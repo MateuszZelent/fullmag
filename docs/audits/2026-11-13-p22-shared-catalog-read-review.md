@@ -20,6 +20,8 @@ Regresje obejmują brak katalogu przy trwałym intencie, późniejszą publikacj
 
 ## Stan w chwili zapisu
 
-Diff i parser Rust przeszły. Kompilacja/testy nowej poprawki oraz odbiór zmienionej binarki pozostają **NOT VERIFIED** do zakończenia zarządzanych bramek. Bieżąca binarka runtime to `9f146c29bb682a465bb8bf6e0c672efa4d84b7c6`; zmiana źródłowa nie została do niej dołączona.
+Diff i parser Rust przeszły. CI dla commitu `7a48aca1f0ebcdd11bc20c21f258a6d019e10070` zakończyło się powodzeniem: workflow `43462284478`, zadanie Rust `132012181960`, w tym wszystkie trzy dokładnie nazwane regresje powyżej. [Zapis dowodu CI](2026-11-13-p22-shared-catalog-read-ci.json) zawiera trafienia testów i SHA-256 pełnego logu; pełnego 33 MB logu nie zapisywano na prawie pełnym WSL.
+
+Odbiór zmienionej binarki pozostaje **NOT VERIFIED**. Bieżąca binarka runtime to `9f146c29bb682a465bb8bf6e0c672efa4d84b7c6`; poprawka źródłowa nie została do niej dołączona. Powodzenie CI nie potwierdza odtworzenia zachowanego etapu ani całego cyklu UI.
 
 Naprawa źródła nie stanowi jeszcze recovery zachowanego intentu. Normalny managed stop/recreate nie kwalifikuje obecnego waiting_for_compute z brakiem katalogu; dalsza ścieżka musi zachować request receipt, sesję, scenę, intent i brak start_release. Nie wolno uznać braku command detail za dowód, że żadna trwała mutacja nie zaszła, ani tworzyć drugiego Study w celu ukrycia tej operacji. Pełny odbiór materiał → ponowienie A, pozostałe scenariusze UI i S46 nadal są otwarte.

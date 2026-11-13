@@ -996,9 +996,10 @@ class StartupRejectionTests(unittest.TestCase):
                 POST_BUILD_START_SHA_ENV="FULLMAG_DOCKER_POST_BUILD_CONTINUATION_SHA256",
                 ensure_configuration=mock.Mock(return_value={}),
                 process_environment=mock.Mock(return_value={}),
+                held_ui_materialization_preflight=mock.Mock(return_value=None),
                 terminal_observation_preflight=mock.Mock(return_value=None),
                 accepted_reattach_preflight=lambda _paths: None,
-                terminal_observation_api_input=mock.Mock(
+                held_ui_materialization_api_input=mock.Mock(
                     side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
                 ),
                 process_receipt_path=mock.Mock(return_value=Path(directory) / "process-tree.json"),
@@ -1038,9 +1039,11 @@ class StartupRejectionTests(unittest.TestCase):
                     mock.patch.object(startup, "_bounded_regular", side_effect=self.bounded_regular), \
                     mock.patch.object(startup, "activate", side_effect=startup.StartupScriptRejected(400, "bad_request", "unsupported model")):
                 self.assertEqual(module.serve(), 0)
+            service.held_ui_materialization_preflight.assert_called_once_with(paths)
             service.terminal_observation_preflight.assert_called_once_with(paths)
-            service.terminal_observation_api_input.assert_called_once_with(
-                paths, terminal_preflight=None, accepted_preflight=None
+            service.held_ui_materialization_api_input.assert_called_once_with(
+                paths, preflight=None, terminal_preflight=None, accepted_preflight=None,
+                store_binding="test"
             )
             maintenance_start.assert_called_once()
             maintenance.stop.assert_called_once()

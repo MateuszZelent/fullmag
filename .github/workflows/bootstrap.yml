@@ -202,6 +202,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation::tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::held_ui_materialization::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
@@ -1239,6 +1240,9 @@ jobs:
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
           python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
+          python -B scripts/test_docker_held_ui_materialization_cli.py -v
+          python -B scripts/test_runtime_service_held_ui_materialization.py -v
+          python -B scripts/test_docker_volume_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_failed_run_resume.py -v
           python -B scripts/test_docker_volume_failed_run_resume_lifecycle.py -v
           python -B scripts/test_docker_volume_failed_run_resume_control.py -v

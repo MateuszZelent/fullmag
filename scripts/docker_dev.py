@@ -3026,6 +3026,28 @@ def _parser() -> argparse.ArgumentParser:
         help="include one exact untracked source file in the managed backend build; repeat as needed",
     )
 
+    held_ui = subparsers.add_parser(
+        "continue-held-ui-volume",
+        help="finish one already accepted UI intent after a pinned preserving rebuild",
+    )
+    for flag, description in (
+        ("attempt", "exact retained development attempt UUID"),
+        ("config-sha256", "retained Compose configuration SHA-256"),
+        ("run-id", "existing accepted UI run; no new intent is created"),
+        ("request-id", "maintenance UUID shared by preview and apply"),
+    ):
+        held_ui.add_argument("--" + flag, required=True, help=description)
+    held_ui.add_argument("--source-root", type=Path, required=True)
+    held_ui.add_argument("--port", type=int, required=True)
+    held_mode = held_ui.add_mutually_exclusive_group(required=True)
+    held_mode.add_argument("--preview", action="store_true")
+    held_mode.add_argument("--apply", action="store_true")
+    held_ui.add_argument("--expected-plan-sha256", help="unchanged reviewed preview SHA; required for apply")
+    held_ui.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
+    )
+
     failed_resume = subparsers.add_parser(
         "resume-failed-run-volume",
         help="resume the pinned existing accepted run after a diagnostic stop; never cancel or replay a script",
@@ -3334,6 +3356,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "cancel-unclaimed-volume":
             from docker_volume_unclaimed_cancellation import cancel_unclaimed
             cancel_unclaimed(args)
+        elif args.action == "continue-held-ui-volume":
+            from docker_volume_held_ui_materialization import run as continue_held_ui
+            print(json.dumps(continue_held_ui(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "resume-failed-run-volume":
             from docker_volume_failed_run_resume import run as resume_failed_run
             print(json.dumps(resume_failed_run(args), ensure_ascii=False, sort_keys=True))

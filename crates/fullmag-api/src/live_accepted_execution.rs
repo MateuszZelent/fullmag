@@ -2758,7 +2758,7 @@ const ACCEPTED_START_RELEASE_ID_DOMAIN: &str = "fullmag.accepted_run_start_relea
 /// accepted-start gate. The public request id remains in the startup/command
 /// provenance; this digest only binds the one release record to its run and
 /// request without imposing repository-name rules on the public API.
-fn accepted_start_release_request_id(run_id: &str, public_request_id: &str) -> String {
+pub(crate) fn accepted_start_release_request_id(run_id: &str, public_request_id: &str) -> String {
     let identity = format!("{ACCEPTED_START_RELEASE_ID_DOMAIN}\0{run_id}\0{public_request_id}");
     format!(
         "accepted-start-{}",

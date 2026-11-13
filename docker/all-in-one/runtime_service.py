@@ -741,6 +741,7 @@ def process_environment(
         for name in SERVICE_MODE_VARIABLES:
             environment.pop(name, None)
         environment.pop("FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN", None)
+        environment.pop("FULLMAG_DEVELOPMENT_HELD_UI_MATERIALIZATION_STDIN", None)
     return environment
 
 
@@ -6042,6 +6043,278 @@ def check(handle: RuntimeHandle, *, full_api_probe: bool = True) -> None:
 
 # Private terminal observation transport. This grants no admission/recovery
 # authority and never activates a script or dispatches a Compute command.
+# Private preserving continuation for an accepted UI intent whose derived
+# catalog could not be published. Host stop/drain authority and native proof
+# validation stay separate from legacy terminal and startup restore modes.
+HELD_UI_REQUEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST"
+HELD_UI_DIGEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST_SHA256"
+HELD_UI_STDIN_ENV = "FULLMAG_DEVELOPMENT_HELD_UI_MATERIALIZATION_STDIN"
+HELD_UI_REQUEST_SCHEMA = "fullmag.held-ui-materialization-request.v1"
+HELD_UI_INPUT_SCHEMA = "fullmag.development-held-ui-materialization-restore.v1"
+HELD_UI_LAUNCH_SCHEMA = "fullmag.held-ui-materialization-launch.v1"
+HELD_UI_ACK_SCHEMA = "fullmag.development-held-ui-materialization-restore-ack.v1"
+_HELD_UI_REQUEST_FIELDS = frozenset({
+    "schema", "plan", "source_scope", "stop_authority", "accepted",
+})
+_HELD_UI_PROOFS = ("preflight", "api_quiescence", "native_drain", "inventory")
+
+
+def _held_ui_json_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"
+
+
+def _held_ui_read(path, name, maximum):
+    """Read one private immutable record without following links or replacements."""
+    _assert_no_links(path.parent, name + " parent")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > maximum:
+            _fail(name + " is not a private bounded regular file")
+        data = bytearray()
+        while len(data) <= maximum:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(descriptor)
+        named = path.lstat()
+        def identity(value):
+            return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                    value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        if (len(data) > maximum or identity(before) != identity(after)
+                or identity(after) != identity(named)):
+            _fail(name + " changed while reading")
+        return bytes(data)
+    finally:
+        os.close(descriptor)
+
+
+def _held_ui_json(raw, name):
+    def reject_constant(value):
+        _fail(name + " contains a non-standard JSON number: " + value)
+    try:
+        value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys, parse_constant=reject_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        _fail(name + " is not valid JSON: " + str(error))
+    if not isinstance(value, dict):
+        _fail(name + " must be a JSON object")
+    return value
+
+
+def held_ui_materialization_preflight(paths):
+    """Read-only bridge validation; Rust independently validates native authority."""
+    environment = process_environment(paths)
+    relative = environment.get(HELD_UI_REQUEST_ENV)
+    digest = environment.get(HELD_UI_DIGEST_ENV)
+    if HELD_UI_STDIN_ENV in environment:
+        _fail("held UI stdin switch is owned by PID 1")
+    if relative is None and digest is None:
+        return None
+    if (not isinstance(relative, str)
+            or re.fullmatch(r"held-ui-materialization/[0-9a-f-]{36}/request\.json", relative) is None
+            or not isinstance(digest, str) or HEX64.fullmatch(digest) is None):
+        _fail("held UI continuation requires exact private request path and digest")
+    if (environment.get("FULLMAG_STARTUP_ENABLED") == "1"
+            or any(key in environment for key in (
+                "FULLMAG_DEVELOPMENT_RESTORE_STDIN", ACCEPTED_REATTACH_REQUEST_ENV,
+                ACCEPTED_REATTACH_DIGEST_ENV, ACCEPTED_REATTACH_STDIN_ENV,
+                TERMINAL_OBSERVATION_REQUEST_ENV, TERMINAL_OBSERVATION_DIGEST_ENV,
+                TERMINAL_OBSERVATION_STDIN_ENV, "FULLMAG_ISOLATED_SNAPSHOT_START",
+                "FULLMAG_ISOLATED_SNAPSHOT_START_SHA256",
+                "FULLMAG_RUNTIME_UNCLAIMED_CANCELLATION_REQUEST",
+                "FULLMAG_RUNTIME_UNCLAIMED_CANCELLATION_REQUEST_SHA256",
+                "FULLMAG_RUNTIME_UNCLAIMED_CANCELLATION_ATTEMPT",
+                RECOVERY_AUTHORIZATION_ENV, CONTAINER_RECOVERY_AUTHORIZATION_ENV,
+                CONTAINER_RECOVERY_AUTHORIZATION_SHA256_ENV,
+                "FULLMAG_STARTUP_SCRIPT", "FULLMAG_STARTUP_PROVENANCE", "FULLMAG_STARTUP_API",
+                "FULLMAG_STARTUP_PROVENANCE_SHA256", "FULLMAG_STARTUP_HELPER_SHA256",
+                "FULLMAG_STARTUP_RECEIPT_KEY"))):
+        _fail("held UI continuation cannot combine with another restore or script startup")
+    path = _reattach_relative(paths.state_root, relative, "held UI request")
+    raw = _held_ui_read(path, "held UI request", 64 * 1024)
+    if _sha256_bytes(raw) != digest:
+        _fail("held UI request digest differs")
+    request = _held_ui_json(raw, "held UI request")
+    if set(request) != _HELD_UI_REQUEST_FIELDS or request.get("schema") != HELD_UI_REQUEST_SCHEMA:
+        _fail("held UI request fields/schema differ")
+    plan = request.get("plan")
+    if (not isinstance(plan, dict)
+            or set(plan) != {"attempt", "maintenance_request_id", "plan_sha256"}
+            or not isinstance(plan.get("attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", plan["attempt"]) is None
+            or not isinstance(plan.get("plan_sha256"), str)
+            or HEX64.fullmatch(plan["plan_sha256"]) is None):
+        _fail("held UI maintenance plan is invalid")
+    request_id = plan.get("maintenance_request_id")
+    try:
+        if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
+            _fail("held UI maintenance UUID is not canonical")
+    except ValueError:
+        _fail("held UI maintenance UUID is invalid")
+    parent = PurePosixPath("held-ui-materialization") / request_id
+    if relative != str(parent / "request.json"):
+        _fail("held UI request path differs from its maintenance UUID")
+    if not isinstance(request.get("accepted"), dict) or not isinstance(request.get("source_scope"), dict):
+        _fail("held UI accepted/source identity is missing")
+    stop = request.get("stop_authority")
+    if (not isinstance(stop, dict)
+            or set(stop) != {"stop_attempt", "terminal", *_HELD_UI_PROOFS}
+            or not isinstance(stop.get("stop_attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", stop["stop_attempt"]) is None
+            or not isinstance(stop.get("terminal"), dict)
+            or set(stop["terminal"]) != {"path", "sha256"}
+            or stop["terminal"].get("path") != (
+                "held-ui-materialization-stop/attempts/" + stop["stop_attempt"] + "/terminal.json")
+            or not isinstance(stop["terminal"].get("sha256"), str)
+            or HEX64.fullmatch(stop["terminal"]["sha256"]) is None):
+        _fail("held UI stop authority is invalid")
+    terminal = _reattach_relative(BUILD_CONTROL_ROOT, stop["terminal"]["path"], "held UI stop terminal")
+    terminal_raw = _held_ui_read(terminal, "held UI stop terminal", MAX_JSON_BYTES)
+    if _sha256_bytes(terminal_raw) != stop["terminal"]["sha256"]:
+        _fail("held UI stop terminal digest differs")
+    _held_ui_json(terminal_raw, "held UI stop terminal")
+    seen = set()
+    for name in _HELD_UI_PROOFS:
+        ref = stop[name]
+        if (not isinstance(ref, dict) or set(ref) != {"path", "sha256"}
+                or not isinstance(ref.get("path"), str)
+                or not isinstance(ref.get("sha256"), str)
+                or HEX64.fullmatch(ref["sha256"]) is None):
+            _fail("held UI proof reference is invalid: " + name)
+        proof = _reattach_relative(paths.state_root, ref["path"], "held UI " + name)
+        if PurePosixPath(ref["path"]).parent != parent or ref["path"] in seen:
+            _fail("held UI proof leaves its request directory or aliases another proof")
+        seen.add(ref["path"])
+        proof_raw = _held_ui_read(proof, "held UI " + name, MAX_JSON_BYTES)
+        if _sha256_bytes(proof_raw) != ref["sha256"]:
+            _fail("held UI proof digest differs: " + name)
+        _held_ui_json(proof_raw, "held UI " + name)
+    return {"request_relative": relative, "request_sha256": digest, "request": request}
+
+
+@contextmanager
+def held_ui_materialization_api_input(
+    paths, *, preflight, terminal_preflight, accepted_preflight, store_binding
+):
+    """Issue one immutable API launch; an uncertain launch is never repeated."""
+    current = held_ui_materialization_preflight(paths)
+    if current is None:
+        if preflight is not None:
+            _fail("held UI request disappeared after preflight")
+        with terminal_observation_api_input(
+            paths, terminal_preflight=terminal_preflight, accepted_preflight=accepted_preflight
+        ) as pair:
+            yield pair
+        return
+    if current != preflight or terminal_preflight is not None or accepted_preflight is not None:
+        _fail("held UI request changed or conflicts with another restore")
+    environment = process_environment(paths)
+    if environment.get("FULLMAG_RUNTIME_PROVENANCE") != str(ACCEPTED_REATTACH_PROVENANCE):
+        _fail("held UI continuation requires fixed Docker runtime provenance")
+    provenance = _read_json(ACCEPTED_REATTACH_PROVENANCE, "held UI target provenance")
+    commit, snapshot, image = (provenance.get(key) for key in
+                              ("commit", "source_snapshot_sha256", "image_id"))
+    if (provenance.get("schema") != "fullmag.docker-all-image.v1"
+            or provenance.get("state") != "succeeded"
+            or not isinstance(commit, str) or HEX40.fullmatch(commit) is None
+            or not isinstance(snapshot, str) or HEX64.fullmatch(snapshot) is None
+            or not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None
+            or environment.get("FULLMAG_RUNTIME_IMAGE_ID") != image
+            or not isinstance(store_binding, str) or HEX64.fullmatch(store_binding) is None):
+        _fail("held UI target build or accepted-store binding is invalid")
+    configuration = _held_ui_read(paths.config, "held UI target config", 64 * 1024)
+    config = _held_ui_json(configuration, "held UI target config")
+    if config.get("store_root") != str(paths.store):
+        _fail("held UI target config selects another accepted store")
+    request = current["request"]
+    parent = PurePosixPath(current["request_relative"]).parent
+    launch_path = _reattach_relative(paths.state_root, str(parent / "launch.json"), "held UI launch")
+    mutex = _reattach_relative(paths.state_root, str(parent / "launch.lock"), "held UI launch lock")
+    import fcntl
+    descriptor = os.open(mutex, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            _fail("held UI launch mutex is not a private regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _fail("held UI launch is already owned")
+        if os.path.lexists(launch_path):
+            raise RuntimeServiceUnknown("held UI API launch already recorded; reconcile its exact outcome before another launch")
+        launch_id = str(uuid.uuid4())
+        payload = dict(request, schema=HELD_UI_INPUT_SCHEMA, launch_id=launch_id,
+                       target_runtime={"build_id": commit, "source_sha256": snapshot,
+                                       "image_id": image, "config_sha256": _sha256_bytes(configuration),
+                                       "accepted_store_binding": store_binding})
+        raw = _held_ui_json_bytes(payload)
+        if len(raw) > 64 * 1024:
+            _fail("held UI private input exceeds its size bound")
+        record = {"schema": HELD_UI_LAUNCH_SCHEMA, "launch_id": launch_id,
+                  "request_path": current["request_relative"],
+                  "request_sha256": current["request_sha256"],
+                  "input_sha256": _sha256_bytes(raw), "input": payload}
+        if (held_ui_materialization_preflight(paths) != current
+                or _held_ui_read(paths.config, "held UI target config", 64 * 1024) != configuration):
+            _fail("held UI request/config changed before launch publication")
+        _publish_accepted_reattach_raw(launch_path, _held_ui_json_bytes(record), "held UI immutable launch")
+        if (held_ui_materialization_preflight(paths) != current
+                or _held_ui_read(paths.config, "held UI target config", 64 * 1024) != configuration):
+            raise RuntimeServiceUnknown("held UI controls changed after launch publication; retain the launch for reconciliation")
+        with tempfile.TemporaryFile(mode="w+b", dir=paths.state_root) as stream:
+            stream.write(raw)
+            stream.seek(0)
+            environment[HELD_UI_STDIN_ENV] = "1"
+            yield environment, stream, record
+    finally:
+        os.close(descriptor)
+
+
+def held_ui_materialization_runtime_receipt(paths, *, preflight, launch, handle):
+    """Bind the native acknowledgement to this exact supervised API process."""
+    if held_ui_materialization_preflight(paths) != preflight:
+        _fail("held UI request changed before acknowledgement")
+    if not isinstance(launch, dict) or launch.get("schema") != HELD_UI_LAUNCH_SCHEMA:
+        _fail("held UI acknowledgement has no immutable launch")
+    parent = PurePosixPath(preflight["request_relative"]).parent
+    launch_path = _reattach_relative(paths.state_root, str(parent / "launch.json"), "held UI launch")
+    if _held_ui_read(launch_path, "held UI launch", MAX_JSON_BYTES) != _held_ui_json_bytes(launch):
+        _fail("held UI launch changed before acknowledgement")
+    relative = str(parent / ("restore-ack-" + launch["launch_id"] + ".json"))
+    ack_raw = _held_ui_read(_reattach_relative(paths.state_root, relative, "held UI ack"),
+                               "held UI ack", 64 * 1024)
+    ack = _held_ui_json(ack_raw, "held UI ack")
+    accepted = preflight["request"]["accepted"]
+    target = launch["input"]["target_runtime"]
+    identity = handle.api_identity
+    if not isinstance(identity, Mapping):
+        _fail("held UI acknowledgement has no supervised API identity")
+    expected = {"schema": HELD_UI_ACK_SCHEMA, "state": "restored",
+                "launch_id": launch["launch_id"], "input_sha256": launch["input_sha256"],
+                "api_instance_id": identity.get("api_instance_id"),
+                "config_sha256": target["config_sha256"],
+                "accepted_store_binding": target["accepted_store_binding"],
+                **{key: accepted[key] for key in (
+                    "project_id", "run_id", "session_id", "session_epoch", "session_created_at_unix_ms", "scene_revision",
+                    "run_intent_sha256", "request_receipt_sha256", "command_id")}}
+    if (set(ack) != {*expected, "catalog_sha256", "start_release_sha256", "gate_action"}
+            or any(type(ack.get(key)) is not type(value) or ack.get(key) != value for key, value in expected.items())
+            or not isinstance(expected["api_instance_id"], str)
+            or ack.get("gate_action") not in {"released", "already_released_exact"}
+            or any(not isinstance(ack.get(key), str) or HEX64.fullmatch(ack[key]) is None
+                   for key in ("catalog_sha256", "start_release_sha256"))):
+        _fail("held UI native acknowledgement differs from its launch/API/request")
+    _accepted_reattach_api_id(ack["api_instance_id"], "held UI restored API")
+    return {"schema": "fullmag.docker-held-ui-materialization-runtime.v1",
+            "launch_id": launch["launch_id"], "request_sha256": preflight["request_sha256"],
+            "input_sha256": launch["input_sha256"], "ack_relative": relative,
+            "ack_sha256": _sha256_bytes(ack_raw), "api_instance_id": ack["api_instance_id"],
+            "run_id": accepted["run_id"], "command_id": accepted["command_id"],
+            "gate_action": ack["gate_action"]}
+
+
 TERMINAL_OBSERVATION_REQUEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST"
 TERMINAL_OBSERVATION_DIGEST_ENV = "FULLMAG_TERMINAL_OBSERVATION_REQUEST_SHA256"
 TERMINAL_OBSERVATION_STDIN_ENV = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN"

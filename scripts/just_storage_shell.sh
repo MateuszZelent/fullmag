@@ -540,6 +540,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/fullmag_console.py" "${fullmag_console_args[@]}"
     ;;
   *"scripts/docker_dev.py"*)
+    docker_dev_held_ui_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" continue-held-ui-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --run-id '(run-[A-Za-z0-9_-]{1,128})' --request-id '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})' --port '([0-9]{4,5})'( --preview| --apply --expected-plan-sha256 '([0-9a-f]{64})')[[:space:]]*$"
     docker_dev_failed_run_resume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-failed-run-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --stop-attempt '([0-9a-f]{32})' --stop-terminal-sha256 '([0-9a-f]{64})' --run-id '(run-[A-Za-z0-9_-]{1,128})' --request-id '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})' --port '([0-9]{4,5})'( --preview| --apply --expected-plan-sha256 '([0-9a-f]{64})')[[:space:]]*$"
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson)')?([[:space:]]+--network-subnet '([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})')?[[:space:]]*$"
@@ -599,6 +600,15 @@ case "${recipe}" in
       docker_dev_args+=(codegen-openapi)
       if [[ -n "${BASH_REMATCH[2]:-}" ]]; then
         docker_dev_args+=(--source-root "${BASH_REMATCH[2]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_held_ui_pattern} ]]; then
+      docker_dev_args+=(continue-held-ui-volume --attempt "${BASH_REMATCH[1]}"
+        --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}"
+        --run-id "${BASH_REMATCH[4]}" --request-id "${BASH_REMATCH[5]}" --port "${BASH_REMATCH[6]}")
+      if [[ "${BASH_REMATCH[7]}" == " --preview" ]]; then
+        docker_dev_args+=(--preview)
+      else
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[8]}")
       fi
     elif [[ "${recipe}" =~ ${docker_dev_failed_run_resume_pattern} ]]; then
       docker_dev_args+=(resume-failed-run-volume --attempt "${BASH_REMATCH[1]}"

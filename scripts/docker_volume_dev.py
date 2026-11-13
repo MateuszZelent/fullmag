@@ -2321,6 +2321,166 @@ def _retained_device_access(previous, document):
     return access
 
 
+def _run_held_ui_materialization(args, *, controller):
+    """Read-only preview for one retained manual HTTP Compute.
+
+    Apply is intentionally gated until the typed stop/recreate handoff is
+    implemented; this slice creates no operation receipt and stops no service.
+    """
+    if getattr(args, "apply", False):
+        raise BuildControlError(
+            "Held UI materialization apply is not available in this read-only preview slice"
+        )
+    if getattr(args, "preview", False) is not True:
+        raise BuildControlError("Held UI materialization requires --preview")
+
+    attempt = getattr(args, "attempt", None)
+    config_sha256 = getattr(args, "config_sha256", None)
+    run_id = getattr(args, "run_id", None)
+    request_id = getattr(args, "request_id", None)
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Held UI preview requires one exact retained DEV attempt")
+    if not isinstance(config_sha256, str) or _SHA256.fullmatch(config_sha256) is None:
+        raise BuildControlError("Held UI preview requires the exact retained Compose digest")
+    if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", run_id) is None:
+        raise BuildControlError("Held UI preview requires one exact accepted run id")
+    import uuid
+    try:
+        request_id = str(uuid.UUID(request_id))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise BuildControlError("Held UI preview requires a canonical maintenance request UUID") from error
+    if request_id != getattr(args, "request_id", None):
+        raise BuildControlError("Held UI preview maintenance request UUID is not canonical")
+
+    require_host()
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+    host = _session_host()
+
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Held UI preview has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+
+    # BuildControl.prepare() creates an absent volume. Preview must never do
+    # that, so require and inspect the exact existing control volume directly.
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Held UI preview requires the existing exact control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())):
+        raise BuildControlError("Held UI preview control volume ownership differs")
+
+    previous_root = "development/attempts/" + attempt
+    previous = control.read(previous_root + "/terminal.json")
+    document = control.read(previous_root + "/compose.json")
+    if (previous.get("schema") != "fullmag.docker-build-operation.v1"
+            or previous.get("phase") != "development"
+            or previous.get("state") != "succeeded"
+            or previous.get("attempt") != attempt
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or previous.get("control_namespace", "") != control.namespace
+            or previous.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or previous.get("config_sha256") != config_sha256
+            or previous.get("inputs", {}).get("source_root") != str(selected)
+            or document.get("name") != control.project
+            or hashlib.sha256(canonical(document)).hexdigest() != config_sha256):
+        raise BuildControlError("Held UI preview retained DEV receipt/source/config pins differ")
+
+    ids = {}
+    actual = {}
+    for service in ("backend", "frontend"):
+        ids[service] = compose_capture(document, "ps", "--all", "--quiet", service).decode().strip()
+        if (not isinstance(ids[service], str)
+                or re.fullmatch(r"[0-9a-f]{64}", ids[service]) is None
+                or previous.get(service + "_container") != ids[service]):
+            raise BuildControlError("Held UI preview retained service container identity differs: " + service)
+        service_image = document.get("services", {}).get(service, {}).get("image")
+        if not isinstance(service_image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", service_image) is None:
+            raise BuildControlError("Held UI preview retained service image is not pinned: " + service)
+        images = json.loads(docker_text("image", "inspect", service_image))
+        containers = json.loads(docker_text("inspect", ids[service]))
+        if len(images) != 1 or images[0].get("Id") != service_image or len(containers) != 1:
+            raise BuildControlError("Held UI preview service/image inspection is ambiguous: " + service)
+        actual[service] = containers[0]
+        labels = actual[service].get("Config", {}).get("Labels", {})
+        if (actual[service].get("Image") != service_image
+                or labels.get("com.docker.compose.project") != control.project
+                or labels.get("com.docker.compose.service") != service
+                or labels.get("org.fullmag.source.worktree-id") != identity["worktree_id"]):
+            raise BuildControlError("Held UI preview service ownership differs: " + service)
+        _validate_retained_service(
+            document, actual[service], service, images[0]["Config"], allow_legacy_frontend=True,
+        )
+        state = actual[service].get("State", {})
+        if state.get("Running") is not True:
+            raise BuildControlError("Held UI preview requires the pinned service to be running: " + service)
+    if actual["backend"].get("State", {}).get("Health", {}).get("Status") != "healthy":
+        raise BuildControlError("Held UI preview backend is not healthy")
+    _assert_private_restart_network(actual, ids, control.project)
+    from docker_volume_stop_diagnostic import _port_matches
+    _port_matches(document, args.port)
+
+    state_root = storage.validate_path(
+        Path(previous["state_root"]), layout["runtime_root"], "held UI retained session state",
+    )
+    certificate_path = _certificate_path(state_root)
+    _retained_certificate(state_root, document)
+    owner_path = state_root / host.OWNER_NAME
+    owner_raw = host.read_owned_regular(owner_path)
+    certificate_raw = host.read_owned_regular(certificate_path)
+    state_root_sha256 = hashlib.sha256(canonical({
+        "schema": "fullmag.held-ui-state-root-binding.v1",
+        "state_root": str(state_root.resolve(strict=True)),
+        "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+    })).hexdigest()
+    source_scope = {
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "namespace": control.namespace,
+        "namespace_registry_sha256": control.namespace_registry_sha256,
+        "source_root": str(selected),
+        "state_root_sha256": state_root_sha256,
+        "backend_container_id": ids["backend"],
+        "backend_started_at": actual["backend"].get("State", {}).get("StartedAt"),
+        "frontend_container_id": ids["frontend"],
+        "frontend_started_at": actual["frontend"].get("State", {}).get("StartedAt"),
+        "runtime_config_sha256": config_sha256,
+    }
+
+    accepted, preflight, inventory = controller.capture_readonly_preflight(
+        ids["backend"], attempt=attempt, maintenance_request_id=request_id,
+        run_id=run_id, source_scope=source_scope,
+    )
+    controller._require(accepted.get("run_id") == run_id,
+                         "current API/RunIntent differs from the selected run")
+    plan, plan_sha256 = controller.build_preview_plan(
+        attempt=attempt,
+        maintenance_request_id=request_id,
+        source_scope=source_scope,
+        accepted=accepted,
+        preflight=preflight,
+        inventory=inventory,
+    )
+    return {
+        "state": "preview-passed",
+        "mode": "read-only",
+        "apply_available": False,
+        "plan": plan,
+        "plan_sha256": plan_sha256,
+    }
+
+
 def _probe_retained_device_access(device_access, image, project):
     """A retained profile cannot gain or lose GPU access during recreation."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
