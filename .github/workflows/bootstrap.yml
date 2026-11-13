@@ -74,17 +74,17 @@ jobs:
           print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
           PY
 
-      - name: Apply exact artifact GREEN source snapshot
+      - name: Apply exact artifact RED source snapshot
         run: |
           python -B - <<'PYCI'
           import gzip,hashlib,io,tarfile
           from pathlib import Path
           packed=Path('.github/antenna-retained-dtq/task-1-source.tar.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == '34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad'
+          assert hashlib.sha256(packed).hexdigest() == 'e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c'
           allowed=('crates/fullmag-antenna-artifacts/','crates/fullmag-ir/','crates/fullmag-quantities/')
           with tarfile.open(fileobj=io.BytesIO(gzip.decompress(packed)),mode='r:') as archive:
               members=archive.getmembers()
-              assert len(members)==121
+              assert len(members)==117
               for entry in members:
                   name=entry.name
                   assert entry.isfile() and not name.startswith('/') and '..' not in Path(name).parts
@@ -93,16 +93,27 @@ jobs:
                   target=Path(name)
                   target.parent.mkdir(parents=True,exist_ok=True)
                   target.write_bytes(data)
-          print('Exact Task 1 GREEN source overlay: 34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad')
+          print('Exact Task 1 RED source overlay: e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c')
           PYCI
-      - name: Run actual retained-current artifact regressions
+      - name: Install independently pinned historical v1 baseline test
+        run: |
+          python -B - <<'PYCI'
+          import hashlib
+          from pathlib import Path
+          data=Path('.github/antenna-retained-dtq/task-1-v1-baseline-tests.rs').read_bytes()
+          assert hashlib.sha256(data).hexdigest()=='bf957661e6c0cb36ac3fe2c0cd37ae3c2f9ffb1db2dd21eaa3951b1d7812d033'
+          Path('crates/fullmag-antenna-artifacts/src/retained_current/tests_v2.rs').write_bytes(data)
+          PYCI
+      - name: Run historical v1 encoder from preimplementation snapshot
         run: |
           set -o pipefail
-          cargo test --locked -p fullmag-antenna-artifacts --lib -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
+          cargo test --locked -p fullmag-antenna-artifacts --lib retained_current::tests_v2::surface_v1_golden_stays_exact -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
       - name: Preserve artifact contract log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: antenna-retained-dtq-task1-green
-          path: antenna-retained-dtq-artifact.log
+          name: antenna-retained-dtq-task1-historical-v1
+          path: |
+            antenna-retained-dtq-artifact.log
+            crates/fullmag-antenna-artifacts/task-1-v1-baseline.bundle
           if-no-files-found: warn
