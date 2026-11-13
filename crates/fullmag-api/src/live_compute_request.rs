@@ -1510,8 +1510,47 @@ mod tests {
             .is_some_and(|message| message.contains("scene_revision precondition failed")));
         assert_eq!(body["intent_disposition"], "not_accepted");
 
-        // A mesh mismatch or still-incomplete material may be reported before
-        // scene validation. Neither may hide the independent older-scene proof.
+        // Reconciliation is independent of which untyped admission error
+        // reached the final fence. Only an older immutable scene pin proves
+        // rejection; equal, future, and saturated pins do not.
+        for (scene_pin, expected_disposition) in [
+            (11, Some(crate::error::IntentDisposition::NotAccepted)),
+            (12, None),
+            (13, None),
+            (u64::MAX, None),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store_root = directory.path().join("submit-store");
+            SessionStore::open(&store_root).unwrap();
+            let state = compute_http_test_state(Some(store_root), false, false).await;
+            let context = crate::capture_current_live_request_context(&state).await.unwrap();
+            let scope = expected_scope_for_context(&state, &context).await;
+            let command: StructuredCommandRequest = serde_json::from_value(keyed_solve_request(
+                Some("compute-intent"),
+                json!({
+                    "scene_revision": scene_pin,
+                    "mesh_revision": 999,
+                    "current_run": {"kind": "none"}
+                }),
+            )).unwrap();
+            let request = LiveComputeRequest::capture_with_request_scope(
+                &context, &command, Some("compute-intent"), None, Some(scope),
+            ).unwrap().unwrap();
+            let message = "mesh_revision precondition failed: expected 999, got 0";
+            let mut error = ApiError::conflict(message);
+            let _transition = state.current_live_session_transition.lock().await;
+            assert!(request.reconcile_error_under_transition(&state, &context, &mut error)
+                .await.unwrap().is_none());
+            assert_eq!(error.intent_disposition, expected_disposition);
+            assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+            assert_eq!(error.message, message);
+            assert!(error.code.is_none());
+            assert!(error.terminal_compute_rejection.is_none());
+        }
+
+        // The HTTP path binds frozen spins before validating mesh pins, so a
+        // jointly stale scene/mesh request preserves that first scene error.
+        // Missing material can precede binding and must not hide the proof.
         for (missing_material, mesh_revision, expected_status, expected_code) in [
             (false, 999, axum::http::StatusCode::CONFLICT, "conflict"),
             (true, 0, axum::http::StatusCode::BAD_REQUEST, "bad_request"),
@@ -1539,9 +1578,8 @@ mod tests {
             assert_eq!(body["code"], expected_code);
             assert_eq!(body["intent_disposition"], "not_accepted");
             if !missing_material {
-                assert!(body["message"].as_str().is_some_and(|message| {
-                    message.contains("mesh_revision precondition failed")
-                }));
+                assert_eq!(body["message"],
+                    "scene_revision precondition failed while binding frozen spins: expected 11, got 12");
             }
         }
 

@@ -1559,3 +1559,32 @@ błędna była późniejsza asercja przy restore. Poprawiono obie na dokładne
 asercje braku `intent_disposition` i wszystkie kontrole admission/replay.
 To korekta oczekiwania testu, bez zmian kodu produkcyjnego. Wykonanie całej
 regresji ponownie w CI nadal wymagane; wcześniejszy run pozostaje FAIL.
+
+
+### Dalszy wynik rzeczywistej regresji HTTP — kolejność frozen-spins binding
+
+Rust CI `43340764240`, job `131608196301`, po poprawieniu kontraktu scope
+przeszedł tamte kontrole, ale zatrzymał się na nowym oczekiwaniu treści błędu
+przy jednocześnie starym scene pin i mesh pin. Niższy walidator sprawdza mesh
+przed scene, jednak rzeczywista ścieżka HTTP wcześniej wywołuje
+`attach_frozen_spins_runtime_plan_binding`, która zgłasza scene conflict.
+Wcześniejsza sugestia o mesh-first w tym konkretnym HTTP przypadku była
+niepełna. Poprawiono test na dokładną istniejącą treść błędu frozen-spins.
+Nie zmieniono produkcyjnej kolejności bramek ani komunikatu. Dodano cztery
+bezpośrednie przypadki końcowej rekoncyliacji pod fence z nieanotowanym
+błędem mesh: starszy scene pin otrzymuje not_accepted, równy/przyszły/MAX nie;
+status, message, code i brak typed rejection pozostają sprawdzane. Nadal
+wymagane jest ponowne wykonanie w CI; dotychczasowy run pozostaje FAIL.
+
+Lokalny backend `1d3311194d38` zakończył kompilację i walidację 24 plików
+pakietu, przeszedł linux-native i worker-cgroup gate, zgłasza API/runtime
+Ready oraz Docker healthy. Binary/app commit
+`48845db952a902d3dafaf6885dc259becb8eba1a`, source snapshot
+`1acfc82fd3cf67bdc7a7586c6d0e93fc54072d497cbdb7d2c478dc8a977aa2fd`.
+Launcher zakończył się failed-confirmed `08a6cbffbe874153a6e7547eb5898650`,
+config `63745a7ce9b506ca7df7088880dfd806ddd9a3947949206ece2d89c01476eb55`,
+z powodu Exited1 frontendu. Potwierdzono prywatną kopię next-env: 0 B,
+SHA `e3b0c442…b855`; źródło czyste 247 B, SHA `7b550dda…e712651`.
+Brakuje freeze i frozen copy, dlatego istniejący frozen refresh nie jest
+adekwatny. Nowa prywatna generacja frontendu jest przygotowywana jako
+jawny tryb naprawy. Dotychczasowy workspace pozostaje zachowany; UI niegotowe.
