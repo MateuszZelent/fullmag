@@ -182,20 +182,21 @@ def run_root_copy(fence, source, distro, request_path, request_sha256, *, poll_i
 
 def run_prepared_root(stage,fence,command,op,request,request_sha256,validator,*,
                       release_copy_sha256=None,poll_interval=2.0):
-    """Supervise a prepared, source-pinned copy or bind under the same guards.
+    """Supervise a prepared, source-pinned copy, bind or admission under one guard.
 
     Internal API only: its stage-specific caller authenticates literal argv and
-    scope before entry. A bind confirms its own terminal separately and releases
-    the copy-fence protocol with the original verified copy SHA. That protocol's
-    copy_result_sha256 never changes meaning to a bind receipt.
+    scope before entry. Bind and admission confirm their own terminal separately
+    and release the copy-fence protocol with the original verified copy SHA.
+    That protocol's copy_result_sha256 never changes meaning to a later receipt.
     """
-    qualification.require(stage in ('copy','bind') and callable(validator),
-                          'Only prepared copy/bind root stages are supported')
+    qualification.require(stage in ('copy','bind','admission') and callable(validator),
+                          'Only prepared copy/bind/admission root stages are supported')
     qualification.require(type(poll_interval) in (int,float) and 0 < poll_interval <= 5,
                           'Bounded root-client polling interval required')
     qualification.require((stage == 'copy' and release_copy_sha256 is None) or
-        (stage == 'bind' and type(release_copy_sha256) is str and re.fullmatch('[0-9a-f]{64}',release_copy_sha256)),
-        'Bind release must acknowledge the exact original completed copy')
+        (stage in ('bind','admission') and type(release_copy_sha256) is str and
+         re.fullmatch('[0-9a-f]{64}',release_copy_sha256)),
+        'Bind/admission release must acknowledge the exact original completed copy')
     operation = _operation_match(fence,request)
     prefix='linux-'+stage+'-client';record_prefix='data-'+stage+'-root-client'
     for suffix in ('-intent.json','-started.json','.stdout','.stderr','-observation-error.json'):

@@ -306,11 +306,10 @@ przyznaje namespace. Istniejące archiwum blokuje replay. Błąd zachowuje
 archiwum i stan częściowy dla jawnego recovery, także gdy helper zapisu
 certyfikatu podjął lokalną próbę odtworzenia jego poprzednich bajtów.
 
-Ten root-only prymityw nie ma CLI. Pełny sterownik nadal musi uwierzytelnić
-lineage, pending, OLD guardy, oba datasety, host namespace i środowisko
-narzędzi oraz połączyć go z supervisorem. Same przekazane piny nie dowodzą
-tych warunków. Świeży probe oraz kwalifikacja runtime i zapisu Zarr pozostają
-odrębnymi wymaganiami po przygotowaniu admission.
+Ten root-only prymityw nie ma CLI. Samo przekazanie pinów nie dowodzi lineage,
+pending, OLD guardów, obu datasetów, host namespace ani środowiska narzędzi;
+te kontrole należą do opisanej niżej integracji. Świeży probe oraz kwalifikacja
+runtime i zapisu Zarr pozostają odrębnymi wymaganiami po przygotowaniu admission.
 
 Źródłowe API `linux_data_volume_admission.admission_verified` wiąże zamknięty
 request z dokładnymi predecessor receipts provision/drain/copy/bind, oryginalnym
@@ -333,9 +332,27 @@ ambiguous evidence; nawet zapisany success journal nie zastępuje rzeczywistego
 terminalnego sukcesu procesu i braku sprzecznego failure receiptu.
 
 Root API nie ma CLI i samo nie dowodzi istnienia żywych parent guardów.
-Podłączenie jego 19 modułów do izolowanego bootstrapu, supervisora i nadrzędnej
-kontynuacji hostlock oraz kontrolowanego startupu przy pending pozostaje
-osobnym etapem integracji. Nie jest to wykonanie migracji ani readmission.
+Źródłowa kontynuacja `docker_dev_data_volume_admission.prepare_bound_group`
+wymaga oryginalnego żywego `copied_group` oraz zweryfikowanego terminalu bindu.
+Zachowuje hostlock, ponawia pełny inventory zatrzymanej grupy przed zajęciem
+OLD guardów i pod nimi oraz otwiera osobną operację control po zakończeniu
+poprzedniej. Używa przypiętego kontekstu OLD backup / NEW canonical, bez
+uznawania starych canonical inode za bieżące i bez zmiany historycznych pinów.
+
+Job admission dodaje trzeci etap do wspólnego izolowanego bootstrapu: 19
+modułów ładuje z uprzednio zweryfikowanych bajtów, bez lokalnych `.pyc`, przy
+wyczyszczonym środowisku. Supervisor zachowuje kontrolę tego samego procesu do
+rzeczywistego terminalu. Sukces wymaga exit code 0, dokładnego result/journalu,
+braku sprzecznego failure oraz ponownego porównania cert/owner i chronionych
+plików NEW z obserwacją sprzed uruchomienia. Operator nie odczytuje prywatnego
+archiwum root jako zastępstwa tej obserwacji. Zwolnienie guardów potwierdza
+oryginalny copy receipt, a osobny receipt opisuje przygotowanie admission.
+
+Zwrócony kontekst przygotowania jest ważny tylko w oryginalnym host scope,
+procesie i wątku; zapisany lub zmieniony słownik nie zastępuje tej kontynuacji.
+Nie daje prawa do namespace, startupu, rejestracji ani usunięcia oryginałów.
+Kontrolowany startup przy pending oraz świeża kwalifikacja pozostają osobnym
+etapem integracji. Nie jest to wykonanie migracji ani readmission na hoście.
 
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,

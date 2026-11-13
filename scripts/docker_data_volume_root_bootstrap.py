@@ -1,4 +1,4 @@
-"""Build closed isolated root-client bootstraps for copy and bind only."""
+"""Build closed isolated root-client bootstraps for copy, bind and admission."""
 
 COPY_COMPONENTS = (
     "linux_data_volume_copy.py",
@@ -17,6 +17,14 @@ BIND_COMPONENTS = COPY_COMPONENTS + (
     "fullmag_data_volume_pending.py",
     "linux_data_volume_bind.py",
 )
+ADMISSION_COMPONENTS = BIND_COMPONENTS + (
+    "linux_native_data_volume_migration.py",
+    "linux_native_host.py",
+    "docker_dev_host.py",
+    "fullmag_storage.py",
+    "fullmag_data_volume_admission.py",
+    "linux_data_volume_admission.py",
+)
 
 _STAGES = {
     "copy": {
@@ -34,6 +42,14 @@ _STAGES = {
             "copy_receipt_sha256", "fence_ready_sha256", "components",
         ),
         "components": BIND_COMPONENTS,
+    },
+    "admission": {
+        "schema": "fullmag.data-volume-linux-admission-request.v1",
+        "keys": (
+            "schema", "volume_id", "storage_root", "token", "bind_request_sha256",
+            "bind_receipt_sha256", "fence_ready_sha256", "components",
+        ),
+        "components": ADMISSION_COMPONENTS,
     },
 }
 
@@ -182,6 +198,8 @@ if STAGE == 'copy':
     importlib.import_module('linux_data_volume_copy').copy_verified(request_path, request_sha256)
 elif STAGE == 'bind':
     importlib.import_module('linux_data_volume_bind').bind_verified(request_path, request_sha256)
+elif STAGE == 'admission':
+    importlib.import_module('linux_data_volume_admission').admission_verified(request_path, request_sha256)
 else:
     raise SystemExit('unsupported root bootstrap stage')
 '''
@@ -190,7 +208,7 @@ else:
 def bootstrap(stage):
     """Return a fixed stage-specific program for ``python -I -B -c`` only."""
     if type(stage) is not str or stage not in _STAGES:
-        raise ValueError("Root bootstrap stage must be exactly 'copy' or 'bind'")
+        raise ValueError("Root bootstrap stage must be exactly 'copy', 'bind' or 'admission'")
     config = _STAGES[stage]
     prefix = "\n".join((
         "STAGE = " + repr(stage),

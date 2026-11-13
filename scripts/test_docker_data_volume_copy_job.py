@@ -589,14 +589,19 @@ except storage.StorageError:
 
 
 class RootCopyBootstrapTests(unittest.TestCase):
-    def test_closed_component_tables_match_both_root_stage_contracts(self):
+    def test_closed_component_tables_match_all_root_stage_contracts(self):
         from scripts import linux_data_volume_bind as bind_stage
+        from scripts import linux_data_volume_admission as admission_stage
         self.assertEqual(tuple(job.root_bootstrap.COPY_COMPONENTS),tuple(linux_copy.COMPONENTS))
         self.assertEqual(tuple(job.root_bootstrap.BIND_COMPONENTS),tuple(bind_stage.COMPONENTS))
+        self.assertEqual(tuple(job.root_bootstrap.ADMISSION_COMPONENTS),tuple(admission_stage.COMPONENTS))
+        self.assertEqual(len(admission_stage.COMPONENTS),19)
 
-    def test_only_fixed_copy_and_bind_stages_can_be_generated(self):
-        for stage in (None,True,'admission','copy;bind','Copy'):
+    def test_only_fixed_copy_bind_and_admission_stages_can_be_generated(self):
+        for stage in (None,True,'admission;bind','copy;bind','Copy'):
             with self.subTest(stage=stage),self.assertRaises(ValueError):job.root_bootstrap.bootstrap(stage)
+        for stage in ('copy','bind','admission'):
+            with self.subTest(stage=stage):self.assertIsInstance(job.root_bootstrap.bootstrap(stage),str)
 
     @staticmethod
     def _fixture(root, good_sentinel):
@@ -713,12 +718,13 @@ class RootCopyBootstrapTests(unittest.TestCase):
                 "import docker_data_volume_root_bootstrap as root_bootstrap\n"
                 "import docker_data_volume_copy_job\n"
                 "import docker_data_volume_bind_job\n"
+                "import linux_data_volume_admission\n"
                 "assert callable(root_bootstrap.bootstrap)\n"
                 "assert callable(docker_data_volume_copy_job.prepare_command)\n"
                 "assert callable(docker_data_volume_bind_job.prepare_command)\n"
-                "try: root_bootstrap.bootstrap('admission')\n"
-                "except ValueError: pass\n"
-                "else: raise AssertionError('unsupported root stage accepted')\n"
+                "assert callable(linux_data_volume_admission.admission_verified)\n"
+                "assert len(root_bootstrap.ADMISSION_COMPONENTS)==19\n"
+                "assert isinstance(root_bootstrap.bootstrap('admission'),str)\n"
             )
             result = subprocess.run(
                 [sys.executable, "-I", "-B", "-c", probe, str(scripts)], cwd=outside,
