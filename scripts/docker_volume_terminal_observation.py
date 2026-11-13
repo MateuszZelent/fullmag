@@ -1108,9 +1108,15 @@ def prepare_context(control, *, proof_relative, proof_sha256, store_root, source
 
 
 def prepare_captured_context(control, *, stop_attempt, store_root, source_root,
-                             attempt, config_sha256, actual):
-    """Use the exact managed stop as the producer, without external proof files."""
+                             attempt, config_sha256, actual, owned_operation=None):
+    """Use the exact managed stop; optionally publish under its live OLD fence.
+
+    Owned mode supports ordinary successful captures in an unnamespaced
+    control root only. The caller authenticates the relocated OLD store path.
+    """
     from docker_volume_accepted_reattach import _control_bytes
+    if owned_operation is not None:
+        _owned_operation_identity(control, owned_operation)
     read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
     proof = build_captured_proof(
         read_control, _store_reader(store_root), iteration=stop_attempt,
@@ -1122,35 +1128,220 @@ def prepare_captured_context(control, *, stop_attempt, store_root, source_root,
         control, read_control, proof, raw, source_root=source_root, attempt=attempt,
         config_sha256=config_sha256, actual=actual,
         stop_pin=(stop_attempt, proof["operation_sha256"]),
+        owned_operation=owned_operation,
     )
 
 
 def _prepare_proof_context(control, read_control, proof, raw, *, source_root,
-                           attempt, config_sha256, actual, stop_pin=None):
+                           attempt, config_sha256, actual, stop_pin=None, owned_operation=None):
     proof_sha256 = sha(raw)
-    stop_attempt, stop_sha256, _ = _observation_stop(
-        control, read_control, source_root=source_root, attempt=attempt,
-        config_sha256=config_sha256, actual=actual, proof=proof,
-        proof_sha256=proof_sha256, stop_pin=stop_pin,
-    )
+    if owned_operation is None:
+        stop_attempt, stop_sha256, _ = _observation_stop(
+            control, read_control, source_root=source_root, attempt=attempt,
+            config_sha256=config_sha256, actual=actual, proof=proof,
+            proof_sha256=proof_sha256, stop_pin=stop_pin,
+        )
+    else:
+        # OLD EX fences are already held. Diagnostic/pre-owner/cold routes
+        # would launch new readers/locks against canonical NEW /state.
+        _owned_operation_identity(control, owned_operation)
+        require(stop_pin is not None, "Owned observation requires an exact captured stop")
+        _, stop = managed(read_control, "iteration/attempts/" + portable(stop_pin[0]) + "/terminal.json")
+        require(stop.get("diagnostic_terminal_stop_sha256") is None,
+                "Owned observation does not support diagnostic stops")
+        _, parent = managed(read_control, "development/attempts/" + portable(attempt) + "/terminal.json")
+        require(parent.get("state") == "succeeded", "Owned observation requires a successful development")
+        backend = actual.get("backend", {}).get("Id")
+        require(isinstance(backend, str) and re.fullmatch("[0-9a-f]{64}", backend),
+                "Owned observation requires the exact stopped backend")
+        from docker_volume_cold_budget_restore import _paths as cold_paths
+        special_paths = ["verification/preowner-drained-stop-" + backend + suffix
+                         for suffix in (".json", ".intent.json")] + list(cold_paths(backend))
+        from docker_volume_accepted_reattach import _control_bytes
+        require(all(_control_bytes(control, path, optional=True, maximum=8 * 1024**2) is None
+                    for path in special_paths), "Owned observation does not support pre-owner/cold stops")
+        stop_attempt, stop_sha256 = validate_empty_stop(
+            read_control, project=control.project, volume=control.volume, source_root=source_root,
+            attempt=attempt, config_sha256=config_sha256, actual=actual,
+            stop_pin=stop_pin, source_proof=proof,
+        )
     private = "terminal-observation/" + proof_sha256
     request = {"schema": "fullmag.terminal-observation-request.v1",
                "proof_path": private + "/proof.json", "proof_sha256": proof_sha256}
     request_raw = canonical(request) + b"\n"
     request_sha = hashlib.sha256(request_raw).hexdigest()
-    _publish_private_records(control, [(private + "/proof.json", raw),
-                                      (private + "/request.json", request_raw)])
+    records = [(private + "/proof.json", raw), (private + "/request.json", request_raw)]
+    if owned_operation is None:
+        _publish_private_records(control, records)
+    else:
+        _publish_private_records(control, records, owned_operation=owned_operation)
     return validate_context({"environment": {REQUEST_ENV: private + "/request.json", REQUEST_SHA_ENV: request_sha},
                             "metadata": {"schema": CONTEXT_SCHEMA, "proof_sha256": proof_sha256,
                                          "request_sha256": request_sha, "stop_attempt": stop_attempt,
                                          "stop_sha256": stop_sha256}})
 
 
-def _publish_private_records(control, records):
+def _owned_operation_identity(control, operation):
+    require(operation is getattr(control, "_active_operation", None) and isinstance(operation, dict)
+            and operation.get("lease_ready") is True and operation.get("daemon_pending") is True,
+            "Exact live owned migration lease and retained native guard required")
+    receipt = operation.get("receipt", {})
+    require(isinstance(receipt, Mapping), "Owned observation receipt is missing")
+    token = receipt.get("attempt")
+    require(isinstance(token, str) and re.fullmatch("[0-9a-f]{32}", token)
+            and receipt.get("phase") == "data-volume-migration"
+            and operation.get("root") == "data-volume-migration/attempts/" + token
+            and receipt.get("compose_project") == control.project
+            and receipt.get("control_volume") == control.volume,
+            "Owned observation operation scope differs")
+    require(getattr(control, "namespace", None) == ""
+            and "control_namespace" not in receipt and "namespace_registry_sha256" not in receipt,
+            "Owned observation requires the unnamespaced control root")
+    return token, operation["root"], control.project, control.volume
+
+
+_OWNED_PUBLISH_SCRIPT = r'''import base64,hashlib,json,os,re,stat,sys
+CONTROL_ROOT = '/control'
+def need(value, message):
+    if not value: raise ValueError(message)
+def unique(pairs):
+    result={}
+    for key,value in pairs:
+        need(key not in result,'duplicate publication field')
+        result[key]=value
+    return result
+raw=sys.stdin.buffer.read(12*1024**2+1)
+need(0<len(raw)<=12*1024**2,'publication input exceeds its bound')
+value=json.loads(raw,object_pairs_hook=unique)
+need(type(value) is dict and set(value)=={'token','proof_sha256','proof_base64','request_base64'},
+     'closed owned publication required')
+token=value['token'];proof_sha=value['proof_sha256']
+need(type(token) is str and re.fullmatch('[0-9a-f]{32}',token),'invalid active token')
+need(type(proof_sha) is str and re.fullmatch('[0-9a-f]{64}',proof_sha),'invalid proof pin')
+proof=base64.b64decode(value['proof_base64'],validate=True)
+request=base64.b64decode(value['request_base64'],validate=True)
+need(0<len(proof)<=8*1024**2 and hashlib.sha256(proof).hexdigest()==proof_sha,'proof pin differs')
+prefix='terminal-observation/'+proof_sha
+expected={'schema':'fullmag.terminal-observation-request.v1',
+          'proof_path':prefix+'/proof.json','proof_sha256':proof_sha}
+need(0<len(request)<=65536 and json.loads(request,object_pairs_hook=unique)==expected,'request scope differs')
+directory_flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+file_flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC
+root=os.open(CONTROL_ROOT,directory_flags)
+fds=[root];links=[];files=[]
+root_identity=os.fstat(root)
+def same(left,right): return (left.st_dev,left.st_ino)==(right.st_dev,right.st_ino)
+def read_file(parent,name,maximum):
+    fd=os.open(name,file_flags,dir_fd=parent)
+    try:
+        before=os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_dev==root_identity.st_dev
+             and before.st_size<=maximum,'unsafe owned publication file')
+        parts=[];total=0
+        while True:
+            part=os.read(fd,min(65536,maximum+1-total))
+            if not part: break
+            total+=len(part);need(total<=maximum,'owned publication file exceeds bound');parts.append(part)
+        after=os.fstat(fd)
+        need((before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==
+             (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+             and same(after,os.stat(name,dir_fd=parent,follow_symlinks=False)),
+             'owned publication file changed during read')
+        return b''.join(parts),after
+    finally: os.close(fd)
+def check():
+    need(same(root_identity,os.stat(CONTROL_ROOT,follow_symlinks=False)),'control root path changed')
+    for parent,name,child in links:
+        need(same(os.fstat(child),os.stat(name,dir_fd=parent,follow_symlinks=False)),
+             'publication parent path changed')
+    need(read_file(root,'active',64)[0]==(token+'\n').encode(),'owned active token changed')
+    for parent,name,identity,content in files:
+        actual,observed=read_file(parent,name,len(content))
+        need(same(observed,identity) and actual==content,'published record changed')
+try:
+    check()
+    parent=root
+    for name in ('runtime-control','terminal-observation',proof_sha):
+        check()
+        try:
+            os.mkdir(name,0o750,dir_fd=parent);os.fsync(parent)
+        except FileExistsError: pass
+        child=os.open(name,directory_flags,dir_fd=parent)
+        fds.append(child);links.append((parent,name,child))
+        need(os.fstat(child).st_dev==root_identity.st_dev,'publication crosses a filesystem')
+        check();parent=child
+    for name,content in (('proof.json',proof),('request.json',request)):
+        check()
+        try:
+            fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o640,dir_fd=parent)
+        except FileExistsError:
+            existing,identity=read_file(parent,name,len(content))
+            need(existing==content,'existing observation record differs')
+        else:
+            try:
+                identity=os.fstat(fd)
+                check()
+                offset=0
+                while offset<len(content):
+                    written=os.write(fd,content[offset:]);need(written>0,'publication made no progress');offset+=written
+                os.fsync(fd)
+            finally: os.close(fd)
+            os.fsync(parent)
+        files.append((parent,name,identity,content))
+        check()
+    check()
+    print('PUBLISHED',flush=True)
+finally:
+    for fd in reversed(fds): os.close(fd)
+'''
+
+
+def _publish_owned_records(control, records, operation):
+    import base64
+    from docker_build_control import bounded_capture
+    from docker_dev_host import docker_argv
+    identity = _owned_operation_identity(control, operation)
+    require(type(records) in (tuple, list) and len(records) == 2,
+            "Owned observation publishes exactly proof and request")
+    require(all(type(row) in (tuple, list) and len(row) == 2 and type(row[0]) is str
+                and type(row[1]) is bytes for row in records), "Closed owned observation records required")
+    match = re.fullmatch(r"terminal-observation/([0-9a-f]{64})/proof\.json", records[0][0])
+    require(match is not None, "Owned observation proof path differs")
+    proof_sha = match[1]
+    prefix = "terminal-observation/" + proof_sha
+    proof, request = records[0][1], records[1][1]
+    require(0 < len(proof) <= 8 * 1024**2 and sha(proof) == proof_sha
+            and records[1][0] == prefix + "/request.json" and 0 < len(request) <= 65536,
+            "Owned observation record pins differ")
+    require(decode(request) == {"schema": "fullmag.terminal-observation-request.v1",
+                               "proof_path": prefix + "/proof.json", "proof_sha256": proof_sha},
+            "Owned observation request scope differs")
+    helper = control._assert_live_operation_helper(operation)
+    require(type(helper) is str and re.fullmatch("[0-9a-f]{64}", helper), "Exact owned helper ID required")
+    payload = json.dumps({"token": identity[0], "proof_sha256": proof_sha,
+                          "proof_base64": base64.b64encode(proof).decode("ascii"),
+                          "request_base64": base64.b64encode(request).decode("ascii")}).encode()
+    argv = docker_argv("exec", "--interactive", "--user", "65532:65532", helper,
+                       "/usr/local/bin/python3", "-I", "-B", "-c", _OWNED_PUBLISH_SCRIPT)
+    # An exec timeout can leave a partial file or a still-running publisher.
+    # Retain everything and propagate uncertainty; never retry or roll back.
+    try:
+        result = bounded_capture(argv, data=payload, timeout=180)
+    finally:
+        current_helper = control._assert_live_operation_helper(operation)
+        require(_owned_operation_identity(control, operation) == identity and current_helper == helper,
+                "Owned observation lease changed during publication")
+    require(result.returncode == 0 and result.stdout == b"PUBLISHED\n",
+            "Owned observation publication is unconfirmed; partial records retained")
+
+
+def _publish_private_records(control, records, *, owned_operation=None):
     # Same managed control helper and operation mutex as other private inputs.
     # No SessionStore or native owner/admission row is written.
     import base64
     from docker_build_control import bounded_capture
+    if owned_operation is not None:
+        return _publish_owned_records(control, records, owned_operation)
     payload = []
     for relative, raw in records:
         payload.append({"path": control.path("runtime-control/" + relative),
