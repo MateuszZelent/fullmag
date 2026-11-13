@@ -1644,3 +1644,15 @@ wyczerpał WSL; usunięto wyłącznie utworzone przez test kopie. Backend po tym
 pozostał healthy z tym samym API instance/PID/start ticks, bez aktywnej sesji.
 WSL około 453 MiB; S46 minimum 1 GiB nadal niespełnione. Danych użytkownika
 ani cudzych runtime'ów nie usuwano.
+
+
+Pierwsze rzeczywiste wywołanie wrappera na `4cca99c7a` zakończyło się przed
+Python/Docker: `[fullmag just] invalid direct Docker development recipe`.
+Nie powstała próba recovery ani zmiana usług. Rozwinięcie `just --dry-run`
+nie obejmuje walidatora shell. Dodano dokładny wzorzec nowej recepty w
+`just_storage_shell.sh`, z rekonstrukcją fixed argv, bez eval i bez szerszego
+allowlistu. Nowa regresja najpierw odtworzyła RED; po poprawce wszystkie
+26 testów granicy shell/just PASS, również odmowy dopisanych komend/opcji
+oraz zachowanie literalnego source-root ze spacjami i metaznakami. `bash -n`
+PASS. Następne guarded apply nadal wymagane; wcześniejsze 233 testy metadata
+pozostają aktualne (ich kod produkcyjny nie zmienił się w tej poprawce).

@@ -508,5 +508,29 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 self.assertFalse(result.stdout)
 
 
+    def test_failed_seed_generation_recipe_dispatches_fixed_frontend_only_arguments(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+            'docker-dev-recover-frontend-seed', 'a' * 32, 'b' * 64, source, '3243'],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        recipe = dry.stderr.strip()
+        marker = '  *"scripts/docker_dev.py"*)\n'
+        result = self.dispatch(recipe, marker=marker)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = result.stdout.split(b'\0')[:-1]
+        self.assertEqual(argv, [b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'refresh-frontend-volume',
+            b'--attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
+            b'--source-root', source.encode(), b'--port', b'3243', b'--failed-seed-new-generation'])
+        for suffix in (' --force', '; printf injected', ' --restart-backend',
+                       " --frontend-frozen-resume '" + 'c' * 32 + "'", ' --failed-seed-new-generation'):
+            with self.subTest(suffix=suffix):
+                refused = self.dispatch(recipe + suffix, marker=marker)
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+                self.assertFalse(refused.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
