@@ -57,3 +57,27 @@ Nie przypisuje się pustemu plikowi nieudowodnionego pochodzenia z Next.
    backendu. Wszystkie seed bytes i freeze zweryfikowane, stara kopia zachowana.
 5. Dopiero potem rzeczywisty odbiór UI/Cell. P22/S46 oraz matrix/integracja
    pozostają oddzielnymi bramkami; sam start usług ich nie zamyka.
+
+
+## Post-recreation completion
+
+A recreated healthy frontend whose bind witness refused may be completed only
+through the existing pinned prepare/apply observer transaction. A failed-seed
+base has its own authority: exact failed terminal/config/input CAS, unchanged
+retained backend package and incarnation, private generation and source identity
+proof. It cannot borrow an unrelated successful iteration/resume. Ordinary
+completion keeps its native source equality requirement.
+
+Future failed-seed refreshes persist an immutable idle backend incarnation/API
+baseline under the operation lease before seed or lifecycle work. A pre-existing
+operation without that journal may use a separately published genuine prior
+operator observation, explicitly tagged `operator-pinned-prior-observation`.
+Missing, malformed or drifted observations refuse; a malformed existing journal
+cannot fall back to an operator record. Both forms enter the transaction CAS.
+No current observation is silently promoted to a prior baseline.
+
+The result pins backend app, frontend input and helper commits separately and
+marks native qualification against the newer selected checkout NOT VERIFIED.
+Completion changes only operation metadata, archives the original unknown
+receipt/Compose and lets the original helper retire its lease. It never repeats
+Compose recreation, backend startup or Compute.

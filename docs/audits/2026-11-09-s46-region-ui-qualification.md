@@ -1682,3 +1682,47 @@ przy brakującym/rozbieżnym pakiecie, proweniencji, Compose i optional pinach.
 Pełne dotknięte dziewięć suite'ów: **235 PASS**, 7.975 s; log
 `/tmp/p22-frontend-pin-final-tests.log`. Produkcyjny kod API i wcześniejsze
 26 testów granicy shell nie zmieniły się. Rzeczywisty apply nadal wymagany.
+
+
+### 13.11 — zdrowe usługi, domknięcie retained frontend recovery
+
+Bieżący odczyt potwierdził Docker Engine 29.9.3, backend
+`1d3311194d38` i nowy frontend `fc57c9ca6c41` w stanie running/healthy.
+`GET http://localhost:3243/workspace` zwrócił HTTP 200. Pełny bootstrap CI
+`43360785517` dla dokładnego `a45237c09d3848a733f4eeceea22fd0f92ab83bb`
+zakończył się sukcesem. Te dowody nie stanowią odbioru cyklu symulacji ani
+rzeczywistego Inspectora FDM Cell.
+
+Próba frontend recovery `33052febe7e54031a42865a76c067a68` odtworzyła frontend
+raz, następnie zachowała lease i stan outcome-unknown-resources-retained przy
+`Recreated frontend source bind identity could not be proven`. Przyczyną
+odmowy dowodu był prawidłowy bezpośredni bind backendu do kanonicznej ścieżki
+Linux: dotychczasowy reconciler dopuszczał tylko alias Docker Desktop WSL.
+Poprawka wymaga zgodności deklaracji, rzeczywistego readonly mountu i tożsamości
+host/backend/frontend, w tym oznaczonych plików. Obce i zapisywalne bindy są
+nadal odrzucane.
+
+Osobny kontrakt domknięcia failed-seed nie pożycza sukcesu niezwiązanej próby
+iteration/resume. Sprawdza dokładny failed-confirmed terminal, rollback Compose
+i manifest, oryginalne source_pins, pakiet/provenance/binarium żywego backendu,
+nową prywatną generację oraz niezależny dowód bindów. Zwykłe domknięcie nadal
+wymaga ścisłego native source equality. Dla failed-seed wynik jawnie rozróżnia
+backend app commit, opublikowany frontend input commit i nowy helper commit;
+kwalifikacja natywnego backendu względem nowego całego checkoutu pozostaje
+`NOT VERIFIED`.
+
+Kolejne próby zapisują pod lease niezmienny backend-incarnation-baseline przed
+zmianą seedów lub lifecycle. Dla istniejącej próby 33052 dostępna jest rzeczywista
+obserwacja operatora zapisana przed jej uruchomieniem:
+`/tmp/p22-backend-before-frontend-repair.json`. Jej ewentualna publikacja ma jawny
+rodzaj `operator-pinned-prior-observation`; nie jest historycznym sukcesem
+backend continuation. Brak lub zmiana baseline blokuje domknięcie. Metadane
+baseline wchodzą w CAS istniejącej transakcji; nie uruchamia ona Compose,
+backendu ani Solve i zachowuje pierwotny receipt/Compose.
+
+Przed zastosowaniem: 122 izolowane testy metadanych, protokołu flock, guest
+seed i parsera powłoki przeszły (16 nowych completion/observer, 22 bind/legacy
+completion, 20 seed recovery, 17 legacy frontend recovery, 21 frozen recovery,
+26 shell). Testy obejmują odmowę przy dryfie PID/API, pakietu, manifestu,
+generacji i źródeł oraz zachowanie zwykłego native source gate. Nie jest to
+jeszcze dowód rzeczywistego domknięcia operacji 33052.

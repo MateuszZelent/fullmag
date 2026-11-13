@@ -534,6 +534,7 @@ def refresh_context(control, args, previous, document, actual, selected) -> dict
         "docker_dev.py", "docker_volume_dev.py", "docker_group_storage.py",
         "docker_volume_frontend_seed_recovery.py", "docker_volume_container_recovery.py",
         "docker_build_control.py", "docker_development_inputs.py", "docker_dev_codegen.py",
+        "docker_volume_frontend_seed_completion.py",
     )
     helper_hashes = {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                      for name in helper_paths}

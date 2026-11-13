@@ -1163,6 +1163,9 @@ jobs:
           python -B scripts/test_docker_frontend_frozen_recovery.py -v
           python -B scripts/test_docker_volume_frontend_recovery.py -v
           python -B scripts/test_docker_volume_frontend_seed_recovery.py -v
+          python -B scripts/test_docker_volume_frontend_seed_completion.py -v
+          python -B scripts/test_docker_frontend_seed_completion_observer.py -v
+          python -B scripts/test_docker_volume_frontend_refresh_reconcile.py -v
           python -B scripts/test_docker_helper_source_transition.py -v
           python -B scripts/test_just_development_recovery_shell.py -v
           python -B scripts/test_docker_volume_reconcile.py -v

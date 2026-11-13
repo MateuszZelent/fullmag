@@ -7413,6 +7413,17 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             current_actual = inspect_services(ids['frontend'])
             seed_recovery.revalidate_context(
                 control, args, previous, document, current_actual, selected, failed_seed_context)
+            # Persist the stable empty backend incarnation before any frontend
+            # seed/publication/lifecycle work, so post-recreation completion has
+            # its own authority even when the base DEV receipt failed.
+            import docker_volume_frontend_seed_completion as seed_completion
+            from docker_volume_reconcile import write_immutable
+            baseline = seed_completion.capture_baseline(current_actual['backend'],
+                _frontend_recovery_backend_observation(ids['backend'], allow_empty=True))
+            record = seed_completion.baseline_record(operation['receipt']['attempt'],
+                args.attempt, baseline, 'captured-under-lease')
+            write_immutable(control, operation['root'] + '/backend-incarnation-baseline.json',
+                            canonical(record))
         try:
             package, provenance, package_sha, binary_provenance = codegen._backend_documents(ids['backend'])
             backend_source, backend_provenance_sha, backend_binary_sha = codegen._validate_backend(
