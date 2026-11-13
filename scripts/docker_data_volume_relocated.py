@@ -15,7 +15,7 @@ import sys
 import threading
 
 import docker_data_volume_bind_job as bind_job
-from fullmag_data_volume_guard import _observe_directory
+from fullmag_data_volume_guard import _observe_directory,resolve_mount_uuid
 from fullmag_data_volume_journal import validate_journal
 from fullmag_data_volume_linux_request import validate_linux_request
 from fullmag_data_volume_runtime_binding import load_plan
@@ -34,8 +34,12 @@ def _mount(path):
     value=row[0]
     require(all(type(value.get(k)) is str and value[k] for k in
         ('target','fsroot','fstype','maj:min','options','propagation')) and
-        (value.get('uuid') is None or type(value['uuid']) is str) and
+        'uuid' in value and 'UUID' not in value and
+        (value['uuid'] is None or (type(value['uuid']) is str and bool(value['uuid']))) and
         re.fullmatch(r'[0-9]+:[0-9]+',value['maj:min']), 'Incomplete relocated mount observation')
+    if value['uuid'] is None and value['fstype'] == 'ext4':
+        value=dict(value)
+        value['uuid']=resolve_mount_uuid(path,None,major_minor=value['maj:min'])
     for k in ('target','fsroot'):
         p=Path(value[k])
         require(p.is_absolute() and str(p) == value[k] and '..' not in p.parts,'Noncanonical relocated mount path')

@@ -20,7 +20,7 @@ import subprocess
 import uuid
 
 import linux_data_volume_provision as qualification
-from fullmag_data_volume_guard import _open_directory_nofollow
+from fullmag_data_volume_guard import _open_directory_nofollow, resolve_mount_uuid
 from fullmag_data_volume_journal import append_started, append_terminal
 from fullmag_data_volume_linux_request import validate_linux_request
 
@@ -173,20 +173,34 @@ def _mount_verified(ready):
     finally:
         if underlay is not None:
             os.close(underlay)
+    return _qualify_mounted_volume(ready)
+
+
+def _qualify_mounted_volume(ready):
+    """Authenticate and mark a new mount; never format or mount a device."""
+    request, descriptor = ready['request'], ready['descriptor']
+    target = Path(request['mount_root'])
     observation = qualification._capture(['findmnt', '--json', '--target', str(target), '--output',
                                            'TARGET,FSTYPE,UUID,MAJ:MIN,OPTIONS'])
     rows = json.loads(observation.stdout).get('filesystems')
     qualification.require(type(rows) is list and len(rows) == 1, 'One exact new mount required')
     row = rows[0]
+    qualification.require(type(row) is dict and 'uuid' in row and 'UUID' not in row,
+                          'New mount must report exactly one UUID field')
+    if row['uuid'] is None:
+        row = dict(row, uuid=resolve_mount_uuid(target, None, major_minor=row.get('maj:min')))
     qualification.require(row.get('target') == str(target) and row.get('fstype') == 'ext4' and
                            row.get('uuid') == request['filesystem_uuid'] and
                            row.get('maj:min') == ready['device']['maj:min'] and
                            {'nodev', 'nosuid', 'rw'} <= set(row.get('options', '').split(',')),
                            'New mount identity, UUID, mode or block device differs')
-    root = _open_directory_nofollow(target)
+    pinned = ready.get('root_descriptor')
+    root = os.dup(pinned) if pinned is not None else _open_directory_nofollow(target)
     try:
         qualification.require(os.fstat(root).st_dev == os.fstat(descriptor).st_rdev,
                                'Mounted root does not belong to the pinned block device')
+        if pinned is not None:
+            _verify_root_path(target, root)
         identity = {'schema': 'fullmag.user-data-volume-identity.v1', 'volume_id': request['volume_id'],
                     'filesystem_uuid': request['filesystem_uuid'],
                     'created_receipt_sha256': request['created_receipt_sha256'],
@@ -194,12 +208,23 @@ def _mount_verified(ready):
                     'controller_sha256': request['controller_sha256'], 'data_migrated': False}
         _exclusive(root, '.fullmag-user-data-volume.json', _encoded(identity))
         os.fchmod(root, 0o755)
+        _verify_root_path(target, root)
         space = os.fstatvfs(root)
         return {'mount': row, 'device': os.fstat(root).st_dev, 'inode': os.fstat(root).st_ino,
                 'available_bytes': space.f_bavail*space.f_frsize,
                 'total_bytes': space.f_blocks*space.f_frsize}
     finally:
         os.close(root)
+
+
+def _verify_root_path(target, root):
+    fresh = _open_directory_nofollow(target)
+    try:
+        before, after = os.fstat(root), os.fstat(fresh)
+        qualification.require((before.st_dev, before.st_ino) == (after.st_dev, after.st_ino),
+                              'Mounted root path changed before publication')
+    finally:
+        os.close(fresh)
 
 
 def _entry_request(path, expected_sha256):

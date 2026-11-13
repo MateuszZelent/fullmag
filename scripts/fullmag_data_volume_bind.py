@@ -21,6 +21,7 @@ from uuid import UUID
 
 from fullmag_data_volume_fs import _directory_fd, _same_directory
 from fullmag_data_volume_manifest import inventory_datasets, require_matching_data, _validate_manifest
+from fullmag_data_volume_guard import resolve_mount_uuid
 from fullmag_data_volume_linux_request import _path
 import linux_data_volume_provision as qualification
 
@@ -119,14 +120,27 @@ def _scope(request):
 
 def _mount_info(path,exact=False):
     args=['findmnt','--json','--mountpoint' if exact else '--target',str(path),
-          '--output','TARGET,FSTYPE,UUID,OPTIONS,PROPAGATION']
+          '--output','TARGET,FSTYPE,UUID,MAJ:MIN,OPTIONS,PROPAGATION']
     result=qualification._capture(args,allowed=(0,1))
     if result.returncode == 1:
         qualification.require(exact and not result.stdout.strip(),'Mount observation is ambiguous')
         return None
     rows=json.loads(result.stdout).get('filesystems')
     qualification.require(type(rows) is list and len(rows) == 1,'Exactly one mount observation required')
-    return rows[0]
+    row=rows[0]
+    qualification.require(type(row) is dict and 'uuid' in row and 'UUID' not in row,
+                          'Mount observation must report exactly one UUID field')
+    if row['uuid'] is None:
+        row=dict(row)
+        major_minor=row.get('maj:min')
+        qualification.require(type(major_minor) is str and
+            re.fullmatch(r'[0-9]+:[0-9]+',major_minor),
+            'Null mount UUID requires an exact findmnt major:minor identity')
+        row['uuid']=resolve_mount_uuid(path,None,major_minor=major_minor)
+    else:
+        qualification.require(type(row['uuid']) is str and bool(row['uuid']),
+                              'Mount observation UUID must be a nonempty string')
+    return row
 
 
 def _destination(request):

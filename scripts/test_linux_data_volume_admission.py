@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -188,6 +189,57 @@ class AdmissionLoadScenario:
 
 class AdmissionContextTests(unittest.TestCase):
     def setUp(self):self.case=AdmissionLoadScenario(self)
+
+    def test_mount_resolves_null_uuid_and_preserves_reported_uuid_route(self):
+        stage=self.case.stage;path=Path(self.case.linux['mount_root'])
+        row={'target':str(path),'fsroot':'/','fstype':'ext4','uuid':None,'maj:min':'8:9',
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        capture=SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())
+        with mock.patch.object(stage.qualification,'_capture',return_value=capture), \
+                mock.patch.object(stage,'resolve_mount_uuid',return_value=self.case.linux['filesystem_uuid'],
+                                  create=True) as resolve:
+            observed=stage._mount(path)
+        self.assertEqual(observed['uuid'],self.case.linux['filesystem_uuid'])
+        resolve.assert_called_once_with(path,None,major_minor='8:9')
+        self.assertIsNone(row['uuid'])
+
+        reported=dict(row,uuid=self.case.linux['filesystem_uuid'])
+        with mock.patch.object(stage.qualification,'_capture',return_value=
+                SimpleNamespace(stdout=json.dumps({'filesystems':[reported]}).encode())), \
+                mock.patch.object(stage,'resolve_mount_uuid',create=True) as resolve:
+            self.assertEqual(stage._mount(path)['uuid'],self.case.linux['filesystem_uuid'])
+        resolve.assert_not_called()
+
+    def test_verify_roots_refuses_mismatched_or_unsupported_null_uuid_resolution(self):
+        case=self.case
+        with case.patches():context=case.call()
+        stage=case.stage;path=Path(context['linux']['mount_root'])
+        row={'target':str(path),'fsroot':'/','fstype':'ext4','uuid':None,'maj:min':'8:9',
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        capture=SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())
+        for resolver,pattern in ((mock.Mock(return_value='22222222-2222-4222-8222-222222222222'),'mount identity'),
+                                 (mock.Mock(side_effect=ValueError('unsupported UUID ioctl')),'unsupported UUID ioctl')):
+            with self.subTest(pattern=pattern), \
+                    mock.patch.object(stage.bind_stage.copy_stage,'_mounted_root'), \
+                    mock.patch.object(stage.qualification,'_capture',return_value=capture), \
+                    mock.patch.object(stage,'resolve_mount_uuid',resolver,create=True), \
+                    self.assertRaisesRegex(ValueError,pattern):
+                stage._verify_roots(context)
+            resolver.assert_called_once_with(path,None,major_minor='8:9')
+
+    def test_mount_rejects_missing_ambiguous_and_invalid_uuid_fields(self):
+        stage=self.case.stage;path=Path(self.case.linux['mount_root'])
+        rows=(
+            {'target':str(path),'fsroot':'/','fstype':'ext4','maj:min':'8:9'},
+            {'target':str(path),'fsroot':'/','fstype':'ext4','uuid':None,'UUID':None,'maj:min':'8:9'},
+            {'target':str(path),'fsroot':'/','fstype':'ext4','uuid':False,'maj:min':'8:9'},
+        )
+        for row in rows:
+            with self.subTest(row=row),mock.patch.object(stage.qualification,'_capture',return_value=
+                    SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())), \
+                    mock.patch.object(stage,'resolve_mount_uuid',create=True) as resolve,self.assertRaises(ValueError):
+                stage._mount(path)
+            resolve.assert_not_called()
 
     def test_valid_complete_lineage_yields_original_and_copied_views_without_old_canonical_probe(self):
         with self.case.patches(),mock.patch.object(self.case.stage.bind_stage.copy_stage,'_source_roots') as originals:

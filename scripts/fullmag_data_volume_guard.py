@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 
 try:
     from . import fullmag_data_volume as _model
@@ -68,6 +69,104 @@ def _open_directory_nofollow(path: Path) -> int:
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def filesystem_uuid_from_fd(fd: int) -> str:
+    """Read a Linux filesystem UUID from an already-open directory FD."""
+
+    if sys.platform != "linux":
+        _fail("filesystem UUID ioctl is available only on Linux")
+    if type(fd) is not int or fd < 0:
+        _fail("filesystem UUID source must be an open directory descriptor")
+
+    duplicate = os.dup(fd)
+    try:
+        before = os.fstat(duplicate)
+        if not stat.S_ISDIR(before.st_mode):
+            _fail("filesystem UUID source descriptor is not a directory")
+
+        # Keep fcntl optional at module import so this guard remains importable
+        # by Windows-side callers that never request the Linux-only ioctl.
+        import fcntl
+        from uuid import UUID
+
+        fsuuid2 = bytearray(17)
+        try:
+            result = fcntl.ioctl(duplicate, 0x80111500, fsuuid2, True)
+        except OSError as error:
+            raise ValueError("filesystem UUID ioctl failed or is unsupported") from error
+        if type(result) is not int or result != 0:
+            _fail("filesystem UUID ioctl returned an invalid status")
+        if len(fsuuid2) != 17 or fsuuid2[0] != 16:
+            _fail("filesystem UUID ioctl returned an invalid UUID length")
+        try:
+            value = UUID(bytes=bytes(fsuuid2[1:17]))
+        except (ValueError, TypeError) as error:
+            raise ValueError("filesystem UUID ioctl returned invalid UUID bytes") from error
+        if value.int == 0:
+            _fail("filesystem UUID ioctl returned the zero UUID")
+
+        after = os.fstat(duplicate)
+        if (before.st_dev, before.st_ino, before.st_mode) != (
+            after.st_dev, after.st_ino, after.st_mode
+        ) or not stat.S_ISDIR(after.st_mode):
+            _fail("filesystem UUID source directory changed during observation")
+        return str(value)
+    finally:
+        os.close(duplicate)
+
+
+def resolve_mount_uuid(path, reported_uuid, *, major_minor=None) -> str:
+    """Preserve a reported UUID or read a null UUID from a no-follow mount FD."""
+
+    read_from_fd = reported_uuid is None
+    if not read_from_fd and (type(reported_uuid) is not str or not reported_uuid):
+        _fail("reported filesystem UUID must be a nonempty string or explicit null")
+    if major_minor is not None and (
+        type(major_minor) is not str
+        or re.fullmatch(r"[0-9]+:[0-9]+", major_minor, re.ASCII) is None
+    ):
+        _fail("mount major:minor identity is invalid")
+    if not read_from_fd and major_minor is None:
+        return reported_uuid
+
+    path = _absolute_path(path, "mount UUID observation path")
+    try:
+        descriptor = _open_directory_nofollow(path)
+    except OSError as error:
+        raise ValueError("cannot open mount UUID observation directory") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISDIR(before.st_mode):
+            _fail("mount UUID observation target is not a directory")
+
+        def check_major_minor(metadata) -> None:
+            if major_minor is None:
+                return
+            observed = f"{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}"
+            if observed != major_minor:
+                _fail("mount directory device differs from findmnt major:minor")
+
+        check_major_minor(before)
+        value = filesystem_uuid_from_fd(descriptor) if read_from_fd else reported_uuid
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_mode) != (
+            after.st_dev, after.st_ino, after.st_mode
+        ) or not stat.S_ISDIR(after.st_mode):
+            _fail("mount UUID observation directory changed during read")
+        check_major_minor(after)
+
+        try:
+            current = path.stat(follow_symlinks=False)
+        except OSError as error:
+            raise ValueError("mount UUID observation path changed during read") from error
+        if not stat.S_ISDIR(current.st_mode) or (
+            current.st_dev, current.st_ino
+        ) != (after.st_dev, after.st_ino):
+            _fail("mount UUID observation path no longer names its pinned directory")
+        return value
+    finally:
+        os.close(descriptor)
 
 
 def _observe_directory(path) -> dict[str, int]:
@@ -225,7 +324,7 @@ def _run_findmnt(path: Path) -> dict:
         "--target",
         str(path),
         "--output",
-        "TARGET,FSTYPE,UUID",
+        "TARGET,FSTYPE,UUID,MAJ:MIN",
     ]
     try:
         result = subprocess.run(
@@ -257,10 +356,21 @@ def _run_findmnt(path: Path) -> dict:
             _fail(f"findmnt omitted or invalidated {upper}")
         return value
 
+    target = field("TARGET", "target")
+    filesystem = field("FSTYPE", "fstype")
+    uuid_keys = [key for key in ("UUID", "uuid") if key in row]
+    if len(uuid_keys) != 1:
+        _fail("findmnt omitted or ambiguously reported UUID")
+    reported_uuid = row[uuid_keys[0]]
+    major_keys = [key for key in ("MAJ:MIN", "maj:min") if key in row]
+    if len(major_keys) > 1:
+        _fail("findmnt ambiguously reported major:minor")
+    major_minor = row[major_keys[0]] if major_keys else None
+    filesystem_uuid = resolve_mount_uuid(path, reported_uuid, major_minor=major_minor)
     return {
-        "target": field("TARGET", "target"),
-        "filesystem": field("FSTYPE", "fstype"),
-        "filesystem_uuid": field("UUID", "uuid"),
+        "target": target,
+        "filesystem": filesystem,
+        "filesystem_uuid": filesystem_uuid,
     }
 
 

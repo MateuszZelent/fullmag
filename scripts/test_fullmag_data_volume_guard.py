@@ -1,15 +1,189 @@
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 from scripts import fullmag_data_volume_guard as guard
 
 
 FILESYSTEM_UUID = "123e4567-e89b-12d3-a456-426614174000"
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Linux filesystem UUID ioctl")
+class FilesystemUuidReaderTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix=".fullmag-filesystem-uuid-test-",
+            dir=Path(__file__).resolve().parents[1],
+        )
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _write_uuid(self, descriptor, request, buffer, mutate=True, *, length=16, raw=None, result=0):
+        self.assertEqual(request, 0x80111500)
+        self.assertTrue(mutate)
+        buffer[0] = length
+        buffer[1:17] = uuid.UUID(FILESYSTEM_UUID).bytes if raw is None else raw
+        return result
+
+    def _directory_fd(self):
+        return os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+    def test_filesystem_uuid_ioctl_uses_owned_duplicate_and_preserves_caller_fd(self):
+        descriptor = self._directory_fd()
+        duplicate = []
+
+        def ioctl(fd, request, buffer, mutate=True):
+            self.assertNotEqual(fd, descriptor)
+            os.fstat(fd)
+            duplicate.append(fd)
+            return self._write_uuid(fd, request, buffer, mutate)
+
+        try:
+            with patch("fcntl.ioctl", side_effect=ioctl):
+                self.assertEqual(guard.filesystem_uuid_from_fd(descriptor), FILESYSTEM_UUID)
+            os.fstat(descriptor)
+            self.assertEqual(len(duplicate), 1)
+            with self.assertRaises(OSError) as error:
+                os.fstat(duplicate[0])
+            self.assertEqual(error.exception.errno, errno.EBADF)
+        finally:
+            os.close(descriptor)
+
+    def test_filesystem_uuid_ioctl_rejects_unsupported_short_invalid_and_zero_results(self):
+        descriptor = self._directory_fd()
+        try:
+            cases = (
+                ("unsupported ioctl", OSError(errno.ENOTTY, "unsupported")),
+                ("nonzero result", None),
+                ("short UUID", None),
+                ("zero UUID", None),
+            )
+            for label, error in cases:
+                with self.subTest(label=label):
+                    if error is not None:
+                        mocked = patch("fcntl.ioctl", side_effect=error)
+                    elif label == "nonzero result":
+                        mocked = patch("fcntl.ioctl", side_effect=lambda fd, req, buf, mutate=True:
+                                       self._write_uuid(fd, req, buf, mutate, result=1))
+                    elif label == "short UUID":
+                        mocked = patch("fcntl.ioctl", side_effect=lambda fd, req, buf, mutate=True:
+                                       self._write_uuid(fd, req, buf, mutate, length=15))
+                    else:
+                        mocked = patch("fcntl.ioctl", side_effect=lambda fd, req, buf, mutate=True:
+                                       self._write_uuid(fd, req, buf, mutate, raw=bytes(16)))
+                    with mocked, self.assertRaises((OSError, ValueError)):
+                        guard.filesystem_uuid_from_fd(descriptor)
+                    os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_filesystem_uuid_ioctl_rejects_non_directory_before_ioctl(self):
+        regular = self.root / "ordinary-file"
+        regular.write_bytes(b"x")
+        descriptor = os.open(regular, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            with patch("fcntl.ioctl") as ioctl, self.assertRaises(ValueError):
+                guard.filesystem_uuid_from_fd(descriptor)
+            ioctl.assert_not_called()
+            os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_resolve_mount_uuid_uses_null_fallback_and_checks_pinned_major_minor(self):
+        metadata = os.stat(self.root, follow_symlinks=False)
+        major_minor = f"{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}"
+        other = "1:1" if major_minor != "1:1" else "2:2"
+        with patch("fcntl.ioctl", side_effect=lambda fd, req, buf, mutate=True:
+                   self._write_uuid(fd, req, buf, mutate)) as ioctl:
+            self.assertEqual(
+                guard.resolve_mount_uuid(self.root, None, major_minor=major_minor),
+                FILESYSTEM_UUID,
+            )
+            self.assertEqual(ioctl.call_count, 1)
+            with self.assertRaises(ValueError):
+                guard.resolve_mount_uuid(self.root, None, major_minor=other)
+            self.assertEqual(ioctl.call_count, 1)
+
+    def test_resolve_mount_uuid_checks_supplied_device_even_when_uuid_was_reported(self):
+        metadata = os.stat(self.root, follow_symlinks=False)
+        major_minor = f"{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}"
+        other = "1:1" if major_minor != "1:1" else "2:2"
+        with patch("fcntl.ioctl") as ioctl:
+            self.assertEqual(
+                guard.resolve_mount_uuid(self.root, FILESYSTEM_UUID, major_minor=major_minor),
+                FILESYSTEM_UUID,
+            )
+            with self.assertRaises(ValueError):
+                guard.resolve_mount_uuid(self.root, FILESYSTEM_UUID, major_minor=other)
+            ioctl.assert_not_called()
+
+    def test_resolve_mount_uuid_preserves_reported_value_and_rejects_bad_fallback_paths(self):
+        with patch("fcntl.ioctl") as ioctl:
+            self.assertEqual(
+                guard.resolve_mount_uuid(self.root / "absent", FILESYSTEM_UUID),
+                FILESYSTEM_UUID,
+            )
+            with self.assertRaises(ValueError):
+                guard.resolve_mount_uuid(self.root / "absent", None)
+            real = self.root / "real"
+            real.mkdir()
+            symlink = self.root / "link"
+            symlink.symlink_to(real, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                guard.resolve_mount_uuid(symlink, None)
+            ioctl.assert_not_called()
+
+    def test_findmnt_explicit_null_uuid_resolves_from_directory_fd(self):
+        metadata = os.stat(self.root, follow_symlinks=False)
+        major_minor = f"{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}"
+        payload = {
+            "filesystems": [{
+                "target": str(self.root),
+                "fstype": "ext4",
+                "uuid": None,
+                "maj:min": major_minor,
+            }]
+        }
+        result = type("Completed", (), {
+            "returncode": 0,
+            "stdout": json.dumps(payload).encode(),
+            "stderr": b"",
+        })()
+        with patch.object(guard.subprocess, "run", return_value=result), patch(
+            "fcntl.ioctl", side_effect=lambda fd, req, buf, mutate=True:
+            self._write_uuid(fd, req, buf, mutate),
+        ):
+            observed = guard._run_findmnt(self.root)
+        self.assertEqual(observed["filesystem_uuid"], FILESYSTEM_UUID)
+
+    def test_findmnt_rejects_missing_ambiguous_and_invalid_uuid_fields(self):
+        cases = (
+            ("missing", {"target": str(self.root), "fstype": "ext4"}),
+            ("ambiguous", {"target": str(self.root), "fstype": "ext4", "UUID": None,
+                           "uuid": None}),
+            ("wrong type", {"target": str(self.root), "fstype": "ext4", "uuid": False}),
+            ("empty", {"target": str(self.root), "fstype": "ext4", "uuid": ""}),
+        )
+        for label, row in cases:
+            result = type("Completed", (), {
+                "returncode": 0,
+                "stdout": json.dumps({"filesystems": [row]}).encode(),
+                "stderr": b"",
+            })()
+            with self.subTest(label=label), patch.object(
+                guard.subprocess, "run", return_value=result
+            ), patch("fcntl.ioctl") as ioctl, self.assertRaises(ValueError):
+                guard._run_findmnt(self.root)
+            ioctl.assert_not_called()
 
 
 class RegisteredVolumeGuardTests(unittest.TestCase):

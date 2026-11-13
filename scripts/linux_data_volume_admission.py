@@ -12,7 +12,8 @@ import os
 from pathlib import Path
 import re
 
-from fullmag_data_volume_guard import _observe_directory,_parse_object,_read_optional_regular
+from fullmag_data_volume_guard import (_observe_directory,_parse_object,_read_optional_regular,
+                                       resolve_mount_uuid)
 from fullmag_data_volume_fs import _same_directory
 from fullmag_data_volume_journal import append_started,append_terminal,next_phase
 from fullmag_data_volume_linux_request import _path,validate_linux_request
@@ -64,7 +65,16 @@ def _mount(path):
         '--output','TARGET,FSROOT,FSTYPE,UUID,MAJ:MIN,OPTIONS,PROPAGATION']).stdout
     rows=_parse_object(raw,'admission mount observation').get('filesystems')
     require(type(rows) is list and len(rows) == 1 and type(rows[0]) is dict,'One exact admission mount required')
-    return rows[0]
+    row=rows[0]
+    require('uuid' in row and 'UUID' not in row,
+            'Admission mount must report exactly one UUID field')
+    if row['uuid'] is None:
+        row=dict(row)
+        row['uuid']=resolve_mount_uuid(path,None,major_minor=row.get('maj:min'))
+    else:
+        require(type(row['uuid']) is str and bool(row['uuid']),
+                'Admission mount UUID must be a nonempty string')
+    return row
 
 
 def _verify_roots(context):

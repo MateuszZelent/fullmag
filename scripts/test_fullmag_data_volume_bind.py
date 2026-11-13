@@ -4,6 +4,7 @@ import unittest
 from contextlib import contextmanager
 import copy
 import errno
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scripts import fullmag_data_volume_bind as bind
@@ -138,6 +140,70 @@ class BindScenario:
 
 
 class DataVolumeBindTests(unittest.TestCase):
+    def _destination_with_mount_row(self, fixture, row, uuid_result):
+        payload=SimpleNamespace(returncode=0,stdout=json.dumps({'filesystems':[row]}).encode())
+        opened=Mock()
+        @contextmanager
+        def directory_fd(_path):
+            yield 77
+        info=SimpleNamespace(st_dev=fixture.request['mount_identity']['device'],
+            st_ino=fixture.request['mount_identity']['inode'],st_uid=0,st_mode=stat.S_IFDIR|0o755)
+        with patch.object(bind.qualification,'_capture',return_value=payload), \
+                patch.object(bind,'resolve_mount_uuid',return_value=uuid_result,create=True) as resolve, \
+                patch.object(bind,'_directory_fd',side_effect=directory_fd) as open_dir, \
+                patch.object(bind.os,'fstat',return_value=info):
+            result=bind._destination(fixture.request)
+        return result,resolve,open_dir
+
+    def test_destination_resolves_null_uuid_and_keeps_nonnull_route(self):
+        fixture=BindScenario(self)
+        row={'target':fixture.mount_root,'fstype':'ext4','uuid':None,'maj:min':'8:9',
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        result,resolve,_=self._destination_with_mount_row(fixture,row,fixture.filesystem_uuid)
+        self.assertEqual(result,Path(fixture.mount_root))
+        resolve.assert_called_once_with(Path(fixture.mount_root),None,major_minor='8:9')
+        self.assertIsNone(row['uuid'])
+
+        row=dict(row,uuid=fixture.filesystem_uuid)
+        result,resolve,_=self._destination_with_mount_row(fixture,row,fixture.filesystem_uuid)
+        self.assertEqual(result,Path(fixture.mount_root))
+        resolve.assert_not_called()
+
+    def test_destination_refuses_mismatched_or_unsupported_resolved_uuid(self):
+        fixture=BindScenario(self)
+        row={'target':fixture.mount_root,'fstype':'ext4','uuid':None,'maj:min':'8:9',
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        with patch.object(bind.qualification,'_capture',return_value=
+                SimpleNamespace(returncode=0,stdout=json.dumps({'filesystems':[row]}).encode())), \
+                patch.object(bind,'resolve_mount_uuid',return_value='22222222-2222-4222-8222-222222222222',
+                             create=True), \
+                patch.object(bind,'_directory_fd') as opened,self.assertRaises(ValueError):
+            bind._destination(fixture.request)
+        opened.assert_not_called()
+
+        with patch.object(bind.qualification,'_capture',return_value=
+                SimpleNamespace(returncode=0,stdout=json.dumps({'filesystems':[row]}).encode())), \
+                patch.object(bind,'resolve_mount_uuid',side_effect=ValueError('unsupported UUID ioctl'),
+                             create=True), \
+                patch.object(bind,'_directory_fd') as opened,self.assertRaisesRegex(ValueError,'unsupported UUID ioctl'):
+            bind._destination(fixture.request)
+        opened.assert_not_called()
+
+    def test_mount_info_rejects_missing_ambiguous_and_invalid_uuid(self):
+        fixture=BindScenario(self)
+        rows=(
+            {'target':fixture.mount_root,'fstype':'ext4','maj:min':'8:9'},
+            {'target':fixture.mount_root,'fstype':'ext4','uuid':None,'UUID':None,'maj:min':'8:9'},
+            {'target':fixture.mount_root,'fstype':'ext4','uuid':False,'maj:min':'8:9'},
+            {'target':fixture.mount_root,'fstype':'ext4','uuid':None},
+        )
+        for row in rows:
+            with self.subTest(row=row),patch.object(bind.qualification,'_capture',return_value=
+                    SimpleNamespace(returncode=0,stdout=json.dumps({'filesystems':[row]}).encode())), \
+                    patch.object(bind,'resolve_mount_uuid',create=True) as resolve,self.assertRaises(ValueError):
+                bind._mount_info(Path(fixture.mount_root),exact=True)
+            resolve.assert_not_called()
+
     def test_shared_original_parent_refuses_before_record_or_mutation(self):
         fixture = BindScenario(self)
         events = []

@@ -18,7 +18,7 @@ import stat
 
 import linux_data_volume_provision as qualification
 from fullmag_data_volume_fs import archive_and_extract
-from fullmag_data_volume_guard import _open_directory_nofollow
+from fullmag_data_volume_guard import _open_directory_nofollow, resolve_mount_uuid
 from fullmag_data_volume_journal import append_started, append_terminal, next_phase
 from fullmag_data_volume_linux_request import validate_linux_request
 from fullmag_data_volume_runtime_binding import load_plan
@@ -85,6 +85,14 @@ def _mounted_root(linux, provision):
     rows = json.loads(observed.stdout).get('filesystems')
     qualification.require(type(rows) is list and len(rows) == 1, 'One exact copy destination mount required')
     row = rows[0]
+    qualification.require(type(row) is dict and 'uuid' in row and 'UUID' not in row,
+                          'Copy destination mount must report exactly one UUID field')
+    if row['uuid'] is None:
+        row = dict(row)
+        row['uuid'] = resolve_mount_uuid(target, None, major_minor=row.get('maj:min'))
+    else:
+        qualification.require(type(row['uuid']) is str and bool(row['uuid']),
+                              'Copy destination mount UUID must be a nonempty string')
     qualification.require(row.get('target') == str(target) and row.get('fstype') == 'ext4' and
         row.get('uuid') == linux['filesystem_uuid'] and
         row.get('maj:min') == provision['filesystem']['mount']['maj:min'] and

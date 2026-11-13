@@ -37,10 +37,10 @@ StateRoot i budżety usług muszą być zachowane.
 - [x] Testy hostowego publikatora: brak zapisu po drift, zachowanie istniejącego
   bindingu i odmowa obcego planu/roli; brak uruchamiania lub zatrzymywania usług.
 - [x] Review i adekwatne testy: 637 PASS w 51 modułach obowiązkowej bramki.
-- [ ] Commit oraz push istniejącego brancha SP4.
+- [x] Commit oraz push istniejącego brancha SP4: `bab622a08668c93cb47973b5ec180c5452dc1abb`.
 - [x] Odczytowa kwalifikacja rzeczywistej grupy i jawna publikacja
   nowego bindingu.
-- [ ] Sprawdzenie opublikowanego rekordu niezmienionym loaderem v1 przy
+- [x] Sprawdzenie opublikowanego rekordu niezmienionym loaderem v1 przy
   przygotowaniu requestu Linux.
 
 ## Odbiór

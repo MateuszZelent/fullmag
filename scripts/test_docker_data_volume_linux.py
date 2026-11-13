@@ -110,7 +110,7 @@ class LinuxVolumeBridgeTests(unittest.TestCase):
             bridge._wsl_executable()
 
     def test_only_format_holds_group_lock_across_the_attached_subprocess(self):
-        for stage in ('probe', 'preflight', 'format-mount'):
+        for stage in ('probe', 'preflight', 'format-mount', 'recover-mounted'):
             events = []
 
             @contextmanager
@@ -136,7 +136,46 @@ class LinuxVolumeBridgeTests(unittest.TestCase):
                     mock.patch.object(bridge, 'command_for_stage', return_value=['pinned-root-stage']), \
                     mock.patch.object(bridge.subprocess, 'run', side_effect=run):
                 self.assertEqual(bridge.run_stage(self.source, stage, 'Ubuntu2'), 7)
-            self.assertEqual(events, ['lock', 'run', 'unlock'] if stage == 'format-mount' else ['run'])
+            self.assertEqual(events, ['lock', 'run', 'unlock'] if stage in
+                             ('format-mount', 'recover-mounted') else ['run'])
+
+    def recovery_command(self, *, change=None):
+        from scripts import linux_data_volume_recover as recovery
+        token = '6'*32
+        components = {}
+        for name in recovery.COMPONENTS:
+            path = self.source/'scripts'/name
+            if not path.exists():
+                path.write_text('# private root fixture\n')
+            components[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        request = {'schema': recovery.SCHEMA, 'volume_id': self.request['volume_id'],
+            'storage_root': self.layout['storage_root'], 'token': token,
+            'failed_journal_relative': 'recovery/'+'5'*32+'/journal.json',
+            **{key: 'a'*64 for key in recovery.DIGEST_KEYS}, 'components': components}
+        if change:
+            change(request)
+        path = self.path.parent/'recovery'/token/'mounted-recovery-request.json'
+        with mock.patch.object(bridge, '_read', side_effect=[(b'recovery', request), (b'linux', self.request)]), \
+                mock.patch.object(bridge, 'load_plan', return_value=(b'plan', self.plan, None)), \
+                mock.patch.object(bridge, '_wsl_executable', return_value='/mnt/c/Windows/System32/wsl.exe'):
+            return bridge.command_for_stage(self.source, self.layout, self.identity, 'recover-mounted',
+                                            'Ubuntu2', path, 'b'*64)
+
+    def test_recovery_uses_isolated_closed_bootstrap_and_never_format_argv(self):
+        from scripts import docker_data_volume_root_bootstrap as bootstrap
+        argv = self.recovery_command()
+        self.assertEqual(argv[6:11], ['/usr/bin/python3', '-I', '-B', '-c', bootstrap.bootstrap('recover-mounted')])
+        self.assertEqual(argv[11], str(self.source))
+        self.assertNotIn('format-mount', argv)
+        self.assertEqual(len(argv), 15)
+
+    def test_recovery_refuses_source_component_or_group_drift(self):
+        with self.assertRaisesRegex(ValueError, 'component source changed'):
+            self.recovery_command(change=lambda request: request['components'].update(
+                {'fullmag_data_volume_guard.py': '0'*64}))
+        self.plan['compose_project'] = 'foreign'
+        with self.assertRaisesRegex(ValueError, 'another checkout'):
+            self.recovery_command()
 
 
 if __name__ == '__main__':

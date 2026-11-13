@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -30,8 +31,11 @@ def _wsl_executable():
 
 def command_for_stage(source, layout, identity, stage, distro, request_path=None,
                       request_sha256=None, formatter_sha256=None):
-    require(stage in ('probe', 'preflight', 'format-mount') and type(distro) is str and
+    require(stage in ('probe', 'preflight', 'format-mount', 'recover-mounted') and type(distro) is str and
              re.fullmatch(r'[A-Za-z0-9_-]{1,80}', distro), 'Exact Linux stage and WSL distro required')
+    if stage == 'recover-mounted':
+        require(formatter_sha256 is None, 'Recovery consumes its own closed component authority')
+        return _recovery_command(source, layout, identity, distro, request_path, request_sha256)
     script = source/'scripts'/'linux_data_volume_provision.py'
     arguments = [stage]
     if stage == 'probe':
@@ -83,6 +87,49 @@ def command_for_stage(source, layout, identity, stage, distro, request_path=None
             '/usr/bin/python3', '-B', str(script), *arguments]
 
 
+def _recovery_command(source, layout, identity, distro, path, expected_sha256):
+    from linux_data_volume_recover import validate_request, COMPONENTS
+    from docker_data_volume_root_bootstrap import bootstrap
+    require(type(expected_sha256) is str and re.fullmatch('[0-9a-f]{64}', expected_sha256) and
+            isinstance(path, (str, Path)), 'Exact root recovery request path and SHA required')
+    _, raw = _read(Path(path), expected_sha256)
+    request = validate_request(raw)
+    op = Path(layout['storage_root'])/'migrations/data-volumes'/request['volume_id']
+    require(request['storage_root'] == layout['storage_root'] and
+            Path(path) == op/'recovery'/request['token']/'mounted-recovery-request.json',
+            'Recovery request is outside the selected storage')
+    _, raw_linux = _read(op/'linux-provision-request.json', request['linux_request_sha256'])
+    linux = validate_linux_request(raw_linux)
+    _, plan, _binding = load_plan(op, linux)
+    require(plan.get('source_root') == str(source) and
+        plan.get('project_id') == identity['project_id'] and
+        plan.get('worktree_id') == identity['worktree_id'] and
+        plan.get('compose_project') == identity['project_name'] and
+        plan.get('provision_request', {}).get('wsl_distro') == distro and
+        linux['volume_id'] == request['volume_id'] and linux['storage_root'] == layout['storage_root'] and
+        linux['source_roots'] == plan.get('observation', {}).get('datasets'),
+        'Recovery belongs to another checkout, group, original dataset or distro')
+    expected_user = Path(layout['storage_root'])/'user-data'/identity['project_name']
+    state = Path(linux['source_roots']['state']['canonical_root'])
+    require(linux['source_roots']['user_data']['canonical_root'] == str(expected_user) and
+        state != Path(layout['runtime_root']) and state.is_relative_to(layout['runtime_root']),
+        'Recovery original datasets differ from the selected group')
+    for name in COMPONENTS:
+        raw = _read_optional_component(source/'scripts'/name)
+        require(hashlib.sha256(raw).hexdigest() == request['components'][name],
+                'Root recovery component source changed: '+name)
+    return [_wsl_executable(), '--distribution', distro, '--user', 'root', '--exec',
+            '/usr/bin/python3', '-I', '-B', '-c', bootstrap('recover-mounted'), str(source), str(path),
+            expected_sha256, json.dumps(request['components'], sort_keys=True, separators=(',', ':'))]
+
+
+def _read_optional_component(path):
+    from fullmag_data_volume_guard import _read_optional_regular
+    raw = _read_optional_regular(path, 'root recovery component', maximum=4*1024**2)
+    require(raw is not None, 'Root recovery component is absent')
+    return raw
+
+
 def run_stage(source_root, stage, distro, *, request_path=None, request_sha256=None,
               formatter_sha256=None):
     require(os.name == 'posix', 'The WSL data-volume bridge requires the Linux host adapter')
@@ -90,7 +137,7 @@ def run_stage(source_root, stage, distro, *, request_path=None, request_sha256=N
     validate_host_path(source, 'data-volume checkout')
     layout = storage.resolve_layout(source, profile='docker-all-gpu')
     identity = compose_project_identity(layout)
-    context = storage.build_lock(layout) if stage == 'format-mount' else nullcontext()
+    context = storage.build_lock(layout) if stage in ('format-mount', 'recover-mounted') else nullcontext()
     with context:
         command = command_for_stage(source, layout, identity, stage, distro,
                                      request_path, request_sha256, formatter_sha256)
@@ -101,7 +148,7 @@ def run_stage(source_root, stage, distro, *, request_path=None, request_sha256=N
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('stage', choices=['probe', 'preflight', 'format-mount'])
+    parser.add_argument('stage', choices=['probe', 'preflight', 'format-mount', 'recover-mounted'])
     parser.add_argument('--source-root', required=True)
     parser.add_argument('--wsl-distro', required=True)
     parser.add_argument('--request')

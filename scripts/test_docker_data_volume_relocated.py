@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from scripts import docker_dev_data_volume_copy as copy_parent
@@ -177,7 +178,6 @@ class RelocatedGroupTests(unittest.TestCase):
         self.assertFalse(view.overlaps(Path('/unrelated/data')))
 
     def test_foreign_pseudo_filesystem_can_be_proved_disjoint_without_uuid(self):
-        from types import SimpleNamespace
         row={'target':'/dev','fsroot':'/','fstype':'devtmpfs','uuid':None,
              'maj:min':'0:999','options':'rw,nosuid','propagation':'private'}
         view=self.issue()
@@ -187,6 +187,67 @@ class RelocatedGroupTests(unittest.TestCase):
         self.assertIsNone(observed['uuid'])
         self.mounts[Path('/dev/null')]=observed
         self.assertFalse(view.overlaps(Path('/dev/null')))
+
+    def test_ext4_null_uuid_resolves_and_reported_uuid_keeps_no_ioctl_route(self):
+        path=self.case.mount_root
+        row={'target':str(path),'fsroot':'/','fstype':'ext4','uuid':None,'maj:min':self.newdev,
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        with mock.patch.object(self.module.qualification,'_capture',return_value=
+                SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())), \
+                mock.patch.object(self.module,'resolve_mount_uuid',return_value=self.case.filesystem_uuid,
+                                  create=True) as resolve:
+            observed=self.real_mount(path)
+        self.assertEqual(observed['uuid'],self.case.filesystem_uuid)
+        resolve.assert_called_once_with(path,None,major_minor=self.newdev)
+        self.assertIsNone(row['uuid'])
+
+        row=dict(row,uuid=self.case.filesystem_uuid)
+        with mock.patch.object(self.module.qualification,'_capture',return_value=
+                SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())), \
+                mock.patch.object(self.module,'resolve_mount_uuid',create=True) as resolve:
+            observed=self.real_mount(path)
+        self.assertEqual(observed['uuid'],self.case.filesystem_uuid)
+        resolve.assert_not_called()
+
+    def test_ext4_null_uuid_mismatch_or_unsupported_resolution_fails_view_check(self):
+        view=self.issue();path=self.case.mount_root
+        row={'target':str(path),'fsroot':'/','fstype':'ext4','uuid':None,'maj:min':self.newdev,
+             'options':'rw,nodev,nosuid','propagation':'private'}
+        original_mount=self.mount
+
+        def observe_with_null(path_value):
+            path_value=Path(path_value)
+            if path_value not in self.mounts or path_value == path:
+                return self.real_mount(path_value)
+            return original_mount(path_value)
+
+        def capture(_argv, **_kwargs):
+            return SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())
+
+        for resolver,pattern in (
+            (mock.Mock(return_value='22222222-2222-4222-8222-222222222222'),'mount changed'),
+            (mock.Mock(side_effect=ValueError('unsupported UUID ioctl')),'unsupported UUID ioctl'),
+        ):
+            with self.subTest(pattern=pattern), \
+                    mock.patch.object(self.module,'_mount',side_effect=observe_with_null), \
+                    mock.patch.object(self.module.qualification,'_capture',side_effect=capture), \
+                    mock.patch.object(self.module,'resolve_mount_uuid',resolver,create=True), \
+                    self.assertRaisesRegex(ValueError,pattern):
+                view.check(self.case.source_root,self.case.plan)
+            resolver.assert_called_once_with(path,None,major_minor=self.newdev)
+
+    def test_relocated_mount_rejects_missing_or_ambiguous_uuid_fields(self):
+        path=self.case.mount_root
+        base={'target':str(path),'fsroot':'/','fstype':'ext4','maj:min':self.newdev,
+              'options':'rw,nodev,nosuid','propagation':'private'}
+        for row in (dict(base),dict(base,uuid=None,UUID=None)):
+            with self.subTest(row=row), \
+                    mock.patch.object(self.module.qualification,'_capture',return_value=
+                        SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())), \
+                    mock.patch.object(self.module,'resolve_mount_uuid',create=True) as resolve, \
+                    self.assertRaises(ValueError):
+                self.real_mount(path)
+            resolve.assert_not_called()
 
     def test_overrides_are_closed_and_keep_original_root_ids(self):
         view=self.issue()

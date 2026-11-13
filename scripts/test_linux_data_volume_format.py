@@ -178,5 +178,96 @@ class LinuxFormatOrchestrationTests(unittest.TestCase):
         self.assertFalse((self.op/'new-mount').exists())
 
 
+class MountedVolumeQualificationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.target = Path(self.temp.name)/'mount'
+        self.target.mkdir()
+        self.request = valid_request()
+        self.request['mount_root'] = str(self.target)
+        self.descriptor = os.open(os.devnull, os.O_RDONLY)
+        self.addCleanup(os.close, self.descriptor)
+        self.ready = {'request': self.request, 'descriptor': self.descriptor,
+                      'device': {'maj:min': '8:16'}}
+        self.row = {'target': str(self.target), 'fstype': 'ext4', 'uuid': None,
+                    'maj:min': '8:16', 'options': 'rw,nodev,nosuid,relatime'}
+
+    def qualify(self, *, resolved=None, error=None):
+        observed = subprocess.CompletedProcess([], 0, json.dumps({'filesystems': [self.row]}).encode())
+        real_fstat = os.fstat
+
+        def stat_descriptor(fd):
+            if fd == self.descriptor:
+                return SimpleNamespace(st_rdev=self.target.stat().st_dev)
+            return real_fstat(fd)
+
+        with mock.patch.object(formatting.qualification, '_capture', return_value=observed), \
+                mock.patch.object(formatting.os, 'fstat', side_effect=stat_descriptor), \
+                mock.patch.object(formatting, 'resolve_mount_uuid',
+                                  return_value=resolved or self.request['filesystem_uuid'],
+                                  side_effect=error) as resolver, \
+                mock.patch.object(formatting, '_run') as mutation:
+            result = formatting._qualify_mounted_volume(self.ready)
+            mutation.assert_not_called()
+            return result, resolver
+
+    def test_explicit_null_uses_kernel_uuid_and_never_mounts_or_formats(self):
+        result, reader = self.qualify()
+        reader.assert_called_once_with(self.target, None, major_minor='8:16')
+        self.assertEqual(result['mount']['uuid'], self.request['filesystem_uuid'])
+        self.assertEqual(result['device'], self.target.stat().st_dev)
+        self.assertTrue((self.target/'.fullmag-user-data-volume.json').is_file())
+
+    def test_kernel_uuid_mismatch_fails_before_marker_creation(self):
+        with self.assertRaisesRegex(ValueError, 'UUID'):
+            self.qualify(resolved='12345678-1234-1234-1234-123456789abc')
+        self.assertFalse((self.target/'.fullmag-user-data-volume.json').exists())
+
+    def test_unsupported_kernel_uuid_fails_before_marker_creation(self):
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            self.qualify(error=ValueError('unsupported filesystem UUID ioctl'))
+        self.assertFalse((self.target/'.fullmag-user-data-volume.json').exists())
+
+    def test_missing_uuid_is_not_treated_as_explicit_null(self):
+        del self.row['uuid']
+        with mock.patch.object(formatting, 'resolve_mount_uuid') as reader:
+            with self.assertRaises(ValueError):
+                self.qualify()
+            reader.assert_not_called()
+        self.assertFalse((self.target/'.fullmag-user-data-volume.json').exists())
+
+    def test_recovery_pinned_root_rejects_same_device_other_inode_before_writing(self):
+        pinned_path = self.target.parent/'pinned-root'; pinned_path.mkdir()
+        pinned = os.open(pinned_path, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, pinned)
+        self.ready['root_descriptor'] = pinned
+        with mock.patch.object(formatting, '_exclusive') as marker, \
+                mock.patch.object(formatting.os, 'fchmod') as chmod:
+            with self.assertRaisesRegex(ValueError, 'root path changed'):
+                self.qualify()
+        marker.assert_not_called(); chmod.assert_not_called()
+        self.assertEqual(os.fstat(pinned).st_ino, pinned_path.stat().st_ino)
+
+    def test_recovery_writes_through_pinned_fd_and_refuses_path_swap_after_marker(self):
+        pinned = os.open(self.target, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, pinned)
+        self.ready['root_descriptor'] = pinned
+        saved = self.target.parent/'saved-original'
+        replacement = self.target.parent/'replacement'; replacement.mkdir()
+        exclusive = formatting._exclusive
+
+        def marker(fd, name, raw):
+            self.target.rename(saved)
+            replacement.rename(self.target)
+            exclusive(fd, name, raw)
+
+        with mock.patch.object(formatting, '_exclusive', side_effect=marker):
+            with self.assertRaisesRegex(ValueError, 'root path changed'):
+                self.qualify()
+        self.assertTrue((saved/'.fullmag-user-data-volume.json').is_file())
+        self.assertFalse((self.target/'.fullmag-user-data-volume.json').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

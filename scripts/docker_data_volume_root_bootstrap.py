@@ -1,4 +1,4 @@
-"""Build closed isolated root-client bootstraps for copy, bind and admission."""
+"""Build closed isolated root-client bootstraps for data-volume stages."""
 
 COPY_COMPONENTS = (
     "linux_data_volume_copy.py",
@@ -25,8 +25,20 @@ ADMISSION_COMPONENTS = BIND_COMPONENTS + (
     "fullmag_data_volume_admission.py",
     "linux_data_volume_admission.py",
 )
+RECOVERY_COMPONENTS = ('linux_data_volume_recover.py',) + tuple(
+    name for name in COPY_COMPONENTS if name != 'linux_data_volume_copy.py')
 
 _STAGES = {
+    "recover-mounted": {
+        "schema": "fullmag.data-volume-mounted-recovery-request.v1",
+        "keys": (
+            "schema", "volume_id", "storage_root", "token", "failed_journal_relative",
+            "linux_request_sha256", "failed_journal_sha256", "format_inputs_sha256",
+            "format_started_sha256", "format_failure_sha256", "selector_sha256",
+            "recovery_journal_sha256", "components",
+        ),
+        "components": RECOVERY_COMPONENTS,
+    },
     "copy": {
         "schema": "fullmag.data-volume-linux-copy-request.v1",
         "keys": (
@@ -194,7 +206,9 @@ os.environ.clear()
 os.environ.update({'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C', 'LANG': 'C'})
 sys.meta_path.insert(0, VerifiedFinder())
 import importlib
-if STAGE == 'copy':
+if STAGE == 'recover-mounted':
+    importlib.import_module('linux_data_volume_recover').recover_mounted(request_path, request_sha256)
+elif STAGE == 'copy':
     importlib.import_module('linux_data_volume_copy').copy_verified(request_path, request_sha256)
 elif STAGE == 'bind':
     importlib.import_module('linux_data_volume_bind').bind_verified(request_path, request_sha256)
@@ -208,7 +222,7 @@ else:
 def bootstrap(stage):
     """Return a fixed stage-specific program for ``python -I -B -c`` only."""
     if type(stage) is not str or stage not in _STAGES:
-        raise ValueError("Root bootstrap stage must be exactly 'copy', 'bind' or 'admission'")
+        raise ValueError("Root bootstrap stage must be exactly 'recover-mounted', 'copy', 'bind' or 'admission'")
     config = _STAGES[stage]
     prefix = "\n".join((
         "STAGE = " + repr(stage),

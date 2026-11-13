@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -183,6 +184,78 @@ class CopyContextTests(unittest.TestCase):
                     mock.patch.object(stage,'_open_directory_nofollow') as opened,self.assertRaises(ValueError):
                 stage._mounted_root(self.linux,self.provision)
             opened.assert_not_called()
+
+    def test_mounted_root_resolves_only_null_uuid_and_still_checks_the_expected_filesystem(self):
+        target=Path(self.linux['mount_root'])
+        marker={'schema':'fullmag.user-data-volume-identity.v1','volume_id':self.linux['volume_id'],
+            'filesystem_uuid':self.linux['filesystem_uuid'],'created_receipt_sha256':self.linux['created_receipt_sha256'],
+            'attached_receipt_sha256':self.linux['attached_receipt_sha256'],
+            'controller_sha256':self.linux['controller_sha256'],'data_migrated':False}
+        metadata=SimpleNamespace(st_uid=0,st_mode=stat.S_IFDIR|0o755,st_dev=200,st_ino=2)
+
+        def observe(row, resolver_result):
+            with tempfile.TemporaryDirectory() as directory:
+                payload={'filesystems':[row]}
+                capture=SimpleNamespace(stdout=json.dumps(payload).encode())
+                with mock.patch.object(stage.qualification,'_capture',return_value=capture), \
+                        mock.patch.object(stage.qualification,'_read',return_value=(b'',marker)), \
+                        mock.patch.object(stage,'_open_directory_nofollow',
+                            side_effect=lambda _path:os.open(directory,os.O_RDONLY|os.O_DIRECTORY)), \
+                        mock.patch.object(stage.os,'fstat',return_value=metadata), \
+                        mock.patch.object(stage,'resolve_mount_uuid',return_value=resolver_result,
+                                          create=True) as resolve:
+                    result=stage._mounted_root(self.linux,self.provision)
+                return result,resolve
+
+        null_row={'target':str(target),'fstype':'ext4','uuid':None,'maj:min':'8:9','options':'rw,nodev,nosuid'}
+        result,resolve=observe(null_row,self.linux['filesystem_uuid'])
+        self.assertEqual(result,target)
+        resolve.assert_called_once_with(target,None,major_minor='8:9')
+        self.assertIsNone(null_row['uuid'])
+
+        reported=dict(null_row,uuid=self.linux['filesystem_uuid'])
+        with tempfile.TemporaryDirectory() as directory:
+            capture=SimpleNamespace(stdout=json.dumps({'filesystems':[reported]}).encode())
+            with mock.patch.object(stage.qualification,'_capture',return_value=capture), \
+                    mock.patch.object(stage.qualification,'_read',return_value=(b'',marker)), \
+                    mock.patch.object(stage,'_open_directory_nofollow',
+                        side_effect=lambda _path:os.open(directory,os.O_RDONLY|os.O_DIRECTORY)), \
+                    mock.patch.object(stage.os,'fstat',return_value=metadata), \
+                    mock.patch.object(stage,'resolve_mount_uuid',create=True) as resolve:
+                self.assertEqual(stage._mounted_root(self.linux,self.provision),target)
+            resolve.assert_not_called()
+
+        wrong=dict(null_row)
+        with mock.patch.object(stage.qualification,'_capture',return_value=
+                SimpleNamespace(stdout=json.dumps({'filesystems':[wrong]}).encode())), \
+                mock.patch.object(stage,'resolve_mount_uuid',return_value='22222222-2222-4222-8222-222222222222',
+                                  create=True), \
+                mock.patch.object(stage,'_open_directory_nofollow') as opened, \
+                self.assertRaises(ValueError):
+            stage._mounted_root(self.linux,self.provision)
+        opened.assert_not_called()
+
+        with mock.patch.object(stage.qualification,'_capture',return_value=
+                SimpleNamespace(stdout=json.dumps({'filesystems':[null_row]}).encode())), \
+                mock.patch.object(stage,'resolve_mount_uuid',side_effect=ValueError('unsupported UUID ioctl'),
+                                  create=True), \
+                mock.patch.object(stage,'_open_directory_nofollow') as opened, \
+                self.assertRaisesRegex(ValueError,'unsupported UUID ioctl'):
+            stage._mounted_root(self.linux,self.provision)
+        opened.assert_not_called()
+
+        invalid_rows=(
+            {key:value for key,value in null_row.items() if key != 'uuid'},
+            dict(null_row,UUID=None),
+            dict(null_row,uuid=False),
+        )
+        for row in invalid_rows:
+            with self.subTest(row=row),mock.patch.object(stage.qualification,'_capture',return_value=
+                    SimpleNamespace(stdout=json.dumps({'filesystems':[row]}).encode())), \
+                    mock.patch.object(stage,'resolve_mount_uuid',create=True) as resolve, \
+                    mock.patch.object(stage,'_open_directory_nofollow') as opened,self.assertRaises(ValueError):
+                stage._mounted_root(self.linux,self.provision)
+            resolve.assert_not_called();opened.assert_not_called()
 
     def test_original_source_inode_replacement_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
