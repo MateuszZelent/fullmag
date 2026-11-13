@@ -6,7 +6,8 @@ const SETTINGS_DIALOG_NAME = "3D View Settings";
 const THEME_STORAGE_KEY = "fullmag.control-room.theme";
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_RESTORE_TIMEOUT_MS = 4_000;
-const MAX_WINDOW_DIMENSION = 4_000;
+// Dock panels can leave less than one third of the window for the canvas.
+const MAX_WINDOW_DIMENSION = 8_192;
 const MIN_WINDOW_DIMENSION = 320;
 const MAX_CALIBRATION_STEPS = 8;
 const CANVAS_SIZE_TOLERANCE_PX = 3;
@@ -66,6 +67,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
   });
   let originalDialogOpen = null;
   let originalTheme = null;
+  let originalThemePreference = null;
   let originalThemeStorage = { available: false, value: null };
   let operationError = null;
   const restorationErrors = [];
@@ -81,6 +83,8 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
 
     originalDialogOpen = await settingsDialog.isVisible().catch(() => false);
     originalTheme = await readThemeMode(page);
+    originalThemePreference = await page.locator("html").getAttribute("data-theme-preference");
+    if (!["dark", "light", "system"].includes(originalThemePreference)) throw new Error("Document omitted its theme preference");
     originalThemeStorage = await readThemePreference(page);
     initialDpr = await readDevicePixelRatio(page);
     assertExpectedDpr(initialDpr, expectedDpr, "initial browser context");
@@ -130,7 +134,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
 
     if (originalTheme !== null) {
       await restore("theme through visible UI", async () => {
-        await switchThemeThroughUi(page, originalTheme, restoreTimeout);
+        await switchThemeThroughUi(page, originalThemePreference ?? originalTheme, restoreTimeout);
         await waitForThemeAndFrame(page, originalTheme);
       });
     }
@@ -181,6 +185,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
       original_browser_viewport: originalViewport,
       original_dialog_open: originalDialogOpen,
       original_theme: originalTheme,
+      original_theme_preference: originalThemePreference,
     };
     throw error;
   }
@@ -199,6 +204,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
     restoration: {
       browser_viewport: "verified",
       original_theme: originalTheme,
+      original_theme_preference: originalThemePreference,
       persisted_theme_preference: originalThemeStorage.available
         ? "restored-and-verified"
         : "not-verified-storage-unavailable",
@@ -543,20 +549,18 @@ async function readAndAssertHudDomLayout(page) {
 }
 
 async function switchThemeThroughUi(page, targetTheme, timeout) {
-  const currentTheme = await readThemeMode(page);
-  if (currentTheme === targetTheme) return;
-  const toggle = page.getByRole("button", {
-    exact: true,
-    name: `Switch to ${targetTheme} theme`,
-  });
+  const currentPreference = await page.locator("html").getAttribute("data-theme-preference");
+  if (currentPreference === targetTheme) return;
+  const toggle = page.getByRole("button", { name: /^Color theme:/ });
   await toggle.waitFor({ state: "visible", timeout });
-  const visibleToggleCount = await toggle.count();
-  if (visibleToggleCount !== 1) {
-    throw new Error(`Expected one visible theme switch button, found ${visibleToggleCount}`);
-  }
+  if (await toggle.count() !== 1) throw new Error("Expected one visible color theme menu");
   await toggle.click({ timeout });
+  const label = { dark: "Dark", light: "Light", system: "System" }[targetTheme];
+  await page.getByRole("menuitemradio", { name: label, exact: true }).click({ timeout });
   await page.waitForFunction(
-    (theme) => document.documentElement.dataset.theme === theme,
+    (theme) => document.documentElement.dataset.themePreference === theme &&
+      document.documentElement.dataset.theme === (theme === "system"
+        ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : theme),
     targetTheme,
     { timeout },
   );

@@ -92,12 +92,19 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             <Range id="fm-view-grid-contrast" label="Grid contrast" value={a.gridOpacity} min={0.25} max={2} step={0.05} onChange={(gridOpacity) => viewport3dStore.setAppearance({ gridOpacity })} />
           </SettingsSection>
           <SettingsSection title="Geometry lighting" onReset={() => onCommand("viewport-3d.reset-appearance-lighting")}>
+            <Choice id="fm-view-render-mode" label="Visualization mode" value={a.renderMode} options={[["scientific", "Scientific — faithful field colors"], ["presentation", "Presentation — PBR and studio HDRI"]]} onChange={(v) => { viewport3dStore.setAppearance({ renderMode: v as typeof a.renderMode }); if (v === "presentation") viewport3dStore.setEffectAmbientOcclusion(true); }} />
+            <p>Scientific field colors remain independent of lighting in both modes. Presentation materials apply to uniform geometry.</p>
             <Choice id="fm-view-lighting" label="Geometry appearance" value={a.lightingMode} options={[["studio", "Studio"], ["flat", "Flat"]]} onChange={(v) => viewport3dStore.setAppearance({ lightingMode: v as typeof a.lightingMode })} />
             <Choice id="fm-view-light-space" label="Lighting reference" value={a.lightingSpace} options={[["camera", "Follow camera"], ["world", "Lock to world"]]} disabled={a.lightingMode === "flat"} onChange={(v) => viewport3dStore.setAppearance({ lightingSpace: v as typeof a.lightingSpace })} />
             <Range id="fm-view-light-strength" label="Light intensity" value={a.lightingIntensity} min={0} max={2} step={0.05} disabled={a.lightingMode === "flat"} onChange={(lightingIntensity) => viewport3dStore.setAppearance({ lightingIntensity })} />
             <Range id="fm-view-light-azimuth" label="Light azimuth (deg)" value={a.lightingAzimuth} min={-180} max={180} step={1} disabled={a.lightingMode === "flat"} onChange={(lightingAzimuth) => viewport3dStore.setAppearance({ lightingAzimuth })} />
             <Range id="fm-view-light-elevation" label="Light elevation (deg)" value={a.lightingElevation} min={-85} max={85} step={1} disabled={a.lightingMode === "flat"} onChange={(lightingElevation) => viewport3dStore.setAppearance({ lightingElevation })} />
             {a.lightingMode === "flat" ? <p>Flat geometry uses unlit materials; studio light controls are inactive.</p> : null}
+            {a.renderMode === "presentation" ? <>
+              <Range id="fm-view-roughness" label="Surface roughness" value={a.materialRoughness} min={0.05} max={1} step={0.05} onChange={(materialRoughness) => viewport3dStore.setAppearance({ materialRoughness })} />
+              <Range id="fm-view-metalness" label="Surface metalness" value={a.materialMetalness} min={0} max={1} step={0.05} onChange={(materialMetalness) => viewport3dStore.setAppearance({ materialMetalness })} />
+              <EffectToggle id="fm-view-shadows" label="Soft shadows" description="Filtered geometry shadows; unavailable in Interactive Lite quality." enabled={a.softShadows} onToggle={(softShadows) => viewport3dStore.setAppearance({ softShadows })} />
+            </> : null}
           </SettingsSection>
           <SettingsSection title="Camera">
             <p>Camera position and target use meters (SI). Camera state belongs to the current session or inspected dataset.</p>
@@ -108,6 +115,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           </SettingsSection>
           <SettingsSection title="Quality and effects" onReset={() => onCommand("viewport-3d.reset-appearance-effects")}>
           <Choice id="fm-view-quality" label="Render quality" value={state.visualProfileId === "capture" ? state.captureReturnProfileId ?? "interactive" : state.visualProfileId} options={[["interactive-lite", "Interactive Lite"], ["interactive", "Interactive"], ["balanced", "Balanced"], ["figure", "Figure"]]} onChange={(v) => viewport3dStore.setVisualProfile(v as typeof state.visualProfileId)} />
+          <p>Interactive Lite omits shadows and AO. Higher qualities increase shadow detail; Figure uses full-resolution AO.</p>
           <EffectToggle id="fm-viewport-3d-effect-antialias" label="Anti-Aliasing" description="Smooths polygon boundaries within the selected quality profile." enabled={effectAntialias} onToggle={(v) => viewport3dStore.setEffectAntialias(v)} />
           <EffectToggle
             id="fm-viewport-3d-effect-ambient-occlusion"
@@ -130,7 +138,8 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           </SettingsSection>
           <SettingsSection title="Image export">
             <Choice id="fm-view-export-background" label="PNG background" value={a.exportBackground} options={[["view", "Match viewport"], ["transparent", "Transparent"]]} onChange={(v) => viewport3dStore.setAppearance({ exportBackground: v as typeof a.exportBackground })} />
-            {a.exportBackground === "transparent" ? <p>Transparent PNG preserves field colors and omits AO and Bloom.</p> : null}
+            <Choice id="fm-view-export-scale" label="PNG resolution" value={String(a.exportScale)} options={[["1", "1× viewport"], ["2", "2× viewport"], ["4", "4× viewport"]]} onChange={(v) => viewport3dStore.setAppearance({ exportScale: Number(v) as typeof a.exportScale })} />
+            <p>PNG is rendered at the selected resolution with the current geometry effects. Large exports may require a lower scale on this device.</p>
             <EffectToggle id="fm-view-export-annotations" label="Include annotations" description="Include the reference scale, legend and orientation in the captured image." enabled={a.exportAnnotations} onToggle={(exportAnnotations) => viewport3dStore.setAppearance({ exportAnnotations })} />
             <Button variant="secondary" onClick={() => { viewport3dStore.setSettingsDialogOpen(false); onCommand("viewport-3d.capture-frame"); }}>Export PNG</Button>
           </SettingsSection>

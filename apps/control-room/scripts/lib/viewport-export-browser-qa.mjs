@@ -61,6 +61,9 @@ export async function runViewportExportBrowserQa(page, {
       if (!canvasHandle) throw new Error("Could not retain the viewport canvas for capture-resolution QA");
     }
 
+    if (expectedCaptureDpr !== undefined) {
+      await choose(page, "PNG resolution", `${expectedCaptureDpr}× viewport`, "fm-view-export-scale", timeoutMs);
+    }
     if (originalSettings.frame !== FRAME_OPTIONS.floor) {
       await choose(page, "Reference frame", FRAME_OPTIONS.floor, "fm-view-frame", timeoutMs);
     }
@@ -226,6 +229,9 @@ export async function runViewportExportBrowserQa(page, {
           restoreTimeoutMs,
         );
       });
+      await restoreSetting(restorationErrors, "PNG resolution", async () => {
+        await choose(page, "PNG resolution", originalSettings.scale, "fm-view-export-scale", restoreTimeoutMs);
+      });
       await restoreSetting(restorationErrors, "Include annotations", async () => {
         await setAnnotations(page, dialog, originalSettings.annotations, restoreTimeoutMs);
       });
@@ -302,11 +308,12 @@ async function ensureSettingsOpen(page, dialog, timeout) {
 }
 
 async function readSettings(page, dialog, timeout) {
-  const [background, annotations, quality, frame] = await Promise.all([
+  const [background, annotations, quality, frame, scale] = await Promise.all([
     readChoice(page, "PNG background", timeout),
     dialog.getByRole("switch", { name: "Include annotations", exact: true }).isChecked({ timeout }),
     readChoice(page, "Render quality", timeout),
     readChoice(page, "Reference frame", timeout),
+    readChoice(page, "PNG resolution", timeout),
   ]);
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
     throw new Error("PNG background control exposed an unknown option: " + background);
@@ -314,7 +321,7 @@ async function readSettings(page, dialog, timeout) {
   if (!Object.values(FRAME_OPTIONS).includes(frame) && frame !== "Floor and vertical planes") {
     throw new Error("Reference frame control exposed an unknown option: " + frame);
   }
-  return { annotations, background, frame, quality };
+  return { annotations, background, frame, quality, scale };
 }
 
 async function readChoice(page, label, timeout = MAX_ACTION_TIMEOUT_MS) {
@@ -690,7 +697,8 @@ function sameSettings(left, right) {
   return left.annotations === right.annotations &&
     left.background === right.background &&
     left.frame === right.frame &&
-    left.quality === right.quality;
+    left.quality === right.quality &&
+    left.scale === right.scale;
 }
 
 function normalizeText(value) {

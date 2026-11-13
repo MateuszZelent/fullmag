@@ -16,7 +16,6 @@ export interface Viewport3DVisualProfile {
   id: Viewport3DVisualProfileId;
   label: string;
   antialias: boolean;
-  captureScale: number;
   dprCap: number;
   edgeBoost: number;
   edgeOpacity: number;
@@ -45,7 +44,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "interactive-lite",
     label: "Interactive Lite",
     antialias: false,
-    captureScale: 1,
     dprCap: 1,
     edgeBoost: 0.85,
     edgeOpacity: 0.3,
@@ -66,7 +64,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "interactive",
     label: "Interactive",
     antialias: true,
-    captureScale: 1,
     dprCap: 1.25,
     edgeBoost: 1,
     edgeOpacity: 0.42,
@@ -87,7 +84,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "balanced",
     label: "Balanced",
     antialias: true,
-    captureScale: 1,
     dprCap: 1.5,
     edgeBoost: 1.1,
     edgeOpacity: 0.55,
@@ -108,7 +104,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "figure",
     label: "Figure",
     antialias: true,
-    captureScale: 2,
     dprCap: 2,
     edgeBoost: 1.25,
     edgeOpacity: 0.72,
@@ -129,7 +124,6 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
     id: "capture",
     label: "Capture",
     antialias: true,
-    captureScale: 4,
     dprCap: 2,
     edgeBoost: 1.35,
     edgeOpacity: 0.82,

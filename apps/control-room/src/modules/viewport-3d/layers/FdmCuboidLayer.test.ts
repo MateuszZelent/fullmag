@@ -34,6 +34,7 @@ import {
   shouldAttachFdmCuboidInspectListener,
   createFdmInspectClearArbitrator,
 } from "./FdmCuboidLayer";
+import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   BoxGeometry,
   InstancedBufferAttribute,
@@ -996,11 +997,75 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("() => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT");
   });
 
-  it("uses unlit materials for FDM cell surfaces", () => {
+  it("selects PBR only for uniform FDM surfaces and preserves instance-color rendering", () => {
+    const profile = {
+      magneticSurface: { toneMapped: false },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.31,
+        metalness: 0.58,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan(profile, false)).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.58,
+      receiveShadow: true,
+      roughness: 0.31,
+      toneMapped: true,
+      vertexColors: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan(profile, true)).toEqual({
+      castShadow: false,
+      kind: "basic",
+      receiveShadow: false,
+      toneMapped: false,
+      vertexColors: true,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+    }, false)).toMatchObject({
+      kind: "lambert",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+    }, false)).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveFdmCuboidSurfaceMaterialPlan({
+      ...profile,
+      uniformGeometry: {
+        ...profile.uniformGeometry,
+        lit: false,
+        pbr: false,
+      },
+    }, false)).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
+    expect(layerSource).toContain("resolveFdmCuboidSurfaceMaterialPlan(");
+    expect(layerSource).toContain("new MeshStandardMaterial({");
+    expect(layerSource).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(layerSource).toContain("MeshBasicMaterial");
-    expect(layerSource).not.toContain("MeshStandardMaterial");
     expect(layerSource).toContain("color.fill(1);");
     expect(layerSource).toContain("new BufferAttribute(color, 3)");
   });
@@ -1123,13 +1188,14 @@ describe("FdmCuboidLayer model", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(layerSource).toContain(
-      "const surfaceMaterialRef = useRef<\n    MeshBasicMaterial | MeshLambertMaterial\n  >(null);",
+      "const surfaceMaterialRef = useRef<\n    MeshBasicMaterial | MeshLambertMaterial | MeshStandardMaterial\n  >(null);",
     );
     expect(layerSource).toContain("ref={surfaceMaterialRef}");
     expect(layerSource).toContain("const mountedSurfaceMaterial = surface.material;");
     expect(layerSource).toContain("mountedSurfaceMaterial === surfaceMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshBasicMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshLambertMaterial");
+    expect(layerSource).toContain("mountedSurfaceMaterial instanceof MeshStandardMaterial");
     expect(layerSource).toContain("mountedSurfaceMaterial.needsUpdate = true;");
     expect(layerSource).not.toContain("surfaceMaterial.needsUpdate = true;");
   });

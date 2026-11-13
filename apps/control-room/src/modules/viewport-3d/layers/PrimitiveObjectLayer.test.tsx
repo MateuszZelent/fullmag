@@ -18,6 +18,7 @@ vi.mock("../viewport3dBatchedInvalidate", () => ({
 }));
 
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
+import { resolvePrimitiveObjectSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -122,14 +123,85 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     });
     expect(overlay!.meshState).toBe("primitive-only");
   });
-  it("keeps ordinary primitives unlit and gives antennas a light-independent metallic finish", () => {
+  it("selects PBR only for uniform presentation primitives and preserves antenna matcap", () => {
+    const profile = {
+      primitivePreview: { toneMapped: false },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.22,
+        metalness: 0.73,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.73,
+      receiveShadow: true,
+      roughness: 0.22,
+      toneMapped: true,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+      },
+    })).toMatchObject({ kind: "lambert", castShadow: false, receiveShadow: false });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+      },
+    })).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: {
+          ...profile.uniformGeometry,
+          lit: false,
+          pbr: false,
+        },
+      },
+    })).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: true,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: false,
+      kind: "matcap",
+      receiveShadow: false,
+    });
+
     const source = readFileSync(
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
     );
     expect(source).toContain("<meshBasicMaterial");
-    expect(source).not.toContain("<meshStandardMaterial");
+    expect(source).toContain("<meshStandardMaterial");
     expect(source).toContain("<meshMatcapMaterial");
+    expect(source).toContain("castShadow={surfaceMaterialPlan.castShadow}");
   });
 
   it("keeps Primitive field-free and routes its presentation through the color resolver", () => {

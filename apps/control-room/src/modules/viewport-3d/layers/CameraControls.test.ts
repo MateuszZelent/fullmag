@@ -5,6 +5,7 @@ import { clearOrientationCameraMomentum } from "../orientation/orientationCamera
 import { snapCameraToDirection, type Direction3 } from "../orientation/cameraOrientation";
 
 import { describe, expect, it, vi } from "vitest";
+import { scheduleViewport3DCameraRestCommit } from "./viewport3DCameraRestCommit";
 
 import {
   commitOrbitCameraEnd,
@@ -778,7 +779,8 @@ describe("SI-scale OrbitControls notifications", () => {
 
     const originalUpdate = controls.update;
     let active = true;
-    const cleanup = installScaleAwareOrbitChange(controls, 100e-9, () => active);
+    const observeMotion = vi.fn();
+    const cleanup = installScaleAwareOrbitChange(controls, 100e-9, () => active, observeMotion);
     controls.dollyOut(0.9);
     expect(change).toHaveBeenCalledTimes(1);
     camera.position.x += 10e-9;
@@ -787,6 +789,7 @@ describe("SI-scale OrbitControls notifications", () => {
     expect(change).toHaveBeenCalledTimes(2);
     for (let index = 0; index < 20; index++) controls.update();
     expect(change).toHaveBeenCalledTimes(2); // Idle never starts a render loop.
+    expect(observeMotion).toHaveBeenLastCalledWith(false);
 
     camera.position.set(100e-9, 0, 0);
     controls.update(); // Angular native change must not be duplicated.
@@ -797,6 +800,93 @@ describe("SI-scale OrbitControls notifications", () => {
     cleanup();
     expect(controls.update).toBe(originalUpdate);
     controls.dispose();
+  });
+});
+
+describe("slow-frame orbit rest", () => {
+  it("retains the gesture through gaps longer than the commit delay and publishes the settled pose", () => {
+    const camera = new PerspectiveCamera();
+    camera.up.set(0, 0, 1);
+    camera.position.set(100e-9, 200e-9, 300e-9);
+    const controls = new NativeOrbitControls(camera);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    let active = true, moving = false;
+    let committed = camera.position.clone();
+    const commit = vi.fn(() => { active = false; committed = camera.position.clone(); });
+    const cleanup = installScaleAwareOrbitChange(controls, 100e-9, () => active, (value) => { moving = value; });
+    let cancel: (() => void) | undefined;
+    vi.useFakeTimers();
+    try {
+      controls.setAzimuthalAngle(controls.getAzimuthalAngle() + 0.8);
+      expect(moving).toBe(true);
+      cancel = scheduleViewport3DCameraRestCommit({ delayMs: 180, isCurrent: () => active,
+        isMoving: () => moving, requestFrame: vi.fn(), commit });
+      vi.advanceTimersByTime(250); // The next frame has not arrived yet.
+      expect(commit).not.toHaveBeenCalled();
+      for (let frame = 0; frame < 360 && active; frame += 1) {
+        controls.update();
+        vi.advanceTimersByTime(250);
+      }
+      expect(commit).toHaveBeenCalledOnce();
+      for (let frame = 0; frame < 120; frame += 1) controls.update();
+      expect(camera.position.distanceTo(committed)).toBeLessThan(100e-9 * 1e-6);
+    } finally {
+      cancel?.();
+      cleanup();
+      controls.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("elapsed-time damping after release", () => {
+  it("matches 60 Hz decay on slow frames without accelerating a fresh drag after idle", () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const run = (interval: number, frames: number) => {
+      const camera = new PerspectiveCamera();
+      camera.position.set(100e-9, 200e-9, 300e-9);
+      const controls = new NativeOrbitControls(camera);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      let tail = false;
+      const cleanup = installScaleAwareOrbitChange(controls, 100e-9, () => true, vi.fn(), () => tail);
+      try {
+        now += 60_000; // No prior idle interval may amplify the first drag.
+        controls.setAzimuthalAngle(controls.getAzimuthalAngle() + 0.8);
+        const drag = camera.position.clone();
+        tail = true;
+        controls.update(); // Establish the tail clock with one normal step.
+        for (let i = 0; i < frames; i++) { now += interval; controls.update(); }
+        expect(controls.dampingFactor).toBe(0.08);
+        return { drag, settled: camera.position.clone() };
+      } finally { cleanup(); controls.dispose(); }
+    };
+    try {
+      const fast = run(1000 / 60, 180);
+      const slow = run(250, 12);
+      expect(slow.drag.distanceTo(fast.drag)).toBeLessThan(1e-18);
+      expect(slow.settled.distanceTo(fast.settled)).toBeLessThan(1e-18);
+    } finally { clock.mockRestore(); }
+  });
+
+  it("restores the public damping factor when an adapted update throws", () => {
+    const camera = new PerspectiveCamera();
+    const controls = new NativeOrbitControls(camera);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    const update = vi.fn().mockImplementationOnce(() => false).mockImplementation(() => { throw new Error("update failed"); });
+    controls.update = update;
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const cleanup = installScaleAwareOrbitChange(controls, 1, () => true, vi.fn(), () => true);
+    try {
+      controls.update();
+      now = 250;
+      expect(() => controls.update()).toThrow("update failed");
+      expect(controls.dampingFactor).toBe(0.08);
+    } finally { cleanup(); controls.dispose(); clock.mockRestore(); }
   });
 });
 
