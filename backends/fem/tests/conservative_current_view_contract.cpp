@@ -5122,8 +5122,9 @@ void accepted_external_lead_finalizer_preserves_owned_series_and_rejects_foreign
                 std::all_of(field.quadrature.h_xyz_apm.begin(), field.quadrature.h_xyz_apm.end(),
                     [](double value) { return std::isfinite(value); }),
             "external lead field lost truncation scope, owned identity or finite converged quadrature");
+        require(field.operator_version == "fem_accepted_external_lead_field.v2",
+            "external lead field has the wrong retained operator version");
         require(field.charge_content_digest == owned.content_digest() &&
-                field.operator_version == "fem_accepted_external_lead_field.v1" &&
                 field.evaluation_content_digest.size() == 64 && !field.canonical_evaluation_bytes.empty() &&
                 sha256_hex(Bytes(field.canonical_evaluation_bytes.begin(), field.canonical_evaluation_bytes.end())) ==
                     field.evaluation_content_digest,
