@@ -10102,6 +10102,15 @@ mod tests {
             "/src/fem/relax/finalize.rs"
         ))
         .expect("read FEM relaxation finalization source");
+        // CPU fixtures for unrelated terminal provenance are valid. Inspect
+        // the production finalizer that owns cached-preview publication.
+        let finalize = finalize
+            .split_once("pub(crate) fn finalize_native_fem_relaxation(")
+            .expect("native FEM relaxation finalizer")
+            .1
+            .split("\nfn ")
+            .next()
+            .expect("native FEM relaxation finalizer body");
         assert!(
             finalize.contains("engine: FemEngine") && !finalize.contains("FemEngine::CpuNative,"),
             "FEM relaxation finalization must use the resolved engine for cached-preview flushes"

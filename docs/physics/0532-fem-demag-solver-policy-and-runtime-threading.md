@@ -375,20 +375,27 @@ The bounded runner contract is to publish the complete existing
 `fullmag_fem_gpu_performance_snapshot_v1` once in terminal execution
 provenance for native FEM GPU direct minimization, when at least one accepted
 step exists. Its recorded scope is
-`backend_lifetime_through_relaxation_finalization`, and
+`native_attempt_lifetimes_at_terminal_capture`, and
 `accepted_source_step` must match the native snapshot's completed step. Physical
 and accepted counters retain their native meanings; rejected and failed work is
 not reclassified. Nanosecond, byte, and Joule fields retain those units, and
 Poisson RHS norm sums describe the unscaled residual system in
 $\mathrm{A\,m}$.
 
+The native getter copies committed attempt lifetimes and explicit physical
+setup counters. It excludes an active, uncommitted attempt and does not count
+every confirmation or field-publication operation outside those transactions.
+Consequently these counters need not equal terminal metadata's Poisson or
+mandatory-control aggregates. Capture time is not a claim of whole-backend
+coverage. A profile-disabled zero timing channel does not prove zero work.
+
 This is bounded observability for the direct-minimizer lane, not a new physical
 quantity, Python/IR setting, or qualification of full SP4. It adds no per-step
 `StepStats` record, device readback, CUDA fence, or ABI field. The existing
 480-byte native v1 ABI remains authoritative. Legacy provenance without the
 optional snapshot remains valid. Runner serialization and its managed
-regression gate are pending; do not infer CPU, LLG, interactive-runtime, or
-full-run coverage from this scope.
+runtime require separate qualification; do not infer CPU, LLG,
+interactive-runtime, or full-run coverage from this scope.
 
 ### 5.1 Fail-closed linear-solve publication
 

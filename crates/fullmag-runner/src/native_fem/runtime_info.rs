@@ -697,7 +697,7 @@ impl NativeFemGpuPerformanceSnapshot {
 
         Ok(FemGpuPerformanceSnapshotProvenance {
             schema_version: "fullmag.fem.gpu.performance-snapshot.v1".into(),
-            scope: "backend_lifetime_through_relaxation_finalization".into(),
+            scope: "native_attempt_lifetimes_at_terminal_capture".into(),
             accepted_source_step,
             abi_version: raw.abi_version,
             struct_size: raw.struct_size,
@@ -1231,7 +1231,7 @@ mod tests {
         );
         assert_eq!(
             value["scope"],
-            "backend_lifetime_through_relaxation_finalization"
+            "native_attempt_lifetimes_at_terminal_capture"
         );
         assert_eq!(
             value["accepted_source_step"].as_u64(),
