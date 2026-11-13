@@ -2,6 +2,7 @@
 //! RunIntent exists but whose catalog/frontier was not materialized before the
 //! former API process stopped. This path never creates a new intent or command.
 use super::*;
+use base64::Engine;
 
 pub(super) const ENV: &str = "FULLMAG_DEVELOPMENT_HELD_UI_MATERIALIZATION_STDIN";
 const REQUEST_SCHEMA: &str = "fullmag.held-ui-materialization-request.v1";
@@ -573,7 +574,7 @@ fn validate_store(input: &Input, store_root: &Path, inventory: &InventoryProof, 
     let binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
         .context("resolve held UI accepted-store binding")?;
     if binding != input.target_runtime.accepted_store_binding { bail!("held UI private input targets another accepted store"); }
-    let store_id = fullmag_session::host_resource_ledger::store_id(store_root)
+    let store_id = fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store_root)
         .context("resolve held UI accepted-store identity")?;
     if inventory.before.store_id != store_id {
         bail!("held UI inventory store identity differs from the configured accepted store");
