@@ -123,6 +123,13 @@ oddaniem sterowania, aby następna faza mogła uzyskać własny lease bez
 zagnieżdżania operacji. Samodzielne `copy_data_volume` pozostaje etapem kopii;
 nie zastępuje pełnego migratora i nie uprawnia do wznowienia grupy.
 
+Kontynuacja `copied_group` wydaje wyłącznie żywy obiekt związany z aktualnym
+ContextVar, PID i wątkiem. Jego zamknięcie albo zmiana przypiętych wejść
+unieważnia kontynuację. Słownik odtworzony z pliku ani poprzednio zachowany
+obiekt nie potwierdzają utrzymania hostowego flock. Importy kontynuacji muszą
+korzystać z tej samej instancji modułu; oddzielne wykonanie dziecka WSL nie
+otrzymuje tej zdolności.
+
 Prymityw `fullmag_data_volume_bind.switch_roots` nie ma samodzielnego CLI.
 Po świeżym porównaniu obu drzew zachowuje oryginały przez atomowe
 `renameat2(RENAME_NOREPLACE)`, tworzy root-owned underlay `000` i przypina
@@ -238,11 +245,34 @@ publikacji markera zachowuje stan wymagający jawnego recovery, w tym
 wszystkie drzewa i blokadę zwykłego startupu. Etap nie wykonuje admission,
 startu, rejestracji, rollback ani usuwania.
 
-Zarządzana recepta obejmuje obecnie kopię; root bind API musi zostać podłączone
-do supervisora utrzymującego rzeczywiste guardy aż do zgodnego terminalu.
-Same zapisane acknowledgements nie dowodzą ich utrzymania. Rzeczywista kopia,
-przełączenie bindów, admission, odtworzenie grupy, kwalifikacja Zarr,
-rejestracja i usunięcie starych duplikatów pozostają **NOT VERIFIED**.
+Zarządzana recepta kopiowania nadal wykonuje tylko kopię. Kontynuacja API
+`docker_dev_data_volume_bind.bind_copied_group` wymaga oryginalnego żywego
+zakresu hostowego. Po zamknięciu operacji Docker kopii uzyskuje osobną operację
+bind, ponawia uwierzytelnienie wejść i pełny inventory zatrzymanej grupy oraz
+zajmuje pięć guardów przez nowy helper. Nie zagnieżdża lease kontrolera.
+Nieznany dodatkowy konsument, także pozostawiony helper poprzedniej operacji,
+blokuje przejście; samo readonly i `exited` nie tworzą wyjątku.
+
+`docker_data_volume_bind_job` przypina literalne argv do wybranego checkoutu,
+grupy, WSL i źródeł. Izolowany bootstrap WSL przed pierwszym importem Fullmaga
+sprawdza SHA requestu i wszystkich modułów, odczytując je przez nofollow FD.
+Zachowuje zweryfikowane bajty całego zamkniętego grafu i wykonuje je własnym
+loaderem `compile`/`exec` z rzeczywistym `__file__`. Nie korzysta z lokalnego
+`.pyc`, nie dopisuje checkoutu do `sys.path` i odmawia, jeśli przypięty moduł
+był już wcześniej załadowany. Nie jest to ochrona przed wrogim rootem hosta.
+Obie bramki wiążą też nagłówek journalu z wolumenem oraz SHA oryginalnego planu.
+Wspólny supervisor kopii i bindu obserwuje ten sam proces
+aż do rzeczywistego terminalu i zgodnego receiptu. Wcześnie zapisany plik,
+timeout ani utrata obserwacji nie uprawniają do zwolnienia guardów lub replay.
+Terminal bindu jest osobnym dowodem. Istniejący protokół copy-fence nadal
+otrzymuje wyłącznie oryginalny zweryfikowany SHA kopii jako
+`copy_result_sha256`; pole nie zmienia znaczenia na SHA bindu.
+
+Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
+na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,
+kwalifikację zapisu/Zarr i rejestrację pod ciągłą kontrolą. Rzeczywista kopia,
+przełączenie bindów, admission, odtworzenie grupy, kwalifikacja Zarr, rejestracja
+i usunięcie starych duplikatów pozostają **NOT VERIFIED**.
 
 ## Weryfikacja
 

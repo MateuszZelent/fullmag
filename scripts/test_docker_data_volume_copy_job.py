@@ -213,6 +213,28 @@ class RootCopyLifecycleTests(unittest.TestCase):
     def scenario(self):
         return Scenario(self)
 
+    def test_bind_observation_error_keeps_same_client_then_acknowledges_original_copy(self):
+        fixture=self.scenario();old_copy_sha='c'*64;bind_sha='d'*64
+        process=FakeProcess(fixture.events,[OSError('bind poll observation fault'),None,0])
+        terminal={'state':'binds-switched-not-admitted','receipt_sha256':bind_sha,
+                  'result':{'namespace_admitted':False}}
+        with fixture.patched_runtime(process,terminal) as runtime:
+            with self.assertRaisesRegex(OSError,'bind poll observation fault'):
+                job.run_prepared_root('bind',fixture.fence,fixture.argv,fixture.operation_root,
+                    fixture.request,fixture.request_sha256,job.validate_terminal,
+                    release_copy_sha256=old_copy_sha,poll_interval=.001)
+        self.assertEqual(runtime.popen.call_count,1)
+        self.assertTrue(process.waited);self.assertFalse(process.terminated or process.killed)
+        self.assertEqual(fixture.fence.finish_calls,[old_copy_sha])
+        self.assertIs(fixture.operation['data_bind_root_process'],process)
+        self.assertNotIn('data_copy_root_process',fixture.operation)
+        self.assertTrue(fixture.operation['receipt']['root_bind_terminal_confirmed'])
+        self.assertEqual(fixture.operation['receipt']['root_bind_observation_error_type'],'OSError')
+        self.assertTrue((fixture.operation_root/'linux-bind-client-observation-error.json').exists())
+        records=fixture.fence.control.write.call_args_list
+        matching=[c.args[1] for c in records if c.args[0].endswith('/data-bind-root-client-terminal.json')]
+        self.assertEqual(matching,[terminal])
+
     def call(self, fixture):
         return job.run_root_copy(
             fixture.fence,

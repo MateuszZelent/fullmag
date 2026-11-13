@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
 import re
+import threading
 
 from bootstrap_docker_toolchain import control_volume_name
 from data_volume_copy_fence_service import COMPONENTS as FENCE_COMPONENTS
@@ -40,6 +43,24 @@ NEW_ARTIFACTS = ('group-drain-inputs.json','group-drained.json','group-drain-sou
                  'linux-copy-result.json','linux-copy-failed.json','linux-copy-client-intent.json',
                  'linux-copy-client-started.json','linux-copy-client.stdout','linux-copy-client.stderr',
                  'linux-copy-client-observation-error.json')
+
+_CURRENT_COPY_SCOPE=ContextVar('fullmag_current_copied_group',default=None)
+
+
+class _CopiedGroupScope(dict):
+    """In-process continuation of the host lock, never a persisted capability."""
+    def __init__(self,context,terminal):
+        super().__init__(context=context,terminal=terminal)
+        self._snapshot=deepcopy(dict(self));self._pid=os.getpid();self._thread=threading.get_ident()
+        self._live=True
+
+
+def require_live_copied_group(value):
+    qualification.require(type(value) is _CopiedGroupScope and _CURRENT_COPY_SCOPE.get() is value and
+        value._live is True and value._pid == os.getpid() and value._thread == threading.get_ident() and
+        dict(value) == value._snapshot,
+        'The original live copied-group host scope is required; snapshots cannot continue migration')
+    return value
 
 
 def _pins(source,names):
@@ -185,7 +206,11 @@ def copied_group(source_root,volume_id,stop_attempt,stop_sha256):
         qualification.require(_load_source(source_root,volume_id) == context,
                               'Copy source scope changed before the host lock')
         terminal=_copy_under_host_lock(context,stop_attempt,stop_sha256)
-        yield {'context':context,'terminal':terminal}
+        scope=_CopiedGroupScope(context,terminal);token=_CURRENT_COPY_SCOPE.set(scope)
+        try:yield scope
+        finally:
+            scope._live=False
+            _CURRENT_COPY_SCOPE.reset(token)
 
 
 def copy_data_volume(source_root,volume_id,stop_attempt,stop_sha256):

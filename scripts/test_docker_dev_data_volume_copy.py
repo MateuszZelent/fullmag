@@ -1,5 +1,6 @@
 """Parent copy sequencing with real small journal files and simulated runtime."""
 from contextlib import contextmanager,ExitStack
+from contextvars import copy_context
 import copy
 import hashlib
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -186,6 +188,28 @@ class CopyParentSequencingTests(unittest.TestCase):
                 self.assertEqual(copied['terminal']['receipt_sha256'],'9'*64)
                 self.assertEqual(self.control.op['receipt']['state'],'succeeded')
             self.assertEqual(self.calls,['host-held','host-released'])
+
+    def test_only_live_original_copy_scope_in_creator_process_can_continue(self):
+        with self.patches():
+            with parent.copied_group(self.source,self.volume,self.stop,self.stop_sha) as copied:
+                self.assertIs(parent.require_live_copied_group(copied),copied)
+                with self.assertRaises(ValueError):parent.require_live_copied_group(dict(copied))
+                creator=os.getpid()
+                with mock.patch.object(parent.os,'getpid',return_value=creator+1),self.assertRaises(ValueError):
+                    parent.require_live_copied_group(copied)
+                inherited=copy_context();failures=[]
+                def other_thread():
+                    try:inherited.run(parent.require_live_copied_group,copied)
+                    except ValueError as error:failures.append(error)
+                thread=threading.Thread(target=other_thread);thread.start();thread.join(timeout=5)
+                self.assertFalse(thread.is_alive());self.assertEqual(len(failures),1)
+            with self.assertRaises(ValueError):parent.require_live_copied_group(copied)
+
+    def test_mutating_a_live_scope_invalidates_its_original_bound_inputs(self):
+        with self.patches():
+            with parent.copied_group(self.source,self.volume,self.stop,self.stop_sha) as copied:
+                copied['terminal']['receipt_sha256']='0'*64
+                with self.assertRaises(ValueError):parent.require_live_copied_group(copied)
 
     @unittest.skipUnless(os.name=='posix','POSIX flock contract')
     def test_other_process_cannot_enter_until_continuation_finishes_even_on_error(self):

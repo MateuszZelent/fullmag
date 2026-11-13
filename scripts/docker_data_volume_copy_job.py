@@ -116,18 +116,19 @@ def _new_log(op, name):
         os.close(parent)
 
 
-def _retained_observation(op, request, request_sha256, error):
+def _retained_observation(op, request, request_sha256, error, *, stage='copy'):
     """Best-effort single diagnostic; failure to log must not drop any lock."""
-    value={'schema':'fullmag.data-volume-copy-client-observation.v1',
+    value={'schema':'fullmag.data-volume-'+stage+'-client-observation.v1',
         'state':'outcome-unknown-resources-retained','volume_id':request['volume_id'],
         'token':request['token'],'request_sha256':request_sha256,'error_type':type(error).__name__}
-    try:_document(op,'linux-copy-client-observation-error.json',value)
+    try:_document(op,'linux-'+stage+'-client-observation-error.json',value)
     except BaseException:pass
     try:print(json.dumps(value,sort_keys=True),flush=True)
     except BaseException:pass
 
 
-def _await_terminal(fence, process, op, request, request_sha256, poll_interval, prior_error=None):
+def _await_terminal(fence, process, op, request, request_sha256, poll_interval, prior_error=None,
+                    *, validator=None, stage='copy'):
     """Do not unwind the caller's host flock on an unconfirmed root outcome.
 
     A lost handle during spawn needs explicit recovery. With a known handle,
@@ -135,20 +136,21 @@ def _await_terminal(fence, process, op, request, request_sha256, poll_interval, 
     timeout, exception or saved file substitutes for the verified terminal.
     """
     first_error=prior_error
-    if first_error is not None:_retained_observation(op,request,request_sha256,first_error)
+    validator=validate_terminal if validator is None else validator
+    if first_error is not None:_retained_observation(op,request,request_sha256,first_error,stage=stage)
     while True:
         try:
             if process is not None:
                 if process.poll() is not None:
                     code=process.wait()
-                    terminal=validate_terminal(op,request,request_sha256,code)
+                    terminal=validator(op,request,request_sha256,code)
                     return terminal,first_error
                 fence.check()
             time.sleep(poll_interval)
         except BaseException as error:
             if first_error is None:
                 first_error=error
-                _retained_observation(op,request,request_sha256,error)
+                _retained_observation(op,request,request_sha256,error,stage=stage)
             # A second interrupt also cannot drop a lock while the root copy
             # remains unconfirmed. The retained process is never restarted.
             try:time.sleep(poll_interval)
@@ -167,38 +169,61 @@ def run_root_copy(fence, source, distro, request_path, request_sha256, *, poll_i
                           'Bounded root-client polling interval required')
     fence.check()
     command,op,request = prepare_command(fence,source,distro,request_path,request_sha256)
+    return run_prepared_root('copy',fence,command,op,request,request_sha256,validate_terminal,
+                             poll_interval=poll_interval)
+
+
+def run_prepared_root(stage,fence,command,op,request,request_sha256,validator,*,
+                      release_copy_sha256=None,poll_interval=2.0):
+    """Supervise a prepared, source-pinned copy or bind under the same guards.
+
+    Internal API only: its stage-specific caller authenticates literal argv and
+    scope before entry. A bind confirms its own terminal separately and releases
+    the copy-fence protocol with the original verified copy SHA. That protocol's
+    copy_result_sha256 never changes meaning to a bind receipt.
+    """
+    qualification.require(stage in ('copy','bind') and callable(validator),
+                          'Only prepared copy/bind root stages are supported')
+    qualification.require(type(poll_interval) in (int,float) and 0 < poll_interval <= 5,
+                          'Bounded root-client polling interval required')
+    qualification.require((stage == 'copy' and release_copy_sha256 is None) or
+        (stage == 'bind' and type(release_copy_sha256) is str and re.fullmatch('[0-9a-f]{64}',release_copy_sha256)),
+        'Bind release must acknowledge the exact original completed copy')
     operation = _operation_match(fence,request)
-    for name in ('linux-copy-client-intent.json','linux-copy-client-started.json',
-                 'linux-copy-client.stdout','linux-copy-client.stderr','linux-copy-client-observation-error.json'):
-        qualification.require(not os.path.lexists(op/name),'Root copy client already prepared; reconcile, never replay')
-    _document(op,'linux-copy-client-intent.json',{'schema':'fullmag.data-volume-copy-client.v1',
+    prefix='linux-'+stage+'-client';record_prefix='data-'+stage+'-root-client'
+    for suffix in ('-intent.json','-started.json','.stdout','.stderr','-observation-error.json'):
+        qualification.require(not os.path.lexists(op/(prefix+suffix)),
+                              'Root '+stage+' client already prepared; reconcile, never replay')
+    _document(op,prefix+'-intent.json',{'schema':'fullmag.data-volume-'+stage+'-client.v1',
         'state':'prepared','volume_id':request['volume_id'],'token':request['token'],'request_sha256':request_sha256})
     with ExitStack() as stack:
-        output = stack.enter_context(_new_log(op,'linux-copy-client.stdout'))
-        errors = stack.enter_context(_new_log(op,'linux-copy-client.stderr'))
+        output = stack.enter_context(_new_log(op,prefix+'.stdout'))
+        errors = stack.enter_context(_new_log(op,prefix+'.stderr'))
         fence.check()
         process=None;spawn_error=None
         try:
             process = subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=output,stderr=errors,start_new_session=True)
-            operation['data_copy_root_process'] = process
-            _document(op,'linux-copy-client-started.json',{'schema':'fullmag.data-volume-copy-client.v1',
+            operation['data_'+stage+'_root_process'] = process
+            _document(op,prefix+'-started.json',{'schema':'fullmag.data-volume-'+stage+'-client.v1',
                 'state':'started','volume_id':request['volume_id'],'token':request['token'],
                 'request_sha256':request_sha256,'client_pid':process.pid})
-            fence.control.write(operation['root']+'/data-copy-root-client.json',{
+            fence.control.write(operation['root']+'/'+record_prefix+'.json',{
                 'client_pid':process.pid,'request_sha256':request_sha256,'state':'started'})
         except BaseException as error:
             spawn_error=error
-        terminal,observation_error=_await_terminal(fence,process,op,request,request_sha256,poll_interval,spawn_error)
+        terminal,observation_error=_await_terminal(fence,process,op,request,request_sha256,poll_interval,spawn_error,
+                                                  validator=validator,stage=stage)
         output.flush();os.fsync(output.fileno());errors.flush();os.fsync(errors.fileno())
         fence.check()
-        fence.finish(terminal['receipt_sha256'])
-        fence.control.write(operation['root']+'/data-copy-root-client-terminal.json',terminal)
+        fence.finish(terminal['receipt_sha256'] if stage == 'copy' else release_copy_sha256)
+        fence.control.write(operation['root']+'/'+record_prefix+'-terminal.json',terminal)
         if observation_error is not None:
             # Both native and host locks stayed held until a verified terminal.
             # Finalize the control lease as failed, without discarding the copy.
-            operation['receipt'].update(state='failed-confirmed',root_copy_terminal_confirmed=True,
-                root_copy_observation_error_type=type(observation_error).__name__)
+            operation['receipt'].update(state='failed-confirmed',**{
+                'root_'+stage+'_terminal_confirmed':True,
+                'root_'+stage+'_observation_error_type':type(observation_error).__name__})
             raise observation_error
         if terminal['state'] == 'failed-confirmed':
-            raise RuntimeError('Root data copy failed; originals and partial artifacts retained')
+            raise RuntimeError('Root data '+stage+' failed; originals and partial artifacts retained')
         return terminal
