@@ -4709,17 +4709,87 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
         javascript = """
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
-const {studyStageTerminalScope: scope} = await import(process.argv[1]);
+const {studyStageTerminalScope: scope, executionStageIds, studyStageCompletedExecutionForAuthored: selectCompleted} = await import(process.argv[1]);
 const ids=['relax-a','relax-b','relax-c'];
-const e={total_stages:3,stage_statuses:['pending','completed','pending'],completed_stage_indexes:[1],
-  stages:ids.map((stage_id,index)=>({stage_id,index,status:index===1?'completed':'pending'}))};
-assert.deepEqual(scope(e,ids,['relax-b']),['relax-b']);
-const extra=structuredClone(e); extra.stage_statuses[0]='completed';
-assert.throws(()=>scope(extra,ids,['relax-b']));
-const metadata=structuredClone(e); metadata.stages[0].started_at_unix_ms=42;
-assert.throws(()=>scope(metadata,ids,['relax-b']));
-const wrong=structuredClone(e); wrong.completed_stage_indexes=[0];
-assert.throws(()=>scope(wrong,ids,['relax-b']));
+const compiled=['script-execution-'+'e'.repeat(64),'script-execution-'+'f'.repeat(64),
+  'script-execution-'+'1'.repeat(64)];
+const session={session_id:'session-1',session_epoch:7,request_scope_epoch:11};
+const result=(authored_stage_id,step_id,run_id='run-current')=>({authored_stage_id,
+  source:{authored_stage_id,step_id,run_id}});
+const current=ids.map((id,index)=>result(id,compiled[index]));
+const baseline={run_id:'run-current',session_id:session.session_id,session_epoch:session.session_epoch,
+  request_scope_epoch:session.request_scope_epoch,total_stages:3,runtime_state:'completed',
+  stage_statuses:['completed','completed','completed'],completed_stage_indexes:[0,1,2],
+  stages:compiled.map((stage_id,index)=>({stage_id,index,status:'completed'}))};
+assert.deepEqual(executionStageIds(baseline,'run-current',session),compiled,
+  'raw durable execution IDs remain available for the proof');
+assert.deepEqual(scope(baseline,ids,ids,current),ids,
+  'completed compiled rows map only through same-run public result source identities');
+assert.equal(selectCompleted(baseline,current,'relax-b'),baseline.stages[1],
+  'the authored Stage B menu target resolves to its exact unchanged durable execution row');
+assert.throws(()=>selectCompleted(baseline,current,'relax-unknown'), /authored|stage/i);
+assert.throws(()=>selectCompleted(baseline,[],'relax-b'), /mapping|source/i);
+assert.throws(()=>selectCompleted(baseline,current.map(item=>({...item,source:{...item.source,run_id:'foreign'}})),
+  'relax-b'), /run/i);
+assert.throws(()=>selectCompleted({...baseline,stages:[...baseline.stages,baseline.stages[1]]},current,'relax-b'),
+  /duplicate|row/i);
+
+const legacyResults=ids.map(id=>result(id,id));
+const legacy={...baseline,stages:ids.map((stage_id,index)=>({stage_id,index,status:'completed'}))};
+assert.deepEqual(scope(legacy,ids,ids,legacyResults),ids,
+  'legacy authored IDs remain valid when the public result source proves the same IDs');
+
+const child={...baseline,run_id:'run-child',runtime_state:'completed',
+  stage_statuses:['completed','pending','pending'],completed_stage_indexes:[0],
+  stages:compiled.map((stage_id,index)=>({stage_id,index,status:index===0?'completed':'pending'}))};
+const childResults=[result('relax-a',compiled[0],'run-child')];
+assert.deepEqual(scope(child,ids,['relax-a'],childResults,current,'run-current'),['relax-a'],
+  'child pending compiled rows may use the exact prior-run source map while only A is current');
+const recompiledId='script-execution-'+'2'.repeat(64);
+const recompiledChild={...child,stages:child.stages.map((row,index)=>index===0
+  ? {...row,stage_id:recompiledId} : row)};
+assert.deepEqual(scope(recompiledChild,ids,['relax-a'],[result('relax-a',recompiledId,'run-child')],
+  current,'run-current'),['relax-a'],
+  'completed current rows use current-run evidence even when recompilation changes their durable ID');
+assert.throws(()=>scope(child,ids,['relax-a'],childResults,current,'foreign-prior-run'), /run/i,
+  'a prior mapping is pinned to the exact preceding run');
+const ambiguousPrior=[result('relax-b',compiled[0],'run-current')];
+assert.throws(()=>scope(child,ids,['relax-a'],childResults,ambiguousPrior,'run-current'), /different authored|assign/i,
+  'one durable execution ID cannot be reassigned to a different authored stage');
+const pendingAuthored={...child,stages:[
+  {stage_id:compiled[0],index:0,status:'completed'},
+  {stage_id:'relax-b',index:1,status:'pending'},
+  {stage_id:'relax-c',index:2,status:'pending'},
+]};
+assert.deepEqual(scope(pendingAuthored,ids,['relax-a'],childResults),['relax-a'],
+  'an unmapped pending row may retain its exact authored ID');
+
+assert.throws(()=>scope(baseline,ids,ids,current.map((item,index)=>index===0
+  ? result(item.authored_stage_id,item.source.step_id,'foreign-run') : item)), /run/i,
+  'a result source from another run cannot authenticate a completed row');
+assert.throws(()=>scope(baseline,ids,ids,[...current,current[0]]), /duplicate/i,
+  'duplicate authored result mapping is rejected');
+assert.throws(()=>scope(baseline,ids,ids,current.slice(1)), /mapping|source|completed/i,
+  'a completed row without its source mapping is rejected');
+assert.throws(()=>scope(baseline,ids,ids,[...current,result('relax-extra','script-execution-'+'2'.repeat(64))]),
+  /authored|mapping|extra/i, 'extra authored mapping is rejected');
+const swapped=[result('relax-a',compiled[1]),result('relax-b',compiled[0]),current[2]];
+assert.throws(()=>scope(baseline,ids,ids,swapped), /order|mapping|stage/i,
+  'swapped source bindings are rejected');
+const wrongStep=[result('relax-a','script-execution-'+'2'.repeat(64)),current[1],current[2]];
+assert.throws(()=>scope(baseline,ids,ids,wrongStep), /execution|source|mapping/i,
+  'a result source that does not match an execution row is rejected');
+const extraExecution={...baseline,stages:[...baseline.stages,
+  {stage_id:'script-execution-'+'2'.repeat(64),index:3,status:'pending'}],total_stages:4};
+assert.throws(()=>scope(extraExecution,ids,ids,current), /count|stage|mapping/i,
+  'extra execution rows are rejected');
+const nonselectedCompleted={...child,stage_statuses:['completed','completed','pending'],completed_stage_indexes:[0,1],
+  stages:child.stages.map((row,index)=>index===1?{...row,status:'completed'}:row)};
+assert.throws(()=>scope(nonselectedCompleted,ids,['relax-a'],
+  [...childResults,result('relax-b',compiled[1],'run-child')],current,'run-current'), /status|selected|execution/i,
+  'a nonselected completed execution cannot be accepted');
+assert.throws(()=>executionStageIds({...baseline,run_id:'foreign-run'},'run-current',session), /run|session/i);
+assert.throws(()=>executionStageIds(baseline,'run-current',{...session,session_id:'foreign-session'}), /run|session/i);
 """
         result = subprocess.run([node, "--input-type=module", "-e", javascript, source.as_uri()],
                                 capture_output=True, text=True, timeout=15)

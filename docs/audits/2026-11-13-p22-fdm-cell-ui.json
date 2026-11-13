@@ -1,0 +1,569 @@
+{
+  "schema": "fullmag.p22-fdm-cell-ui-acceptance.v1",
+  "qualified_at": "2026-11-13T15:27:31.375103+00:00",
+  "scope": "FDM CPU double, 8-cell live runtime; FDM Cell Inspector and browser reload, not full P01-P22 acceptance",
+  "runtime": {
+    "binary_commit": "9f146c29bb682a465bb8bf6e0c672efa4d84b7c6",
+    "binary_worktree_state": "clean",
+    "binary_source_snapshot_sha256": "bab950ffbf87a49209b69e556a11364b99208ddca3a5c9cc69cda2f18f51d4d5",
+    "backend_container": "e5c715464132014b8f83f5f702b9626af22192731818699981da343f24689bec",
+    "frontend_container": "22c04a4db6e3ef1e80987e5f1b6adfd43bd1c62bd4df36e0adb3d9e9e4c7a307",
+    "development_attempt": "b87b3885b29e4a10891bc416dcc53719",
+    "run_id": "run-live-6c17b503b4780c537529256c9e0220fbd96e0ae2f8ec2bf3339d8aaa6e52cc3b",
+    "api_instance_id": "75c6d4d1-00a9-416d-b27e-6fda461ad85d",
+    "native_profile": "fdm/cpu/double",
+    "cell_count": 8,
+    "demag": false
+  },
+  "browser_attempt": "b38edfb5c4b44ba2905fece51629f34e",
+  "session": {
+    "request_scope_epoch": "75c6d4d1-00a9-416d-b27e-6fda461ad85d:1",
+    "session_epoch": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00@1794582150656",
+    "session_id": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00"
+  },
+  "state": "passed",
+  "physics": {
+    "canvas": {
+      "context_lost": false,
+      "context_type": "WebGL2RenderingContext",
+      "depth_bits": 24,
+      "drawing_buffer_height": 746,
+      "drawing_buffer_width": 927,
+      "height": 746,
+      "preserve_drawing_buffer": false,
+      "rect": {
+        "height": 746,
+        "width": 927.15625
+      },
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "topology_transfers": [],
+      "vendor": "Google Inc. (Google)",
+      "width": 927
+    },
+    "keyboard_tabs": true,
+    "layout": {
+      "clipped_values": [],
+      "details_bottom": 885.5,
+      "footer_top": 952.5,
+      "inspector_width": 380,
+      "scroll_width": 358,
+      "summary_top": 362.5,
+      "tabs_bottom": 362.5,
+      "total_bottom": 840.5,
+      "width": 358
+    },
+    "narrow_layout": {
+      "clipped_values": [],
+      "details_bottom": 921,
+      "footer_top": 952.5,
+      "inspector_width": 300,
+      "scroll_width": 278,
+      "summary_top": 362.5,
+      "tabs_bottom": 362.5,
+      "total_bottom": 876,
+      "width": 278
+    },
+    "observation": {
+      "ordinal": 6,
+      "rows": [
+        {
+          "id": "mat_ms",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": 800000,
+              "text": "800,000"
+            }
+          ]
+        },
+        {
+          "id": "mat_aex",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": 1.3e-11,
+              "text": "1.300e-11"
+            }
+          ]
+        },
+        {
+          "id": "mat_alpha",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": 0.5,
+              "text": "0.5"
+            }
+          ]
+        },
+        {
+          "id": "m",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "mx",
+              "raw": 0.986260256021403,
+              "text": "0.98626"
+            },
+            {
+              "kind": "my",
+              "raw": 0.1651989933159304,
+              "text": "0.165199"
+            },
+            {
+              "kind": "mz",
+              "raw": 0,
+              "text": "0"
+            },
+            {
+              "kind": "magnitude",
+              "raw": 1,
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "id": "eden_ex",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": 0,
+              "text": "0"
+            },
+            {
+              "kind": "cell-energy",
+              "raw": 0,
+              "text": "0"
+            }
+          ]
+        },
+        {
+          "id": "eden_ext",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": -13215.919465274435,
+              "text": "-13,215.9"
+            },
+            {
+              "kind": "cell-energy",
+              "raw": -1.0572735572219551e-22,
+              "text": "-1.057e-22"
+            }
+          ]
+        },
+        {
+          "id": "eden_total",
+          "status": "ready",
+          "values": [
+            {
+              "kind": "scalar",
+              "raw": -13215.919465274435,
+              "text": "-13,215.9"
+            },
+            {
+              "kind": "cell-energy",
+              "raw": -1.0572735572219551e-22,
+              "text": "-1.057e-22"
+            }
+          ]
+        }
+      ]
+    },
+    "public_probes": [
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_ex",
+        "sampling_method": "point_probe",
+        "scalar": 0,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_ext",
+        "sampling_method": "point_probe",
+        "scalar": -13215.919465274435,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_total",
+        "sampling_method": "point_probe",
+        "scalar": -13215.919465274435,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "m",
+        "sampling_method": "point_probe",
+        "scalar": 1,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": [
+          0.986260256021403,
+          0.1651989933159304,
+          0
+        ],
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_aex",
+        "sampling_method": "point_probe",
+        "scalar": 1.3e-11,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_alpha",
+        "sampling_method": "point_probe",
+        "scalar": 0.5,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_ms",
+        "sampling_method": "point_probe",
+        "scalar": 800000,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_ex",
+        "sampling_method": "point_probe",
+        "scalar": 0,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_ext",
+        "sampling_method": "point_probe",
+        "scalar": -13215.919465274435,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "eden_total",
+        "sampling_method": "point_probe",
+        "scalar": -13215.919465274435,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "m",
+        "sampling_method": "point_probe",
+        "scalar": 1,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": [
+          0.986260256021403,
+          0.1651989933159304,
+          0
+        ],
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_aex",
+        "sampling_method": "point_probe",
+        "scalar": 1.3e-11,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_alpha",
+        "sampling_method": "point_probe",
+        "scalar": 0.5,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      },
+      {
+        "cell_id": 6,
+        "element_id": null,
+        "nearest_node": null,
+        "nearest_node_status": "not_requested",
+        "occupancy": "occupied",
+        "quantity_id": "mat_ms",
+        "sampling_method": "point_probe",
+        "scalar": 800000,
+        "source": {
+          "default_slice_hash": "sha256:395cb1dd90fdaacaf53279fe53ae099fc7504858a7d117708387474a0321b65c",
+          "default_slice_revision": "2306762730992757471",
+          "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+          "kind": "default"
+        },
+        "u_m": 9.999999999999999e-10,
+        "v_m": 1.0000000000000003e-09,
+        "vector": null,
+        "world_m": [
+          9.999999999999999e-10,
+          1.0000000000000003e-09,
+          0
+        ]
+      }
+    ],
+    "real_pointer_pick": true,
+    "state": "passed",
+    "themes": [
+      "light",
+      "dark"
+    ]
+  },
+  "page_errors": 0,
+  "console_errors": 0,
+  "http_errors": [],
+  "home_round_trip": true,
+  "screenshots": {
+    "light": {
+      "file": "2026-11-13-p22-fdm-cell-ui-light.png",
+      "sha256": "e9830253685246a5efe05fd5b3284998cc7901f3651adf96df0b83fb2ba745a2",
+      "bytes": 45497
+    },
+    "dark": {
+      "file": "2026-11-13-p22-fdm-cell-ui-dark.png",
+      "sha256": "deadf48f323e17461c16bde66abec59377bd02f70e78b4eea03e8fac86eaf20e",
+      "bytes": 46538
+    },
+    "narrow": {
+      "file": "2026-11-13-p22-fdm-cell-ui-narrow.png",
+      "sha256": "e77d2b1de7d98cb810dee2a9e220032adabe1de52417191382c278cb5f35ab0e",
+      "bytes": 44623
+    }
+  },
+  "visual_review": {
+    "performed": true,
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "inspector_widths_px": [
+      380,
+      300
+    ],
+    "result": "Material rows, vector cards, energy table and Details fit the panel; no clipped values."
+  },
+  "limitations": [
+    "Short FDM CPU flow test, no demag; not a convergence or FEM/GPU/multilayer qualification.",
+    "This runtime proof applies to binary9f and the recorded harness, not automatically to later native builds.",
+    "Full rerun/mesh/texture/S46 acceptance remains separate."
+  ]
+}

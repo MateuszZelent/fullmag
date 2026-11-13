@@ -1017,7 +1017,7 @@ function resultIdentities(resource, runId, expectedIds) {
   return identities;
 }
 
-function executionStageIds(execution, runId, session) {
+export function executionStageIds(execution, runId, session) {
   assert(plainRecord(execution) && execution.run_id === runId
     && execution.session_id === session.session_id
     && execution.session_epoch === session.session_epoch
@@ -1027,29 +1027,151 @@ function executionStageIds(execution, runId, session) {
   return execution.stages.map((stage) => stage?.stage_id);
 }
 
-export function studyStageTerminalScope(execution, authoredIds, expectedExecutedIds) {
+function studyStageExecutionSourceMap(execution, authoredIds, currentResults, priorResults, priorRunId) {
+  assert(Array.isArray(currentResults), "Current run result identities are missing");
+  assert(Array.isArray(priorResults), "Prior run result identities are malformed");
+  const authoredSet = new Set(authoredIds);
+  const currentByExecutionId = new Map();
+  const currentByAuthoredId = new Map();
+  const priorByExecutionId = new Map();
+  const priorByAuthoredId = new Map();
+
+  const addResults = (results, byExecutionId, byAuthoredId, expectedRunId, label) => {
+    const seenAuthored = new Set();
+    const seenExecution = new Set();
+    let observedRunId = null;
+    for (const result of results) {
+      assert(plainRecord(result) && plainRecord(result.source), `${label} result source mapping is malformed`);
+      const authoredId = result.authored_stage_id;
+      const executionId = result.source.step_id;
+      const runId = result.source.run_id;
+      assert(authoredSet.has(authoredId), `${label} result maps an unknown authored stage`);
+      assert(typeof executionId === "string" && executionId.length > 0,
+        `${label} result omitted its durable execution step ID`);
+      assert(typeof runId === "string" && runId.length > 0, `${label} result omitted its run ID`);
+      if (expectedRunId !== null) {
+        assert.equal(runId, expectedRunId, `${label} result source belongs to another run`);
+      } else {
+        assert.notEqual(runId, execution.run_id, "Prior result source belongs to the current run");
+        assert(observedRunId === null || observedRunId === runId,
+          "Prior result mappings combine more than one run");
+        observedRunId = runId;
+      }
+      assert(!seenAuthored.has(authoredId), `${label} result mapping duplicates an authored stage`);
+      assert(!seenExecution.has(executionId), `${label} result mapping duplicates a durable execution ID`);
+      seenAuthored.add(authoredId);
+      seenExecution.add(executionId);
+      const existingExecution = byExecutionId.get(executionId);
+      const existingAuthored = byAuthoredId.get(authoredId);
+      assert(existingExecution === undefined || existingExecution === authoredId,
+        "Result mappings assign one durable execution ID to multiple authored stages");
+      assert(existingAuthored === undefined || existingAuthored === executionId,
+        "Result mappings disagree about an authored stage's durable execution ID");
+      byExecutionId.set(executionId, authoredId);
+      byAuthoredId.set(authoredId, executionId);
+    }
+  };
+
+  addResults(currentResults, currentByExecutionId, currentByAuthoredId, execution.run_id, "Current");
+  if (priorResults.length > 0) {
+    assert(typeof priorRunId === "string" && priorRunId.length > 0,
+      "Prior execution mapping omitted its pinned predecessor run ID");
+    assert.notEqual(priorRunId, execution.run_id, "Prior execution mapping names the current run");
+    addResults(priorResults, priorByExecutionId, priorByAuthoredId, priorRunId, "Prior");
+  } else {
+    assert(priorRunId === null || priorRunId === undefined,
+      "Prior run ID was supplied without prior result identities");
+  }
+  for (const [executionId, authoredId] of priorByExecutionId) {
+    const currentAuthoredId = currentByExecutionId.get(executionId);
+    assert(currentAuthoredId === undefined || currentAuthoredId === authoredId,
+      "Current and prior runs assign one durable execution ID to different authored stages");
+  }
+  return { currentByExecutionId, currentByAuthoredId, priorByExecutionId, priorByAuthoredId };
+}
+
+export function studyStageTerminalScope(execution, authoredIds, expectedExecutedIds,
+  currentResults = [], priorResults = [], priorRunId = null) {
   const selected = new Set(expectedExecutedIds);
-  assert.equal(selected.size, expectedExecutedIds.length);
-  assert.equal(execution.total_stages, authoredIds.length);
-  assert.deepEqual(execution.stages.map((row) => row.stage_id), authoredIds,
-    "P22 stage view must preserve the authored definitions");
+  assert.equal(selected.size, expectedExecutedIds.length, "Selected authored stage list contains duplicates");
+  assert(authoredIds.every((id) => typeof id === "string" && id.length > 0)
+    && new Set(authoredIds).size === authoredIds.length, "Authored stage list is malformed or duplicated");
+  assert([...selected].every((id) => authoredIds.includes(id)), "Selected authored stage is absent from the scene");
+  const mappings = studyStageExecutionSourceMap(
+    execution, authoredIds, currentResults, priorResults, priorRunId,
+  );
+  assert.equal(execution.total_stages, authoredIds.length,
+    "P22 execution stage count differs from the authored stage list");
   const expectedStatuses = authoredIds.map((id) => selected.has(id) ? "completed" : "pending");
   assert.deepEqual(execution.stage_statuses, expectedStatuses,
     "P22 current execution includes another or unfinished stage");
   assert.deepEqual(execution.completed_stage_indexes,
     authoredIds.flatMap((id, index) => selected.has(id) ? [index] : []));
+  assert(Array.isArray(execution.stages) && execution.stages.length === authoredIds.length,
+    "P22 execution row count differs from the authored stage list");
+  const authoredRows = [];
+  const seenExecutionIds = new Set();
   for (const [index, row] of execution.stages.entries()) {
+    assert(plainRecord(row) && typeof row.stage_id === "string" && row.stage_id.length > 0,
+      "P22 execution row has no durable stage ID");
+    assert(!seenExecutionIds.has(row.stage_id), "P22 execution rows duplicate a durable stage ID");
+    seenExecutionIds.add(row.stage_id);
+    let authoredId;
+    if (row.status === "completed") {
+      authoredId = mappings.currentByExecutionId.get(row.stage_id);
+      assert(authoredId, "Completed execution row has no matching same-run result source mapping");
+    } else if (row.status === "pending") {
+      assert(!mappings.currentByExecutionId.has(row.stage_id),
+        "Pending execution row has a current-run completed result source");
+      authoredId = mappings.priorByExecutionId.get(row.stage_id);
+      if (authoredId === undefined && authoredIds.includes(row.stage_id)) {
+        const priorExecutionId = mappings.priorByAuthoredId.get(row.stage_id);
+        const currentExecutionId = mappings.currentByAuthoredId.get(row.stage_id);
+        assert((priorExecutionId === undefined || priorExecutionId === row.stage_id)
+          && (currentExecutionId === undefined || currentExecutionId === row.stage_id),
+        "Pending authored stage conflicts with an authenticated durable execution mapping");
+        authoredId = row.stage_id;
+      }
+      assert(authoredId, "Pending execution row has no exact authored or authenticated prior source mapping");
+    } else {
+      assert.fail(`P22 execution row has an unsupported terminal status: ${row.status}`);
+    }
+    authoredRows.push(authoredId);
     assert.equal(row.index, index);
-    assert.equal(row.status, expectedStatuses[index]);
-    if (!selected.has(row.stage_id)) {
+    const authoredIndex = authoredIds.indexOf(authoredId);
+    assert.notEqual(authoredIndex, -1, "Execution source mapping names an unknown authored stage");
+    assert.equal(row.status, expectedStatuses[authoredIndex]);
+    if (!selected.has(authoredId)) {
       for (const key of ["started_at_unix_ms", "completed_at_unix_ms", "completed_step"]) {
         assert.equal(row[key], undefined, "An unselected stage has execution metadata");
       }
     }
   }
-  const executed = execution.stages.filter((row) => row.status === "completed").map((row) => row.stage_id);
+  assert.deepEqual(authoredRows, authoredIds,
+    "P22 durable execution rows do not map in exact authored stage order");
+  for (const [executionId, authoredId] of mappings.currentByExecutionId) {
+    const row = execution.stages.find((candidate) => candidate.stage_id === executionId);
+    assert(row && row.status === "completed" && authoredRows[row.index] === authoredId,
+      "Current result source does not match a completed execution row");
+  }
+  assert.deepEqual([...mappings.currentByAuthoredId.keys()], expectedExecutedIds,
+    "Current run result mappings differ from the selected authored execution list");
+  const executed = execution.stages.filter((row) => row.status === "completed")
+    .map((row) => authoredRows[row.index]);
   assert.deepEqual(executed, expectedExecutedIds);
   return executed;
+}
+
+
+export function studyStageCompletedExecutionForAuthored(execution, currentResults, authoredId) {
+  assert(stageIds.includes(authoredId), "Selected authored stage is absent from the fixed P22 scene");
+  const { currentByAuthoredId } = studyStageExecutionSourceMap(execution, stageIds, currentResults, [], null);
+  const executionId = currentByAuthoredId.get(authoredId);
+  assert(executionId, "Selected authored stage has no same-run result source mapping");
+  const rows = execution.stages.filter((row) => row?.stage_id === executionId);
+  assert.equal(rows.length, 1, "Selected authored stage maps to a missing or duplicate execution row");
+  assert.equal(rows[0].status, "completed", "Selected authored stage execution is not completed");
+  return rows[0];
 }
 
 function assertNoInflightCommands(queue) {
@@ -1321,6 +1443,8 @@ export async function runStudyStageRerun() {
   async function readSnapshot(expectedSession = null, {
     requireIdle = true,
     expectedStageIds = studyStageExpectedStageIds(mode, "before"),
+    priorResultIdentities = [],
+    priorRunId = null,
   } = {}) {
     const status = await apiGet(statusPath, expectedSession, false);
     readCounts.status++;
@@ -1369,11 +1493,12 @@ export async function runStudyStageRerun() {
       : validateStudyStageScene(scene);
     assert.equal(scene.revision, statusAfter.resources.scene_revision,
       "Committed scene revision differs from the P22 status");
-    const observedStageIds = executionStageIds(execution, currentRun.run_id, observedSession);
+    executionStageIds(execution, currentRun.run_id, observedSession);
     assert.equal(execution.runtime_state, "completed", "P22 baseline stage execution is not completed");
-    assert.deepEqual(observedStageIds, sceneStageIds);
-    const completedStageIds = studyStageTerminalScope(execution, sceneStageIds, expectedStageIds);
     const results = await readResults(currentRun.run_id, observedSession, expectedStageIds);
+    const completedStageIds = studyStageTerminalScope(
+      execution, sceneStageIds, expectedStageIds, results, priorResultIdentities, priorRunId,
+    );
     const expectedResultIds = expectedStageIds;
     assert.deepEqual(results.map((result) => result.authored_stage_id), expectedResultIds,
       "P22 baseline durable results differ from the current stage view");
@@ -2274,8 +2399,7 @@ export async function runStudyStageRerun() {
       };
       await expandParent("model:study");
       await expandParent("model:study:stages");
-      const selectedStage = beforeClick.execution.stages.find((stage) => stage?.stage_id === "relax-a");
-      assert(selectedStage, "The fresh completed stage execution omitted the exact Stage A target");
+      studyStageCompletedExecutionForAuthored(beforeClick.execution, beforeClick.resultIdentities, "relax-a");
       const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-a"]');
       await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
       assert.equal(await row.count(), 1, "The authored relax-a Explorer row is absent or duplicated");
@@ -2290,10 +2414,8 @@ export async function runStudyStageRerun() {
       };
       await expandParent("model:study");
       await expandParent("model:study:stages");
-      const selectedStage = beforeClick.execution.stages.find((stage) => stage?.stage_id === "relax-b");
-      assert(selectedStage, "The fresh completed stage execution omitted the exact Stage B target");
-      const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:'
-        + selectedStage.stage_id + '"]');
+      studyStageCompletedExecutionForAuthored(beforeClick.execution, beforeClick.resultIdentities, "relax-b");
+      const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-b"]');
       assert.equal(await row.count(), 1, "The authored relax-b Explorer row is absent or duplicated");
       await row.click({ button: "right" });
       action = page.getByRole("menuitem", { name: "Run This Stage", exact: true });
@@ -2439,6 +2561,8 @@ export async function runStudyStageRerun() {
     const afterSnapshot = await readSnapshot(session, {
       requireIdle: true,
       expectedStageIds: expectedAfterIds,
+      priorResultIdentities: before.resultIdentities,
+      priorRunId: before.currentRun.run_id,
     });
     assert.equal(afterSnapshot.currentRun.run_id, terminal.currentRun.run_id,
       "P22 current run changed between terminal poll and result reads");
@@ -2505,7 +2629,12 @@ export async function runStudyStageRerun() {
       && canvas.drawing_buffer_width > 0 && canvas.drawing_buffer_height > 0,
       "P22 reload lost the visible WebGL drawing buffer");
     assert.equal(canvas.fdm_model_count, afterSnapshot.profile.domain_cell_count);
-    const reloaded = await readSnapshot(session, { requireIdle: true, expectedStageIds: expectedAfterIds });
+    const reloaded = await readSnapshot(session, {
+      requireIdle: true,
+      expectedStageIds: expectedAfterIds,
+      priorResultIdentities: before.resultIdentities,
+      priorRunId: before.currentRun.run_id,
+    });
     assert.deepEqual(stableProjection(reloaded), stableProjection(afterSnapshot),
       "P22 reload changed the current run, scene, stage execution or result identities");
     if (["texture-stage-b", "texture-study"].includes(mode)) {

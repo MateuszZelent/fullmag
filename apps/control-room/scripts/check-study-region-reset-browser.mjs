@@ -490,15 +490,18 @@ export async function runRegionResetBrowserQa() {
       session_scope: scope(gate.session) });
     gate.phase = "observe";
   }
-  async function results(runId, expectedIds) {
+  async function results(runId, expectedIds = null) {
     const resource = await get(base + "simulation/stages/results?run_id=" + encodeURIComponent(runId) + "&limit=100");
     assert.equal(resource.next_cursor ?? null, null);
     const ids = resource.results.map(studyStageResultIdentity).sort((a,b) => a.authored_stage_id.localeCompare(b.authored_stage_id));
-    assert.deepEqual(ids.map((r) => r.authored_stage_id), expectedIds);
+    const authoredIds = ids.map((r) => r.authored_stage_id);
+    assert.equal(new Set(authoredIds).size, authoredIds.length, "Result mapping duplicates an authored stage");
+    if (expectedIds !== null) assert.deepEqual(authoredIds, expectedIds);
     assert(ids.every((r) => r.source.run_id === runId));
     return ids;
   }
   async function waitRun(previousRun, expectedIds) {
+    const priorResults = previousRun ? await results(previousRun) : [];
     let binding = null;
     while (remaining() > 1) {
       assert.deepEqual(report.violations, [], "Request guard rejected the operation");
@@ -541,9 +544,11 @@ export async function runRegionResetBrowserQa() {
           const terminalStatus = await freshStatus();
           assert.equal(terminalStatus.run?.run_id, run.run_id, "Terminal status switched runs");
           regionResetAssertExecutionIdentity(execution, gate.session, run.run_id);
-          studyStageTerminalScope(execution, stages, expectedIds);
+          const currentResults = await results(run.run_id, expectedIds);
+          studyStageTerminalScope(execution, stages, expectedIds, currentResults,
+            priorResults, priorResults.length > 0 ? previousRun : null);
           return { run_id: run.run_id, command_id: submitted.command_id, execution_binding: binding,
-            status: "completed", stage_ids: expectedIds, results: await results(run.run_id, expectedIds) };
+            status: "completed", stage_ids: expectedIds, results: currentResults };
         }
       }
       // Observe the same operation; never repeat a UI click after timeout.
