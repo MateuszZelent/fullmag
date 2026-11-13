@@ -1204,6 +1204,7 @@ jobs:
           python -B scripts/test_docker_volume_frontend_recovery.py -v
           python -B scripts/test_docker_volume_frontend_seed_recovery.py -v
           python -B scripts/test_docker_volume_recovery_handoff.py -v
+          python -B scripts/test_docker_frontend_start_handoff.py -v
           python -B scripts/test_docker_frontend_seed_generated.py -v
           python -B scripts/test_docker_volume_frontend_seed_completion.py -v
           python -B scripts/test_docker_frontend_seed_completion_observer.py -v

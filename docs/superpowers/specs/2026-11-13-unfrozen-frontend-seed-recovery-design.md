@@ -118,3 +118,27 @@ A malformed-present capability must refuse before specialized cold/drained early
 returns. A no-newline child Compose is a supported completion encoding only
 when its typed request and existing `completed()` evidence authenticate it;
 other control records retain their strict canonical encoding contract.
+
+
+## Generacja frontendu przy ponownym starcie grupy
+
+Zakończone odtworzenie usług musi przekazywać do nowego development dokładnie
+uwierzytelniony poprzedni receipt i Compose. `_pin_private_group_storage` ma
+przenosić generację przez istniejący validator, przed `_frontend` i po ponownym
+sprawdzeniu pod lease. Nowy render nie oznacza powrotu do legacy workspace.
+Brak całej pary dopuszcza legacy tylko dla autentycznego poprzednika bez generacji;
+częściowa para, niezgodny mount/namespace/registry/root/config lub zmiana CAS
+kończy próbę przed seed helperem. Zamknięta lista dopuszczonych bajtów zostaje.
+
+Próba d7 nie zapisała odwołania do zakończonego recreate6d125. Jej kontynuacja
+jest nowym, jawnie przypiętym startem ze zachowanego stanu, a nie dopisaniem
+brakującej historii. Wymaga osobnych pinów failed-precompose terminal/current d7,
+verified i immutable base33052 oraz terminal/current/verified recreate6d125.
+Recreate musi wskazywać dokładny base/config/usunięte IDs/state/volumes. Failed
+child ma ten sam project/control/source/state/cache/device/operator intent oraz
+pełną capability; jedyną dopuszczoną przyczyną jest dokładna odmowa metadata
+przed Compose/seed/service mutation. Wymagana jest obserwacja nieobecności
+własnych usług i starych IDs, porządek czasowy, namespace/registry binding oraz
+ponowna walidacja pod lease. Pełne owner/certificate/native authorization checks
+pozostają obowiązkowe. Nie ma ogólnego fallbacku do najnowszego verified ani
+zmiany któregokolwiek historycznego receipt/current/verified.

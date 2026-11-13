@@ -1877,3 +1877,48 @@ kontrolowane bajty dokumentów i stan obu zatrzymanych kontenerów. Wynik:
 `c40afe806a776da5db9dd48456bccbe9ceb4b351b1de12daad4d58598ae59101`.
 [Zaktualizowany indeks handoff](2026-11-13-recovered-frontend-rebuild-handoff.json)
 zawiera ten dowód. Nie jest on jeszcze uruchomieniem ani odbiorem nowej binarki/UI.
+
+
+### Start po eb079b7b: recovery przeszło, zgubiona generacja frontendu
+
+Commit `eb079b7b102f701f3fb8e5b8950b5d5171a8b224` jest wypchnięty.
+Canonical startup zakończył odtworzenie usług `6d12568afc4342768d405fcc49a5ce18`
+i przygotowanie obrazu wrappera backendu `900f82d517eb4f6ea3977b49ff2223b5`.
+Następnie development `d7c399ef69fe494ca484696bd2b98858` zakończył się
+`failed-confirmed` przed utworzeniem Compose i usług: `Frontend metadata has
+unknown changes; all state retained`. Active marker jest nieobecny; Docker
+odpowiada, ale nasze kontenery aplikacji są usunięte przez zakończone recreate,
+a UI 3243 odmawia połączenia. Nie wykonano nowej kompilacji aplikacji ani odbioru UI.
+
+Rzeczywisty odczyt receiptów i workspace wykazał, że nowy development nie ma pary
+`frontend_generation_id/subpath`, podczas gdy immutable verified33052 ma pełną
+parę i zachowany workspace z inputs-freeze. `start()` nie przekazał poprzedniego
+receipt/Compose do `_pin_private_group_storage`, więc `_frontend()` wybrał stary
+legacy workspace z pustym next-env. Guard bajtów prawidłowo odmówił jego użycia.
+Pełna recovery capability przeszła do nowego receiptu; poprzednia naprawa nie
+została obalona. Kolejna korekta dotyczy dokładnego przekazania uwierzytelnionej
+generacji przy recreate/start, z zachowaniem guardów i wszystkich starych danych.
+Nie ponowiono operacji lifecycle ani Compute po tej odmowie.
+
+
+### Generacja przy zwykłym recreate/start: pierwszy fragment naprawy
+
+Normalna ścieżka odtwarzania przechwytuje poprzednią generację przed removal,
+sprawdza ją ponownie pod lease, przekazuje przez reuse_state i zapisuje pin
+w inputs nowego development. Start sprawdza immutable terminal/Compose oraz
+current/verified CAS, source/state i namespace; przed backend-cache/frontend seed
+używa istniejącego walidatora generacji. Preflight sprawdza ten warunek już
+przed kontrolowanym stopem. Żaden stary receipt ani pusty plik nie jest nadpisywany.
+
+Dziewięć nowych regresji i 268 powiązanych testów: PASS (łącznie 277).
+Review potwierdziło kolejność; znalezioną lukę braku private_group_storage przy
+zachowanym generation evidence zamknięto testem RED dwóch wariantów i poprawką.
+Zgodny starszy layout nadal jest obsługiwany. Osobny commit
+`ce4642e7a4a7c912152cd8f4a33deb6870502c18` poprawia ordinary-recovery fixture
+i dodaje odmowę niepełnej pary capability przy pustym environment (13 PASS).
+
+To odbiór kodu zwykłej ścieżki, nie restart ani odbiór UI. Specjalizowane
+completed/resume oraz jawna kontynuacja failed-precompose d7 pozostają kolejnym
+fragmentem. Odczyt rzeczywistego zachowanego owner/certificate po d7 potwierdził
+identyczne hashe, dotychczasowy image b6dc i restart_verified=true; certyfikat
+nie został obrócony do obrazu nieudanego startu. UI 3243 pozostaje niedostępne.

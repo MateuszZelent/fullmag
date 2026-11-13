@@ -976,6 +976,87 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
     return inputs, volume
 
 
+
+def _capture_frontend_start_handoff(control, previous, document):
+    """Pin a retained private generation before removal or a new start."""
+    if not isinstance(previous, Mapping) or not isinstance(document, Mapping):
+        raise BuildControlError("Frontend start predecessor is malformed")
+    mode = previous.get("private_group_storage")
+    if mode is None:
+        if "frontend_generation_id" in previous or "frontend_generation_subpath" in previous:
+            raise BuildControlError("Frontend generation has no private storage binding")
+        services = document.get("services")
+        frontend = services.get("frontend") if isinstance(services, Mapping) else None
+        mounts = frontend.get("volumes") if isinstance(frontend, Mapping) else None
+        for mount in mounts if isinstance(mounts, list) else ():
+            options = mount.get("volume") if isinstance(mount, Mapping) else None
+            subpath = options.get("subpath") if isinstance(options, Mapping) else None
+            if (isinstance(subpath, str)
+                    and re.search(r"(?:^|/)private/frontend/generations/", subpath)):
+                raise BuildControlError("Frontend generation mount has no private storage binding")
+        return None
+    if mode != "group-volume-v1":
+        raise BuildControlError("Frontend start predecessor storage mode is unknown")
+    from docker_volume_frontend_seed_recovery import generation_receipt_fields
+    fields = generation_receipt_fields(control, previous, document)
+    if not fields:
+        return None
+    attempt = previous.get("attempt")
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Frontend start predecessor attempt is malformed")
+    root = "development/attempts/" + attempt
+    raw = control.read_bytes(root + "/terminal.json")
+    if raw != canonical(previous) + b"\n" or control.read_bytes("development/current.json") != raw:
+        raise BuildControlError("Frontend start predecessor terminal/current CAS differs")
+    compose_raw = control.read_bytes(root + "/compose.json")
+    if compose_raw != canonical(document) + b"\n":
+        # Metadata completion has a separately authenticated no-newline encoding.
+        compose_raw, saved = _read_frontend_refresh_child_compose(
+            control, root + "/compose.json", "frontend start predecessor Compose", previous,
+            child_attempt=attempt, parent_attempt=previous.get("previous_development_attempt"))
+        if saved != document:
+            raise BuildControlError("Frontend start predecessor Compose differs")
+    if (previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or document.get("name") != control.project
+            or previous.get("config_sha256") != hashlib.sha256(canonical(document)).hexdigest()):
+        raise BuildControlError("Frontend start predecessor project/config differs")
+    _validate_frontend_refresh_recovery_namespace(control, previous, previous)
+    verified = control.read_bytes("development/verified.json", optional=True)
+    return {"schema": "fullmag.frontend-start-handoff.v1", "attempt": attempt,
+        "terminal_sha256": hashlib.sha256(raw).hexdigest(),
+        "compose_sha256": hashlib.sha256(compose_raw).hexdigest(),
+        "verified_sha256": hashlib.sha256(verified).hexdigest() if verified is not None else None,
+        "source_root": previous.get("inputs", {}).get("source_root"),
+        "state_root": previous.get("state_root"), **fields}
+
+
+def _validate_frontend_start_handoff(control, handoff, selected, state):
+    """Re-read immutable authority and mutable CAS before selecting a workspace."""
+    if (not isinstance(handoff, Mapping)
+            or handoff.get("schema") != "fullmag.frontend-start-handoff.v1"
+            or not isinstance(handoff.get("attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", handoff["attempt"]) is None
+            or handoff.get("source_root") != str(selected)
+            or handoff.get("state_root") != str(state)):
+        raise BuildControlError("Frontend start handoff identity differs")
+    root = "development/attempts/" + handoff["attempt"]
+    previous = control.read(root + "/terminal.json")
+    document = control.read(root + "/compose.json")
+    if _capture_frontend_start_handoff(control, previous, document) != handoff:
+        raise BuildControlError("Frontend start handoff authority changed")
+    return previous, document
+
+
+def _pin_start_frontend_storage(control, operation, selected, state, handoff, *, new_render):
+    if handoff is None:
+        _pin_private_group_storage(control, operation, new_render=new_render)
+        return
+    previous, document = _validate_frontend_start_handoff(control, handoff, selected, state)
+    _pin_private_group_storage(control, operation, new_render=new_render,
+                               previous=previous, document=document)
+
+
 def _uses_private_group_storage(control, operation):
     mode = operation["receipt"].get("private_group_storage")
     if mode not in (None, "group-volume-v1"):
@@ -2591,6 +2672,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record}
+    frontend_handoff = reuse_state.get("frontend_start_handoff") if reuse_state is not None else None
+    if frontend_handoff is not None:
+        _validate_frontend_start_handoff(control, frontend_handoff, selected, reuse_state["state"])
+        operation_inputs["frontend_start_handoff"] = frontend_handoff
     if getattr(args, "completed_recreation_attempt", None):
         operation_inputs["completed_recreation"] = {
             "attempt": args.completed_recreation_attempt,
@@ -2793,7 +2878,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
-        _pin_private_group_storage(control, operation, new_render=provided_operation is None)
+        _pin_start_frontend_storage(control, operation, selected, state, frontend_handoff,
+                                    new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
         frontend_inputs, frontend_volume = _frontend(control, operation, selected, state, args.port, image)
@@ -6390,6 +6476,7 @@ def preflight_retained_recovery_handoff(control, previous, document, actual, *, 
     The full state-dependent native recovery validator still runs later under the
     recreate lease, after the exact stop/drain evidence is available.
     """
+    _capture_frontend_start_handoff(control, previous, document)
     previous = _resolve_frontend_refresh_recovery_lineage(
         control, previous, document, actual=actual)
     if not _retained_container_recovery_present(previous, document):
@@ -9184,6 +9271,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        frontend_handoff = (None if fresh_state else
+            _capture_frontend_start_handoff(control, previous, document))
         prelaunch_failure_archive = None
         prelaunch_failure_store = None
         if prelaunch_failure_pin is not None:
@@ -9568,6 +9657,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if offline_attempt is not None:
             recreate_inputs["offline_reconciliation"] = offline_attempt
         with control.operation("recreate-services", recreate_inputs) as operation:
+            if frontend_handoff is not None:
+                _validate_frontend_start_handoff(control, frontend_handoff, selected, state)
             if offline_attempt is not None:
                 if not validate_for_recreate(
                     control, previous, document, actual, selected, args.config_sha256,
@@ -10039,6 +10130,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             "operator_probe_environment_record": operator_probe_record}
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding
+        if reuse is not None and frontend_handoff is not None:
+            reuse["frontend_start_handoff"] = frontend_handoff
         recovery_context.update(accepted_reattach_context)
         if retained_restore_pin is not None and not fresh_state:
             recovery_context["cold_budget_restore"] = retained_restore_pin
