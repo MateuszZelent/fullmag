@@ -175,6 +175,136 @@ def isolated(module):
                 setattr(module, name, value)
 
 
+def with_dependency_manifest(module, inputs, dependency_names):
+    """Write one host-style dependency witness for an isolated frontend seed."""
+
+    dependencies = (
+        dict(dependency_names)
+        if isinstance(dependency_names, dict)
+        else {name: "test-version" for name in dependency_names}
+    )
+    package = {
+        "name": "@fullmag/control-room",
+        "dependencies": dependencies,
+        "devDependencies": {},
+    }
+    package_bytes = (json.dumps(package, sort_keys=True) + "\n").encode()
+    package_path = inputs.workspace_root / "apps" / "control-room" / "package.json"
+    package_path.write_bytes(package_bytes)
+    manifest = dict(inputs.manifest)
+    files = [dict(record) for record in manifest["files"]]
+    package_record = next(
+        record for record in files
+        if record["relative"] == "apps/control-room/package.json"
+    )
+    package_record["sha256"] = hashlib.sha256(package_bytes).hexdigest()
+    dependency_files = sorted({
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "apps/control-room/package.json",
+        "apps/control-room/next.config.ts",
+    })
+    dependency_hashes = {record["relative"]: record["sha256"] for record in files}
+    dependency_seed = json.dumps(
+        {name: dependency_hashes[name] for name in dependency_files},
+        ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    manifest.update(
+        files=files,
+        dependency_seed_files=dependency_files,
+        dependency_seed_sha256=hashlib.sha256(dependency_seed).hexdigest(),
+        toolpins_sha256="b" * 64,
+    )
+    module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+    return module.read_inputs()
+
+
+def add_seeded_workspace_package(module, inputs, relative, package):
+    package_bytes = (json.dumps(package, sort_keys=True) + "\n").encode()
+    package_path = inputs.workspace_root / relative / "package.json"
+    package_path.parent.mkdir(parents=True, exist_ok=True)
+    package_path.write_bytes(package_bytes)
+    manifest = dict(inputs.manifest)
+    files = [dict(record) for record in manifest["files"]]
+    files.append({
+        "relative": f"{relative}/package.json",
+        "sha256": hashlib.sha256(package_bytes).hexdigest(),
+    })
+    dependency_files = sorted(set(manifest["dependency_seed_files"]) | {f"{relative}/package.json"})
+    dependency_hashes = {record["relative"]: record["sha256"] for record in files}
+    dependency_seed = json.dumps(
+        {name: dependency_hashes[name] for name in dependency_files},
+        ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    manifest.update(
+        files=files,
+        dependency_seed_files=dependency_files,
+        dependency_seed_sha256=hashlib.sha256(dependency_seed).hexdigest(),
+    )
+    module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+    return module.read_inputs()
+
+
+def make_dependency_tree(module, inputs, dependency_names):
+    """Create a tiny pnpm-like tree for the direct dependencies under test."""
+
+    workspace = inputs.workspace_root
+    app_node_modules = workspace / "apps" / "control-room" / "node_modules"
+    app_node_modules.mkdir(parents=True, exist_ok=True)
+    for name in dependency_names:
+        virtual_package = (
+            workspace / "node_modules" / ".pnpm" / f"{name}@test-version"
+            / "node_modules" / name
+        )
+        virtual_package.mkdir(parents=True, exist_ok=True)
+        (virtual_package / "package.json").write_text(
+            json.dumps({"name": name, "version": "test-version"}),
+            encoding="utf-8",
+        )
+        if name == "next":
+            binary = virtual_package / "dist" / "bin" / "next"
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        link = app_node_modules / name
+        if not link.exists() and not link.is_symlink():
+            link.symlink_to(virtual_package, target_is_directory=True)
+
+
+def dependency_witness(inputs):
+    manifest = inputs.manifest
+    return {
+        "schema": "fullmag.frontend-dependency-install-witness.v1",
+        "dependency_seed_sha256": manifest["dependency_seed_sha256"],
+        "toolpins_sha256": manifest["toolpins_sha256"],
+    }
+
+
+def start_with_dependency_history(test, module, inputs, history, install):
+    module._prepare_state_directories()
+    module._prepare_managed_frontend(inputs)
+    module._atomic_json(module.DIAGNOSTIC_RECEIPT_PATH, history, "frontend diagnostic receipt")
+    stopping = type("Stopping", (), {"is_set": lambda self: False})()
+    log_stream = io.BytesIO()
+    with patch.dict(os.environ, {"FULLMAG_DOCKER_FRONTEND": "dev"}, clear=False):
+        with patch.object(
+            module,
+            "_tool_version",
+            side_effect=[module.EXPECTED_NODE_VERSION, module.EXPECTED_PNPM_VERSION],
+        ):
+            with patch.object(module, "_log_stream", return_value=log_stream):
+                with patch.object(module, "_run_pnpm_install", side_effect=install) as installer:
+                    with patch.object(module, "_start_log_tailer", return_value=None):
+                        def fake_start_next(*args, **_kwargs):
+                            module._release_runtime_lock(args[5])
+                            return object()
+
+                        with patch.object(module, "_start_next", side_effect=fake_start_next):
+                            module.start(stopping)
+    log_stream.close()
+    return installer
+
+
 class BackendHealthcheckContractTests(TestCase):
     def test_native_ready_cannot_bypass_unconfirmed_supervisor_startup(self):
         health = load_healthcheck_module()
@@ -1241,6 +1371,180 @@ else:
                                     self.module.start(stopping)
             install.assert_called_once()
             log_stream.close()
+
+    @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
+    def test_old_ready_receipt_reinstalls_after_dependency_seed_adds_postprocessing(self):
+        with isolated(self.module) as (_root, workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module, original_inputs, ("next", "postprocessing")
+            )
+            self.module._prepare_state_directories()
+            self.module._prepare_managed_frontend(inputs)
+            make_dependency_tree(self.module, inputs, ("next",))
+            old_history = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "running",
+                "dependency_install": "ready",
+                "dependency_install_witness": {
+                    "schema": "fullmag.frontend-dependency-install-witness.v1",
+                    "dependency_seed_sha256": "c" * 64,
+                    "toolpins_sha256": inputs.manifest["toolpins_sha256"],
+                },
+            }
+
+            def install(_inputs, _stopping_event, _log_stream, _receipt, _runtime_lock):
+                make_dependency_tree(self.module, inputs, ("next", "postprocessing"))
+
+            installer = start_with_dependency_history(
+                self, self.module, inputs, old_history, install
+            )
+            installer.assert_called_once()
+            self.assertTrue(
+                (workspace / "apps/control-room/node_modules/postprocessing").is_dir()
+            )
+
+    @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
+    def test_matching_dependency_witness_reuses_tree_across_source_commit_change(self):
+        with isolated(self.module) as (_root, workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module, original_inputs, ("next", "postprocessing")
+            )
+            manifest = dict(inputs.manifest, source_commit="1" * 40)
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+            inputs = self.module.read_inputs()
+            self.module._prepare_state_directories()
+            self.module._prepare_managed_frontend(inputs)
+            make_dependency_tree(self.module, inputs, ("next", "postprocessing"))
+            history = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "running",
+                "dependency_install": "ready",
+                "dependency_install_witness": dependency_witness(inputs),
+            }
+            installer = start_with_dependency_history(
+                self, self.module, inputs, history, AssertionError("cache hit must not install")
+            )
+            installer.assert_not_called()
+
+    @skipIf(os.name == "nt", "workspace dependency regression uses Linux symlink semantics")
+    def test_scoped_workspace_dependency_cache_hit_requires_seeded_target_manifest(self):
+        with isolated(self.module) as (_root, _workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module,
+                original_inputs,
+                {"next": "test-version", "@fullmag/shared-ui": "workspace:*"},
+            )
+            inputs = add_seeded_workspace_package(
+                self.module,
+                inputs,
+                "apps/shared-ui",
+                {"name": "@fullmag/shared-ui", "version": "1.2.3"},
+            )
+            make_dependency_tree(self.module, inputs, ("next",))
+            app_node_modules = inputs.workspace_root / "apps/control-room/node_modules"
+            scope = app_node_modules / "@fullmag"
+            scope.mkdir()
+            (scope / "shared-ui").symlink_to(
+                inputs.workspace_root / "apps/shared-ui", target_is_directory=True
+            )
+            history = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "running",
+                "dependency_install": "ready",
+                "dependency_install_witness": dependency_witness(inputs),
+            }
+            installer = start_with_dependency_history(
+                self, self.module, inputs, history, AssertionError("valid workspace cache must hit")
+            )
+            installer.assert_not_called()
+
+    @skipIf(os.name == "nt", "workspace dependency regression uses Linux symlink semantics")
+    def test_workspace_dependency_link_outside_seed_workspace_is_not_ready(self):
+        with isolated(self.module) as (_root, _workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module,
+                original_inputs,
+                {"next": "test-version", "@fullmag/shared-ui": "workspace:*"},
+            )
+            inputs = add_seeded_workspace_package(
+                self.module,
+                inputs,
+                "apps/shared-ui",
+                {"name": "@fullmag/shared-ui", "version": "1.2.3"},
+            )
+            make_dependency_tree(self.module, inputs, ("next",))
+            outside = inputs.workspace_root.parent / "outside-shared-ui"
+            outside.mkdir()
+            (outside / "package.json").write_text(
+                json.dumps({"name": "@fullmag/shared-ui", "version": "1.2.3"}),
+                encoding="utf-8",
+            )
+            scope = inputs.workspace_root / "apps/control-room/node_modules/@fullmag"
+            scope.mkdir()
+            (scope / "shared-ui").symlink_to(outside, target_is_directory=True)
+            self.assertFalse(self.module._dependency_tree_ready(inputs))
+
+    @skipIf(os.name == "nt", "workspace dependency regression uses Linux symlink semantics")
+    def test_workspace_dependency_target_with_unseeded_manifest_is_not_ready(self):
+        with isolated(self.module) as (_root, _workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module,
+                original_inputs,
+                {"next": "test-version", "@fullmag/shared-ui": "workspace:*"},
+            )
+            make_dependency_tree(self.module, inputs, ("next",))
+            target = inputs.workspace_root / "apps/unseeded-shared-ui"
+            target.mkdir(parents=True)
+            (target / "package.json").write_text(
+                json.dumps({"name": "@fullmag/shared-ui", "version": "1.2.3"}),
+                encoding="utf-8",
+            )
+            scope = inputs.workspace_root / "apps/control-room/node_modules/@fullmag"
+            scope.mkdir()
+            (scope / "shared-ui").symlink_to(target, target_is_directory=True)
+            self.assertFalse(self.module._dependency_tree_ready(inputs))
+
+    @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
+    def test_missing_direct_dependency_reinstalls_even_with_matching_witness(self):
+        with isolated(self.module) as (_root, workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module, original_inputs, ("next", "postprocessing")
+            )
+            make_dependency_tree(self.module, inputs, ("next",))
+            history = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "running",
+                "dependency_install": "ready",
+                "dependency_install_witness": dependency_witness(inputs),
+            }
+
+            def install(_inputs, _stopping_event, _log_stream, _receipt, _runtime_lock):
+                make_dependency_tree(self.module, inputs, ("next", "postprocessing"))
+
+            installer = start_with_dependency_history(
+                self, self.module, inputs, history, install
+            )
+            installer.assert_called_once()
+            self.assertTrue(
+                (workspace / "apps/control-room/node_modules/postprocessing").is_dir()
+            )
+
+    @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
+    def test_legacy_ready_receipt_without_dependency_witness_fails_closed(self):
+        with isolated(self.module) as (_root, _workspace, original_inputs):
+            inputs = with_dependency_manifest(
+                self.module, original_inputs, ("next", "postprocessing")
+            )
+            make_dependency_tree(self.module, inputs, ("next", "postprocessing"))
+            history = {
+                "schema": self.module.RECEIPT_SCHEMA,
+                "state": "running",
+                "dependency_install": "ready",
+            }
+            installer = start_with_dependency_history(
+                self, self.module, inputs, history, lambda *_args: None
+            )
+            installer.assert_called_once()
 
     @skipIf(os.name == "nt", "runtime flock regression uses POSIX file locking")
     def test_runtime_lock_rejects_a_second_active_consumer(self):
