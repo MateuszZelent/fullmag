@@ -104,3 +104,18 @@ lease. Powtórzenie request_id weryfikuje jej immutable terminal nawet po zmiani
 latest verified. Brak terminalnego dowodu sukcesu odmawia kolejnego dispatchu.
 Sam historyczny sukces operacji nie oznacza bieżącej kondycji runtime ani
 zakończenia obliczeń B/C; oba te fakty wymagają osobnego odbioru.
+
+## Potwierdzona odmowa pierwszego guardu po usunięciu usług
+
+Po succeeded recreate i failed-confirmed development wolno kontynuować tylko
+zamkniętą odmowę pierwszej rewalidacji: brak wskaźnika startu, dokładny canonical
+terminal i zamknięte pola bez state/cache/app artefaktów, identyczny request/plan
+oraz błąd nieobecności jednego ze starych kontenerów. Timestampy mają kontrakt
+epoch float z BuildControl. Różna wielkość liter w dokładnej odpowiedzi Docker
+inspect nie zmienia dowodu braku obiektu; błąd daemona nadal nie dowodzi nieobecności.
+
+Kontynuacja nie ponawia recreate. Odtwarza retained state/device/subnet/frontend
+handoff i uruchamia zwykły managed start. SHA terminala wcześniejszej odmowy jest
+ponownie sprawdzane pod nowym lease i przed Compose, obok całej pierwotnej
+rewalidacji owner/run/resource. Unknown, rozpoczęty start, inne błędy oraz
+jakiekolwiek pola późniejszych faz nadal odmawiają automatycznej kontynuacji.

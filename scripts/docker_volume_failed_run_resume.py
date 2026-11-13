@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import os
 import uuid
@@ -585,7 +586,7 @@ def _inspect_container(identifier, *, absent=False):
     if absent:
         text = result.stderr.decode('utf-8', 'strict').strip()
         pattern = r'Error(?: response from daemon)?: No such (?:object|container): ' + re.escape(identifier)
-        if result.returncode != 1 or result.stdout.strip() not in (b'', b'[]') or re.fullmatch(pattern, text) is None:
+        if result.returncode != 1 or result.stdout.strip() not in (b'', b'[]') or re.fullmatch(pattern, text, flags=re.IGNORECASE) is None:
             _fail('old service absence is not authoritative: ' + identifier)
         return None
     if result.returncode:
@@ -797,7 +798,7 @@ def _completed_result(control, args):
         _fail('request start has no completed success proof; retain resources without replay')
     recreation = _read_control(control, 'recreate-services/verified.json', optional=True)
     if isinstance(recreation, Mapping) and recreation.get('inputs', {}).get('failed_run_resume') == context:
-        _fail('continuation removed old services without a completed start; retain resources and do not replay')
+        raise _RemovedStartNeedsQualification(context, recreation)
     return None
 
 
@@ -815,10 +816,117 @@ def bind_start_attempt(control, context, operation):
         control.write(path, pointer)
 
 
+
+class _RemovedStartNeedsQualification(ResumeError):
+    def __init__(self, context, removal):
+        super().__init__('continuation removed old services without a completed start; qualification required')
+        self.context = context
+        self.removal = removal
+
+
+def qualify_prestart_failure(control, context, *, pin=None):
+    """Authenticate only the closed first checkpoint, before any state/cache/app write."""
+    path = 'failed-run-resume/requests/' + context['request_id'] + '/start.json'
+    if pin is None:
+        if control.read_bytes(path, optional=True) is not None:
+            _fail('first prestart qualification refuses an already bound start')
+        current = _read_control(control, 'development/current.json', optional=True)
+        if not isinstance(current, Mapping):
+            _fail('confirmed first prestart failure is absent')
+        attempt = current.get('attempt')
+    else:
+        if (not isinstance(pin, Mapping) or set(pin) != {
+                'schema', 'development_attempt', 'terminal_sha256', 'plan_sha256'}
+                or pin.get('schema') != 'fullmag.failed-run-prestart-failure.v1'
+                or pin.get('plan_sha256') != context['plan_sha256']):
+            _fail('confirmed prestart failure pin is malformed')
+        _sha(pin.get('terminal_sha256'), 'failed prestart terminal SHA')
+        current = None
+        attempt = pin.get('development_attempt')
+    attempt = _identity(attempt, re.compile(r'[0-9a-f]{32}\Z'), 'failed prestart attempt')
+    raw = control.read_bytes('development/attempts/' + attempt + '/terminal.json')
+    failure = _canonical_control_record(raw, 'confirmed first prestart failure')
+    allowed = set(('attempt attempt_limit build_data_qualification compose_project control_volume error '
+        'filesystem_after filesystem_before finished_at helper_container inputs log_byte_limit '
+        'minimum_free_bytes phase schema started_at state').split())
+    inputs = failure.get('inputs')
+    input_fields = {'device_access', 'failed_run_resume', 'frontend_start_handoff',
+        'gpu_access_requested', 'gpu_preflight', 'image_id', 'operator_probe_environment',
+        'operator_probe_environment_schema', 'operator_probe_environment_sha256',
+        'source_checkout_kind', 'source_project_id', 'source_root', 'source_worktree_id', 'ui_mode'}
+    errors = {'old service absence is not authoritative: ' + context[key]['Id']
+              for key in ('backend_pin', 'frontend_pin')}
+    if (set(failure) != allowed or failure.get('schema') != 'fullmag.docker-build-operation.v1'
+            or failure.get('phase') != 'development' or failure.get('state') != 'failed-confirmed'
+            or failure.get('attempt') != attempt or failure.get('compose_project') != control.project
+            or failure.get('control_volume') != control.volume or failure.get('error') not in errors
+            or not isinstance(inputs, Mapping) or not set(inputs) <= input_fields
+            or inputs.get('failed_run_resume') != context
+            or inputs.get('source_root') != context['source_root']
+            or not isinstance(inputs.get('image_id'), str)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', inputs['image_id']) is None
+            or not isinstance(failure.get('helper_container'), str) or not failure['helper_container']
+            or any(type(failure.get(key)) not in (float, int)
+                   or not math.isfinite(failure[key]) or failure[key] <= 0
+                   for key in ('started_at', 'finished_at'))
+            or failure['finished_at'] < failure['started_at']):
+        _fail('receipt is not a confirmed first prestart failure before state/app writes')
+    digest = hashlib.sha256(raw).hexdigest()
+    if current is not None and current != failure:
+        _fail('confirmed prestart current pointer differs from its terminal')
+    if pin is not None and pin['terminal_sha256'] != digest:
+        _fail('confirmed prestart terminal changed')
+    return {'schema': 'fullmag.failed-run-prestart-failure.v1', 'development_attempt': attempt,
+            'terminal_sha256': digest, 'plan_sha256': context['plan_sha256']}
+
+
+def _resume_confirmed_prestart(control, args, context, removal):
+    from pathlib import Path
+    import docker_volume_dev as dev
+    from docker_dev_network import retained_requested_subnet
+    pin = qualify_prestart_failure(control, context)
+    root = 'development/attempts/' + args.attempt
+    previous = _read_control(control, root + '/terminal.json')
+    document = _read_control(control, root + '/compose.json')
+    operation_id = _identity(removal.get('attempt'), re.compile(r'[0-9a-f]{32}\Z'), 'removal attempt')
+    actual = _read_control(control, 'recreate-services/attempts/' + operation_id + '/retained-containers.json')
+    state = Path(context['state_root'])
+    revalidate_resume_request(control, args, context, previous, document, actual, state,
+                              phase='before-start', removal=removal)
+    failure = _read_control(control, 'development/attempts/' + pin['development_attempt'] + '/terminal.json')
+    probe = dev._operator_probe_record_from_retained(previous, document)
+    reuse = {'state': state, 'host_certificate': dev._certificate_path(state),
+        'owner_marker': state / dev._session_host().OWNER_NAME,
+        'receipt': {'image_id': previous['inputs']['image_id']},
+        'operator_probe_environment_record': probe}
+    if 'frontend_start_handoff' in failure['inputs']:
+        reuse['frontend_start_handoff'] = failure['inputs']['frontend_start_handoff']
+    args.gpu_access = previous['inputs']['gpu_access_requested']
+    args.include_untracked = dev.include_untracked_from_compose(document)
+    args.native_contract = dev._retained_native_contracts(previous, document)
+    subnet = retained_requested_subnet(document, getattr(args, 'network_subnet', None))
+    if subnet is not None:
+        args.network_subnet = subnet
+    handoff = {'context': dict(context), 'previous': previous, 'document': document,
+        'actual': actual, 'state': str(state), 'removal': dict(removal), 'prestart_failure': pin}
+    return dev.start(args, reuse_state=reuse,
+        retained_device_access=dev._retained_device_access(previous, document),
+        failed_run_resume_context=handoff)
+
+
 def run(args):
     _validate_args(args)
     control = _request_control(args)
-    completed = _completed_result(control, args)
+    try:
+        completed = _completed_result(control, args)
+    except _RemovedStartNeedsQualification as pending:
+        if not args.apply:
+            raise
+        _resume_confirmed_prestart(control, args, pending.context, pending.removal)
+        completed = _completed_result(control, args)
+        if completed is None:
+            _fail('qualified prestart continuation has no completed start proof')
+        return completed
     if completed is not None:
         return completed
     from docker_volume_dev import resume_failed_run

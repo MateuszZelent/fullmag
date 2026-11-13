@@ -2741,6 +2741,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         _validate_existing_operation_inputs(provided_operation.get("receipt", {}), operation_inputs)
     if failed_run_resume_context is not None:
         operation_inputs["failed_run_resume"] = failed_run_resume_context["context"]
+        if "prestart_failure" in failed_run_resume_context:
+            operation_inputs["failed_run_prestart_continuation"] = failed_run_resume_context["prestart_failure"]
     operation_context = (control.operation("development", operation_inputs)
                          if provided_operation is None
                          else nullcontext(provided_operation))
@@ -5772,10 +5774,14 @@ def resume_failed_run(args):
 
 
 def _revalidate_failed_run_handoff(control, args, handoff, *, phase):
-    if (not isinstance(handoff, Mapping) or set(handoff) != {
-            "context", "previous", "document", "actual", "state", "removal"}):
+    required = {"context", "previous", "document", "actual", "state", "removal"}
+    if (not isinstance(handoff, Mapping)
+            or set(handoff) not in (required, required | {"prestart_failure"})):
         raise BuildControlError("Failed-run continuation handoff is malformed")
     from docker_volume_failed_run_resume import revalidate_resume_request
+    if "prestart_failure" in handoff:
+        from docker_volume_failed_run_resume import qualify_prestart_failure
+        qualify_prestart_failure(control, handoff["context"], pin=handoff["prestart_failure"])
     return revalidate_resume_request(
         control, args, handoff["context"], handoff["previous"], handoff["document"],
         handoff["actual"], Path(handoff["state"]), phase=phase,

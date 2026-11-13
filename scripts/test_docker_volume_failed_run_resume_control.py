@@ -124,6 +124,9 @@ class FailedRunResumeControlTests(unittest.TestCase):
             stderr=('Error: No such object: '+container+'\n').encode())
         with mock.patch('docker_build_control.docker_capture',return_value=absent):
             self.assertIsNone(resume._inspect_container(container,absent=True))
+        absent.stderr=('error: no such object: '+container+'\n').encode()
+        with mock.patch('docker_build_control.docker_capture',return_value=absent):
+            self.assertIsNone(resume._inspect_container(container,absent=True))
         failed=SimpleNamespace(returncode=1,stdout=b'',stderr=b'Cannot connect to Docker daemon')
         with mock.patch('docker_build_control.docker_capture',return_value=failed):
             with self.assertRaisesRegex(resume.ResumeError,'absence'):
@@ -137,6 +140,85 @@ class FailedRunResumeControlTests(unittest.TestCase):
                 with self.assertRaisesRegex(resume.ResumeError,'apply|reviewed'):
                     resume.revalidate_resume_request(control,request,ctx,{}, {}, {},
                                                      Path('/tmp/state'),phase='recreate-lease')
+
+
+    def _failed_prestart(self,control,ctx,**changes):
+        fields=('attempt attempt_limit build_data_qualification compose_project control_volume error '
+            'filesystem_after filesystem_before finished_at helper_container inputs log_byte_limit '
+            'minimum_free_bytes phase schema started_at state').split()
+        value=dict.fromkeys(fields)
+        value.update(attempt='e'*32,compose_project='group',control_volume='control',
+            phase='development',schema='fullmag.docker-build-operation.v1',state='failed-confirmed',
+            error='old service absence is not authoritative: '+ctx['backend_pin']['Id'],
+            started_at=1794571200.25,finished_at=1794571201.25,
+            helper_container='qualified-control-helper',inputs={'failed_run_resume':ctx,
+                'source_root':ctx['source_root'],'image_id':'sha256:'+'1'*64})
+        value.update(changes)
+        control.write('development/current.json',value)
+        control.write('development/attempts/'+'e'*32+'/terminal.json',value)
+        return value
+
+    def test_only_canonical_first_prestart_failure_can_continue_removed_services(self):
+        control=Control();ctx=self.prepare(control,args())['context']
+        self._failed_prestart(control,ctx)
+        pin=resume.qualify_prestart_failure(control,ctx)
+        self.assertEqual(pin['development_attempt'],'e'*32)
+        self.assertEqual(resume.qualify_prestart_failure(control,ctx,pin=pin),pin)
+        for changes in ({'state':'outcome-unknown-resources-retained'}, {'state_root':None},
+                        {'backend_container':'1'*64},{'error':'backend failed after start'}):
+            with self.subTest(changes=changes):
+                self._failed_prestart(control,ctx,**changes)
+                with self.assertRaisesRegex(resume.ResumeError,'prestart|first|confirmed'):
+                    resume.qualify_prestart_failure(control,ctx)
+
+    def test_prestart_failure_pin_is_immutable_after_latest_moves(self):
+        control=Control();ctx=self.prepare(control,args())['context']
+        failure=self._failed_prestart(control,ctx)
+        pin=resume.qualify_prestart_failure(control,ctx)
+        control.write('development/current.json',{'attempt':'new-running-operation'})
+        self.assertEqual(resume.qualify_prestart_failure(control,ctx,pin=pin),pin)
+        failure['error']='changed proof'
+        control.write('development/attempts/'+'e'*32+'/terminal.json',failure)
+        with self.assertRaises(resume.ResumeError):
+            resume.qualify_prestart_failure(control,ctx,pin=pin)
+
+
+    def test_qualified_prestart_continues_start_once_without_recreating_again(self):
+        import docker_volume_dev as dev
+        control=Control();ctx=self.prepare(control,args())['context']
+        failure=self._failed_prestart(control,ctx)
+        failure['inputs']['frontend_start_handoff']={'fixture':'pinned-handoff'}
+        control.write('development/current.json',failure)
+        control.write('development/attempts/'+'e'*32+'/terminal.json',failure)
+        removal={'attempt':'f'*32,'inputs':{'failed_run_resume':ctx}}
+        control.write('recreate-services/verified.json',removal)
+        control.write('recreate-services/attempts/'+'f'*32+'/retained-containers.json',{'backend':{},'frontend':{}})
+        previous={'inputs':{'image_id':'sha256:'+'2'*64,'gpu_access_requested':'disabled'}}
+        control.write('development/attempts/'+'a'*32+'/terminal.json',previous)
+        control.write('development/attempts/'+'a'*32+'/compose.json',{'name':'group'})
+        request=args(preview=False,apply=True,expected_plan_sha256=ctx['plan_sha256'])
+        def start(call_args,**kwargs):
+            self.assertIsNone(call_args.script);self.assertFalse(call_args.fresh_state)
+            self.assertEqual(kwargs['retained_device_access'],'cpu')
+            self.assertEqual(kwargs['reuse_state']['frontend_start_handoff'],{'fixture':'pinned-handoff'})
+            self.assertEqual(kwargs['failed_run_resume_context']['prestart_failure']['development_attempt'],'e'*32)
+            resume.bind_start_attempt(control,ctx,{'receipt':{'attempt':'9'*32}})
+            control.write('development/attempts/'+'9'*32+'/terminal.json',{
+                'phase':'development','state':'succeeded','attempt':'9'*32,
+                'compose_project':'group','control_volume':'control','inputs':{'failed_run_resume':ctx}})
+        with (mock.patch.object(resume,'_request_control',return_value=control),
+              mock.patch.object(resume,'revalidate_resume_request') as validate,
+              mock.patch.object(dev,'_operator_probe_record_from_retained',return_value={}),
+              mock.patch.object(dev,'include_untracked_from_compose',return_value=[]),
+              mock.patch.object(dev,'_retained_native_contracts',return_value=[]),
+              mock.patch.object(dev,'_retained_device_access',return_value='cpu'),
+              mock.patch('docker_dev_network.retained_requested_subnet',return_value=None),
+              mock.patch.object(dev,'start',side_effect=start) as started,
+              mock.patch.object(dev,'resume_failed_run') as recreate):
+            result=resume.run(request)
+        self.assertEqual(result['development_attempt'],'9'*32)
+        started.assert_called_once();recreate.assert_not_called()
+        self.assertEqual(validate.call_args.kwargs,{'phase':'before-start','removal':removal})
 
 
 if __name__=='__main__':unittest.main()
