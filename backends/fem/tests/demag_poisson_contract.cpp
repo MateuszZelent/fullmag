@@ -13,6 +13,7 @@
 #include "core/fem_material_runtime.hpp"
 #include "cuda_demag_residual_fixture.hpp"
 #include "cuda_pgbb_final_energy_overlay_fixture.hpp"
+#include "cuda_pgbb_accepted_potential_fixture.hpp"
 #include "mandatory_control_counter_fixture.hpp"
 #include "poisson_device_pcg_counter_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
@@ -2969,7 +2970,7 @@ void device_scalar_pcg_terminal_state_contract() {
 }
 #endif
 
-void direct_pgbb_performance_lifecycle_contract()
+void direct_pgbb_performance_lifecycle_contract(bool exercise_c2 = false)
 {
     const char *saved_env = std::getenv("FULLMAG_FEM_STEP_PROFILE");
     const bool had_env = saved_env != nullptr;
@@ -3064,7 +3065,10 @@ void direct_pgbb_performance_lifecycle_contract()
 
         plan.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
         plan.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
-        plan.demag_solver.relative_tolerance = 1e-10;
+        plan.demag_solver.relative_tolerance = exercise_c2 ? 1e-12 : 1e-10;
+        // The public SP4 path requests automatic device selection (-1).
+        // Warm-start provenance must use the resolved owner, not that sentinel.
+        plan.gpu_device_index = exercise_c2 ? -1 : 0;
         plan.demag_solver.max_iterations = 500;
         plan.poisson_boundary_marker = 1;
         plan.robin_beta_mode = 2;
@@ -3082,6 +3086,12 @@ void direct_pgbb_performance_lifecycle_contract()
         auto &ctx = handle->context;
         auto &state = ctx.gpu_state.performance_counters;
         fullmag_fem_step_stats stats{};
+        const auto warm_before_cold = fullmag::fem::workspace_ptr(ctx)->warm_start_count;
+        if (exercise_c2) {
+            check(ctx.mfem_device.gpu_device_index == -1 &&
+                ctx.mfem_context.selected_device_index >= 0,
+                "PGBB warm fixture resolves an automatic GPU request to a device owner");
+        }
         const int accepted = fullmag_fem_backend_relax_step(handle,
             FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB,&stats);
         check_result(accepted == FULLMAG_FEM_OK,fullmag_fem_backend_last_error(handle),
@@ -3094,6 +3104,14 @@ void direct_pgbb_performance_lifecycle_contract()
                   pcg.solves > 0 && pcg.status_readbacks > 0 &&
                   mandatory.poisson_certificate_readbacks > 0 && mandatory.bb_certificate_readbacks > 0,
               "real direct PGBB publishes legacy and additive physical counters with profiler off/on");
+        if (exercise_c2) {
+            check(fullmag::fem::workspace_ptr(ctx)->warm_start_count == warm_before_cold,
+                "first PGBB step has no accepted-potential warm start");
+            fullmag::fem::test::gpu_pgbb_accepted_potential_contract(
+                handle, stats.total_energy_joules, check);
+            fullmag_fem_backend_destroy(handle);
+            continue;
+        }
         ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
         ctx.stage_completion.relax_stop.has_energy_tolerance_j = 0;
         ctx.stage_completion.relax_stop.torque_tolerance_apm = 1e300;
@@ -3665,6 +3683,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     }
     fullmag::fem::test::check_gpu_hypre_demag_residual(check);
     direct_pgbb_performance_lifecycle_contract();
+    direct_pgbb_performance_lifecycle_contract(true);
 }
 #endif
 

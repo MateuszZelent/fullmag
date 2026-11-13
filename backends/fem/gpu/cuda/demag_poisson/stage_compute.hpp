@@ -43,6 +43,16 @@ struct GpuDemagApplyRequest {
     GpuDemagSolvePurpose purpose = GpuDemagSolvePurpose::IntermediateRkStage;
 };
 
+// Private PGBB-only permit: capture before ordinary field invalidation, then
+// recheck immediately before destructive Poisson apply. Existing fresh APIs
+// never accept this permit.
+bool gpu_demag_pgbb_potential_key(const Context &, void *, FemGpuPgbbPotentialKey &);
+FemGpuPgbbPotentialPermit gpu_demag_consume_pgbb_potential(Context &, void *);
+void gpu_demag_publish_pgbb_potential(Context &, void *);
+bool compute_device_demag_for_pgbb_trial(
+    Context &, const FemGpuComponentField &, void *,
+    FemGpuPgbbPotentialPermit &, std::string &);
+
 // Resolve/validate a request at the module boundary so unsupported enum values
 // fail closed instead of silently selecting a more expensive or less strict
 // path.  The function is CUDA-independent and is covered by a source contract.

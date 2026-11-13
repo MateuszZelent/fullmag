@@ -10,6 +10,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/relaxation/pgbb.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
@@ -32,6 +33,65 @@
 #include <string>
 
 namespace fullmag::fem {
+
+bool gpu_demag_pgbb_potential_key(
+    const Context &ctx, void *stream, FemGpuPgbbPotentialKey &key)
+{
+    key = {};
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const auto *ws = workspace_ptr(ctx);
+    const auto &gpu = ctx.gpu_state.device;
+    if (!gpu_relax_pgbb_field_reuse_key(ctx, key.endpoint) || ws == nullptr ||
+        !ws->ready || !ws->solver_setup_complete || ws->x_par == nullptr ||
+        demag_poisson_resolved_linear_engine(ctx) != 3 ||
+        ws->operator_fingerprint.empty() ||
+        ws->operator_fingerprint.size() >= key.operator_fingerprint.size() ||
+        !ws->stream_interop.ready || ws->stream_interop.hypre_stream == nullptr ||
+        gpu.demag_poisson.poisson_solution == nullptr ||
+        gpu.demag_poisson.scalar_dof_count == 0 ||
+        static_cast<uint64_t>(ws->x_par->Size()) != gpu.demag_poisson.scalar_dof_count ||
+        ctx.mfem_context.selected_device_index < 0) return false;
+    // Bind the selected device owner and its streams without a CUDA API query
+    // that could surface an asynchronous error in a mere eligibility check.
+    key.device = ctx.mfem_context.selected_device_index;
+    std::copy(ws->operator_fingerprint.begin(), ws->operator_fingerprint.end(),
+        key.operator_fingerprint.begin());
+    key.fingerprint_size = ws->operator_fingerprint.size();
+    key.workspace = reinterpret_cast<uintptr_t>(ws);
+    key.solution = reinterpret_cast<uintptr_t>(gpu.demag_poisson.poisson_solution);
+    key.stream = reinterpret_cast<uintptr_t>(stream);
+    key.hypre_stream = reinterpret_cast<uintptr_t>(ws->stream_interop.hypre_stream);
+    key.rows = gpu.demag_poisson.scalar_dof_count;
+    key.operator_build = ws->operator_build_count;
+    key.operator_upload = ws->operator_upload_count;
+    key.solver_setup = ws->solver_setup_count;
+    return true;
+#else
+    (void)ctx; (void)stream;
+    return false;
+#endif
+}
+
+FemGpuPgbbPotentialPermit gpu_demag_consume_pgbb_potential(Context &ctx, void *stream)
+{
+    auto &token = ctx.gpu_state.device.relaxation.pgbb_accepted_potential;
+    FemGpuPgbbPotentialPermit permit{};
+    FemGpuPgbbPotentialKey current{};
+    if (token.valid && gpu_demag_pgbb_potential_key(ctx, stream, current) &&
+        token.key == current) {
+        permit.key = token.key;
+        permit.valid = true;
+    }
+    token.valid = false; // Consume before any caller may overwrite x.
+    return permit;
+}
+
+void gpu_demag_publish_pgbb_potential(Context &ctx, void *stream)
+{
+    auto &token = ctx.gpu_state.device.relaxation.pgbb_accepted_potential;
+    token.valid = false;
+    token.valid = gpu_demag_pgbb_potential_key(ctx, stream, token.key);
+}
 
 bool validate_gpu_demag_evaluation_request(
     const GpuDemagApplyRequest &request,
@@ -158,7 +218,8 @@ bool compute_device_demag_for_device_stage_impl(
     const FemGpuComponentField &m,
     void *raw_stream,
     const GpuDemagApplyRequest &request,
-    std::string &reason)
+    std::string &reason,
+    FemGpuPgbbPotentialPermit *permit = nullptr)
 {
     gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
     if (!validate_gpu_demag_evaluation_request(request, reason)) {
@@ -197,7 +258,12 @@ bool compute_device_demag_for_device_stage_impl(
         reason = "strict FEM GPU demag FieldAndRecoveredEnergy requires uploaded Ms and node-volume buffers";
         return false;
     }
-    const bool reset_initial_solution = request.reset_initial_solution;
+    FemGpuPgbbPotentialKey current_key{};
+    const bool reuse_accepted = permit != nullptr && permit->valid &&
+        gpu_demag_pgbb_potential_key(ctx, raw_stream, current_key) &&
+        permit->key == current_key;
+    if (permit != nullptr) permit->valid = false;
+    const bool reset_initial_solution = request.reset_initial_solution && !reuse_accepted;
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     auto &timings = ctx.gpu_state.rk_phase_timings;
@@ -596,6 +662,15 @@ bool compute_device_demag_for_device_stage(
             GpuDemagEvaluationMode::FieldAndRecoveredEnergy,
             GpuDemagSolvePurpose::ObservableRefresh},
         reason);
+}
+
+bool compute_device_demag_for_pgbb_trial(
+    Context &ctx, const FemGpuComponentField &m, void *stream,
+    FemGpuPgbbPotentialPermit &permit, std::string &reason)
+{
+    return compute_device_demag_for_device_stage_impl(ctx, m, stream,
+        GpuDemagApplyRequest{true, GpuDemagEvaluationMode::FieldOnly,
+            GpuDemagSolvePurpose::RelaxationTrial}, reason, &permit);
 }
 
 bool compute_device_demag_for_device_stage_fresh(

@@ -638,6 +638,15 @@ bool gpu_compose_term_complete_energy_difference(
     return true;
 }
 
+bool gpu_relax_compute_pgbb_trial_field_and_energy_terms(
+    Context &ctx, cudaStream_t stream, int nodes, int blocks, std::string &reason)
+{
+    if (!gpu_rk_compute_effective_field_for_pgbb_trial(ctx,
+        ctx.gpu_state.device.magnetization.m, stream, nodes, ctx.state.current_time,
+        "launch GPU PGBB first trial with accepted potential permit", reason)) return false;
+    return gpu_rk_reduce_final_energy_terms(ctx, stream, nodes, blocks, reason);
+}
+
 bool gpu_relax_compute_effective_field_and_energy_terms(
     Context &ctx,
     cudaStream_t stream,

@@ -963,6 +963,7 @@ bool gpu_state_resize_demag_poisson_scalars(
     uint64_t full_scalar_dof_count,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if (!state.lifecycle.allocated) {
         error = "FemGpuState Poisson scalar resize requires allocated device state";
         return false;

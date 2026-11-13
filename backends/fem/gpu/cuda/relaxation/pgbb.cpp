@@ -9,6 +9,7 @@
  */
 
 #include "gpu/cuda/relaxation/pgbb.hpp"
+#include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 
 #include "context.hpp"
@@ -639,6 +640,11 @@ int gpu_relax_projected_gradient_bb_step(
     std::string &error)
 {
     out_stats = {};
+    struct PotentialExitGuard {
+        FemGpuPgbbPotentialToken &token;
+        bool committed = false;
+        ~PotentialExitGuard() { if (!committed) token.valid = false; }
+    } potential_guard{ctx.gpu_state.device.relaxation.pgbb_accepted_potential};
 #if FULLMAG_HAS_CUDA_RUNTIME
     std::string reason;
     if (!gpu_relax_pgbb_preflight(ctx, reason)) {
@@ -927,12 +933,11 @@ int gpu_relax_projected_gradient_bb_step(
                     stream,
                     "cudaMemcpyAsync GPU projected-gradient BB trial m",
                     reason) ||
-                !gpu_relax_compute_effective_field_and_energy_terms(
-                    ctx,
-                    stream,
-                    n,
-                    blocks,
-                    reason)) {
+                !(backtracks == 0
+                    ? gpu_relax_compute_pgbb_trial_field_and_energy_terms(
+                        ctx, stream, n, blocks, reason)
+                    : gpu_relax_compute_effective_field_and_energy_terms(
+                        ctx, stream, n, blocks, reason))) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -941,6 +946,11 @@ int gpu_relax_projected_gradient_bb_step(
                     error);
             }
             logical_rhs_evaluations += 1u;
+            if (gpu.relaxation.next_pgbb_failure == GpuRelaxPgbbFailurePoint::AfterTrialField) {
+                gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
+                return gpu_relax_restore_previous_magnetization_after_failure(ctx, stream,
+                    "injected PGBB trial failure", "native PGBB phi rollback fixture", error);
+            }
 
             GpuDirectArmijoResult armijo_result{};
             if (!gpu_direct_minimizer_armijo_evaluate(
@@ -1004,6 +1014,11 @@ int gpu_relax_projected_gradient_bb_step(
                 last_direct_difference = armijo_result.difference;
                 accepted_armijo_increment_rhs_j = armijo_rhs;
                 accepted_trial_snapshot = armijo_result.trial_snapshot;
+            }
+            if (backtracks == 0 && gpu.relaxation.next_pgbb_failure ==
+                    GpuRelaxPgbbFailurePoint::RejectFirstTrial) {
+                gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
+                armijo = false;
             }
             if (armijo) {
                 line_search_accepted = true;
@@ -1158,6 +1173,11 @@ int gpu_relax_projected_gradient_bb_step(
         ctx.anisotropy.cubic_enabled;
     accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)] =
         ctx.magnetoelastic.enabled;
+    if (gpu.relaxation.next_pgbb_failure == GpuRelaxPgbbFailurePoint::DuringAcceptedStatistics) {
+        gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
+        return gpu_relax_restore_accepted_step_after_finalize_failure(ctx, stream,
+            rollback, "injected native PGBB finalizer failure", error);
+    }
     if (!gpu_rk_finalize_step_stats_control_readback_with_energy_terms(
             ctx,
             out_stats,
@@ -1215,6 +1235,10 @@ int gpu_relax_projected_gradient_bb_step(
         gpu_relax_pgbb_field_reuse_key(ctx, accepted_key)) {
         gpu.relaxation.pgbb_accepted_field.key = accepted_key;
         gpu.relaxation.pgbb_accepted_field.valid = true;
+        if (refinement_rhs_evaluations == 0) {
+            gpu_demag_publish_pgbb_potential(ctx, stream);
+            potential_guard.committed = true;
+        }
     }
     return FULLMAG_FEM_OK;
 #else

@@ -147,6 +147,18 @@ bool gpu_rk_compute_demag_for_device_stage(
         ctx, m, stream, kRkStageDemagRequest, reason);
 }
 
+bool gpu_rk_compute_demag_for_pgbb_trial(
+    Context &ctx, const FemGpuComponentField &m, cudaStream_t stream,
+    FemGpuPgbbPotentialPermit &permit, std::string &reason)
+{
+    // Only the strict Poisson lane can consume this token. Other lanes retain
+    // their existing fresh behavior; this does not select a CPU fallback.
+    if (!ctx.demag.enabled || ctx.poisson_demag.gpu_demag_mode !=
+        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON)
+        return gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason);
+    return compute_device_demag_for_pgbb_trial(ctx, m, stream, permit, reason);
+}
+
 bool gpu_rk_compute_demag_for_device_stage_fresh(
     Context &ctx,
     const FemGpuComponentField &m,
