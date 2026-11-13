@@ -295,6 +295,23 @@ bajty czterech modułów zamiast lokalnego cache `.pyc`; image-owned kod runtime
 pozostaje częścią przypiętego obrazu. Guard starego store nie zastępuje
 osobnego writer lock nowego store, wymaganego przez etap admission.
 
+Prymityw `fullmag_data_volume_admission.prepare_guarded` zajmuje istniejący
+NEW store writer, sprawdza jego inode, bytes i metadane/ACL oraz zapisuje pięć
+oryginalnych plików admission i kandydata w `state-admission.json`. Archiwum
+powstaje przez O_EXCL, jako plik 0600 w istniejącym root-owned katalogu 0700
+nowego filesystemu, z fsync przed zmianą certyfikatu. Root, store, writer,
+cert-file inode i canonical archive-parent pozostają przypięte do końca.
+Kandydat zmienia wyłącznie device/inode i `restart_verified=False`; nie
+przyznaje namespace. Istniejące archiwum blokuje replay. Błąd zachowuje
+archiwum i stan częściowy dla jawnego recovery, także gdy helper zapisu
+certyfikatu podjął lokalną próbę odtworzenia jego poprzednich bajtów.
+
+Ten root-only prymityw nie ma CLI. Pełny sterownik nadal musi uwierzytelnić
+lineage, pending, OLD guardy, oba datasety, host namespace i środowisko
+narzędzi oraz połączyć go z supervisorem. Same przekazane piny nie dowodzą
+tych warunków. Świeży probe oraz kwalifikacja runtime i zapisu Zarr pozostają
+odrębnymi wymaganiami po przygotowaniu admission.
+
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,
 kwalifikację zapisu/Zarr i rejestrację pod ciągłą kontrolą. Rzeczywista kopia,
