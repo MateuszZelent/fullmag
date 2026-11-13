@@ -27,6 +27,9 @@ _FILE_ENTRY_KEYS = _ENTRY_BASE_KEYS | frozenset({"size", "sha256", "hardlink_to"
 _TOTAL_KEYS = frozenset(
     {"logical_bytes", "allocated_bytes", "entries", "files", "directories"}
 )
+_FINGERPRINT_FIELDS = (
+    "device", "inode", "file_type", "mode", "uid", "gid", "size", "mtime_ns", "ctime_ns",
+)
 _SHA256_LENGTH = 64
 _CHUNK_SIZE = 1024 * 1024
 
@@ -135,9 +138,10 @@ def _kind_from_stat(info: os.stat_result, label: str) -> str:
     _fail(f"{label} has an unsupported filesystem node type")
 
 
-def _fingerprint(info: os.stat_result, kind: str, label: str) -> tuple[int, ...]:
+def _fingerprint(info: os.stat_result, label: str) -> tuple[int, ...]:
+    """Return mutation-guard metadata; allocation is counted separately."""
     try:
-        fingerprint = (
+        return (
             int(info.st_dev),
             int(info.st_ino),
             int(stat.S_IFMT(info.st_mode)),
@@ -148,11 +152,25 @@ def _fingerprint(info: os.stat_result, kind: str, label: str) -> tuple[int, ...]
             int(info.st_mtime_ns),
             int(info.st_ctime_ns),
         )
-        if kind == "file":
-            fingerprint += (int(info.st_blocks),)
     except (AttributeError, OverflowError, TypeError, ValueError) as error:
         raise ValueError(f"{label} lacks supported filesystem metadata") from error
-    return fingerprint
+
+
+def _fingerprint_differences(expected: tuple[int, ...], observed: tuple[int, ...]) -> list[str]:
+    if len(expected) != len(_FINGERPRINT_FIELDS) or len(observed) != len(_FINGERPRINT_FIELDS):
+        return ["fingerprint_shape"]
+    return [
+        name for name, left, right in zip(_FINGERPRINT_FIELDS, expected, observed)
+        if left != right
+    ]
+
+
+def _xattr_differences(expected: dict[str, str], observed: dict[str, str]) -> list[str]:
+    return [
+        "xattr:" + name
+        for name in sorted(set(expected) | set(observed))
+        if expected.get(name) != observed.get(name)
+    ]
 
 
 def _read_xattrs(descriptor: int, label: str) -> dict[str, str]:
@@ -260,11 +278,12 @@ def inventory_datasets(roots: dict[str, Path], *, maximum_entries: int = 100000)
             _fail(f"{label} changed filesystem node type while opening")
         if info.st_dev != device_by_role[role]:
             _fail(f"{label} crossed the root filesystem device")
-        fingerprint = _fingerprint(info, actual_kind, label)
-        if expected_info is not None and fingerprint != _fingerprint(
-            expected_info, actual_kind, label
-        ):
-            _fail(f"{label} changed identity or metadata while opening")
+        fingerprint = _fingerprint(info, label)
+        if expected_info is not None:
+            expected_fingerprint = _fingerprint(expected_info, label)
+            if fingerprint != expected_fingerprint:
+                fields = _fingerprint_differences(expected_fingerprint, fingerprint)
+                _fail(f"{label} changed fields while opening: {', '.join(fields)}")
         xattrs = _read_xattrs(descriptor, label)
         state = {
             "role": role,
@@ -291,8 +310,10 @@ def inventory_datasets(roots: dict[str, Path], *, maximum_entries: int = 100000)
                 _fail(f"{label} lacks allocated-block metadata")
             inode = (int(info.st_dev), int(info.st_ino))
             old = inode_fingerprints.get(inode)
-            if old is not None and (old[0] != fingerprint or old[1] != xattrs):
-                _fail(f"hardlink aliases for {label} disagree on observed metadata")
+            if old is not None:
+                fields = _fingerprint_differences(old[0], fingerprint) + _xattr_differences(old[1], xattrs)
+                if fields:
+                    _fail(f"hardlink aliases for {label} disagree on fields: {', '.join(fields)}")
             inode_fingerprints.setdefault(inode, (fingerprint, xattrs))
             entry.update(
                 {
@@ -317,10 +338,16 @@ def inventory_datasets(roots: dict[str, Path], *, maximum_entries: int = 100000)
         except OSError as error:
             raise ValueError(f"cannot recheck {label}: {error}") from error
         kind = _kind_from_stat(info, label)
-        if kind != state["kind"] or _fingerprint(info, kind, label) != state["fingerprint"]:
-            _fail(f"{label} changed type, identity, size, mode, or mtime during walk")
-        if _read_xattrs(descriptor, label) != state["xattrs"]:
-            _fail(f"{label} extended attributes changed during walk")
+        fingerprint = _fingerprint(info, label)
+        fields = _fingerprint_differences(state["fingerprint"], fingerprint)
+        if kind != state["kind"]:
+            fields.insert(0, "kind")
+        if fields:
+            _fail(f"{label} changed fields during walk: {', '.join(fields)}")
+        xattrs = _read_xattrs(descriptor, label)
+        fields = _xattr_differences(state["xattrs"], xattrs)
+        if fields:
+            _fail(f"{label} changed metadata fields during walk: {', '.join(fields)}")
         if state["directory_names"] is not None:
             if _listdir_fd(descriptor) != state["directory_names"]:
                 _fail(f"{label} gained or lost entries during walk")
@@ -332,11 +359,12 @@ def inventory_datasets(roots: dict[str, Path], *, maximum_entries: int = 100000)
                     f"{label} path changed or disappeared during walk: {error}"
                 ) from error
             path_kind = _kind_from_stat(path_info, label)
-            if (
-                path_kind != kind
-                or _fingerprint(path_info, path_kind, label) != state["fingerprint"]
-            ):
-                _fail(f"{label} path no longer names the inspected filesystem object")
+            path_fingerprint = _fingerprint(path_info, label)
+            fields = _fingerprint_differences(state["fingerprint"], path_fingerprint)
+            if path_kind != state["kind"]:
+                fields.insert(0, "kind")
+            if fields:
+                _fail(f"{label} path changed fields: {', '.join(fields)}")
 
     def open_relative_state(root_fd: int, role: str, relative_path: str, kind: str):
         if relative_path == "":
@@ -539,16 +567,20 @@ def inventory_datasets(roots: dict[str, Path], *, maximum_entries: int = 100000)
                 raise ValueError(f"dataset root {role} changed during walk: {error}") from error
             try:
                 current_info = os.fstat(current_fd)
-                if _fingerprint(current_info, "directory", f"{role} root") != _fingerprint(
-                    root_info[role], "directory", f"{role} root"
-                ):
-                    _fail(f"dataset root {role} changed identity or metadata during walk")
-                if _read_xattrs(current_fd, f"{role} root") != next(
+                current_fingerprint = _fingerprint(current_info, f"{role} root")
+                root_fingerprint = _fingerprint(root_info[role], f"{role} root")
+                fields = _fingerprint_differences(root_fingerprint, current_fingerprint)
+                if fields:
+                    _fail(f"dataset root {role} changed fields during walk: {', '.join(fields)}")
+                current_xattrs = _read_xattrs(current_fd, f"{role} root")
+                root_xattrs = next(
                     state["xattrs"]
                     for state in states
                     if state["role"] == role and state["path"] == ""
-                ):
-                    _fail(f"dataset root {role} extended attributes changed during walk")
+                )
+                fields = _xattr_differences(root_xattrs, current_xattrs)
+                if fields:
+                    _fail(f"dataset root {role} changed metadata fields: {', '.join(fields)}")
             finally:
                 os.close(current_fd)
 

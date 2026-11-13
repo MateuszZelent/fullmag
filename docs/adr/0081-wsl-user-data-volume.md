@@ -42,6 +42,12 @@ wymaga zachowania inode i nie kwalifikuje skopiowanego StateRoot.
    xattrs/ACL i topologię twardych linków. Odrzuca symlinki, pliki specjalne,
    obce urządzenia oraz drift. Ctime i inode służą kontroli wyścigów; nie są
    przenośnymi metadanymi porównywanymi pomiędzy filesystemami.
+   Przejściowy fingerprint kontroli mutacji obejmuje device, inode, typ węzła,
+   mode, uid, gid, size, mtime_ns i ctime_ns; xattrs są sprawdzane osobno,
+   a treść plików przez SHA-256. `st_blocks` nie należy do fingerprintu ani
+   warunku zgodności, ponieważ alokacja filesystemowa może się zmieniać.
+   `totals.allocated_bytes` pozostaje pomiarem obserwacyjnym sumowanym raz na
+   inode i nie wpływa na porównanie danych.
 6. Oryginalne bajty i metadane zachowujemy także w pełnym archiwum PAX na
    nowym ext4. Chroni to historię, gdy nowy runtime legalnie zmieni katalogi
    sesji, SQLite lub evidence admission. Archiwum oraz kopia robocza znajdują

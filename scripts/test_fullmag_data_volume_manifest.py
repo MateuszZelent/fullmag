@@ -39,6 +39,15 @@ def _make_roots(base: Path, side: str, payload: bytes = b"same") -> dict[str, Pa
     return roots
 
 
+class _StatWithBlocks:
+    def __init__(self, original, blocks):
+        self._original = original
+        self.st_blocks = blocks
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
 def _set_user_xattr(path: Path, value: bytes) -> None:
     if not hasattr(os, "setxattr"):
         raise unittest.SkipTest("Python has no xattr API")
@@ -490,12 +499,47 @@ class DataTreeManifestTests(unittest.TestCase):
                 "_hash_file_descriptor",
                 side_effect=hash_then_rewrite_and_restore_mtime,
             ):
-                with self.assertRaises(ValueError):
+                with self.assertRaises(ValueError) as raised:
                     manifest.inventory_datasets(roots)
 
+            self.assertIn("ctime_ns", str(raised.exception))
             self.assertEqual(target.stat().st_size, original_stat.st_size)
             self.assertEqual(target.stat().st_mtime_ns, original_stat.st_mtime_ns)
             self.assertNotEqual(mutation_ctimes[0], original_stat.st_ctime_ns)
+
+    def test_st_blocks_drift_during_inventory_does_not_reject_content_or_matching_data(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-manifest-") as temporary:
+            base = Path(temporary)
+            source_roots = _make_roots(base, "source")
+            copied_roots = _make_roots(base, "copy")
+            targets = [
+                roots[role] / "nested" / "data.bin"
+                for roots in (source_roots, copied_roots)
+                for role in ("user_data", "state")
+            ]
+            target_inodes = {(path.stat().st_dev, path.stat().st_ino) for path in targets}
+            real_fstat = manifest.os.fstat
+            calls = {}
+
+            def fstat_with_block_drift(descriptor):
+                info = real_fstat(descriptor)
+                inode = (info.st_dev, info.st_ino)
+                if inode not in target_inodes:
+                    return info
+                calls[inode] = calls.get(inode, 0) + 1
+                # The first observation matches stat(); later hash/reopen checks
+                # differ only in allocation metadata.
+                blocks = info.st_blocks + max(calls[inode] - 1, 0)
+                return _StatWithBlocks(info, blocks)
+
+            with patch.object(manifest.os, "fstat", side_effect=fstat_with_block_drift):
+                source = manifest.inventory_datasets(source_roots)
+                copied = manifest.inventory_datasets(copied_roots)
+                self.assertIsNone(manifest.require_matching_data(source, copied))
+
+            self.assertTrue(all(calls.get(inode, 0) >= 3 for inode in target_inodes))
+            self.assertGreaterEqual(source["totals"]["allocated_bytes"], 0)
+            self.assertGreaterEqual(copied["totals"]["allocated_bytes"], 0)
 
     def test_require_matching_rejects_forged_or_changed_digest(self):
         with tempfile.TemporaryDirectory(prefix="fullmag-manifest-") as temporary:
