@@ -1656,3 +1656,29 @@ allowlistu. Nowa regresja najpierw odtworzyła RED; po poprawce wszystkie
 oraz zachowanie literalnego source-root ze spacjami i metaznakami. `bash -n`
 PASS. Następne guarded apply nadal wymagane; wcześniejsze 233 testy metadata
 pozostają aktualne (ich kod produkcyjny nie zmienił się w tej poprawce).
+
+
+### Rzeczywisty failed receipt bez pól finish — poprawka pinów
+
+Na `c37d37b8b` guarded preflight odmówił przed operation/stage:
+`Failed-seed backend app commit differs from the retained receipt`.
+Read-only diagnoza potwierdziła, że terminal 08a6 nie ma source_commit,
+frontend_input_commit ani backend_app_commit (cały start nie przeszedł
+readiness). Retained Compose frontend i globalny manifest mają commit
+`48845db952a902d3dafaf6885dc259becb8eba1a`; backend Compose nie deklaruje
+FULLMAG_SOURCE_COMMIT. Zapisane per-attempt package/provenance istnieją i są
+identyczne z live dokumentami zweryfikowanego backendu: SHA-256
+`66abe22ba5e74162b191f63dda2c50de565fb93fed149c70f114580b0c628a41` i
+`6f9a9f3fa88b0bf3cd90c29d6c488c818111f2003de3aecbbba93b708f2e787a`.
+API instance/PID/start ticks pozostają zgodne z baseline, active_session=false.
+
+Nowy capture wyprowadza backend pin z live validated package oraz wymaga
+równości z zachowanymi dokumentami (treść + raw hashe), a input pin z retained
+Compose i manifestu. Opcjonalne finish fields muszą je potwierdzać; ich brak
+nie powoduje wymyślenia danych ani pominięcia package proof. Te hashe są częścią
+proof i rewalidacji pod lease oraz przed publikacją. Controller commit nadal
+osobno. Dodano realistyczny test failed receipt bez finish fields i odmowy
+przy brakującym/rozbieżnym pakiecie, proweniencji, Compose i optional pinach.
+Pełne dotknięte dziewięć suite'ów: **235 PASS**, 7.975 s; log
+`/tmp/p22-frontend-pin-final-tests.log`. Produkcyjny kod API i wcześniejsze
+26 testów granicy shell nie zmieniły się. Rzeczywisty apply nadal wymagany.

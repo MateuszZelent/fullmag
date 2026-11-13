@@ -86,6 +86,230 @@ def failure_fixture():
 
 
 class FailedSeedRecoveryTests(unittest.TestCase):
+    def test_failed_receipt_without_finish_fields_uses_live_backend_and_compose_input_pins(self):
+        from unittest import mock
+        import docker_dev_codegen as codegen
+        from docker_build_control import canonical
+
+        backend_commit, input_commit = "1" * 40, "2" * 40
+        backend_id = "b" * 64
+        backend_image = "sha256:" + "c" * 64
+        binary_sha = "d" * 64
+        package = {
+            "schema": "fullmag.direct-compose.backend-build-receipt.v1",
+            "state": "succeeded",
+            "source": {"resolved_commit": backend_commit, "source_digest": "e" * 64},
+            "native_source_identity": {"source_snapshot_sha256": "f" * 64,
+                                        "source_snapshot_dirty": False},
+            "artifacts": [{"path": "bin/fullmag-api", "sha256": binary_sha}],
+        }
+        package_raw = canonical(package) + b"\n"
+        package_sha = hashlib.sha256(package_raw).hexdigest()
+        provenance = {
+            "schema": "fullmag.docker-all-image.v1",
+            "state": "succeeded",
+            "build_receipt_sha256": package_sha,
+            "binary_hashes": {"fullmag-api": binary_sha},
+        }
+        provenance_raw = canonical(provenance) + b"\n"
+        provenance_sha = hashlib.sha256(provenance_raw).hexdigest()
+        provenance_and_binary = provenance_sha + ":" + binary_sha
+        receipt, _, _ = failure_fixture()
+        receipt.update(backend_container=backend_id,
+                       backend_started_at="2026-11-13T00:48:26.626490875Z",
+                       control_volume="fullmag-build-control-own-group")
+        self.assertFalse({"source_commit", "backend_app_commit", "frontend_input_commit"} & receipt.keys())
+        document = {
+            "name": "own-group",
+            "services": {
+                "backend": {"image": backend_image, "environment": {}},
+                "frontend": {"image": "sha256:" + "a" * 64,
+                             "environment": {"FULLMAG_SOURCE_COMMIT": input_commit}},
+            },
+        }
+        actual = {"backend": {
+            "Id": backend_id, "Image": backend_image,
+            "State": {"Running": True, "StartedAt": receipt["backend_started_at"],
+                      "Health": {"Status": "healthy"}},
+            "Config": {"Labels": {"com.docker.compose.project": "own-group",
+                                   "com.docker.compose.service": "backend"}},
+        }}
+        previous_inputs = manifest(input_commit)
+        saved = {
+            "development/attempts/" + receipt["attempt"] + "/backend-build-receipt.json": package_raw,
+            "development/attempts/" + receipt["attempt"] + "/provenance.json": provenance_raw,
+        }
+
+        class FakeControl:
+            project = "own-group"
+            volume = receipt["control_volume"]
+
+            def read_bytes(self, path, *, optional=False):
+                if path not in saved:
+                    if optional:
+                        return None
+                    raise BuildControlError("missing saved backend proof")
+                return saved[path]
+
+        control = FakeControl()
+        with mock.patch.object(codegen, "_backend_documents", return_value=(
+                package, provenance, package_sha, provenance_and_binary)):
+            pins = recovery.authenticated_source_pins(
+                control, receipt, document, actual, previous_inputs)
+
+        self.assertEqual(pins["backend_app_commit"], backend_commit)
+        self.assertEqual(pins["input_manifest_commit"], input_commit)
+        self.assertEqual(pins["backend_receipt_sha256"], package_sha)
+        self.assertEqual(pins["backend_provenance_sha256"], provenance_sha)
+        self.assertEqual(pins["backend_binary_sha256"], binary_sha)
+        self.assertEqual(pins["backend_container_id"], backend_id)
+        self.assertEqual(pins["backend_started_at"], receipt["backend_started_at"])
+        live_source = {"commit": backend_commit}
+        recovery.validate_live_backend_pins(
+            pins, live_source, receipt_sha256=package_sha,
+            provenance_sha256=provenance_sha, binary_sha256=binary_sha)
+        for field in ("backend_app_commit", "backend_receipt_sha256",
+                      "backend_provenance_sha256", "backend_binary_sha256"):
+            changed = dict(pins)
+            changed[field] = "9" * (40 if field == "backend_app_commit" else 64)
+            with self.subTest(live_pin=field), self.assertRaises(BuildControlError):
+                recovery.validate_live_backend_pins(
+                    changed, live_source, receipt_sha256=package_sha,
+                    provenance_sha256=provenance_sha, binary_sha256=binary_sha)
+        controller_commit = "3" * 40
+        role_pins = recovery.validate_seed_manifest(
+            previous_inputs, manifest(controller_commit),
+            backend_app_commit=pins["backend_app_commit"],
+            expected_backend_app_commit=pins["backend_app_commit"],
+            input_manifest_commit=pins["input_manifest_commit"],
+            controller_commit=controller_commit,
+            selected_seed_bytes={SEED_RELATIVE: SOURCE_BYTES,
+                                 "apps/control-room/package.json": PACKAGE_BYTES},
+        )
+        self.assertEqual(role_pins["backend_app_commit"], backend_commit)
+        self.assertEqual(role_pins["input_manifest_commit"], input_commit)
+        self.assertEqual(role_pins["controller_commit"], controller_commit)
+
+    def test_backend_and_input_source_pins_reject_mismatched_saved_or_retained_evidence(self):
+        from unittest import mock
+        import docker_dev_codegen as codegen
+        from docker_build_control import canonical
+
+        backend_commit, input_commit = "1" * 40, "2" * 40
+        backend_id = "b" * 64
+        backend_image = "sha256:" + "c" * 64
+        binary_sha = "d" * 64
+        package = {
+            "schema": "fullmag.direct-compose.backend-build-receipt.v1",
+            "state": "succeeded",
+            "source": {"resolved_commit": backend_commit, "source_digest": "e" * 64},
+            "native_source_identity": {"source_snapshot_sha256": "f" * 64,
+                                        "source_snapshot_dirty": False},
+            "artifacts": [{"path": "bin/fullmag-api", "sha256": binary_sha}],
+        }
+        package_raw = canonical(package) + b"\n"
+        package_sha = hashlib.sha256(package_raw).hexdigest()
+        provenance = {
+            "schema": "fullmag.docker-all-image.v1", "state": "succeeded",
+            "build_receipt_sha256": package_sha,
+            "binary_hashes": {"fullmag-api": binary_sha},
+        }
+        provenance_raw = canonical(provenance) + b"\n"
+        provenance_sha = hashlib.sha256(provenance_raw).hexdigest()
+        provenance_and_binary = provenance_sha + ":" + binary_sha
+        receipt, _, _ = failure_fixture()
+        receipt.update(backend_container=backend_id,
+                       backend_started_at="2026-11-13T00:48:26.626490875Z",
+                       control_volume="fullmag-build-control-own-group")
+        document = {
+            "name": "own-group",
+            "services": {
+                "backend": {"image": backend_image, "environment": {}},
+                "frontend": {"image": "sha256:" + "a" * 64,
+                             "environment": {"FULLMAG_SOURCE_COMMIT": input_commit}},
+            },
+        }
+        actual = {"backend": {
+            "Id": backend_id, "Image": backend_image,
+            "State": {"Running": True, "StartedAt": receipt["backend_started_at"],
+                      "Health": {"Status": "healthy"}},
+            "Config": {"Labels": {"com.docker.compose.project": "own-group",
+                                   "com.docker.compose.service": "backend"}},
+        }}
+        previous_inputs = manifest(input_commit)
+        package_path = "development/attempts/" + receipt["attempt"] + "/backend-build-receipt.json"
+        provenance_path = "development/attempts/" + receipt["attempt"] + "/provenance.json"
+        saved = {package_path: package_raw, provenance_path: provenance_raw}
+
+        class FakeControl:
+            project = "own-group"
+            volume = receipt["control_volume"]
+
+            def read_bytes(self, path, *, optional=False):
+                if path not in saved:
+                    if optional:
+                        return None
+                    raise BuildControlError("missing saved backend proof")
+                return saved[path]
+
+        control = FakeControl()
+        live = (package, provenance, package_sha, provenance_and_binary)
+        bad_cases = (
+            ("saved package differs", lambda: saved.__setitem__(package_path, canonical({**package, "extra": True}) + b"\n")),
+            ("saved provenance differs", lambda: saved.__setitem__(provenance_path, canonical({**provenance, "extra": True}) + b"\n")),
+            ("package proof missing", lambda: saved.pop(package_path)),
+            ("provenance proof missing", lambda: saved.pop(provenance_path)),
+            ("frontend Compose commit differs", lambda: document["services"]["frontend"]["environment"].update(FULLMAG_SOURCE_COMMIT="3" * 40)),
+            ("optional backend finish pin differs", lambda: receipt.update(source_commit="3" * 40)),
+            ("optional backend app pin differs", lambda: receipt.update(backend_app_commit="3" * 40)),
+            ("optional input finish pin differs", lambda: receipt.update(frontend_input_commit="3" * 40)),
+            ("backend container differs", lambda: actual["backend"].update(Id="9" * 64)),
+            ("backend incarnation differs", lambda: actual["backend"]["State"].update(StartedAt="2026-11-13T01:00:00Z")),
+            ("backend image differs", lambda: actual["backend"].update(Image="sha256:" + "9" * 64)),
+        )
+        for label, mutate in bad_cases:
+            with self.subTest(case=label):
+                receipt, _, _ = failure_fixture()
+                receipt.update(backend_container=backend_id,
+                               backend_started_at="2026-11-13T00:48:26.626490875Z",
+                               control_volume="fullmag-build-control-own-group")
+                document["services"]["frontend"]["environment"]["FULLMAG_SOURCE_COMMIT"] = input_commit
+                actual["backend"].update(
+                    Id=backend_id, Image=backend_image,
+                    State={"Running": True, "StartedAt": receipt["backend_started_at"],
+                           "Health": {"Status": "healthy"}},
+                    Config={"Labels": {"com.docker.compose.project": "own-group",
+                                       "com.docker.compose.service": "backend"}},
+                )
+                saved[package_path] = package_raw
+                saved[provenance_path] = provenance_raw
+                previous_inputs["source_commit"] = input_commit
+                mutate()
+                with mock.patch.object(codegen, "_backend_documents", return_value=live), \
+                     self.assertRaises(BuildControlError):
+                    recovery.authenticated_source_pins(
+                        control, receipt, document, actual, previous_inputs)
+
+        receipt, _, _ = failure_fixture()
+        receipt.update(backend_container=backend_id,
+                       backend_started_at="2026-11-13T00:48:26.626490875Z",
+                       control_volume="fullmag-build-control-own-group")
+        document["services"]["frontend"]["environment"]["FULLMAG_SOURCE_COMMIT"] = input_commit
+        actual["backend"].update(
+            Id=backend_id, Image=backend_image,
+            State={"Running": True, "StartedAt": receipt["backend_started_at"],
+                   "Health": {"Status": "healthy"}},
+            Config={"Labels": {"com.docker.compose.project": "own-group",
+                               "com.docker.compose.service": "backend"}},
+        )
+        saved[package_path] = package_raw
+        saved[provenance_path] = provenance_raw
+        with mock.patch.object(codegen, "_backend_documents",
+                               side_effect=codegen.CodegenError("live backend proof absent")), \
+             self.assertRaisesRegex(BuildControlError, "live backend package/provenance"):
+            recovery.authenticated_source_pins(
+                control, receipt, document, actual, previous_inputs)
+
     def test_exact_failed_seed_and_input_manifest_are_admitted_with_distinct_commit_pins(self):
         previous = manifest("1" * 40)
         selected = manifest("2" * 40)

@@ -108,6 +108,116 @@ def validate_seed_manifest(previous: Mapping[str, object], current: Mapping[str,
     }
 
 
+def authenticated_source_pins(control, previous: Mapping[str, object],
+                              document: Mapping[str, object], actual: Mapping[str, object],
+                              previous_inputs: Mapping[str, object]) -> dict[str, object]:
+    """Authenticate backend app and frontend input commits from retained artifacts."""
+    import docker_dev_codegen as codegen
+
+    attempt = previous.get("attempt")
+    backend_id = previous.get("backend_container")
+    backend_started_at = previous.get("backend_started_at")
+    backend = actual.get("backend")
+    backend_state = backend.get("State") if isinstance(backend, Mapping) else None
+    backend_health = backend_state.get("Health") if isinstance(backend_state, Mapping) else None
+    backend_config = backend.get("Config") if isinstance(backend, Mapping) else None
+    backend_labels = backend_config.get("Labels") if isinstance(backend_config, Mapping) else None
+    services = document.get("services") if isinstance(document, Mapping) else None
+    backend_service = services.get("backend") if isinstance(services, Mapping) else None
+    backend_environment = (backend_service.get("environment")
+                           if isinstance(backend_service, Mapping) else None)
+    frontend_service = services.get("frontend") if isinstance(services, Mapping) else None
+    frontend_environment = (frontend_service.get("environment")
+                           if isinstance(frontend_service, Mapping) else None)
+    input_manifest_commit = (frontend_environment.get("FULLMAG_SOURCE_COMMIT")
+                             if isinstance(frontend_environment, Mapping) else None)
+    if (not isinstance(attempt, str) or _ATTEMPT.fullmatch(attempt) is None
+            or not isinstance(backend_id, str) or _CONTAINER.fullmatch(backend_id) is None
+            or not isinstance(backend_started_at, str) or not backend_started_at
+            or not isinstance(backend, Mapping) or backend.get("Id") != backend_id
+            or not isinstance(backend_state, Mapping) or backend_state.get("Running") is not True
+            or backend_state.get("StartedAt") != backend_started_at
+            or not isinstance(backend_health, Mapping) or backend_health.get("Status") != "healthy"
+            or not isinstance(backend_labels, Mapping)
+            or backend_labels.get("com.docker.compose.project") != control.project
+            or backend_labels.get("com.docker.compose.service") != "backend"
+            or not isinstance(backend_service, Mapping)
+            or not isinstance(backend_service.get("image"), str)
+            or backend.get("Image") != backend_service.get("image")
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume):
+        _fail("Failed-seed backend container/configuration is not the retained healthy incarnation")
+    if (not isinstance(input_manifest_commit, str)
+            or _COMMIT.fullmatch(input_manifest_commit) is None
+            or not isinstance(previous_inputs, Mapping)
+            or previous_inputs.get("source_commit") != input_manifest_commit):
+        _fail("Failed-seed frontend Compose commit differs from its retained input manifest")
+
+    root = "development/attempts/" + attempt
+    saved_receipt_raw = control.read_bytes(root + "/backend-build-receipt.json", optional=True)
+    saved_provenance_raw = control.read_bytes(root + "/provenance.json", optional=True)
+    if not isinstance(saved_receipt_raw, bytes) or not isinstance(saved_provenance_raw, bytes):
+        _fail("Failed-seed attempt has no saved backend package/provenance proof")
+    try:
+        saved_receipt = json.loads(saved_receipt_raw)
+        saved_provenance = json.loads(saved_provenance_raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Failed-seed saved backend package/provenance is malformed") from error
+    if (not isinstance(saved_receipt, Mapping) or not isinstance(saved_provenance, Mapping)
+            or canonical(saved_receipt) + b"\n" != saved_receipt_raw
+            or canonical(saved_provenance) + b"\n" != saved_provenance_raw):
+        _fail("Failed-seed saved backend package/provenance is not canonical")
+
+    try:
+        live_receipt, live_provenance, receipt_sha256, provenance_and_binary = codegen._backend_documents(backend_id)
+        backend_source, provenance_sha256, binary_sha256 = codegen._validate_backend(
+            live_receipt, live_provenance, receipt_sha256, provenance_and_binary)
+    except codegen.CodegenError as error:
+        if error.reconciliation_required:
+            from docker_build_control import ControlOutcomeUnknown
+            raise ControlOutcomeUnknown(
+                "Failed-seed live backend package/provenance observation is unknown") from error
+        raise BuildControlError("Failed-seed live backend package/provenance is not verified") from error
+    if (saved_receipt != live_receipt or saved_provenance != live_provenance
+            or hashlib.sha256(saved_receipt_raw).hexdigest() != receipt_sha256
+            or hashlib.sha256(saved_provenance_raw).hexdigest() != provenance_sha256):
+        _fail("Failed-seed saved package/provenance differs from the retained live backend")
+    backend_app_commit = backend_source.get("commit") if isinstance(backend_source, Mapping) else None
+    if (not isinstance(backend_app_commit, str) or _COMMIT.fullmatch(backend_app_commit) is None
+            or (isinstance(backend_environment, Mapping)
+                and "FULLMAG_SOURCE_COMMIT" in backend_environment
+                and backend_environment.get("FULLMAG_SOURCE_COMMIT") != backend_app_commit)):
+        _fail("Failed-seed live backend source commit differs from its retained configuration")
+    for field in ("source_commit", "backend_app_commit"):
+        if field in previous and previous.get(field) != backend_app_commit:
+            _fail("Failed-seed optional backend finish pin differs from the live package")
+    if ("frontend_input_commit" in previous
+            and previous.get("frontend_input_commit") != input_manifest_commit):
+        _fail("Failed-seed optional frontend finish pin differs from retained Compose")
+    return {
+        "backend_app_commit": backend_app_commit,
+        "input_manifest_commit": input_manifest_commit,
+        "backend_receipt_sha256": receipt_sha256,
+        "backend_provenance_sha256": provenance_sha256,
+        "backend_binary_sha256": binary_sha256,
+        "backend_container_id": backend_id,
+        "backend_started_at": backend_started_at,
+    }
+
+
+def validate_live_backend_pins(source_pins: Mapping[str, object],
+                               backend_source: Mapping[str, object], *,
+                               receipt_sha256: str, provenance_sha256: str,
+                               binary_sha256: str) -> None:
+    """Recheck the captured package, provenance, and binary before publication."""
+    if (not isinstance(source_pins, Mapping) or not isinstance(backend_source, Mapping)
+            or source_pins.get("backend_app_commit") != backend_source.get("commit")
+            or source_pins.get("backend_receipt_sha256") != receipt_sha256
+            or source_pins.get("backend_provenance_sha256") != provenance_sha256
+            or source_pins.get("backend_binary_sha256") != binary_sha256):
+        _fail("Retained frontend seed recovery backend package/provenance changed")
+
+
 def _validate_failed_seed_identity(previous: Mapping[str, object], frontend: Mapping[str, object],
                                    log: bytes, seed_bytes: bytes, *, expected_attempt: str) -> dict[str, object]:
     if (previous.get("schema") != "fullmag.docker-build-operation.v1"
@@ -408,20 +518,22 @@ def refresh_context(control, args, previous, document, actual, selected) -> dict
                       for item in seeded_files}
     if canonical(previous_inputs) + b"\n" != input_raw:
         _fail("Failed-seed prior input manifest is not its canonical retained document")
+    backend_pins = authenticated_source_pins(control, previous, document, actual, previous_inputs)
     pins = validate_seed_manifest(
         previous_inputs, current_inputs,
-        backend_app_commit=previous.get("source_commit"),
-        expected_backend_app_commit=previous.get("source_commit"),
-        input_manifest_commit=previous.get("frontend_input_commit", previous.get("source_commit")),
+        backend_app_commit=backend_pins["backend_app_commit"],
+        expected_backend_app_commit=backend_pins["backend_app_commit"],
+        input_manifest_commit=backend_pins["input_manifest_commit"],
         controller_commit=current_inputs.get("source_commit"),
         selected_seed_bytes=selected_bytes,
     )
+    pins.update(backend_pins)
     failure_identity = _validate_failed_seed_identity(
         previous, actual["frontend"], log, seed_bytes, expected_attempt=attempt)
     helper_paths = (
         "docker_dev.py", "docker_volume_dev.py", "docker_group_storage.py",
         "docker_volume_frontend_seed_recovery.py", "docker_volume_container_recovery.py",
-        "docker_build_control.py", "docker_development_inputs.py",
+        "docker_build_control.py", "docker_development_inputs.py", "docker_dev_codegen.py",
     )
     helper_hashes = {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                      for name in helper_paths}

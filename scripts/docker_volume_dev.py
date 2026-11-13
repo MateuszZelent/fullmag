@@ -7415,7 +7415,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 control, args, previous, document, current_actual, selected, failed_seed_context)
         try:
             package, provenance, package_sha, binary_provenance = codegen._backend_documents(ids['backend'])
-            backend_source, _, _ = codegen._validate_backend(package, provenance, package_sha, binary_provenance)
+            backend_source, backend_provenance_sha, backend_binary_sha = codegen._validate_backend(
+                package, provenance, package_sha, binary_provenance)
             source_probe = None
             if not recover_oom and failed_seed_context is None:
                 source_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
@@ -7424,9 +7425,10 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 raise ControlOutcomeUnknown(str(error)) from error
             raise
         if failed_seed_context is not None:
-            if (failed_seed_context['source_pins']['backend_app_commit'] != backend_source.get('commit')
-                    or backend_source.get('commit') != previous.get('source_commit')):
-                raise BuildControlError('Retained frontend seed recovery backend app commit differs')
+            seed_recovery.validate_live_backend_pins(
+                failed_seed_context['source_pins'], backend_source,
+                receipt_sha256=package_sha, provenance_sha256=backend_provenance_sha,
+                binary_sha256=backend_binary_sha)
         elif not recover_oom and not source_matches(source_probe, backend_source, package):
             raise BuildControlError('Frontend refresh requires the current native source capture; run the canonical idle restart first')
         desired = describe(selected, args.port)

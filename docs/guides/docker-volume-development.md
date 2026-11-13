@@ -212,7 +212,11 @@ ma 0 bajtów, a `inputs-freeze.json` i `frozen-inputs` nie istnieją. Nie napraw
 pliku na miejscu i nie próbuje ponownie historycznego startu.
 
 Read-only kontrole wiążą poprzedni terminal/current/verified i Compose CAS,
-stary seed oraz bieżący manifest źródeł. Bieżący manifest frontendu musi być
+stary seed oraz bieżący manifest źródeł. Commit backendu pochodzi z live
+package/provenance, których treść i hashe muszą zgadzać się z zachowanymi
+dokumentami danej próby. Input commit frontendu pochodzi z przypiętego Compose
+i musi zgadzać się z manifestem. Nieudany start może nie mieć końcowych pól
+commit; jeśli są obecne, muszą potwierdzać te same piny. Bieżący manifest frontendu musi być
 zgodny ze starym we wszystkich wejściach poza `source_commit`; receipt
 oddzielnie zapisuje commit pakietu aplikacji/backendu, commit starego manifestu
 frontendu, commit aktualnego manifestu kontrolera i hash helperów. Nie oznacza
