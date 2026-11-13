@@ -27,6 +27,16 @@ Unknown, failed, niekompletne lub niespójne wpisy pozostają w puli roboczej.
 Current, verified, bieżący poprzednik, aktywne operacje oraz domknięcie ich
 referencji pozostają chronione. Sam wiek rekordu nie jest kwalifikacją.
 
+Osobna kwalifikacja `--rejected-no-run` obejmuje potwierdzone odrzucenie API
+400/422 bez powiązanego RunIntent, admission ani lease. Jeżeli ta aktywacja
+wcześniej wycofała poprzedni workspace, wymagany jest oryginalny manifest
+retirement, zgodna odpowiedź, terminalny katalog i intent poprzednika oraz
+wszystkie przypięte dokumenty projektu. Wspólny walidator producenta retirement
+sprawdza ich bajty i tożsamości. Wyjątek referencji obejmuje wyłącznie komponent
+ścieżki własnego archiwum oraz jego uwierzytelnione `operation_id`; dodatkowa
+referencja w dowolnym polu, pliku lub pozostałej ścieżce nadal blokuje operację.
+Nie jest to kwalifikacja nieznanego wyniku ani zgoda na ponowienie żądania.
+
 Każdy katalog historii zawiera `.history.json` z pinami planu i dowodów oraz
 `.history.sha256`. Indeks ma nagłówek `fullmag.activation-history.v1 <attempt>`
 i uporządkowane wiersze `<sha256> <liczba-bajtów> <nazwa>`. Obejmuje wszystkie
@@ -91,8 +101,9 @@ skryptu o oryginalnym hashu oraz eksportu oryginalnych rekordów aktywacji.
 Pusty katalog runu nie wystarcza: wymagane są metadane Zarr, terminalny manifest
 runu i zachowane artefakty wskazane przez jego deklarację output storage.
 Brak pól przestrzennych jest dozwolony dla zapisu wyłącznie tabelarycznego.
-Pierwsza kwalifikowana postać wyniku to pojedynczy leaf `reversal-attempt-1`
-z tabelarycznym lub polowym autosave Zarr. Inne nazwy lub wiele leafów
+Kwalifikowana postać wyniku to pojedynczy leaf `reversal-attempt-1` albo
+`relax-attempt-1` z odpowiednim targetem `main` albo `relax` oraz tabelarycznym
+lub polowym autosave Zarr. Inne nazwy lub wiele leafów
 wymagają rozszerzenia walidatora; nie są pomijane podczas kontroli.
 Nie uzupełnia tych danych jako ukrytego skutku preview. Zmiana źródeł,
 instancji usług, pinów, ledgeru albo zachowanych danych unieważnia plan.

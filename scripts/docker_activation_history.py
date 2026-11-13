@@ -23,7 +23,7 @@ from docker_activation_history_storage import (
     _directory, _raw, _locked, apply_plan, make_plan, source_files,
 )
 from docker_activation_history_inventory import (
-    control_references, source_inventory, validate_existing_archives,
+    _closed_recovery_metadata_file, control_references, source_inventory, validate_existing_archives,
 )
 from docker_activation_history_output import validate_preserved_run
 from docker_build_control import BuildControl, BuildControlError, bounded_capture, docker_capture
@@ -166,12 +166,17 @@ def preserved_rejection(output_root, request, files):
     return {"source_sha256": source_sha, "provenance_sha256": digest(export_raw), "kind": "rejected-no-run-v1"}
 
 
-def rejected_store_records(store_root):
+def rejected_store_records(store_root, attempt):
     from docker_volume_offline_reconcile import _metadata_file, _read_store_file
+    if not isinstance(attempt, str) or ATTEMPT.fullmatch(attempt) is None:
+        raise HistoryError("Invalid rejected activation identity for store inventory")
+    own_prefix = "retirements/" + attempt
     paths = sorted(str(path.relative_to(store_root)) for path in store_root.rglob("*"))
     records = {path: _read_store_file(store_root, path)[0] for path in paths
-               if path.endswith(".json") and (_metadata_file(path)
-                   or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))}
+               if (path.endswith(".json") and (_metadata_file(path)
+                   or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))
+                   or (path.startswith(own_prefix + "/")
+                       and _closed_recovery_metadata_file(path)))}
     return records, paths
 
 
@@ -197,7 +202,7 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
     store = _inventory_store(store_root)
     rejected = request.get("qualification_kind") == "rejected-no-run-v1"
     if rejected:
-        records, paths = rejected_store_records(store_root)
+        records, paths = rejected_store_records(store_root, token)
         candidate = qualify_rejected_activation(
             token, files, project=identity["compose_project"], volume=identity["control_volume"],
             namespace=identity["namespace"], store_records=records, inventory_paths=paths)

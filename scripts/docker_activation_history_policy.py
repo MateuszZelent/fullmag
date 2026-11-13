@@ -255,13 +255,37 @@ def qualify_rejected_activation(attempt, files, *, project, volume, namespace,
     if any(record.get(key) is not None for record in (receipt, result, rejection)
            for key in ("run_id", "session_id", "response")):
         raise HistoryError("Rejected activation has an accepted identity or response")
-    if not isinstance(store_records, dict) or not isinstance(inventory_paths, list):
+    if (not isinstance(store_records, dict) or not isinstance(inventory_paths, list)
+            or any(not isinstance(path, str) for path in inventory_paths)
+            or len(set(inventory_paths)) != len(inventory_paths)):
         raise HistoryError("Complete rejected activation store evidence is missing")
     from docker_volume_offline_reconcile import _metadata_file
     required = {path for path in inventory_paths if path.endswith(".json") and (
         _metadata_file(path) or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))}
+    retirement = receipt.get("retirement")
+    retirement_result = receipt.get("retirement_result")
+    own_retirement = None
+    if retirement is None:
+        if retirement_result != {"state": "retirement-only", "retirement": None}:
+            raise HistoryError("Rejected history v1 requires no predecessor workspace retirement")
+    else:
+        from docker_activation_history_inventory import (
+            _authenticate_own_predecessor_retirement, _closed_recovery_metadata_file,
+        )
+        own_prefix = "retirements/" + attempt
+        required.update(
+            path for path in inventory_paths
+            if (path == own_prefix or path.startswith(own_prefix + "/"))
+            and _closed_recovery_metadata_file(path)
+        )
     if set(store_records) != required:
         raise HistoryError("Rejected activation metadata inventory is incomplete")
+    if retirement is not None:
+        own_retirement = _authenticate_own_predecessor_retirement(
+            attempt, receipt, store_records, inventory_paths,
+        )
+        if own_retirement is None:
+            raise HistoryError("Rejected activation predecessor retirement is not present")
     request_hash = digest(receipt["request_id"].encode())
     needles = {attempt, receipt["request_id"], request_hash,
                "live-http-" + request_hash, receipt["source_sha256"]}
@@ -271,20 +295,45 @@ def qualify_rejected_activation(attempt, files, *, project, volume, namespace,
         if isinstance(value, list):
             return any(referenced(item) for item in value)
         return isinstance(value, str) and any(needle in value for needle in needles)
-    retirement_result = receipt.get("retirement_result")
-    if (receipt.get("retirement") is not None or not isinstance(retirement_result, dict)
-            or retirement_result != {"state": "retirement-only", "retirement": None}):
-        raise HistoryError("Rejected history v1 requires no predecessor workspace retirement")
-    if referenced(inventory_paths):
-        raise HistoryError("Rejected activation has a related SessionStore path")
+    for path in inventory_paths:
+        scanned = path
+        if own_retirement is not None:
+            prefix, _ = own_retirement
+            if path == prefix or path.startswith(prefix + "/"):
+                # Strip only the authenticated retirement namespace component.
+                scanned = path[len(prefix):]
+        if referenced(scanned):
+            raise HistoryError("Rejected activation has a related SessionStore path")
     for path, raw in store_records.items():
-        if path not in inventory_paths or referenced(document(raw, "store admission metadata")):
+        if path not in inventory_paths:
+            raise HistoryError("Rejected activation metadata is outside the complete store inventory")
+        if path.endswith(".json"):
+            value = document(raw, "store admission metadata")
+        else:
+            try:
+                value = raw.decode("utf-8", "strict")
+            except (AttributeError, UnicodeDecodeError) as error:
+                raise HistoryError("Store predecessor document is not UTF-8") from error
+        if own_retirement is not None and path == own_retirement[1]:
+            value = dict(value)
+            # This exact operation id was authenticated by the retirement producer.
+            del value["operation_id"]
+        if referenced(value):
             raise HistoryError("Rejected activation has related RunIntent/admission/lease evidence")
-    return {"attempt": attempt, "qualification_kind": "rejected-no-run-v1",
-            "run_id": None, "session_id": None, "request_id": receipt["request_id"],
-            "source_sha256": receipt["source_sha256"], "finished_at": terminal["finished_at"],
-            "files": manifest, "rejection": rejection,
-            "store_record_hashes": {path: digest(raw) for path, raw in sorted(store_records.items())}}
+    qualified = {"attempt": attempt, "qualification_kind": "rejected-no-run-v1",
+                 "run_id": None, "session_id": None, "request_id": receipt["request_id"],
+                 "source_sha256": receipt["source_sha256"], "finished_at": terminal["finished_at"],
+                 "files": manifest, "rejection": rejection,
+                 "store_record_hashes": {path: digest(raw) for path, raw in sorted(store_records.items())}}
+    if own_retirement is not None:
+        prefix, manifest_path = own_retirement
+        qualified["predecessor_retirement"] = {
+            "schema": "fullmag.activation-predecessor-retirement.v1",
+            "prefix": prefix,
+            "manifest_path": manifest_path,
+            "manifest_sha256": digest(store_records[manifest_path]),
+        }
+    return qualified
 
 
 def referenced_attempts(records, known_runs):

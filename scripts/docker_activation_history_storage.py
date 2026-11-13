@@ -133,6 +133,8 @@ def _qualified_current_terminal(root, candidates, guard_records):
         if manifest != candidate.get("files"):
             raise HistoryError("Qualified current terminal manifest changed")
         terminal_raw = files["terminal.json"]
+        if current_raw != terminal_raw:
+            continue
         terminal = document(terminal_raw, "qualified rejected terminal")
         receipt = document(files["receipt.json"], "qualified rejected receipt")
         if (files["receipt.json"] != terminal_raw
@@ -143,26 +145,52 @@ def _qualified_current_terminal(root, candidates, guard_records):
                 or terminal.get("attempt") != token
                 or terminal.get("run_id") is not None
                 or terminal.get("session_id") is not None
-                or terminal.get("retirement") is not None
-                or terminal.get("retirement_result") != {
-                    "state": "retirement-only", "retirement": None}
                 or terminal.get("error") != REJECTED_ACTIVATION_ERROR
                 or receipt != terminal):
             raise HistoryError("Qualified current terminal is not a confirmed no-run rejection")
+        retirement = terminal.get("retirement")
+        predecessor = candidate.get("predecessor_retirement")
+        if retirement is None:
+            if (predecessor is not None or terminal.get("retirement_result") != {
+                    "state": "retirement-only", "retirement": None}):
+                raise HistoryError("Qualified current terminal has an inconsistent predecessor retirement")
+        else:
+            expected_prefix = "retirements/" + token
+            expected_path = expected_prefix + "/project/retirement-manifest.json"
+            store_hashes = candidate.get("store_record_hashes")
+            if (not isinstance(retirement, dict)
+                    or retirement.get("state") not in {"retired", "replayed"}
+                    or retirement.get("operation_id") != token
+                    or retirement.get("archive_manifest_path") != expected_path
+                    or terminal.get("retirement_result") != {
+                        "state": "retirement-only", "retirement": retirement}
+                    or not isinstance(predecessor, dict)
+                    or set(predecessor) != {"schema", "prefix", "manifest_path", "manifest_sha256"}
+                    or predecessor.get("schema") != "fullmag.activation-predecessor-retirement.v1"
+                    or predecessor.get("prefix") != expected_prefix
+                    or predecessor.get("manifest_path") != expected_path
+                    or not isinstance(predecessor.get("manifest_sha256"), str)
+                    or SHA.fullmatch(predecessor["manifest_sha256"]) is None
+                    or retirement.get("archive_sha256") != predecessor["manifest_sha256"]
+                    or not isinstance(store_hashes, dict)
+                    or store_hashes.get(expected_path) != predecessor["manifest_sha256"]):
+                raise HistoryError("Qualified current terminal predecessor retirement proof differs")
         rejection = candidate["rejection"]
         if (type(rejection.get("http_status")) is not int
                 or rejection["http_status"] not in {400, 422}
                 or not isinstance(rejection.get("code"), str)
                 or not isinstance(rejection.get("message"), str)):
             raise HistoryError("Rejected no-run candidate lacks its API rejection identity")
-        if current_raw == terminal_raw:
-            return {
-                "path": "activation/current.json",
-                "qualification_kind": REJECTED_NO_RUN,
-                "attempt": token,
-                "terminal_sha256": manifest["terminal.json"]["sha256"],
-                "current_sha256": digest(current_raw),
-            }
+        qualified = {
+            "path": "activation/current.json",
+            "qualification_kind": REJECTED_NO_RUN,
+            "attempt": token,
+            "terminal_sha256": manifest["terminal.json"]["sha256"],
+            "current_sha256": digest(current_raw),
+        }
+        if predecessor is not None:
+            qualified["predecessor_retirement"] = dict(predecessor)
+        return qualified
     return None
 
 

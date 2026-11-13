@@ -506,5 +506,36 @@ class ActivationHistoryRunTests(unittest.TestCase):
         invoke.assert_not_called()
 
 
+class RejectedStoreRecordCollectionTests(unittest.TestCase):
+    def test_rejected_inventory_includes_own_retirement_documents_and_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = "retirements/" + ATTEMPT
+            expected = {
+                "admission/request.json": b"{}",
+                "runs/old/run_catalog.json": b"{}",
+                "runs/old/run_intent.json": b"{}",
+                prefix + "/project/retirement-manifest.json": b"{}",
+                prefix + "/project/ui_state.json": b"{}",
+                prefix + "/project/workspace_metadata.json": b"{}",
+                prefix + "/project/main.py": b"# old workspace\n",
+            }
+            for relative, content in expected.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            records, paths = history.rejected_store_records(root, ATTEMPT)
+
+            self.assertEqual(set(records), set(expected))
+            self.assertTrue(set(expected).issubset(paths))
+            self.assertEqual(records[prefix + "/project/main.py"], expected[prefix + "/project/main.py"])
+
+    def test_rejected_inventory_rejects_unpinned_attempt_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(HistoryError):
+                history.rejected_store_records(Path(temporary), "not-an-attempt")
+
+
 if __name__ == "__main__":
     unittest.main()
