@@ -187,17 +187,30 @@ The 2D view has four zones:
 
 | Zone | Content | Contract |
 |---|---|---|
-| A — toolbar (`PlanarToolbar`) | icon buttons in four groups plus an overflow menu `⋯` | 34 px, one line, never wraps; overflow goes to a `DropdownMenu`; `role="toolbar"`, `aria-label="2D view tools"` |
+| A — toolbar (`PlanarToolbar`) | section-plane radiogroup, then icon buttons in four groups plus an overflow menu `⋯` | 34 px, one line, never wraps; overflow goes to a `DropdownMenu`; `role="toolbar"`, `aria-label="2D view tools"` |
 | B — surface | canvas with axes (`PlanarSurface`) and the tool overlay (`PlanarToolOverlay`, SVG) | renderer unchanged; Canvas 2D + worker (ADR 0020 decision 5) |
 | C — legend (`PlanarColorLegend`) | one compact card per visible field layer, overlaid bottom-left on the surface | hidden by `field-map.toggle-legend` (`planar.viewport_colorbar_visible`) |
 | D — status bar (`PlanarStatusBar`) | plane label, position slider with `‹ ›` steps, normal coordinate, cut-element count, cursor coordinates, zoom, crop chip with a clear button | 28 px; the slider commits `default_slice.position_fraction` once on release |
 
 A and D stay visible over loading and error states. There are no Quantity,
-Component, Scope, plane, `Single layer | Average`, `Free section` controls and
+Component, Scope, `Single layer | Average`, `Free section` controls and
 no text toggles (`Arrows`, `Lines`, `Mesh`, `Slices`) above the surface: what
 is displayed is edited per layer in the Inspector 2D tab (ADR 0080 U1–U4). The
 former `FieldMapToolbar` and `PlanarSectionStrip` are removed. The hover badge
 "No sample" is removed; D shows `—` when the cursor is outside the frame.
+
+Toolbar group 0 — section plane (`role="radiogroup"`, `aria-label="Section
+plane"`, text items `XY | XZ | YZ` with `aria-checked`). Each item runs
+`field-map.plane.xy|xz|yz` (`fieldMapPlaneCommands.ts`), which patches
+`default_slice.plane` through `planarSectionPlanePatch` (kernel
+`planarSectionModel.ts`): a non-`plane_sample` operator returns to
+`plane_sample` and the crop clears, because both belong to the previous frame.
+The plane is part of the sample identity, so the patch flushes at once. The
+items are disabled with the reason "The monitor defines this section plane…"
+while `planar.source` is a monitor. The Inspector 2D tab shows the same
+`XY | XZ | YZ` control at its top for every selected target (object, Airbox)
+and runs the same commands; the plane is one setting of the whole 2D view, not
+a per-object one.
 
 Toolbar group 1 — tools (exactly one active, `role="radiogroup"`, each item
 `aria-checked`). The active tool is ephemeral client state
@@ -439,7 +452,9 @@ Vitest, otherwise listed as NOT RUN):
   `fieldMapViewCommands`; `zoom-in`/`zoom-out` multiply/divide
   `interaction.zoom` by 1.25 around the view centre within the wheel limits.
 - `components/PlanarToolbar.test.tsx`: `role="toolbar"` with
-  `aria-label="2D view tools"`, four groups, a six-item tool `radiogroup`;
+  `aria-label="2D view tools"`, the `Section plane` radiogroup (XY checked,
+  YZ click patches plane and clears the crop, disabled for a monitor source),
+  four groups, a six-item tool `radiogroup`;
   clicking Crop runs `field-map.tool.crop` and the active tool has
   `aria-checked="true"`; the vectors toggle `aria-pressed` follows
   `planar.layers.vectors`; the 2D DOM contains no "Quantity", "Scope",

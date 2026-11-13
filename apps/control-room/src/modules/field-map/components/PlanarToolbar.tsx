@@ -42,6 +42,7 @@ import {
 import { Separator } from "@/shared/ui/Separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 
+import { PLANAR_SECTION_PLANES } from "../fieldMapPlaneCommands";
 import { MULTISLICE_MAX_PANELS, MULTISLICE_MIN_PANELS } from "../model/planarMultislice";
 
 interface ToolbarItem {
@@ -54,6 +55,13 @@ interface ToolbarItem {
 
 const ICON_SIZE = 16;
 const icon = (Icon: typeof Hand) => <Icon aria-hidden="true" size={ICON_SIZE} strokeWidth={1.75} />;
+
+/** Section plane of the whole 2D view; the Inspector runs the same commands. */
+const PLANES: readonly ToolbarItem[] = PLANAR_SECTION_PLANES.map((plane) => ({
+  commandId: plane.commandId,
+  icon: <span className="fm-planar-toolbar__plane-label">{plane.label}</span>,
+  label: `Section plane ${plane.label}`,
+}));
 
 const TOOLS: readonly ToolbarItem[] = [
   { commandId: "field-map.tool.navigate", icon: icon(Hand), label: "Navigate" },
@@ -102,6 +110,7 @@ function toolbarStateKey(): string {
   return JSON.stringify([
     planar.component,
     planar.source.kind,
+    planar.default_slice.plane,
     planar.field_overlays?.length ?? 0,
     planar.layers,
     planar.multislice?.enabled ?? false,
@@ -114,7 +123,7 @@ const serverCommandVersion = () => 0;
 
 /**
  * Icon toolbar above the 2D canvas (plan §2.1 A, §2.2). It renders only
- * registered commands: tools, navigation, view masks and export. Enabled,
+ * registered commands: section plane, tools, navigation, view masks and export. Enabled,
  * active and disabled-reason state come from the same contributions the
  * ribbon, shortcuts and command palette use; the toolbar holds no data props.
  */
@@ -137,6 +146,12 @@ export function PlanarToolbar() {
   return (
     <TooltipProvider delayDuration={300}>
       <div aria-label="2D view tools" className="fm-planar-toolbar" role="toolbar">
+        <div aria-label="Section plane" className="fm-planar-toolbar__group" role="radiogroup">
+          {PLANES.map((item) => (
+            <ToolbarButton context={context} item={item} key={item.commandId} kind="radio" onRun={run} />
+          ))}
+        </div>
+        <Separator className="fm-planar-toolbar__separator" orientation="vertical" />
         <div aria-label="Canvas tool" className="fm-planar-toolbar__group" role="radiogroup">
           {TOOLS.map((item) => (
             <ToolbarButton context={context} item={item} key={item.commandId} kind="radio" onRun={run} />

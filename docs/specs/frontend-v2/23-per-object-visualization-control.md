@@ -221,13 +221,39 @@ decides whether that layer takes part. For each layer and pass
 Toggling a mask never rewrites layer flags, and editing a flag never toggles a
 mask.
 
+Inspector 2D tab layout (target first, view second):
+
+1. Status line (`Live`, `Mesh ready`, ...).
+2. **Field in *name*** — what the selected target shows and the only place
+   where its quantity is chosen. Its first rows are `Shown` and `Quantity`:
+   - with an own layer, `Shown` reads `Own setting · <quantity> · <component>`
+     and the group edits that layer: Quantity, Component, `Show` (Color =
+     `raster`, Arrows = `vectors`), collapsible Coloring, Arrows and
+     `More drawing` (points, mesh, contours, streamlines). An object layer
+     offers "Use All objects setting" (removes the own layer when an `all`
+     layer exists); the Airbox and `all` layers offer "Remove from 2D view";
+   - without an own layer, `Shown` reads `Inherited from All objects · <quantity>`
+     when a visible `all` layer covers the target, otherwise `Not drawn in the
+     2D view`. Choosing a Quantity is the explicit edit that creates the
+     target's layer with that quantity; selection alone never creates a layer,
+     never writes state and never switches the centre module.
+3. **2D view** (collapsible, summary `<plane> · <n> field layers`): the field
+   layer list (order, eye, Raster/Vectors chips, remove, "Add field"), section
+   plane, crop and view, and the view-wide point and wireframe styles. These
+   apply to the whole 2D view, not to the selected target.
+4. Advanced (provenance).
+
+There is no separate base-field editor. A live state still in `legacy` is
+shown as the layer list the backend migration would create (`all` from the
+base field, beneath the existing overlays); the first layer edit sends that
+list with `layer_model: "layers"`, so the inspector always describes what the
+canvas draws.
+
 Tree selection:
 
 - Selecting an object, its `Visualization` child, or the Airbox in the model
-  tree selects that target's layer row in the Inspector 2D tab.
-- When the selected target has no layer, the layer editor shows an empty
-  state with one action "Add field for *name*"; selection alone never creates
-  a layer, never writes state, and never switches the centre module.
+  tree makes that target the subject of **Field in *name*** and highlights its
+  layer row; a click on another row edits that layer instead.
 - "Add field" lists targets without a layer (All objects, Airbox, each scene
   object). At 16 layers the button stays enabled and shows the refusal reason
   instead of adding.
@@ -246,7 +272,10 @@ cases), `PlanarFieldLayerList.test.tsx` (row label `film · m · direction`, the
 eye patches only that layer's `visible`, drag and `Alt+↑/↓` reorder, tree
 selection of `object:film`, empty state, masked chip note),
 `PlanarTargetFieldSection.test.tsx` (immediate quantity flush without a
-compute request), Airbox isolation, composition order and hidden layers
+compute request, inherited and not-drawn states, choosing a quantity creates
+the own layer, "Use All objects setting" removes it),
+`PlanarVisualizationSection.test.tsx` (legacy state shown as the migrated
+layer list and converted on the first edit), Airbox isolation, composition order and hidden layers
 without data requests, one legend card per visible layer.
 
 ## 6. Tests

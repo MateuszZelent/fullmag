@@ -168,6 +168,55 @@ export function effectivePass(
   return viewMasks[pass] === true ? "on" : "masked";
 }
 
+/**
+ * Layer list the backend migration (`migrate_planar_layer_model`) would make
+ * from a live `legacy` state: existing overlays become visible and keep their
+ * order, an enabled base field becomes the `all` layer beneath them. `layers`
+ * state is returned unchanged, so the inspector always edits what is drawn.
+ */
+export function effectivePlanarFieldLayers(
+  planar: Pick<Planar, "layer_model" | "field_overlays" | "layers" | "quantity_id" | "component"
+    | "view_scope" | "colormap" | "range" | "raster_opacity" | "vector_style">,
+): PlanarFieldLayer[] {
+  const overlays = planar.field_overlays ?? [];
+  if ((planar.layer_model ?? "legacy") === "layers") return [...overlays];
+  const migrated = overlays.map((layer) => ({ ...layer, visible: true }));
+  const masks = planar.layers;
+  if (!masks.raster && !masks.vectors) return migrated;
+  let id = "all";
+  for (let suffix = 2; migrated.some((layer) => layer.id === id); suffix += 1) id = `all-${suffix}`;
+  migrated.push({
+    id,
+    quantity_id: planar.quantity_id,
+    component: planar.component,
+    view_scope: planar.view_scope,
+    colormap: planar.colormap,
+    range: planar.range ?? { mode: "auto", min: null, max: null },
+    raster_opacity: planar.raster_opacity ?? 1,
+    raster_visible: masks.raster,
+    vectors_visible: masks.vectors,
+    vector_style: planar.vector_style,
+    visible: true,
+    points_visible: masks.points,
+    mesh_visible: masks.mesh,
+    contours_visible: masks.contours,
+    streamlines_visible: masks.streamlines === true,
+  });
+  return migrated;
+}
+
+/**
+ * Layer that draws a target which has no own layer: the visible `all` layer
+ * covers magnetic objects and mesh parts; nothing covers the Airbox.
+ */
+export function inheritedFieldLayer(
+  layers: readonly PlanarFieldLayer[],
+  target: PlanarFieldLayerTarget,
+): PlanarFieldLayer | null {
+  if (target === "all" || isAirboxTarget(target)) return null;
+  return layers.find((layer) => layer.id === "all" && layerVisible(layer)) ?? null;
+}
+
 /** Multislice draws the first visible layer of the list (ADR 0080 W7). */
 export function multisliceLayer(layers: readonly PlanarFieldLayer[]): PlanarFieldLayer | null {
   return layers.find(layerVisible) ?? null;
