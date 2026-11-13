@@ -1545,7 +1545,8 @@ fn historical_export_snapshot(state: &AppState, source: &AcceptedRunExportSource
     let run = fullmag_application::RunId::parse(&source.run_id).map_err(|e| invalid(e.to_string()))?;
     let project = fullmag_application::ProjectId::parse(&source.project_id).map_err(|e| invalid(e.to_string()))?;
     let accepted = fullmag_runtime_control::load_accepted_study_snapshot(&store, &run, &project).map_err(|e| invalid(e.to_string()))?;
-    let catalog = store.read_run_catalog(run.as_str()).map_err(|e| invalid(e.to_string()))?
+    let catalog = store.read_run_catalog_in_transaction(run.as_str(), &_transaction)
+        .map_err(|e| invalid(e.to_string()))?
         .ok_or_else(|| invalid("run catalog absent".into()))?;
     let artifacts = store.read_artifact_catalog(run.as_str()).map_err(|e| invalid(e.to_string()))?
         .ok_or_else(|| invalid("artifact catalog absent".into()))?;

@@ -604,6 +604,9 @@ jobs:
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
 
+      - name: Run fenced accepted catalog snapshot contracts
+        run: cargo test -p fullmag-session --lib fenced_run_catalog_read --no-fail-fast
+
       - name: Run Docker accepted FEM GPU and host admission contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_

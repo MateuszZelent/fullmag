@@ -667,7 +667,7 @@ fn load_durable_projection_with_journal(
     validate_live_intent(context, &intent.specification)?;
 
     let Some(run_catalog) = store
-        .read_run_catalog(&context.run_id)
+        .read_run_catalog_in_transaction(&context.run_id, &core_transaction)
         .map_err(|error| ApiError::internal(format!("read accepted run catalog: {error}")))?
     else {
         return Ok(None);
@@ -4406,6 +4406,30 @@ mod tests {
         let catalog = store.read_run_catalog(&context.run_id).unwrap().unwrap();
         if cancel { assert_eq!(catalog.revision, 5); }
         (directory, store, context, catalog)
+    }
+
+    #[test]
+    fn missing_run_catalog_defers_projection_and_releases_its_shared_fence() {
+        let (_directory, store, context, catalog) =
+            accepted_projection_fixture(None, &["step-a"], false);
+        let catalog_path = store
+            .root()
+            .join(format!("runs/{}/run_catalog.json", context.run_id));
+        std::fs::remove_file(catalog_path).unwrap();
+
+        assert!(load_durable_projection(store.root(), &context, None, &mut None)
+            .unwrap()
+            .is_none());
+
+        let publisher = fullmag_session::SessionStore::open_existing(store.root()).unwrap();
+        publisher.commit_run_catalog(&catalog).unwrap();
+        let transaction = store.read_transaction().unwrap();
+        assert_eq!(
+            store
+                .read_run_catalog_in_transaction(&context.run_id, &transaction)
+                .unwrap(),
+            Some(catalog),
+        );
     }
 
     fn pending_cursor(context: &ProjectionContext, projection: &DurableProjection) -> ProjectionCursor {

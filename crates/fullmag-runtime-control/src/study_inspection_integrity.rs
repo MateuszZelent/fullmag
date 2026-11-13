@@ -76,7 +76,8 @@ fn read_saved_inspection<T>(
     retain_inspection: bool,
     build: impl FnOnce(serde_json::Value, Option<fullmag_runner::LoadedAntennaClosedLoopInspection>) -> Result<T>,
 ) -> Result<T> {
-    let catalog = store.read_run_catalog(run.as_str())?.context("inspection run catalog missing")?;
+    let catalog = store.read_run_catalog_in_transaction(run.as_str(), transaction)?
+        .context("inspection run catalog missing")?;
     let task = catalog.tasks.iter().find(|task| task.task_id == task_id).context("inspection task missing")?;
     if task.lifecycle != FmsTaskLifecycle::Succeeded { bail!("inspection task is not succeeded"); }
     exact_attempt(task.attempt_id.as_deref(), task.ownership_epoch, attempt_id, epoch)?;

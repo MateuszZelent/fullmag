@@ -1895,6 +1895,22 @@ impl SessionStore {
         }
     }
 
+    /// Read a catalog once inside an already-held shared snapshot.
+    ///
+    /// Unlike `read_run_catalog`, this must not wait for a missing catalog:
+    /// the shared fence prevents the writer that could publish it from
+    /// proceeding. A missing catalog is the result for this snapshot; callers
+    /// may retry after releasing the transaction.
+    pub fn read_run_catalog_in_transaction(
+        &self,
+        run_id: &str,
+        transaction: &ReadTransaction,
+    ) -> Result<Option<FmsRunCatalog>> {
+        validate_store_id(run_id)?;
+        transaction.require_root(&self.root)?;
+        self.read_run_catalog_once(run_id)
+    }
+
     fn run_intent_file_exists(&self, run_id: &str) -> Result<bool> {
         let path = checked_path(&self.root, &format!("runs/{run_id}/run_intent.json"))?;
         Ok(fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()))
@@ -12929,6 +12945,74 @@ mod read_transaction_tests {
         let transaction = first.read_transaction().unwrap();
         let error = second.read_coordinator_journal_readonly("run-read", &transaction).unwrap_err();
         assert!(error.to_string().contains("another store"));
+    }
+
+    #[test]
+    fn fenced_run_catalog_read_returns_absent_then_allows_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-fenced-catalog";
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id,
+            "submit-fenced-catalog",
+            serde_json::json!({"run_id": run_id}),
+        )).unwrap();
+
+        let reader = store.read_transaction().unwrap();
+        assert!(store.read_run_catalog_in_transaction(run_id, &reader).unwrap().is_none());
+        drop(reader);
+
+        let publisher = SessionStore::open_existing(store.root()).unwrap();
+        let catalog = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: Vec::new(),
+        };
+        publisher.commit_run_catalog(&catalog).unwrap();
+        let reader = store.read_transaction().unwrap();
+        assert_eq!(
+            store.read_run_catalog_in_transaction(run_id, &reader).unwrap(),
+            Some(catalog),
+        );
+    }
+
+    #[test]
+    fn fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-fenced-catalog";
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id,
+            "submit-fenced-catalog",
+            serde_json::json!({"run_id": run_id}),
+        )).unwrap();
+
+        let foreign_store = SessionStore::open(directory.path().join("foreign-store")).unwrap();
+        let foreign_transaction = foreign_store.read_transaction().unwrap();
+        let error = store.read_run_catalog_in_transaction(run_id, &foreign_transaction).unwrap_err();
+        assert!(error.to_string().contains("another store"));
+        drop(foreign_transaction);
+
+        let catalog_path = store.root().join(format!("runs/{run_id}/run_catalog.json"));
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        let foreign_catalog = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "another-run".into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: Vec::new(),
+        };
+        fs::write(&catalog_path, serde_json::to_vec(&foreign_catalog).unwrap()).unwrap();
+        let transaction = store.read_transaction().unwrap();
+        let error = store.read_run_catalog_in_transaction(run_id, &transaction).unwrap_err();
+        assert!(error.to_string().contains("identity does not match"));
+        drop(transaction);
+
+        fs::write(&catalog_path, b"not a run catalog").unwrap();
+        let transaction = store.read_transaction().unwrap();
+        assert!(store.read_run_catalog_in_transaction(run_id, &transaction).is_err());
     }
 }
 
