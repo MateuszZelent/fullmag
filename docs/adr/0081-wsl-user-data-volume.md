@@ -547,3 +547,36 @@ admission. Nie dowodzą rzeczywistego formatu urządzenia ani działania Dockera
 Odbiór hostowy wymaga osobno create/attach receipts, identyfikacji nowego
 urządzenia, rzeczywistych mountów hosta i kontenera, kompletności danych,
 świeżego probe oraz kwalifikacji pierwszego pełnego Zarr po migracji.
+
+
+### Jawna rekwalifikacja zachowanej kopii po porażce
+
+Potwierdzona porażka `copy-verified` przed bindem może zachować kompletne PAX
+oraz payload bez terminalu kwalifikującego. `recover-copy` nie uruchamia ponownie
+zwykłego kopiowania ani provisioningu. Nowy request, selector CAS i osobny journal
+zachowują niezmieniony failed parent oraz dokładny udany prefix do drainu.
+
+Najpierw, w zarządzanej operacji grupy i pod hostlock, odczytowy root probe
+sprawdza historyczne evidence oraz prywatne ścieżki. Nie zdobywa native fences,
+nie zapisuje danych i nie daje authority do kontynuacji. Jego odmowa poprzedza
+zmianę selectora i pozyskanie blokad; rzeczywisty terminal klienta musi być
+zaobserwowany. Następnie właściwa operacja zdobywa pięć świeżych fences,
+powtarza preflight i blokuje istniejący writer kopii. Sprawdzenie konsumentów
+obejmuje też cały nowy mount z zachowanym payload.
+
+Rekwalifikacja porównuje pełne manifesty obecnych źródeł, istniejącego payload
+oraz PAX odtworzonego wyłącznie do nowego prywatnego katalogu. Wpisy archiwum
+mają zamknięte nazwy, typy i topologię hardlinków; odmowa obejmuje traversal,
+symlinki, duplikaty i dodatkowe bajty za zakończeniem PAX. SHA i inode archiwum
+są sprawdzane przed i po. Katalog dowodowy pozostaje zachowany. Ta kontrola
+potwierdza zgodność trzech aktualnych widoków; nie odtwarza nieopublikowanego
+historycznego SHA sprzed błędu.
+
+Wynik copy v2 zachowuje oryginalny intent, a osobno wskazuje nowy request
+recovery, jego bieżący graf źródeł i zachowany failure. Czytelnik v1 nadal odmawia
+przy failure lub zmienionych komponentach. Dopiero potwierdzony terminal root
+oraz rzeczywisty native ack pozwalają wydać nowy żywy `CopiedGroupScope` w tym
+samym procesie, wątku i hostlock. Snapshot nie zastępuje tego scope.
+
+To kontrakt i implementacja źródłowa. Rzeczywista rekwalifikacja, cutover oraz
+nowy FEM GPU/Zarr wymagają osobnych dowodów wykonania.

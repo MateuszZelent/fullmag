@@ -85,8 +85,7 @@ def _load_completed(copied):
         'Copied terminal drain belongs to another source scope')
     for name in NEW_ARTIFACTS:
         require(not os.path.lexists(op/name),'Bind has previous artifacts; reconcile, never replay')
-    require(copy_parent._pins(source,root_copy.COMPONENTS) == request['components'],
-            'Completed root-copy component source changed before cutover')
+    root_copy.require_current_copy_components(source,op,request,terminal['result'])
     root_copy._source_roots(linux);root_copy._mounted_root(linux,provision)
     return dict(previous,source=source,layout=layout,identity=identity,plan=plan,linux=linux,drain=drain,
                 copy_request=request,copy_request_sha256=request_sha,copy_receipt_sha256=terminal['receipt_sha256'],

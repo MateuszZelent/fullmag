@@ -58,7 +58,8 @@ def _unqualified_consumers(control,actuals,allowed,consumer_roots,relocated=None
     return consumers,windows_proofs
 
 
-def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=None,relocated=None):
+def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=None,relocated=None,
+                          extra_consumer_roots=()):
     """Require exact stop/native records, unchanged incarnations and consumers."""
     require(type(stop_attempt) is str and re.fullmatch('[0-9a-f]{32}',stop_attempt) and
             type(stop_sha256) is str and re.fullmatch('[0-9a-f]{64}',stop_sha256),'Exact managed stop pins required')
@@ -81,6 +82,10 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
     else:
         view=require_relocated(relocated,source,plan)
         roots=view['old_roots'];declared_roots=view['canonical_roots'];consumer_roots=view['consumer_roots']
+    require(type(extra_consumer_roots) is tuple and
+        all(isinstance(p,Path) and p.is_absolute() and '..' not in p.parts for p in extra_consumer_roots),
+        'Additional protected consumer roots must be exact absolute paths')
+    consumer_roots=tuple(consumer_roots)+extra_consumer_roots
     ids = docker_capture('ps','--all','--no-trunc','--format','{{.ID}}').stdout.decode().split()
     require(ids and len(ids) == len(set(ids)) and all(re.fullmatch('[0-9a-f]{64}',s) for s in ids),
             'Complete unambiguous container inventory required')

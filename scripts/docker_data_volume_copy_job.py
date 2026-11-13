@@ -22,6 +22,7 @@ from fullmag_data_volume_guard import _open_directory_nofollow
 from fullmag_data_volume_linux_request import validate_linux_request
 from fullmag_data_volume_runtime_binding import load_plan
 from linux_data_volume_copy import COMPONENTS, validate_request, validate_result
+import linux_data_volume_copy as copy_stage
 from linux_data_volume_format import _document
 import linux_data_volume_provision as qualification
 
@@ -91,18 +92,26 @@ def validate_terminal(op, request, request_sha256, exit_code):
     qualification.require(type(exit_code) is int, 'An observed terminal client exit is required')
     _, journal = qualification._selected_journal(op)
     event = journal['events'][-1] if journal['events'] else {}
-    qualification.require(event.get('phase') == 'copy-verified' and event.get('inputs_sha256') == request_sha256,
+    qualification.require(event.get('phase') == 'copy-verified',
                           'Root copy journal belongs to another request')
     success = op/'linux-copy-result.json'; failure = op/'linux-copy-failed.json'
     if exit_code == 0:
-        qualification.require(not os.path.lexists(failure) and event.get('state') == 'succeeded',
+        qualification.require(event.get('state') == 'succeeded',
                               'Successful client exit has no unambiguous completed root copy')
         raw,result = qualification._read(success,event['receipt_sha256'])
         _, linux_raw = qualification._read(op/'linux-provision-request.json',request['linux_request_sha256'])
         linux = validate_linux_request(linux_raw)
         validate_result(result,request,linux,request_sha256)
+        if result['schema'] == 'fullmag.data-volume-linux-copy-result.v2':
+            qualification.require(event.get('inputs_sha256') == result['recovery_request_sha256'],
+                                  'Recovered copy journal does not match its recovery request')
+            copy_stage.require_current_copy_components(Path(__file__).resolve().parents[1],op,request,result)
+        else:
+            qualification.require(not os.path.lexists(failure) and event.get('inputs_sha256') == request_sha256,
+                                  'Ordinary copy cannot supersede a failure or another request')
     else:
-        qualification.require(not os.path.lexists(success) and event.get('state') == 'failed-confirmed',
+        qualification.require(not os.path.lexists(success) and event.get('state') == 'failed-confirmed' and
+            event.get('inputs_sha256') == request_sha256,
                               'Root copy client failed without a confirmed terminal root failure')
         raw,result = qualification._read(failure,event['receipt_sha256'])
         qualification.require(set(result) == {'schema','state','volume_id','token','request_sha256','error_type',
@@ -189,11 +198,11 @@ def run_prepared_root(stage,fence,command,op,request,request_sha256,validator,*,
     and release the copy-fence protocol with the original verified copy SHA.
     That protocol's copy_result_sha256 never changes meaning to a later receipt.
     """
-    qualification.require(stage in ('copy','bind','admission') and callable(validator),
-                          'Only prepared copy/bind/admission root stages are supported')
+    qualification.require(stage in ('copy','copy-recovery','bind','admission') and callable(validator),
+                          'Only prepared copy/recovery/bind/admission root stages are supported')
     qualification.require(type(poll_interval) in (int,float) and 0 < poll_interval <= 5,
                           'Bounded root-client polling interval required')
-    qualification.require((stage == 'copy' and release_copy_sha256 is None) or
+    qualification.require((stage in ('copy','copy-recovery') and release_copy_sha256 is None) or
         (stage in ('bind','admission') and type(release_copy_sha256) is str and
          re.fullmatch('[0-9a-f]{64}',release_copy_sha256)),
         'Bind/admission release must acknowledge the exact original completed copy')
@@ -223,7 +232,7 @@ def run_prepared_root(stage,fence,command,op,request,request_sha256,validator,*,
                                                   validator=validator,stage=stage)
         output.flush();os.fsync(output.fileno());errors.flush();os.fsync(errors.fileno())
         fence.check()
-        fence.finish(terminal['receipt_sha256'] if stage == 'copy' else release_copy_sha256)
+        fence.finish(terminal['receipt_sha256'] if stage in ('copy','copy-recovery') else release_copy_sha256)
         fence.control.write(operation['root']+'/'+record_prefix+'-terminal.json',terminal)
         if observation_error is not None:
             # Both native and host locks stayed held until a verified terminal.

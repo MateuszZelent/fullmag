@@ -39,6 +39,20 @@ _STAGES = {
         ),
         "components": RECOVERY_COMPONENTS,
     },
+    "probe-copy-recovery": {
+        "schema": "fullmag.data-volume-copy-recovery-probe.v1",
+        "keys": ("schema", "volume_id", "storage_root", "token",
+                 "original_copy_request_sha256", "failed_copy_receipt_sha256", "failed_journal_relative",
+                 "failed_journal_sha256", "selector_sha256", "recovery_journal_sha256", "fence_ready_sha256", "components"),
+        "components": COPY_COMPONENTS,
+    },
+    "recover-copy": {
+        "schema": "fullmag.data-volume-copy-recovery-request.v1",
+        "keys": ("schema", "volume_id", "storage_root", "token",
+                 "original_copy_request_sha256", "failed_copy_receipt_sha256", "failed_journal_relative",
+                 "failed_journal_sha256", "selector_sha256", "recovery_journal_sha256", "fence_ready_sha256", "components"),
+        "components": COPY_COMPONENTS,
+    },
     "copy": {
         "schema": "fullmag.data-volume-linux-copy-request.v1",
         "keys": (
@@ -208,6 +222,11 @@ sys.meta_path.insert(0, VerifiedFinder())
 import importlib
 if STAGE == 'recover-mounted':
     importlib.import_module('linux_data_volume_recover').recover_mounted(request_path, request_sha256)
+elif STAGE == 'probe-copy-recovery':
+    print(json.dumps(importlib.import_module('linux_data_volume_copy').probe_recovery(
+        request_path, request_sha256), sort_keys=True), flush=True)
+elif STAGE == 'recover-copy':
+    importlib.import_module('linux_data_volume_copy').recover_verified(request_path, request_sha256)
 elif STAGE == 'copy':
     importlib.import_module('linux_data_volume_copy').copy_verified(request_path, request_sha256)
 elif STAGE == 'bind':
@@ -222,7 +241,7 @@ else:
 def bootstrap(stage):
     """Return a fixed stage-specific program for ``python -I -B -c`` only."""
     if type(stage) is not str or stage not in _STAGES:
-        raise ValueError("Root bootstrap stage must be exactly 'recover-mounted', 'copy', 'bind' or 'admission'")
+        raise ValueError("Root bootstrap stage must be exactly 'recover-mounted', 'probe-copy-recovery', 'recover-copy', 'copy', 'bind' or 'admission'")
     config = _STAGES[stage]
     prefix = "\n".join((
         "STAGE = " + repr(stage),

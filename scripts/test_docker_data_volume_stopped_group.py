@@ -93,6 +93,13 @@ class StoppedCopySourceTests(unittest.TestCase):
         with self.patches(),self.assertRaisesRegex(ValueError,'dataset-bind-reference'):self.call()
         self.proof.assert_not_called()
 
+    def test_retained_volume_references_are_rejected_when_recovery_protects_that_root(self):
+        self.add_consumer('/mnt/retained-copy/payload/project')
+        with self.patches():self.call()
+        with self.patches(),self.assertRaisesRegex(ValueError,'dataset-bind-reference'):
+            self.call(extra_consumer_roots=(Path('/mnt/retained-copy'),))
+        self.proof.assert_not_called()
+
     def test_control_volume_or_extra_group_reference_is_not_implicitly_owned(self):
         other=self.add_consumer(own_group=True)
         with self.patches(),self.assertRaisesRegex(ValueError,'additional-group-resource'):self.call()

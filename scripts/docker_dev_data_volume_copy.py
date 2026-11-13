@@ -74,7 +74,8 @@ def _pins(source,names):
     return result
 
 
-def _load_source(source_root,volume_id):
+def _load_base_source(source_root,volume_id):
+    """Authenticate immutable provisioning scope, without admitting a phase."""
     qualification.require(os.name == 'posix' and type(volume_id) is str and
         re.fullmatch('[0-9a-f]{32}',volume_id) and volume_id != '0'*32,'Exact WSL volume identity required')
     source=select_checkout(Path(source_root),str(source_root));validate_host_path(source,'copy source checkout')
@@ -101,20 +102,25 @@ def _load_source(source_root,volume_id):
         provision.get('filesystem_uuid') == linux['filesystem_uuid'] and
         provision.get('linux_request_sha256') == hashlib.sha256(linux_raw).hexdigest() and
         provision.get('namespace_admitted') is False,'An exact completed formatter result is required')
+    return {'source':source,'layout':layout,'identity':identity,'operation_root':op,'plan':plan,
+        'plan_sha256':hashlib.sha256(plan_raw).hexdigest(),'linux':linux,'provision':provision,
+        'linux_request_sha256':hashlib.sha256(linux_raw).hexdigest(),
+        'provision_result_sha256':hashlib.sha256(provision_raw).hexdigest(),
+        'runtime_binding':binding,'runtime_binding_sha256':linux.get('runtime_binding_sha256')}
+
+
+def _load_source(source_root,volume_id):
+    context=_load_base_source(source_root,volume_id)
+    op=context['operation_root'];linux=context['linux'];provision=context['provision']
     journal_path,journal=qualification._selected_journal(op)
-    qualification.require(journal['request_sha256'] == hashlib.sha256(plan_raw).hexdigest() and
+    qualification.require(journal['request_sha256'] == context['plan_sha256'] and
         next_phase(journal) == 'group-drained' and journal['events'][-1]['phase'] == 'ext4-mounted' and
-        journal['events'][-1]['receipt_sha256'] == hashlib.sha256(provision_raw).hexdigest(),
+        journal['events'][-1]['receipt_sha256'] == context['provision_result_sha256'],
         'Copy must follow the completed formatter exactly once')
     for name in NEW_ARTIFACTS:
         qualification.require(not os.path.lexists(op/name),'Copy has previous artifacts; reconcile, never replay')
     root_copy._source_roots(linux);root_copy._mounted_root(linux,provision)
-    return {'source':source,'layout':layout,'identity':identity,'operation_root':op,'plan':plan,
-        'plan_sha256':hashlib.sha256(plan_raw).hexdigest(),'linux':linux,
-        'linux_request_sha256':hashlib.sha256(linux_raw).hexdigest(),
-        'provision_result_sha256':hashlib.sha256(provision_raw).hexdigest(),
-        'journal_path':journal_path,'journal':journal,'runtime_binding':binding,
-        'runtime_binding_sha256':linux.get('runtime_binding_sha256')}
+    return dict(context,journal_path=journal_path,journal=journal)
 
 
 def _existing_control(identity,image):

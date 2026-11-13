@@ -17,12 +17,12 @@ import re
 import stat
 
 import linux_data_volume_provision as qualification
-from fullmag_data_volume_fs import archive_and_extract
+from fullmag_data_volume_fs import archive_and_extract, requalify_existing_copy
 from fullmag_data_volume_guard import _open_directory_nofollow, resolve_mount_uuid
-from fullmag_data_volume_journal import append_started, append_terminal, next_phase
+from fullmag_data_volume_journal import append_started, append_terminal, next_phase, validate_journal
 from fullmag_data_volume_linux_request import validate_linux_request
 from fullmag_data_volume_runtime_binding import load_plan
-from linux_data_volume_format import _document, _publish_journal
+from linux_data_volume_format import _document, _publish_journal, _encoded
 
 
 SCHEMA = 'fullmag.data-volume-linux-copy-request.v1'
@@ -60,6 +60,163 @@ def _components(request):
         raw = qualification._read_optional_regular(directory/name, 'root copy source', maximum=4*1024**2)
         qualification.require(raw is not None and qualification.digest(raw) == request['components'][name],
                               'Root copy source changed: '+name)
+
+
+RECOVERY_SCHEMA = 'fullmag.data-volume-copy-recovery-request.v1'
+RECOVERY_DIGESTS = ('original_copy_request_sha256','failed_copy_receipt_sha256',
+                    'failed_journal_sha256','selector_sha256','recovery_journal_sha256','fence_ready_sha256')
+RECOVERY_KEYS = {'schema','volume_id','storage_root','token','failed_journal_relative','components',*RECOVERY_DIGESTS}
+
+
+def validate_recovery_request(value):
+    require = qualification.require
+    require(type(value) is dict and set(value) == RECOVERY_KEYS and value['schema'] == RECOVERY_SCHEMA,
+            'Closed root copy recovery request required')
+    for key in ('volume_id','token'):
+        require(type(value[key]) is str and re.fullmatch('[0-9a-f]{32}',value[key]) and value[key] != '0'*32,
+                'Exact nonzero recovery identity required')
+    for key in RECOVERY_DIGESTS:
+        require(type(value[key]) is str and re.fullmatch('[0-9a-f]{64}',value[key]),
+                'Exact copy recovery evidence SHA required')
+    from fullmag_data_volume_linux_request import _path
+    _path(value['storage_root'],'copy recovery storage root')
+    require(type(value['failed_journal_relative']) is str and
+        re.fullmatch(r'recovery/[0-9a-f]{32}/journal\.json',value['failed_journal_relative']) and
+        value['failed_journal_relative'] != 'recovery/'+value['token']+'/journal.json',
+        'Exact distinct failed copy predecessor required')
+    require(type(value['components']) is dict and set(value['components']) == set(COMPONENTS) and
+        all(type(v) is str and re.fullmatch('[0-9a-f]{64}',v) for v in value['components'].values()),
+        'Exact root copy recovery component pins required')
+    return value
+
+
+RECOVERY_PROBE_SCHEMA = 'fullmag.data-volume-copy-recovery-probe.v1'
+
+
+def validate_recovery_probe_request(value):
+    qualification.require(type(value) is dict and set(value) == RECOVERY_KEYS and
+        value['schema'] == RECOVERY_PROBE_SCHEMA, 'Closed root copy recovery probe request required')
+    validate_recovery_request(dict(value,schema=RECOVERY_SCHEMA))
+    return value
+
+
+def _recovery_evidence(op, original, recovery, recovery_sha256, *, completed_result=None, probe=False):
+    """Authenticate immutable failure, selector, prefix and fresh held ack."""
+    require = qualification.require
+    request = validate_recovery_request(recovery)
+    require(request['volume_id'] == original['volume_id'] and request['storage_root'] == original['storage_root'] and
+            request['token'] != original['token'], 'Recovery changed the original copy scope or reused its token')
+    _, pinned_original = qualification._read(op/'linux-copy-request.json',request['original_copy_request_sha256'])
+    require(pinned_original == original, 'Recovery original copy request differs')
+    _, failure = qualification._read(op/'linux-copy-failed.json',request['failed_copy_receipt_sha256'])
+    require(type(failure) is dict and set(failure) == {'schema','state','volume_id','token','request_sha256',
+        'error_type','originals_and_partial_copy_retained'} and
+        failure['schema'] == 'fullmag.data-volume-linux-copy-failure.v1' and failure['state'] == 'failed-confirmed' and
+        failure['volume_id'] == original['volume_id'] and failure['token'] == original['token'] and
+        failure['request_sha256'] == request['original_copy_request_sha256'] and
+        type(failure['error_type']) is str and re.fullmatch('[A-Za-z_][A-Za-z0-9_]*',failure['error_type']) and
+        failure['originals_and_partial_copy_retained'] is True, 'Confirmed original copy failure required')
+    _, original_started = qualification._read(op/'linux-copy-started.json')
+    require(original_started == {'schema':'fullmag.data-volume-copy-started.v1','volume_id':original['volume_id'],
+        'token':original['token'],'request_sha256':request['original_copy_request_sha256']},
+        'Original copy start evidence differs')
+    _, failed = qualification._read(op/request['failed_journal_relative'],request['failed_journal_sha256'])
+    failed = validate_journal(failed)
+    require(failed['volume_id'] == original['volume_id'] and len(failed['events']) == 10,
+            'Exact failed copy journal required')
+    start,end = failed['events'][-2:]
+    require(start['phase'] == end['phase'] == 'copy-verified' and
+        start['inputs_sha256'] == end['inputs_sha256'] == request['original_copy_request_sha256'] and
+        end['state'] == 'failed-confirmed' and end['receipt_sha256'] == request['failed_copy_receipt_sha256'],
+        'Failed copy terminal differs from its request and receipt')
+    prefix = validate_journal(dict(failed,events=failed['events'][:8]))
+    require(next_phase(prefix) == 'copy-verified' and
+        prefix['events'][-1]['receipt_sha256'] == original['drain_sha256'] and
+        qualification.digest(_encoded(prefix)) == request['recovery_journal_sha256'],
+        'Recovery must preserve exactly the successful eight-event drain prefix')
+    _, selector = qualification._read(op/'active-attempt.json',request['selector_sha256'])
+    attempt = op/'recovery'/request['token']
+    journal_path,journal = qualification._selected_journal(op)
+    if probe:
+        # The failed parent remains selected until this read-only root client
+        # has a real terminal. The host later performs its selector CAS.
+        _,previous = qualification._read(attempt/'previous-active-attempt.json',request['selector_sha256'])
+        require(previous == selector and journal_path == op/request['failed_journal_relative'] and
+            journal == failed, 'Copy recovery probe requires the exact selected failed parent')
+        _,current = qualification._read(attempt/'journal.json',request['recovery_journal_sha256'])
+        require(current == prefix, 'Copy recovery probe prefix differs from the exact drain prefix')
+    else:
+        require(selector == {'schema':'fullmag.data-volume-active-recovery.v2','volume_id':original['volume_id'],
+            'attempt':request['token'],'journal_relative':'recovery/'+request['token']+'/journal.json',
+            'parent_journal_relative':request['failed_journal_relative'],
+            'parent_journal_sha256':request['failed_journal_sha256'],'state':'started'},
+            'Copy recovery selector differs from its failed predecessor')
+        require(journal_path == attempt/'journal.json' and journal['request_sha256'] == prefix['request_sha256'] and
+            journal['events'][:8] == prefix['events'], 'Selected copy recovery journal prefix differs')
+    if completed_result is None and not probe:
+        _,current = qualification._read(journal_path,request['recovery_journal_sha256'])
+        require(current == prefix, 'Copy recovery journal already advanced; never replay')
+    elif completed_result is not None:
+        result = completed_result
+        _, recovery_started = qualification._read(attempt/'copy-recovery-started.json')
+        require(recovery_started == {'schema':'fullmag.data-volume-copy-recovery-started.v1',
+            'volume_id':original['volume_id'],'token':request['token'],'request_sha256':recovery_sha256,
+            'original_copy_request_sha256':request['original_copy_request_sha256']} and
+            not os.path.lexists(attempt/'copy-recovery-failed.json'),
+            'Recovered copy must have one confirmed start and no recovery failure')
+        require(result.get('recovery_request_sha256') == recovery_sha256 and
+            result.get('failed_copy_receipt_sha256') == request['failed_copy_receipt_sha256'] and
+            result.get('request_sha256') == request['original_copy_request_sha256'] and len(journal['events']) >= 10,
+            'Completed recovery lineage differs')
+        result_raw,persisted = qualification._read(op/'linux-copy-result.json')
+        require(persisted == result and journal['events'][8:10] ==
+            append_terminal(append_started(prefix,'copy-verified',recovery_sha256),'succeeded',
+                            qualification.digest(result_raw))['events'][8:10],
+            'Completed recovery journal terminal differs')
+    _,drain = qualification._read(op/'group-drained.json',original['drain_sha256'])
+    if probe:
+        # This observation runs before acquiring fresh native fences. Only the
+        # immutable historical witness is authenticated; it grants no authority.
+        require(request['fence_ready_sha256'] == original['fence_ready_sha256'],
+                'Copy recovery probe must pin the original historical fence witness')
+        _,held = qualification._read(op/'copy-fence-ready.json',original['fence_ready_sha256'])
+        validate_held_fence(held,original['token'],original['volume_id'],drain['process_receipt_sha256'])
+    else:
+        _,held = qualification._read(attempt/'fence-ready.json',request['fence_ready_sha256'])
+        validate_held_fence(held,request['token'],original['volume_id'],drain['process_receipt_sha256'])
+    return {'request':request,'attempt_root':attempt,'journal_path':journal_path,'journal':journal}
+
+
+def require_current_copy_components(source, op, original_request, result):
+    """Require the exact current v1 graph or authenticated v2 recovery graph."""
+    original = validate_request(original_request)
+    op = Path(op)
+    qualification.require(op == Path(original['storage_root'])/'migrations/data-volumes'/original['volume_id'],
+                          'Copy component operation scope differs')
+    _,linux = qualification._read(op/'linux-provision-request.json',original['linux_request_sha256'])
+    validate_result(result,original,validate_linux_request(linux),result.get('request_sha256'))
+    if result.get('schema') == 'fullmag.data-volume-linux-copy-result.v1':
+        qualification.require(not os.path.lexists(op/'linux-copy-failed.json'),
+                              'Original copy failure requires explicit authenticated v2 recovery')
+        graph = original['components']
+    else:
+        qualification.require(result.get('schema') == 'fullmag.data-volume-linux-copy-result.v2' and
+            type(result.get('recovery_request_sha256')) is str and
+            re.fullmatch('[0-9a-f]{64}',result['recovery_request_sha256']), 'Closed copy result version required')
+        # The selected token is read through the closed selector; the full
+        # request reauthenticates its exact hash, predecessor and selected path.
+        _,selector = qualification._read(op/'active-attempt.json')
+        token = selector.get('attempt')
+        qualification.require(type(token) is str and re.fullmatch('[0-9a-f]{32}',token),
+                              'Exact selected recovery token required')
+        _,raw = qualification._read(op/'recovery'/token/'copy-recovery-request.json',result['recovery_request_sha256'])
+        evidence = _recovery_evidence(op,original,raw,result['recovery_request_sha256'],completed_result=result)
+        graph = evidence['request']['components']
+    for name,expected in graph.items():
+        raw = qualification._read_optional_regular(Path(source)/'scripts'/name,'current copy component',maximum=4*1024**2)
+        qualification.require(raw is not None and qualification.digest(raw) == expected,
+                              'Root copy source changed: '+name)
+    return graph
 
 
 def _source_roots(linux):
@@ -137,14 +294,21 @@ def validate_held_fence(held,token,volume_id,process_receipt_sha256):
 def validate_result(result,request,linux,request_sha256):
     """Authenticate one completed copy without granting switch authority."""
     require=qualification.require
-    require(type(result) is dict and set(result) == {'schema','state','volume_id','token','request_sha256',
+    v2 = type(result) is dict and result.get('schema') == 'fullmag.data-volume-linux-copy-result.v2'
+    extra = {'completion_mode','recovery_request_sha256','failed_copy_receipt_sha256'} if v2 else set()
+    require(type(result) is dict and set(result) == extra | {'schema','state','volume_id','token','request_sha256',
         'filesystem_uuid','data_sha256','manifest_path','manifest_sha256','archive_path','archive_sha256',
         'copied_roots','namespace_admitted','originals_retired'} and
-        result['schema'] == 'fullmag.data-volume-linux-copy-result.v1' and
+        result['schema'] in ('fullmag.data-volume-linux-copy-result.v1','fullmag.data-volume-linux-copy-result.v2') and
         result['state'] == 'copied-and-verified-not-switched' and result['volume_id'] == request['volume_id'] and
         result['token'] == request['token'] and result['request_sha256'] == request_sha256 and
         result['namespace_admitted'] is False and result['originals_retired'] is False,
         'Root copy success scope differs')
+    if v2:
+        require(result['completion_mode'] == 'requalified-existing-archive-and-payload' and
+            all(type(result[k]) is str and re.fullmatch('[0-9a-f]{64}',result[k])
+                for k in ('recovery_request_sha256','failed_copy_receipt_sha256')),
+            'Recovered copy completion evidence differs')
     target=Path(linux['mount_root']);archive=target/'migration'/request['volume_id']
     copies={role:str(target/'payload'/Path(pin['canonical_root']).relative_to(linux['storage_root']))
             for role,pin in linux['source_roots'].items()}
@@ -157,21 +321,17 @@ def validate_result(result,request,linux,request_sha256):
     return result
 
 
-def load_context(request_path, request_sha256, *, completed_receipt_sha256=None):
-    """Authenticate inputs or an explicit completed copy, without mutation.
+def _original_context(request_path, request_sha256):
+    """Read immutable original scope and mount identity, without phase authority.
 
-    The completed view cannot re-enter copy_verified: its journal must already
-    have advanced. It only supplies the authenticated inputs for a later stage.
+    Callers separately authenticate either the original current graph or the
+    closed recovery graph and exact journal transition before any mutation.
     """
     qualification.require(os.name == 'posix' and os.geteuid() == 0, 'Host root required for metadata-preserving copy')
     qualification.require(type(request_sha256) is str and re.fullmatch('[0-9a-f]{64}', request_sha256),
                           'Exact root copy request SHA required')
-    qualification.require(completed_receipt_sha256 is None or
-        (type(completed_receipt_sha256) is str and re.fullmatch('[0-9a-f]{64}',completed_receipt_sha256)),
-        'Exact completed copy receipt SHA required')
     _, raw_request = qualification._read(Path(request_path), request_sha256)
     request = validate_request(raw_request)
-    _components(request)
     op = Path(request['storage_root'])/'migrations/data-volumes'/request['volume_id']
     qualification.require(Path(request_path) == op/'linux-copy-request.json', 'Copy request escapes its selected operation')
     _, linux_raw = qualification._read(op/'linux-provision-request.json', request['linux_request_sha256'])
@@ -208,21 +368,6 @@ def load_context(request_path, request_sha256, *, completed_receipt_sha256=None)
     journal_path, journal = qualification._selected_journal(op)
     qualification.require(journal['volume_id'] == request['volume_id'] and
         journal['request_sha256'] == qualification.digest(plan_raw), 'Copy journal belongs to another original plan')
-    if completed_receipt_sha256 is None:
-        qualification.require(next_phase(journal) == 'copy-verified' and
-            journal['events'][-1]['phase'] == 'group-drained' and
-            journal['events'][-1]['receipt_sha256'] == request['drain_sha256'],
-            'Copy requires a completed formatter and managed group drain')
-        result=None
-    else:
-        qualification.require(next_phase(journal) == 'binds-switched' and
-            journal['events'][-1]['phase'] == 'copy-verified' and
-            journal['events'][-1]['inputs_sha256'] == request_sha256 and
-            journal['events'][-1]['receipt_sha256'] == completed_receipt_sha256 and
-            not os.path.lexists(op/'linux-copy-failed.json'),
-            'Completed copy must match the exact successful journal terminal')
-        _,result=qualification._read(op/'linux-copy-result.json',completed_receipt_sha256)
-        result=validate_result(result,request,linux,request_sha256)
     drained=[e for e in journal['events'] if e['phase'] == 'group-drained' and e['state'] == 'succeeded']
     qualification.require(len(drained) == 1 and drained[0]['receipt_sha256'] == request['drain_sha256'],
                           'Managed drain is not the journalled copy predecessor')
@@ -233,7 +378,35 @@ def load_context(request_path, request_sha256, *, completed_receipt_sha256=None)
     target = _mounted_root(linux, provision)
     return {'request':request,'linux':linux,'operation_root':op,'journal_path':journal_path,
             'journal':journal,'roots':roots,'target':target,'provision':provision,
-            'plan':plan,'plan_sha256':qualification.digest(plan_raw),'drain':drain,'copy_result':result}
+            'plan':plan,'plan_sha256':qualification.digest(plan_raw),'drain':drain}
+
+
+def load_context(request_path, request_sha256, *, completed_receipt_sha256=None):
+    """Authenticate a new copy or exact completed v1/v2, never replay recovery."""
+    qualification.require(completed_receipt_sha256 is None or
+        (type(completed_receipt_sha256) is str and re.fullmatch('[0-9a-f]{64}',completed_receipt_sha256)),
+        'Exact completed copy receipt SHA required')
+    context = _original_context(request_path,request_sha256)
+    request,op,journal = context['request'],context['operation_root'],context['journal']
+    if completed_receipt_sha256 is None:
+        _components(request)
+        qualification.require(next_phase(journal) == 'copy-verified' and
+            journal['events'][-1]['phase'] == 'group-drained' and
+            journal['events'][-1]['receipt_sha256'] == request['drain_sha256'],
+            'Copy requires a completed formatter and managed group drain')
+        result = None
+    else:
+        _, result = qualification._read(op/'linux-copy-result.json',completed_receipt_sha256)
+        result = validate_result(result,request,context['linux'],request_sha256)
+        require_current_copy_components(Path(__file__).parent.parent,op,request,result)
+        inputs = result.get('recovery_request_sha256',request_sha256)
+        qualification.require(next_phase(journal) == 'binds-switched' and
+            journal['events'][-1]['phase'] == 'copy-verified' and
+            journal['events'][-1]['inputs_sha256'] == inputs and
+            journal['events'][-1]['receipt_sha256'] == completed_receipt_sha256 and
+            (result['schema'].endswith('.v2') or not os.path.lexists(op/'linux-copy-failed.json')),
+            'Completed copy must match the exact successful journal terminal')
+    return dict(context,copy_result=result)
 
 
 @contextmanager
@@ -319,6 +492,124 @@ def copy_verified(request_path, request_sha256):
                 'error_type':type(error).__name__,'originals_and_partial_copy_retained':True}
             failure_sha = _document(op,'linux-copy-failed.json',failure)
             _, journal_now = qualification._read(context['journal_path'])
+            if journal_now == started:
+                _publish_journal(context['journal_path'],started,append_terminal(started,state,failure_sha))
+            raise
+
+
+def _require_recovery_targets(context, recovery, attempt_root):
+    """Shared read-only preconditions, before CAS and again before start."""
+    require = qualification.require
+    op = context['operation_root']
+    plan = context['plan']
+    index = op.parents[2]/'index/data-volumes'
+    require(type(plan.get('worktree_id')) is str and re.fullmatch('[a-z0-9._-]{1,128}',plan['worktree_id']),
+            'Exact original worktree identity required')
+    for name in (plan['worktree_id']+'.pending.json',plan['worktree_id']+'.json'):
+        require(not os.path.lexists(index/name), 'Pending or registered migration blocks copy recovery')
+    archive = context['target']/'migration'/recovery['volume_id']
+    for path in (op/'linux-copy-result.json',op/'source-manifest-export.json',archive/'source-manifest.json',
+                 archive/('recovery-verification-'+recovery['token']),
+                 attempt_root/'copy-recovery-started.json',
+                 attempt_root/'copy-recovery-failed.json'):
+        require(not os.path.lexists(path), 'Copy recovery artifact exists; reconcile, never replay')
+    # Check every bind event, not only the first one; no partial switch is safe.
+    require(not any(p.name.startswith(('linux-bind-','linux-admission-')) for p in op.iterdir()),
+            'Bind or admission artifacts block copy recovery')
+
+
+def probe_recovery(path, expected_sha256):
+    """Observe preconditions before fresh fences/CAS; grants no copy authority.
+
+    Recovery must repeat its full authentication under fresh native guards.
+    This observation never creates a copied scope or a completed-copy receipt.
+    """
+    require = qualification.require
+    require(os.name == 'posix' and os.geteuid() == 0,'Host root required for copy recovery probe')
+    require(type(expected_sha256) is str and re.fullmatch('[0-9a-f]{64}',expected_sha256),
+            'Exact copy recovery probe request SHA required')
+    _,raw = qualification._read(Path(path),expected_sha256)
+    probe = validate_recovery_probe_request(raw)
+    op = Path(probe['storage_root'])/'migrations/data-volumes'/probe['volume_id']
+    attempt = op/'recovery'/probe['token']
+    require(Path(path) == attempt/'copy-recovery-probe-request.json',
+            'Copy recovery probe request escapes its exact attempt')
+    _components(probe)
+    context = _original_context(op/'linux-copy-request.json',probe['original_copy_request_sha256'])
+    recovery = dict(probe,schema=RECOVERY_SCHEMA)
+    evidence = _recovery_evidence(op,context['request'],recovery,expected_sha256,probe=True)
+    require(context['journal'] == evidence['journal'],'Copy recovery probe selected parent changed')
+    _require_recovery_targets(context,recovery,attempt)
+    return {'schema':'fullmag.data-volume-copy-recovery-probe-result.v1','state':'ready-for-copy-recovery',
+        'volume_id':probe['volume_id'],'token':probe['token'],'request_sha256':expected_sha256,
+        'original_copy_request_sha256':probe['original_copy_request_sha256'],
+        'failed_copy_receipt_sha256':probe['failed_copy_receipt_sha256'],
+        'filesystem_uuid':context['linux']['filesystem_uuid']}
+
+
+def _recovery_context(path, expected_sha256):
+    require = qualification.require
+    require(type(expected_sha256) is str and re.fullmatch('[0-9a-f]{64}',expected_sha256),
+            'Exact copy recovery request SHA required')
+    _,raw = qualification._read(Path(path),expected_sha256)
+    recovery = validate_recovery_request(raw)
+    op = Path(recovery['storage_root'])/'migrations/data-volumes'/recovery['volume_id']
+    require(Path(path) == op/'recovery'/recovery['token']/'copy-recovery-request.json',
+            'Copy recovery request escapes its exact attempt')
+    _components(recovery)
+    context = _original_context(op/'linux-copy-request.json',recovery['original_copy_request_sha256'])
+    evidence = _recovery_evidence(op,context['request'],recovery,expected_sha256)
+    require(context['journal'] == evidence['journal'], 'Copy recovery context changed')
+    _require_recovery_targets(context,recovery,evidence['attempt_root'])
+    return dict(context,recovery=recovery,attempt_root=evidence['attempt_root'])
+
+
+def recover_verified(path, expected_sha256):
+    """Qualify retained artifacts once, without repeating archive/copy/mount."""
+    qualification.require(os.name == 'posix' and os.geteuid() == 0,'Host root required for retained copy recovery')
+    context = _recovery_context(path,expected_sha256)
+    op,request,recovery = context['operation_root'],context['request'],context['recovery']
+    with _operation_lock(op):
+        fresh = _recovery_context(path,expected_sha256)
+        qualification.require(fresh == context,'Copy recovery context changed before its lock')
+        started = append_started(context['journal'],'copy-verified',expected_sha256)
+        _publish_journal(context['journal_path'],context['journal'],started)
+        result_written = False
+        try:
+            _document(context['attempt_root'],'copy-recovery-started.json',
+                {'schema':'fullmag.data-volume-copy-recovery-started.v1','volume_id':request['volume_id'],
+                 'token':recovery['token'],'request_sha256':expected_sha256,
+                 'original_copy_request_sha256':recovery['original_copy_request_sha256']})
+            archive = context['target']/'migration'/request['volume_id']
+            copied = requalify_existing_copy(request['storage_root'],context['roots'],archive/'originals.pax',
+                context['target']/'payload',archive/('recovery-verification-'+recovery['token']))
+            _source_roots(context['linux']); _mounted_root(context['linux'],context['provision'])
+            manifest_sha = _document(archive,'source-manifest.json',copied['source_manifest'])
+            export_sha = _document(op,'source-manifest-export.json',copied['source_manifest'])
+            qualification.require(export_sha == manifest_sha,'Recovered manifest export differs')
+            result = {'schema':'fullmag.data-volume-linux-copy-result.v2','state':'copied-and-verified-not-switched',
+                'volume_id':request['volume_id'],'token':request['token'],
+                'request_sha256':recovery['original_copy_request_sha256'],
+                'filesystem_uuid':context['linux']['filesystem_uuid'],'data_sha256':copied['data_sha256'],
+                'manifest_path':str(archive/'source-manifest.json'),'manifest_sha256':manifest_sha,
+                'archive_path':copied['archive_path'],'archive_sha256':copied['archive_sha256'],
+                'copied_roots':copied['copied_roots'],'namespace_admitted':False,'originals_retired':False,
+                'completion_mode':'requalified-existing-archive-and-payload',
+                'recovery_request_sha256':expected_sha256,'failed_copy_receipt_sha256':recovery['failed_copy_receipt_sha256']}
+            validate_result(result,request,context['linux'],recovery['original_copy_request_sha256'])
+            result_sha = _document(op,'linux-copy-result.json',result); result_written = True
+            _publish_journal(context['journal_path'],started,append_terminal(started,'succeeded',result_sha))
+            return result
+        except BaseException as error:
+            state = ('failed-confirmed' if isinstance(error,Exception) and not result_written and
+                     not os.path.lexists(op/'linux-copy-result.json')
+                     else 'outcome-unknown-resources-retained')
+            failure = {'schema':'fullmag.data-volume-copy-recovery-failure.v1','state':state,
+                'volume_id':request['volume_id'],'token':recovery['token'],'request_sha256':expected_sha256,
+                'original_copy_request_sha256':recovery['original_copy_request_sha256'],
+                'error_type':type(error).__name__,'originals_archive_and_payload_retained':True}
+            failure_sha = _document(context['attempt_root'],'copy-recovery-failed.json',failure)
+            _,journal_now = qualification._read(context['journal_path'])
             if journal_now == started:
                 _publish_journal(context['journal_path'],started,append_terminal(started,state,failure_sha))
             raise

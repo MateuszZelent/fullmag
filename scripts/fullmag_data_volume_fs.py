@@ -8,15 +8,17 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 import hashlib
+import fcntl
 import os
 from pathlib import Path
 import stat
 import subprocess
+import tarfile
 
 try:
-    from .fullmag_data_volume_manifest import inventory_datasets, require_matching_data
+    from .fullmag_data_volume_manifest import inventory_datasets, require_matching_data, _read_xattrs
 except ImportError:
-    from fullmag_data_volume_manifest import inventory_datasets, require_matching_data
+    from fullmag_data_volume_manifest import inventory_datasets, require_matching_data, _read_xattrs
 
 
 COPY_HEADROOM_BYTES = 25 * 1024**3
@@ -176,6 +178,172 @@ def archive_and_extract(storage_root, roots, archive_path, payload_root):
             'data_sha256': before['data_sha256'], 'archive_path': str(archive),
             'archive_sha256': digest.hexdigest(), 'source_manifest': before,
             'copied_roots': {role: str(path) for role, path in copied.items()}}
+
+
+def _archive_members(stream, manifest, relatives):
+    """Validate effective PAX names and hardlink topology before privileged tar."""
+    expected = {}
+    aliases = {}
+    for entry in manifest['entries']:
+        name = relatives[entry['role']] + ('/'+entry['path'] if entry['path'] else '')
+        expected[name] = entry
+        aliases[entry['role']+':'+entry['path']] = name
+    def group(name):
+        entry = expected[name]
+        return aliases[entry['hardlink_to']] if entry.get('hardlink_to') else name
+    seen = {}
+    materialized_groups = set()
+    stream.seek(0)
+    with tarfile.open(fileobj=stream, mode='r:') as archive:
+        for member in archive:
+            name = member.name[:-1] if member.isdir() and member.name.endswith('/') else member.name
+            if (not name or name.startswith('/') or any(p in ('', '.', '..') for p in name.split('/')) or
+                    name not in expected or name in seen or member.sparse is not None or
+                    any(k.startswith('GNU.sparse') for k in member.pax_headers)):
+                raise ValueError('Retained PAX has an unsafe, duplicate or unexpected member')
+            entry = expected[name]
+            if entry['kind'] == 'directory':
+                valid = member.type == tarfile.DIRTYPE
+            elif member.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                valid = member.size == entry['size'] and group(name) not in materialized_groups
+            elif member.type == tarfile.LNKTYPE:
+                target = member.linkname
+                valid = (target in seen and seen[target] in (tarfile.REGTYPE, tarfile.AREGTYPE) and
+                         expected[target]['kind'] == 'file' and group(target) == group(name))
+            else:
+                valid = False
+            if not valid:
+                raise ValueError('Retained PAX member type or hardlink topology differs')
+            seen[name] = member.type
+            if member.type in (tarfile.REGTYPE,tarfile.AREGTYPE):
+                materialized_groups.add(group(name))
+        # GNU tar stops at its first zero header; reject hidden trailing data.
+        stream.seek(archive.offset)
+        remaining = 0
+        for chunk in iter(lambda:stream.read(1024**2), b''):
+            remaining += len(chunk)
+            if any(chunk):
+                raise ValueError('Retained PAX contains data after its terminal header')
+        if remaining < 1024 or remaining % 512:
+            raise ValueError('Retained PAX terminal padding is incomplete')
+    if set(seen) != set(expected):
+        raise ValueError('Retained PAX does not contain the exact two complete datasets')
+    stream.seek(0)
+
+
+@contextmanager
+def _existing_copy_writer(state_root, expected):
+    """Lock an existing inode; never create or replace the copied writer."""
+    store = state_root/'runs/docker-all/session-store'
+    with _directory_fd(store) as parent:
+        descriptor = os.open('WRITER.lock', os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or
+                    before.st_dev != os.fstat(parent).st_dev or
+                    {'mode':stat.S_IMODE(before.st_mode),'uid':before.st_uid,'gid':before.st_gid,
+                     'mtime_ns':before.st_mtime_ns,'xattrs':_read_xattrs(descriptor, 'copied writer')} !=
+                    {k:expected[k] for k in ('mode','uid','gid','mtime_ns','xattrs')}):
+                raise ValueError('Existing copied writer metadata or ACL differs')
+            fcntl.flock(descriptor, fcntl.LOCK_EX|fcntl.LOCK_NB)
+            def check():
+                current = os.stat('WRITER.lock', dir_fd=parent, follow_symlinks=False)
+                if (current.st_dev,current.st_ino) != (before.st_dev,before.st_ino):
+                    raise ValueError('Existing copied writer was replaced')
+                now = os.fstat(descriptor)
+                if ({'mode':stat.S_IMODE(now.st_mode),'uid':now.st_uid,'gid':now.st_gid,
+                     'mtime_ns':now.st_mtime_ns,'xattrs':_read_xattrs(descriptor,'copied writer')} !=
+                        {k:expected[k] for k in ('mode','uid','gid','mtime_ns','xattrs')}):
+                    raise ValueError('Existing copied writer metadata changed')
+                _same_directory(store, parent)
+            check()
+            yield
+            check()
+        finally:
+            os.close(descriptor)
+
+
+def requalify_existing_copy(storage_root, roots, archive_path, payload_root, verification_root):
+    """Prove CURRENT fenced source, retained PAX and payload are identical.
+
+    Only the fresh verification directory and its stderr evidence are written.
+    It is retained on success and failure. No claim about an unrecorded historic
+    pre-failure content hash is made.
+    """
+    storage = _no_links(storage_root); archive = _no_links(archive_path)
+    payload = _no_links(payload_root); verification = _no_links(verification_root)
+    if verification.parent != archive.parent or os.path.lexists(verification):
+        raise ValueError('Recovery verification directory must be new beside retained PAX')
+    if set(roots) != {'state','user_data'}:
+        raise ValueError('Exact two source roots required')
+    relatives = {}
+    for role, root in roots.items():
+        root = _no_links(root)
+        if root == storage or not root.is_relative_to(storage):
+            raise ValueError('Recovery source escapes its exact storage')
+        if archive.is_relative_to(root) or payload.is_relative_to(root):
+            raise ValueError('Retained copy overlaps an original')
+        relatives[role] = root.relative_to(storage).as_posix()
+    before = inventory_datasets(roots)
+    writers = [e for e in before['entries'] if e['role'] == 'state' and
+               e['path'] == 'runs/docker-all/session-store/WRITER.lock' and e['kind'] == 'file']
+    if len(writers) != 1:
+        raise ValueError('Source manifest must pin the existing store writer')
+    copied = {role:payload/relative for role,relative in relatives.items()}
+    with ExitStack() as stack:
+        parent = stack.enter_context(_directory_fd(archive.parent))
+        payload_fd = stack.enter_context(_directory_fd(payload))
+        _require_owned_parent(parent); _require_owned_parent(payload_fd)
+        if os.fstat(parent).st_dev != os.fstat(payload_fd).st_dev:
+            raise ValueError('Retained archive and payload filesystem differs')
+        stack.enter_context(_existing_copy_writer(copied['state'],writers[0]))
+        require_matching_data(before, inventory_datasets(copied))
+        descriptor = os.open(archive.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        stream = stack.enter_context(os.fdopen(descriptor,'rb'))
+        pin = lambda m:(m.st_dev,m.st_ino,m.st_mode,m.st_uid,m.st_gid,m.st_size,m.st_mtime_ns,m.st_ctime_ns)
+        initial = os.fstat(descriptor)
+        if (not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1 or
+                initial.st_dev != os.fstat(parent).st_dev or initial.st_uid != os.geteuid() or
+                stat.S_IMODE(initial.st_mode) & 0o022):
+            raise ValueError('Retained PAX must be a protected single regular file')
+        def archive_hash():
+            stream.seek(0); digest = hashlib.sha256()
+            for chunk in iter(lambda:stream.read(1024**2),b''): digest.update(chunk)
+            if pin(os.fstat(descriptor)) != pin(initial) or pin(os.stat(archive.name,dir_fd=parent,
+                    follow_symlinks=False)) != pin(initial):
+                raise ValueError('Retained PAX changed during recovery')
+            _same_directory(archive.parent,parent)
+            return digest.hexdigest()
+        digest = archive_hash()
+        _archive_members(stream,before,relatives)
+        available = os.fstatvfs(parent)
+        if available.f_bavail*available.f_frsize < before['totals']['logical_bytes']+COPY_HEADROOM_BYTES:
+            raise ValueError('Recovery lacks independent extraction plus 25 GiB campaign headroom')
+        os.mkdir(verification.name,mode=0o700,dir_fd=parent)
+        created = os.stat(verification.name,dir_fd=parent,follow_symlinks=False)
+        verify_fd = stack.enter_context(_directory_fd(verification))
+        opened = os.fstat(verify_fd)
+        if ((opened.st_dev,opened.st_ino) != (created.st_dev,created.st_ino) or
+                opened.st_dev != initial.st_dev or opened.st_uid != os.geteuid() or
+                stat.S_IMODE(opened.st_mode) != 0o700 or os.listdir(verify_fd)):
+            raise ValueError('New recovery verification directory was replaced')
+        stream.seek(0)
+        extract = ['/usr/bin/tar','--acls','--xattrs','--xattrs-include=*','--numeric-owner',
+                   '--same-owner','--same-permissions','--delay-directory-restore','--keep-old-files',
+                   '-x','-f','/proc/self/fd/'+str(descriptor),'-C','/proc/self/fd/'+str(verify_fd)]
+        with open(os.devnull,'wb') as sink:
+            _run_to_file(extract,sink,verification.name+'.extract.stderr',parent_fd=parent,
+                         pass_fds=(descriptor,verify_fd))
+        _same_directory(verification,verify_fd); _same_directory(payload,payload_fd)
+        extracted = {role:verification/relative for role,relative in relatives.items()}
+        require_matching_data(before,inventory_datasets(extracted))
+        require_matching_data(before,inventory_datasets(copied))
+        require_matching_data(before,inventory_datasets(roots))
+        if archive_hash() != digest:
+            raise ValueError('Retained PAX bytes changed during verification')
+    return {'source_manifest':before,'data_sha256':before['data_sha256'],
+            'archive_path':str(archive),'archive_sha256':digest,
+            'copied_roots':{role:str(root) for role,root in copied.items()}}
 
 
 def select_new_empty_device(baseline, observed, capacity_bytes):

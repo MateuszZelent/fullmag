@@ -3,6 +3,7 @@ from contextlib import ExitStack
 import copy
 import hashlib
 import json
+from pathlib import Path
 from unittest import TestCase,main,mock
 
 from scripts import docker_dev_data_volume_copy as copy_parent
@@ -99,8 +100,15 @@ class CompletedCopyLoadTests(TestCase):
             'provision_result_sha256':self.previous['provision_result_sha256'],
             'drain_sha256':sha(encode(self.drain)),'fence_ready_sha256':'f'*64,
             'components':copy_parent._pins(self.case.source,copy_parent.root_copy.COMPONENTS)}
-        self.terminal={'state':'copied-and-verified-not-switched','receipt_sha256':'9'*64,
-            'result':{'request_sha256':sha(encode(self.request))}}
+        target=Path(self.case.linux['mount_root']);archive=target/'migration'/self.case.linux['volume_id']
+        result={'schema':'fullmag.data-volume-linux-copy-result.v1','state':'copied-and-verified-not-switched',
+            'volume_id':self.request['volume_id'],'token':self.request['token'],
+            'request_sha256':sha(encode(self.request)),'filesystem_uuid':self.case.linux['filesystem_uuid'],
+            'data_sha256':'a'*64,'manifest_sha256':'b'*64,'archive_sha256':'c'*64,
+            'manifest_path':str(archive/'source-manifest.json'),'archive_path':str(archive/'originals.pax'),
+            'copied_roots':{k:str(target/'payload'/Path(p['canonical_root']).relative_to(self.request['storage_root']))
+                for k,p in self.case.linux['source_roots'].items()},'namespace_admitted':False,'originals_retired':False}
+        self.terminal={'state':'copied-and-verified-not-switched','receipt_sha256':'9'*64,'result':result}
         self.scope={'context':self.previous,'terminal':self.terminal}
         self.values={'plan.json':self.case.plan,'linux-provision-request.json':self.case.linux,
             'linux-provision-result.json':self.case.provision,'linux-copy-request.json':self.request,
@@ -133,9 +141,11 @@ class CompletedCopyLoadTests(TestCase):
         with mock.patch.object(self.bind,'copy_terminal',return_value=dict(self.terminal,receipt_sha256='0'*64)), \
                 self.assertRaisesRegex(ValueError,'live copy terminal'):
             self.bind._load_completed(object())
-        changed=dict(self.request['components'],**{'fullmag_data_volume.py':'0'*64})
-        with mock.patch.object(self.bind.copy_parent,'_pins',return_value=changed), \
-                self.assertRaisesRegex(ValueError,'component source changed'):
+        original_read=self.bind.root_copy.qualification._read_optional_regular
+        def changed_component(path,*args,**kwargs):
+            return b'changed source' if Path(path).name=='fullmag_data_volume.py' else original_read(path,*args,**kwargs)
+        with mock.patch.object(self.bind.root_copy.qualification,'_read_optional_regular',side_effect=changed_component), \
+                self.assertRaisesRegex(ValueError,'Root copy source changed'):
             self.bind._load_completed(object())
         self.case.sources.assert_not_called();self.case.mount.assert_not_called()
 
