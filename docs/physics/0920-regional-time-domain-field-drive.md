@@ -11,6 +11,9 @@
   `docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`,
   `docs/physics/0900-native-fem-operator-contracts-and-validation.md`, and
   `docs/physics/0950-quasistatic-microwave-antenna-field-basis-and-k-selective-excitation.md`
+- Hand-written masks (`B_ext.Add(mask, f(t))` of mumax3) are a separate source defined in
+  `docs/physics/0922-masks-for-field-excitation.md`; they reuse the stage, energy and output
+  semantics of this page
 
 **Stan odbioru:** opis rozdziela kontrakt docelowy od dowodów wykonania.
 Obecność kodu nie jest kwalifikacją czterech realizacji. Mapa źródeł i rozdział
