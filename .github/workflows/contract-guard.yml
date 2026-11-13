@@ -64,6 +64,7 @@ jobs:
           scripts.test_docker_data_volume_stopped_group scripts.test_docker_data_volume_copy_job
           scripts.test_docker_data_volume_copy_job_contracts scripts.test_docker_dev_data_volume_copy
           scripts.test_docker_data_volume_bind_job scripts.test_docker_dev_data_volume_bind
+          scripts.test_docker_data_volume_relocated
           scripts.test_just_data_volume_shell
           scripts.test_data_volume_stopped_windows_bind
           scripts.test_data_volume_released_state scripts.test_data_volume_copy_fences

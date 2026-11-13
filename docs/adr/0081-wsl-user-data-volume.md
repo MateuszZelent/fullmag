@@ -268,6 +268,28 @@ Terminal bindu jest osobnym dowodem. Istniejący protokół copy-fence nadal
 otrzymuje wyłącznie oryginalny zweryfikowany SHA kopii jako
 `copy_result_sha256`; pole nie zmienia znaczenia na SHA bindu.
 
+Po bindzie `relocated_copied_group` wydaje osobny żywy kontekst OLD/NEW,
+oparty na dokładnym terminalu bindu, pending i oryginalnym zakresie hostlock.
+Zapisany słownik ani funkcja uwierzytelniająca od wywołującego nie zastępują
+rzeczywistej instancji zakresu kopii. Kontekst przypina selector, ścieżkę i
+prefix journalu; dopuszcza wyłącznie poprawną kontynuację `admission-prepared`
+w stanie started/succeeded. Błąd, unknown lub recovery wymagają osobnej
+kwalifikacji. Każde użycie ponawia niezmienne SHA, pending, UUID, inode oraz
+ochronę i FSROOT nowych mountów. Pliki certyfikatu/owner/probe przyszłego
+admission nie są traktowane jako niezmienne dowody starego etapu.
+
+Observer czyta stary store przez zachowane backupy, nadal sprawdzając
+historyczne deklaracje mountów zatrzymanej pary. Inventory obejmuje backupy,
+nowe ścieżki kanoniczne, payload i fizyczne aliasy określone przez maj:min oraz
+FSROOT; nieudowodniona rozłączność nadal blokuje. Copy-fence może podmienić
+wyłącznie readonly `/state` i `/user-data` na uwierzytelnione backupy, z
+zachowaniem oryginalnych IDs oraz dokładnego backendu i obrazu. Named mounty
+ledger/control pozostają bez zmian. Kontekst jest ponawiany przed startem
+helpera i podczas jego obserwacji. Bootstrap helpera wykonuje zweryfikowane
+bajty czterech modułów zamiast lokalnego cache `.pyc`; image-owned kod runtime
+pozostaje częścią przypiętego obrazu. Guard starego store nie zastępuje
+osobnego writer lock nowego store, wymaganego przez etap admission.
+
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,
 kwalifikację zapisu/Zarr i rejestrację pod ciągłą kontrolą. Rzeczywista kopia,

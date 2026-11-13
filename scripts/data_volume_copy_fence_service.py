@@ -128,9 +128,8 @@ def serve(request, reader, output):
     import runtime_service
     require(Path(runtime_service.__file__).resolve() == Path('/opt/fullmag/runtime_service.py'),
             'Native authentication must come from the backend image')
-    # The already imported native module remains image-owned. Migration helpers
-    # must use the verified checkout even if a later image bundles older copies.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    # The bootstrap's verified-bytes finder owns the four migration helpers.
+    # Never reopen the checkout as an import path for unpinned dependencies.
     from data_volume_copy_fences import hold_copy_fences
     from data_volume_released_state import collect_released_state
     from docker_volume_linux_supervision_stop import read

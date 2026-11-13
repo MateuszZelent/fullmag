@@ -122,5 +122,54 @@ class StoppedCopySourceTests(unittest.TestCase):
             self.call()
         self.assertEqual(self.proof.call_count,1)
 
+    def relocated_fixture(self):
+        old={r:p.with_name('.'+p.name+'.retained-original') for r,p in self.roots.items()}
+        payload={r:Path('/mounted-new/payload')/r for r in self.roots}
+        view={'old_roots':old,'canonical_roots':self.roots,
+              'consumer_roots':tuple(old.values())+tuple(self.roots.values())+tuple(payload.values())}
+        return SimpleNamespace(overlaps=mock.Mock(return_value=False)),view
+
+    def test_relocated_view_reads_old_store_but_checks_unchanged_canonical_declarations(self):
+        relocated,view=self.relocated_fixture();actual=copy.deepcopy(self.actuals)
+        with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view) as verify:
+            result=self.call(relocated=relocated)
+            snapshot._original_roots.assert_not_called()
+            snapshot._store_reader.assert_called_once_with(view['old_roots']['state']/'runs/docker-all/session-store')
+            self.assertEqual(verify.call_count,2)
+            self.assertEqual(self.actuals,actual)
+            self.assertEqual(result['actual']['backend'],actual[0])
+
+    def test_relocated_inventory_covers_all_aliases_and_unknown_physical_identity(self):
+        relocated,view=self.relocated_fixture()
+        for path in view['consumer_roots']:
+            self.add_consumer(str(path/'results'))
+            try:
+                with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view), \
+                        self.assertRaisesRegex(ValueError,'dataset-bind-reference'):self.call(relocated=relocated)
+            finally:self.actuals.pop()
+        self.add_consumer('/physically-same-through-another-alias')
+        relocated.overlaps.return_value=True
+        with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view), \
+                self.assertRaisesRegex(ValueError,'dataset-bind-reference'):self.call(relocated=relocated)
+        relocated.overlaps.side_effect=ValueError('unproved filesystem root')
+        with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view), \
+                self.assertRaisesRegex(ValueError,'unproven-bind-identity'):self.call(relocated=relocated)
+
+    def test_saved_relocated_dictionary_cannot_select_old_store(self):
+        with self.patches(),self.assertRaisesRegex(ValueError,'authenticated live relocated'):
+            self.call(relocated={'old_roots':self.roots})
+        self.proof.assert_not_called()
+
+    def test_held_fence_must_use_the_same_relocation_context(self):
+        relocated,view=self.relocated_fixture()
+        fence=SimpleNamespace(control=self.control,operation=self.operation,
+            request={'volume_id':self.plan['volume_id'],'token':self.operation['receipt']['attempt']},
+            identifier='d'*64,check=mock.Mock())
+        with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view), \
+                self.assertRaisesRegex(ValueError,'Foreign live copy fence'):self.call(fence=fence,relocated=relocated)
+        fence.relocated=relocated
+        with self.patches(),mock.patch.object(snapshot,'require_relocated',return_value=view):
+            self.call(fence=fence,relocated=relocated)
+
 
 if __name__=='__main__':unittest.main()

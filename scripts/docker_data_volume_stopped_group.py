@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 from docker_build_control import canonical, docker_capture
+from docker_data_volume_relocated import require_relocated
 from docker_dev_data_volume import _decode, _migration_bind_identity, _runtime_pins
 from docker_volume_accepted_reattach import _control_bytes
 from docker_volume_reconcile import fingerprint
@@ -28,7 +29,7 @@ def _original_roots(plan):
     return roots
 
 
-def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=None):
+def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=None,relocated=None):
     """Require exact stop/native records, unchanged incarnations and consumers."""
     require(type(stop_attempt) is str and re.fullmatch('[0-9a-f]{32}',stop_attempt) and
             type(stop_sha256) is str and re.fullmatch('[0-9a-f]{64}',stop_sha256),'Exact managed stop pins required')
@@ -43,9 +44,14 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
     if fence is not None:
         require(fence.control is control and fence.operation is operation and
             fence.request['volume_id'] == plan['volume_id'] and
-            fence.request['token'] == operation['receipt']['attempt'],'Foreign live copy fence')
+            fence.request['token'] == operation['receipt']['attempt'] and
+            getattr(fence,'relocated',None) is relocated,'Foreign live copy fence')
         fence.check();allowed.add(fence.identifier)
-    roots = _original_roots(plan)
+    if relocated is None:
+        roots = _original_roots(plan);declared_roots=roots;consumer_roots=tuple(roots.values())
+    else:
+        view=require_relocated(relocated,source,plan)
+        roots=view['old_roots'];declared_roots=view['canonical_roots'];consumer_roots=view['consumer_roots']
     ids = docker_capture('ps','--all','--no-trunc','--format','{{.ID}}').stdout.decode().split()
     require(ids and len(ids) == len(set(ids)) and all(re.fullmatch('[0-9a-f]{64}',s) for s in ids),
             'Complete unambiguous container inventory required')
@@ -82,13 +88,14 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
             if mount.get('Type') == 'bind':
                 try:
                     p=physical(mount,a.get('State'))
-                    if p is not None and any(p == r or p in r.parents or r in p.parents for r in roots.values()):
+                    if p is not None and (any(p == r or p in r.parents or r in p.parents for r in consumer_roots) or
+                            (relocated is not None and relocated.overlaps(p))):
                         consumers.append({'id':a['Id'],'reason':'dataset-bind-reference'})
                 except (OSError,ValueError,RuntimeError) as error:
                     consumers.append({'id':a['Id'],'reason':'unproven-bind-identity','error_type':type(error).__name__})
     require(not consumers,'Unqualified source consumers: '+str(consumers))
     mounts={m.get('Destination'):m for m in actual['backend'].get('Mounts',[])}
-    for target,path in [('/state',roots['state']),('/user-data',roots['user_data']),('/opt/fullmag/source',Path(source))]:
+    for target,path in [('/state',declared_roots['state']),('/user-data',declared_roots['user_data']),('/opt/fullmag/source',Path(source))]:
         m=mounts.get(target,{})
         require(m.get('Type') == 'bind' and m.get('RW') is (target != '/opt/fullmag/source') and
             _migration_bind_identity(m.get('Source'))[0] == path,'Stopped source bind differs: '+target)
@@ -105,5 +112,6 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
     require(type(process_sha) is str and re.fullmatch('[0-9a-f]{64}',process_sha),'Exact terminal process SHA required')
     control._assert_live_operation_helper(operation)
     if fence is not None:fence.check()
+    if relocated is not None:require_relocated(relocated,source,plan)
     return {'actual':actual,'source_proof':proof,'process_receipt_sha256':process_sha,
             'stopped_windows_bind_proofs':windows_proofs,'consumers':[]}

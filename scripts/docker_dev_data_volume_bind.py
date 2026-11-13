@@ -136,3 +136,10 @@ def bind_copied_group(copied):
             namespace_admitted=False,data_migrated=False,originals_retired=False)
     copy_parent.require_live_copied_group(copied)
     return {'context':context,'terminal':terminal}
+
+
+def relocated_copied_group(copied,bound):
+    """Authenticate separate OLD/NEW views while retaining this copy host scope."""
+    copy_parent.require_live_copied_group(copied)
+    import docker_data_volume_relocated as relocated
+    return relocated.from_bound(copied,bound)
