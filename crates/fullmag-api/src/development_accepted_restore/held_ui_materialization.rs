@@ -1306,6 +1306,112 @@ fn validate_restore_environment_mode() -> Result<()> {
     Ok(())
 }
 
+fn build_held_snapshot(
+    workspace_root: &Path,
+    authority: &ValidatedHeldAuthority,
+) -> Result<crate::types::SessionStateResponse> {
+    let loaded = &authority.loaded;
+    build_held_snapshot_projection(
+        workspace_root,
+        &authority.input,
+        &authority.input_sha256,
+        &loaded.run_id,
+        &loaded.specification,
+        &loaded.scene,
+        &loaded.receipt,
+        loaded.total_steps,
+    )
+}
+
+fn build_held_snapshot_projection(
+    workspace_root: &Path,
+    input: &Input,
+    input_sha256: &str,
+    run_id: &RunId,
+    specification: &RunSpecification,
+    scene: &SceneDocument,
+    receipt: &fullmag_session::LiveComputeRequestReceipt,
+    total_steps: usize,
+) -> Result<crate::types::SessionStateResponse> {
+    let accepted = &input.accepted;
+    if run_id.as_str() != accepted.run_id.as_str()
+        || specification.run_id.as_str() != run_id.as_str()
+        || specification.snapshot.project_id.as_str() != accepted.project_id.as_str()
+        || scene.revision != accepted.scene_revision
+    {
+        bail!("held UI snapshot source differs from its accepted run, project, or scene pins");
+    }
+    let live = specification.parameters.pointer("/live_workspace")
+        .context("held UI snapshot RunIntent has no live workspace")?;
+    let command = live.get("command")
+        .context("held UI snapshot RunIntent has no original command")?;
+    let stored_receipt = live.get("request_receipt")
+        .context("held UI snapshot RunIntent has no original request receipt")?;
+    let receipt_value = serde_json::to_value(receipt)?;
+    if live.get("command_id").and_then(Value::as_str) != Some(accepted.command_id.as_str())
+        || command.get("kind").and_then(Value::as_str) != Some(accepted.command_kind.as_str())
+        || command.get("client_intent_id").and_then(Value::as_str) != Some(accepted.client_intent_id.as_str())
+        || receipt.command_id.as_str() != accepted.command_id.as_str()
+        || receipt.request_id.as_deref() != Some(accepted.request_id.as_str())
+        || receipt.request_sha256.as_str() != accepted.request_sha256.as_str()
+        || receipt.key_sha256.as_str() != accepted.request_key_sha256.as_str()
+        || receipt.command_kind.as_deref() != Some(accepted.command_kind.as_str())
+        || receipt.client_intent_id.as_deref() != Some(accepted.client_intent_id.as_str())
+        || receipt.requested_target.as_ref() != command.get("target")
+        || stored_receipt != &receipt_value
+    {
+        bail!("held UI snapshot command or request receipt differs from its accepted pins");
+    }
+
+    let accepted_plan_metadata = json!({
+        "schema": "fullmag.held-ui-materialization-plan.v1",
+        "run_id": accepted.run_id.as_str(),
+        "project_id": accepted.project_id.as_str(),
+        "session_id": accepted.session_id.as_str(),
+        "session_epoch": accepted.session_epoch,
+        "session_created_at_unix_ms": accepted.session_created_at_unix_ms,
+        "scene_revision": accepted.scene_revision,
+        "run_intent_sha256": accepted.run_intent_sha256.as_str(),
+        "run_intent_payload_sha256": accepted.run_intent_payload_sha256.as_str(),
+        "definition_sha256": accepted.definition_sha256.as_str(),
+        "study_sha256": accepted.study_sha256.as_str(),
+        "execution_input_sha256": accepted.execution_input_sha256.as_str(),
+        "command_id": accepted.command_id.as_str(),
+        "command": command,
+        "request_id": accepted.request_id.as_str(),
+        "request_sha256": accepted.request_sha256.as_str(),
+        "request_key_sha256": accepted.request_key_sha256.as_str(),
+        "request_receipt_sha256": accepted.request_receipt_sha256.as_str(),
+        "request_receipt": receipt_value,
+    });
+    let authority_metadata = json!({
+        "held_ui_materialization": {
+            "schema": INPUT_SCHEMA,
+            "state": "pending_materialization",
+            "launch_id": input.launch_id.as_str(),
+            "maintenance_request_id": input.plan.maintenance_request_id.as_str(),
+            "plan_sha256": input.plan.plan_sha256.as_str(),
+            "input_sha256": input_sha256,
+            "run_id": accepted.run_id.as_str(),
+            "command_id": accepted.command_id.as_str(),
+            "request_receipt_sha256": accepted.request_receipt_sha256.as_str(),
+        }
+    });
+    let mut snapshot = super::build_accepted_snapshot(workspace_root, AcceptedSnapshotProjection {
+        run_id,
+        specification,
+        scene,
+        logical_session_id: &accepted.session_id,
+        total_steps,
+        terminal_outcome: None,
+        preparation_failure: None,
+        authority_metadata,
+        accepted_plan_metadata,
+    })?;
+    snapshot.session.started_at_unix_ms = u128::from(accepted.session_created_at_unix_ms);
+    Ok(snapshot)
+}
+
 pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), String> {
     match std::env::var_os(ENV) {
         Some(value) if value == "1" => {}
@@ -1328,8 +1434,23 @@ pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         validate_and_load_held_authority(input, &runtime_control_root, &build_control_root, &store_root)
     }).await.map_err(|error| format!("held UI authority validation task failed: {error}"))?
         .map_err(|error| format!("held UI authority validation failed: {error:#}"))?;
-    drop(validation);
-    Err("held UI authority validated; materialization is not installed yet".into())
+    let _transition = state.current_live_session_transition.lock().await;
+    if state.current_live_state.read().await.is_some()
+        || state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire) != 0 {
+        return Err("held UI materialization requires a fresh API workspace".into());
+    }
+    let snapshot = build_held_snapshot(&state.current_workspace_root, &validation)
+        .map_err(|error| format!("held UI snapshot projection failed: {error:#}"))?;
+    {
+        let mut current = state.current_live_state.write().await;
+        state.current_live_session_epoch.store(
+            validation.input.accepted.session_epoch,
+            std::sync::atomic::Ordering::Release,
+        );
+        *current = Some(snapshot);
+    }
+    drop(_transition);
+    Err("held UI snapshot is hydrated in memory; durable catalog, frontier, and start release remain fail-closed".into())
 }
 
 #[cfg(test)]
@@ -1353,7 +1474,7 @@ mod tests {
                 run_id: "run-live-6b6552a649f3cd4a87309ab4b48a1f0c83c0a884636a180dea580f83e0bf8cd0".into(),
                 run_intent_payload_sha256: "1".repeat(64), run_intent_sha256: "2".repeat(64),
                 scene_revision: 2, session_epoch: 1, session_created_at_unix_ms: 1794582150656,
-                session_id: "session-live-4100b4f4843786fb095305286d66ea1d5b3cf4f23d17abc62e384f6cf7c303e1".into(),
+                session_id: "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00".into(),
                 study_sha256: "3".repeat(64),
             },
             launch_id: "00000000-0000-4000-8000-000000000000".into(),
@@ -1513,5 +1634,143 @@ mod tests {
         let mut value = serde_json::to_value(fixture()).unwrap();
         value.as_object_mut().unwrap().remove("target_runtime");
         assert!(serde_json::from_value::<Input>(value).is_err());
+    }
+
+    #[test]
+    fn held_snapshot_preserves_original_scene_session_and_pending_command() {
+        use fullmag_application::{
+            ProjectSnapshot, RequestedExecution, RequestedResourceBudget, StudyId, StudyReference,
+        };
+
+        let input = fixture();
+        let accepted = &input.accepted;
+        let run_id = RunId::parse(accepted.run_id.clone()).unwrap();
+        let project_id = ProjectId::parse(accepted.project_id.clone()).unwrap();
+        let command = json!({
+            "kind": accepted.command_kind,
+            "client_intent_id": accepted.client_intent_id,
+            "target": {"kind": "stage_id", "stage_id": "relax-a"},
+        });
+        let receipt = fullmag_session::LiveComputeRequestReceipt {
+            key_sha256: accepted.request_key_sha256.clone(),
+            request_sha256: accepted.request_sha256.clone(),
+            command_id: accepted.command_id.clone(),
+            request_id: Some(accepted.request_id.clone()),
+            command_kind: Some(accepted.command_kind.clone()),
+            client_intent_id: Some(accepted.client_intent_id.clone()),
+            requested_target: command.get("target").cloned(),
+        };
+        let mut specification = RunSpecification::new(
+            ProjectSnapshot {
+                project_id,
+                definition_revision: 4,
+                definition_sha256: accepted.definition_sha256.clone(),
+            },
+            StudyReference {
+                study_id: StudyId::parse("study-held-ui").unwrap(),
+                plan_version: "study_plan.v1".into(),
+                plan_sha256: accepted.study_sha256.clone(),
+            },
+            accepted.study_sha256.clone(),
+            json!({
+                "live_workspace": {
+                    "command_id": accepted.command_id,
+                    "command": command,
+                    "request_receipt": receipt,
+                }
+            }),
+            RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        );
+        specification.run_id = run_id.clone();
+        let command_receipt = fullmag_session::LiveComputeRequestReceipt {
+            key_sha256: accepted.request_key_sha256.clone(),
+            request_sha256: accepted.request_sha256.clone(),
+            command_id: accepted.command_id.clone(),
+            request_id: Some(accepted.request_id.clone()),
+            command_kind: Some(accepted.command_kind.clone()),
+            client_intent_id: Some(accepted.client_intent_id.clone()),
+            requested_target: Some(json!({"kind": "stage_id", "stage_id": "relax-a"})),
+        };
+        let mut scene = SceneDocument::default();
+        scene.revision = accepted.scene_revision;
+        scene.scene.name = "held-ui-authored-study".into();
+        scene.materials.push(fullmag_authoring::SceneMaterialAsset {
+            id: "CoFeB".into(),
+            name: "CoFeB".into(),
+            properties: fullmag_authoring::ScriptBuilderMaterialState {
+                ms: Some(600_000.0),
+                aex: Some(1.0e-11),
+                alpha: 0.5,
+                dind: None,
+                dbulk: None,
+            },
+            references: vec![],
+        });
+        scene.study.stages = ["relax-a", "relax-b", "relax-c"]
+            .into_iter()
+            .map(|id| fullmag_authoring::SceneStudyStageState {
+                kind: "relax".into(),
+                entrypoint_kind: "relax".into(),
+                extra: std::collections::BTreeMap::from([("id".into(), json!(id))]),
+                ..Default::default()
+            })
+            .collect();
+        let workspace = tempfile::tempdir().unwrap();
+        let snapshot = build_held_snapshot_projection(
+            workspace.path(),
+            &input,
+            &"a".repeat(64),
+            &run_id,
+            &specification,
+            &scene,
+            &command_receipt,
+            1,
+        ).unwrap();
+
+        assert_eq!(snapshot.session.session_id, accepted.session_id);
+        assert_eq!(snapshot.session.started_at_unix_ms, u128::from(accepted.session_created_at_unix_ms));
+        assert_eq!(accepted.session_epoch, 1);
+        assert_eq!(accepted.session_created_at_unix_ms, 1_794_582_150_656);
+        assert_eq!(snapshot.session.run_id, accepted.run_id);
+        assert_eq!(snapshot.session.status, "awaiting_command");
+        assert_eq!(snapshot.run.as_ref().unwrap().run_id, accepted.run_id);
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "waiting_for_compute");
+        assert_eq!(snapshot.run.as_ref().unwrap().total_steps, 1);
+        assert_eq!(snapshot.scene_document.as_ref().unwrap().study.stages.len(), 3);
+        let edited_material = &snapshot.scene_document.as_ref().unwrap().materials[0].properties;
+        assert_eq!(edited_material.ms, Some(600_000.0));
+        assert_eq!(edited_material.aex, Some(1.0e-11));
+        assert_eq!(edited_material.alpha, 0.5);
+        assert_eq!(snapshot.scene_document.as_ref(), Some(&scene));
+        assert_eq!(snapshot.stage_execution, None);
+        assert_eq!(
+            snapshot.scene_document.as_ref().unwrap().study.stages
+                .iter().map(|stage| stage.extra["id"].as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["relax-a", "relax-b", "relax-c"],
+        );
+        let plan = &snapshot.session.plan_summary["accepted_run"];
+        assert_eq!(plan["run_id"], accepted.run_id);
+        assert_eq!(plan["command_id"], accepted.command_id);
+        assert_eq!(plan["request_receipt_sha256"], accepted.request_receipt_sha256);
+        assert_eq!(plan["session_epoch"], 1);
+        assert_eq!(plan["session_created_at_unix_ms"], 1_794_582_150_656u64);
+        assert_eq!(plan["request_receipt"], serde_json::to_value(&command_receipt).unwrap());
+        assert_eq!(plan["command"]["target"]["kind"], "stage_id");
+        assert_eq!(plan["command"]["target"]["stage_id"], "relax-a");
+        let marker = serde_json::to_value(snapshot.metadata.as_ref().unwrap()).unwrap();
+        assert_eq!(marker["held_ui_materialization"]["state"], "pending_materialization");
+        assert!(marker.get("startup_provenance").is_none());
+        assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 0);
     }
 }
