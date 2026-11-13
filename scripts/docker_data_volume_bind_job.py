@@ -23,6 +23,7 @@ try:
     from . import docker_data_volume_root_bootstrap as root_bootstrap
     from . import docker_data_volume_copy_job as copy_job
     from . import fullmag_data_volume_pending as pending
+    from . import fullmag_data_volume_bind as bind_result
     from . import linux_data_volume_bind as bind_stage
     from . import linux_data_volume_copy as copy_stage
     from .fullmag_data_volume_journal import next_phase
@@ -30,6 +31,7 @@ except ImportError:
     import docker_data_volume_root_bootstrap as root_bootstrap
     import docker_data_volume_copy_job as copy_job
     import fullmag_data_volume_pending as pending
+    import fullmag_data_volume_bind as bind_result
     import linux_data_volume_bind as bind_stage
     import linux_data_volume_copy as copy_stage
     from fullmag_data_volume_journal import next_phase
@@ -166,48 +168,11 @@ def _verified_copy_inputs(operation_root, request, request_sha256):
 
 
 def _positive_identity(value, label):
-    qualification.require(type(value) is dict and set(value) == {"device", "inode"} and
-        all(type(item) is int and item > 0 for item in value.values()),
-        "Exact positive " + label + " identity required")
+    return bind_result._positive_identity(value, label)
 
 
 def _validate_switch(switch, request, linux, copy_result):
-    require = qualification.require
-    root_keys = {"role", "canonical_root", "backup_root", "copied_root", "original_identity",
-                 "underlay_identity", "bound_identity", "mount"}
-    require(type(switch) is dict and set(switch) == {
-        "schema", "state", "volume_id", "filesystem_uuid", "data_sha256", "roots",
-        "namespace_admitted", "originals_retired",
-    } and switch["schema"] == "fullmag.data-volume-bind-result.v1" and
-        switch["state"] == "binds-switched-not-admitted" and
-        switch["volume_id"] == request["volume_id"] and
-        switch["filesystem_uuid"] == linux["filesystem_uuid"] and
-        switch["data_sha256"] == copy_result["data_sha256"] and
-        switch["namespace_admitted"] is False and switch["originals_retired"] is False and
-        type(switch["roots"]) is dict and set(switch["roots"]) == {"state", "user_data"},
-        "Nested root bind result differs from the verified copy")
-    for role, source in linux["source_roots"].items():
-        row = switch["roots"][role]
-        canonical = Path(source["canonical_root"])
-        backup = canonical.with_name("." + canonical.name + ".fullmag-before-" + request["volume_id"])
-        require(type(row) is dict and set(row) == root_keys and row["role"] == role and
-            row["canonical_root"] == str(canonical) and row["backup_root"] == str(backup) and
-            row["copied_root"] == copy_result["copied_roots"][role] and
-            row["original_identity"] == {key: source[key] for key in ("device", "inode")},
-            "Nested root bind path or original identity differs: " + role)
-        _positive_identity(row["underlay_identity"], role + " underlay")
-        _positive_identity(row["bound_identity"], role + " bound root")
-        require(row["underlay_identity"]["device"] == source["device"] and
-            row["bound_identity"]["device"] != source["device"],
-            "Nested bind inode identities cross the wrong filesystems: " + role)
-        mount = row["mount"]
-        require(type(mount) is dict and set(mount) == {"target", "fstype", "uuid", "options", "propagation"} and
-            mount["target"] == str(canonical) and mount["fstype"] == "ext4" and
-            mount["uuid"] == linux["filesystem_uuid"] and
-            type(mount["options"]) is str and
-            {"rw", "nodev", "nosuid"} <= set(mount["options"].split(",")) and
-            mount["propagation"] == "private",
-            "Nested canonical bind mount identity or protection differs: " + role)
+    return bind_result.validate_switch_result(switch, request, linux, copy_result)
 
 
 def validate_terminal(operation_root, request, request_sha256, exit_code):

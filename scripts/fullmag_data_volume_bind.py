@@ -35,6 +35,57 @@ def _identity(metadata):
     return {'device':metadata.st_dev,'inode':metadata.st_ino}
 
 
+def _positive_identity(value, label):
+    qualification.require(type(value) is dict and set(value) == {"device", "inode"} and
+        all(type(item) is int and item > 0 for item in value.values()),
+        "Exact positive " + label + " identity required")
+
+
+def validate_switch_result(switch, request, linux, copy_result):
+    """Validate the closed nested switch result against authenticated input views.
+
+    This pure check deliberately performs no host observations and grants no
+    admission authority; callers must authenticate the inputs and separately
+    establish the live mount and lifecycle guards.
+    """
+    require = qualification.require
+    root_keys = {"role", "canonical_root", "backup_root", "copied_root", "original_identity",
+                 "underlay_identity", "bound_identity", "mount"}
+    require(type(switch) is dict and set(switch) == {
+        "schema", "state", "volume_id", "filesystem_uuid", "data_sha256", "roots",
+        "namespace_admitted", "originals_retired",
+    } and switch["schema"] == "fullmag.data-volume-bind-result.v1" and
+        switch["state"] == "binds-switched-not-admitted" and
+        switch["volume_id"] == request["volume_id"] and
+        switch["filesystem_uuid"] == linux["filesystem_uuid"] and
+        switch["data_sha256"] == copy_result["data_sha256"] and
+        switch["namespace_admitted"] is False and switch["originals_retired"] is False and
+        type(switch["roots"]) is dict and set(switch["roots"]) == {"state", "user_data"},
+        "Nested root bind result differs from the verified copy")
+    for role, source in linux["source_roots"].items():
+        row = switch["roots"][role]
+        canonical = Path(source["canonical_root"])
+        backup = canonical.with_name("." + canonical.name + ".fullmag-before-" + request["volume_id"])
+        require(type(row) is dict and set(row) == root_keys and row["role"] == role and
+            row["canonical_root"] == str(canonical) and row["backup_root"] == str(backup) and
+            row["copied_root"] == copy_result["copied_roots"][role] and
+            row["original_identity"] == {key: source[key] for key in ("device", "inode")},
+            "Nested root bind path or original identity differs: " + role)
+        _positive_identity(row["underlay_identity"], role + " underlay")
+        _positive_identity(row["bound_identity"], role + " bound root")
+        require(row["underlay_identity"]["device"] == source["device"] and
+            row["bound_identity"]["device"] != source["device"],
+            "Nested bind inode identities cross the wrong filesystems: " + role)
+        mount = row["mount"]
+        require(type(mount) is dict and set(mount) == {"target", "fstype", "uuid", "options", "propagation"} and
+            mount["target"] == str(canonical) and mount["fstype"] == "ext4" and
+            mount["uuid"] == linux["filesystem_uuid"] and
+            type(mount["options"]) is str and
+            {"rw", "nodev", "nosuid"} <= set(mount["options"].split(",")) and
+            mount["propagation"] == "private",
+            "Nested canonical bind mount identity or protection differs: " + role)
+
+
 def _scope(request):
     """Validate the closed scope before any filesystem mutation."""
     require=qualification.require

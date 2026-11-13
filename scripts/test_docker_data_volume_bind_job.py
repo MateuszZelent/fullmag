@@ -636,10 +636,33 @@ class RootBindTerminalContracts(unittest.TestCase):
     def test_wrong_nested_scope_flags_or_mount_propagation_are_rejected(self):
         mutations = (
             ("result admission", lambda result: result.update(namespace_admitted=True)),
+            ("result retirement", lambda result: result.update(originals_retired=True)),
             ("copy receipt", lambda result: result.update(copy_receipt_sha256="e" * 64)),
+            ("switch extra key", lambda result: result["switch"].update(extra=True)),
+            ("switch volume", lambda result: result["switch"].update(volume_id="e" * 32)),
+            ("switch UUID", lambda result: result["switch"].update(filesystem_uuid="e" * 36)),
             ("backup path", lambda result: result["switch"]["roots"]["state"].update(backup_root="/foreign")),
+            ("canonical path", lambda result: result["switch"]["roots"]["state"].update(
+                canonical_root="/foreign/state"
+            )),
+            ("nested extra key", lambda result: result["switch"]["roots"]["state"].update(extra=True)),
+            ("original identity", lambda result: result["switch"]["roots"]["state"].update(
+                original_identity={"device": 101, "inode": 999}
+            )),
+            ("underlay filesystem", lambda result: result["switch"]["roots"]["state"].update(
+                underlay_identity={"device": 999, "inode": 301}
+            )),
+            ("bound filesystem", lambda result: result["switch"]["roots"]["state"].update(
+                bound_identity={"device": 101, "inode": 601}
+            )),
+            ("wrong mount UUID", lambda result: result["switch"]["roots"]["state"]["mount"].update(
+                uuid="11111111-1111-4111-8111-111111111111"
+            )),
             ("shared bind", lambda result: result["switch"]["roots"]["user_data"]["mount"].update(
                 propagation="shared"
+            )),
+            ("missing protected mount option", lambda result: result["switch"]["roots"]["state"]["mount"].update(
+                options="nodev,nosuid"
             )),
         )
         for label, mutate in mutations:

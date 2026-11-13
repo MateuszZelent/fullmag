@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from unittest.mock import Mock, patch
@@ -416,6 +417,121 @@ class DataVolumeBindTests(unittest.TestCase):
 
         self.assert_first_root_retained(fixture, events, real_rename, bind_mount, make_private)
         bind_mount.assert_not_called()
+
+
+class BindResultValidationTests(unittest.TestCase):
+    def scenario(self):
+        volume_id = "1" * 32
+        filesystem_uuid = "11111111-2222-4333-8444-555555555555"
+        request = {"volume_id": volume_id}
+        linux = {
+            "filesystem_uuid": filesystem_uuid,
+            "source_roots": {
+                "state": {
+                    "canonical_root": "/srv/fullmag/storage/runs/docker-all/session-store",
+                    "device": 101,
+                    "inode": 201,
+                },
+                "user_data": {
+                    "canonical_root": "/srv/fullmag/storage/user-data/worktree-a",
+                    "device": 101,
+                    "inode": 202,
+                },
+            },
+        }
+        copy_result = {
+            "data_sha256": "a" * 64,
+            "copied_roots": {
+                "state": "/mnt/fullmag-new/payload/runs/docker-all/session-store",
+                "user_data": "/mnt/fullmag-new/payload/user-data/worktree-a",
+            },
+        }
+        roots = {}
+        for role, source in linux["source_roots"].items():
+            canonical = Path(source["canonical_root"])
+            roots[role] = {
+                "role": role,
+                "canonical_root": str(canonical),
+                "backup_root": str(canonical.with_name(
+                    "." + canonical.name + ".fullmag-before-" + volume_id
+                )),
+                "copied_root": copy_result["copied_roots"][role],
+                "original_identity": {key: source[key] for key in ("device", "inode")},
+                "underlay_identity": {"device": source["device"], "inode": 300 + len(roots)},
+                "bound_identity": {"device": 501 + len(roots), "inode": 400 + len(roots)},
+                "mount": {
+                    "target": str(canonical),
+                    "fstype": "ext4",
+                    "uuid": filesystem_uuid,
+                    "options": "rw,nodev,nosuid,noatime",
+                    "propagation": "private",
+                },
+            }
+        switch = {
+            "schema": "fullmag.data-volume-bind-result.v1",
+            "state": "binds-switched-not-admitted",
+            "volume_id": volume_id,
+            "filesystem_uuid": filesystem_uuid,
+            "data_sha256": copy_result["data_sha256"],
+            "roots": roots,
+            "namespace_admitted": False,
+            "originals_retired": False,
+        }
+        return request, linux, copy_result, switch
+
+    def test_pure_validator_accepts_exact_switch_without_mutating_inputs(self):
+        request, linux, copy_result, switch = self.scenario()
+        before = copy.deepcopy((request, linux, copy_result, switch))
+
+        result = bind.validate_switch_result(switch, request, linux, copy_result)
+
+        self.assertIsNone(result)
+        self.assertEqual((request, linux, copy_result, switch), before)
+
+    def test_pure_validator_rejects_scope_identity_and_mount_drift(self):
+        mutations = (
+            ("closed top-level keys", lambda switch, _request, _linux: switch.update(extra=True)),
+            ("volume identity", lambda switch, _request, _linux: switch.update(volume_id="e" * 32)),
+            ("filesystem UUID", lambda switch, _request, _linux: switch.update(filesystem_uuid="e" * 36)),
+            ("canonical path", lambda switch, _request, _linux: switch["roots"]["state"].update(
+                canonical_root="/srv/foreign/state"
+            )),
+            ("root closed keys", lambda switch, _request, _linux: switch["roots"]["state"].update(extra=True)),
+            ("underlay device", lambda switch, _request, _linux: switch["roots"]["state"].update(
+                underlay_identity={"device": 999, "inode": 301}
+            )),
+            ("bound device", lambda switch, _request, _linux: switch["roots"]["state"].update(
+                bound_identity={"device": 101, "inode": 401}
+            )),
+            ("mount UUID", lambda switch, _request, _linux: switch["roots"]["state"]["mount"].update(
+                uuid="22222222-2222-4222-8222-222222222222"
+            )),
+            ("shared propagation", lambda switch, _request, _linux: switch["roots"]["state"]["mount"].update(
+                propagation="shared"
+            )),
+            ("authority flag", lambda switch, _request, _linux: switch.update(namespace_admitted=True)),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                request, linux, copy_result, switch = self.scenario()
+                mutate(switch, request, linux)
+                with self.assertRaises(ValueError):
+                    bind.validate_switch_result(switch, request, linux, copy_result)
+
+    def test_pure_module_import_does_not_load_host_bind_job(self):
+        scripts = str(Path(__file__).resolve().parent)
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "import fullmag_data_volume_bind; "
+            "assert callable(fullmag_data_volume_bind.validate_switch_result); "
+            "assert 'docker_data_volume_bind_job' not in sys.modules"
+        )
+        subprocess.run(
+            [sys.executable, "-B", "-I", "-c", code, scripts],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
 if __name__ == "__main__":
