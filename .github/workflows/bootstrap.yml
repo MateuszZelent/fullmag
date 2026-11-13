@@ -74,17 +74,17 @@ jobs:
           print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
           PY
 
-      - name: Apply exact artifact RED source snapshot
+      - name: Apply exact artifact GREEN source snapshot
         run: |
           python -B - <<'PYCI'
           import gzip,hashlib,io,tarfile
           from pathlib import Path
           packed=Path('.github/antenna-retained-dtq/task-1-source.tar.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == 'e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c'
+          assert hashlib.sha256(packed).hexdigest() == '34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad'
           allowed=('crates/fullmag-antenna-artifacts/','crates/fullmag-ir/','crates/fullmag-quantities/')
           with tarfile.open(fileobj=io.BytesIO(gzip.decompress(packed)),mode='r:') as archive:
               members=archive.getmembers()
-              assert len(members)==117
+              assert len(members)==121
               for entry in members:
                   name=entry.name
                   assert entry.isfile() and not name.startswith('/') and '..' not in Path(name).parts
@@ -93,16 +93,16 @@ jobs:
                   target=Path(name)
                   target.parent.mkdir(parents=True,exist_ok=True)
                   target.write_bytes(data)
-          print('Exact Task 1 RED source overlay: e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c')
+          print('Exact Task 1 GREEN source overlay: 34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad')
           PYCI
       - name: Run actual retained-current artifact regressions
         run: |
           set -o pipefail
-          cargo test --locked -p fullmag-antenna-artifacts --lib retained_current:: -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
+          cargo test --locked -p fullmag-antenna-artifacts --lib -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
       - name: Preserve artifact contract log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: antenna-retained-dtq-task1-red
+          name: antenna-retained-dtq-task1-green
           path: antenna-retained-dtq-artifact.log
           if-no-files-found: warn
