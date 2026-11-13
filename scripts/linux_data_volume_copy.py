@@ -28,6 +28,7 @@ from linux_data_volume_format import _document, _publish_journal
 SCHEMA = 'fullmag.data-volume-linux-copy-request.v1'
 COMPONENTS = ('linux_data_volume_copy.py', 'fullmag_data_volume_fs.py',
               'fullmag_data_volume_manifest.py', 'fullmag_data_volume_guard.py',
+              'fullmag_data_volume.py',
               'fullmag_data_volume_journal.py', 'fullmag_data_volume_linux_request.py',
               'linux_data_volume_provision.py', 'linux_data_volume_format.py',
               'fullmag_data_volume_runtime_binding.py')
@@ -125,11 +126,41 @@ def validate_held_fence(held,token,volume_id,process_receipt_sha256):
         len({(p['device'],p['inode']) for p in locks}) == 5, 'All five distinct copy locks must be pinned')
 
 
-def load_context(request_path, request_sha256):
-    """Authenticate existing inputs without creating an archive or directory."""
+def validate_result(result,request,linux,request_sha256):
+    """Authenticate one completed copy without granting switch authority."""
+    require=qualification.require
+    require(type(result) is dict and set(result) == {'schema','state','volume_id','token','request_sha256',
+        'filesystem_uuid','data_sha256','manifest_path','manifest_sha256','archive_path','archive_sha256',
+        'copied_roots','namespace_admitted','originals_retired'} and
+        result['schema'] == 'fullmag.data-volume-linux-copy-result.v1' and
+        result['state'] == 'copied-and-verified-not-switched' and result['volume_id'] == request['volume_id'] and
+        result['token'] == request['token'] and result['request_sha256'] == request_sha256 and
+        result['namespace_admitted'] is False and result['originals_retired'] is False,
+        'Root copy success scope differs')
+    target=Path(linux['mount_root']);archive=target/'migration'/request['volume_id']
+    copies={role:str(target/'payload'/Path(pin['canonical_root']).relative_to(linux['storage_root']))
+            for role,pin in linux['source_roots'].items()}
+    require(result['filesystem_uuid'] == linux['filesystem_uuid'] and
+        result['manifest_path'] == str(archive/'source-manifest.json') and
+        result['archive_path'] == str(archive/'originals.pax') and result['copied_roots'] == copies and
+        all(type(result[k]) is str and re.fullmatch('[0-9a-f]{64}',result[k])
+            for k in ('data_sha256','manifest_sha256','archive_sha256')),
+        'Root copy terminal paths or content pins differ')
+    return result
+
+
+def load_context(request_path, request_sha256, *, completed_receipt_sha256=None):
+    """Authenticate inputs or an explicit completed copy, without mutation.
+
+    The completed view cannot re-enter copy_verified: its journal must already
+    have advanced. It only supplies the authenticated inputs for a later stage.
+    """
     qualification.require(os.name == 'posix' and os.geteuid() == 0, 'Host root required for metadata-preserving copy')
     qualification.require(type(request_sha256) is str and re.fullmatch('[0-9a-f]{64}', request_sha256),
                           'Exact root copy request SHA required')
+    qualification.require(completed_receipt_sha256 is None or
+        (type(completed_receipt_sha256) is str and re.fullmatch('[0-9a-f]{64}',completed_receipt_sha256)),
+        'Exact completed copy receipt SHA required')
     _, raw_request = qualification._read(Path(request_path), request_sha256)
     request = validate_request(raw_request)
     _components(request)
@@ -168,16 +199,33 @@ def load_context(request_path, request_sha256):
     validate_held_fence(held,request['token'],request['volume_id'],drain['process_receipt_sha256'])
     journal_path, journal = qualification._selected_journal(op)
     qualification.require(journal['volume_id'] == request['volume_id'] and
-        journal['request_sha256'] == qualification.digest(plan_raw) and next_phase(journal) == 'copy-verified' and
-        journal['events'][-1]['phase'] == 'group-drained' and journal['events'][-1]['receipt_sha256'] == request['drain_sha256'],
-        'Copy requires a completed formatter and managed group drain')
+        journal['request_sha256'] == qualification.digest(plan_raw), 'Copy journal belongs to another original plan')
+    if completed_receipt_sha256 is None:
+        qualification.require(next_phase(journal) == 'copy-verified' and
+            journal['events'][-1]['phase'] == 'group-drained' and
+            journal['events'][-1]['receipt_sha256'] == request['drain_sha256'],
+            'Copy requires a completed formatter and managed group drain')
+        result=None
+    else:
+        qualification.require(next_phase(journal) == 'binds-switched' and
+            journal['events'][-1]['phase'] == 'copy-verified' and
+            journal['events'][-1]['inputs_sha256'] == request_sha256 and
+            journal['events'][-1]['receipt_sha256'] == completed_receipt_sha256 and
+            not os.path.lexists(op/'linux-copy-failed.json'),
+            'Completed copy must match the exact successful journal terminal')
+        _,result=qualification._read(op/'linux-copy-result.json',completed_receipt_sha256)
+        result=validate_result(result,request,linux,request_sha256)
+    drained=[e for e in journal['events'] if e['phase'] == 'group-drained' and e['state'] == 'succeeded']
+    qualification.require(len(drained) == 1 and drained[0]['receipt_sha256'] == request['drain_sha256'],
+                          'Managed drain is not the journalled copy predecessor')
     mounted = next((e for e in journal['events'] if e['phase'] == 'ext4-mounted' and e['state'] == 'succeeded'), None)
     qualification.require(mounted is not None and mounted['receipt_sha256'] == request['provision_result_sha256'],
                           'Formatter result is not the journalled mounted volume')
     roots = _source_roots(linux)
     target = _mounted_root(linux, provision)
     return {'request':request,'linux':linux,'operation_root':op,'journal_path':journal_path,
-            'journal':journal,'roots':roots,'target':target,'provision':provision}
+            'journal':journal,'roots':roots,'target':target,'provision':provision,
+            'plan':plan,'plan_sha256':qualification.digest(plan_raw),'drain':drain,'copy_result':result}
 
 
 @contextmanager

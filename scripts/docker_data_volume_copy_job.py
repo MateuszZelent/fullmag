@@ -21,7 +21,7 @@ import fullmag_storage as storage
 from fullmag_data_volume_guard import _open_directory_nofollow
 from fullmag_data_volume_linux_request import validate_linux_request
 from fullmag_data_volume_runtime_binding import load_plan
-from linux_data_volume_copy import COMPONENTS, validate_request
+from linux_data_volume_copy import COMPONENTS, validate_request, validate_result
 from linux_data_volume_format import _document
 import linux_data_volume_provision as qualification
 
@@ -91,25 +91,9 @@ def validate_terminal(op, request, request_sha256, exit_code):
         qualification.require(not os.path.lexists(failure) and event.get('state') == 'succeeded',
                               'Successful client exit has no unambiguous completed root copy')
         raw,result = qualification._read(success,event['receipt_sha256'])
-        qualification.require(set(result) == {'schema','state','volume_id','token','request_sha256','filesystem_uuid',
-            'data_sha256','manifest_path','manifest_sha256','archive_path','archive_sha256',
-            'copied_roots','namespace_admitted','originals_retired'} and
-            result['schema'] == 'fullmag.data-volume-linux-copy-result.v1' and
-            result['state'] == 'copied-and-verified-not-switched' and result['volume_id'] == request['volume_id'] and
-            result['token'] == request['token'] and result['request_sha256'] == request_sha256 and
-            result['namespace_admitted'] is False and result['originals_retired'] is False,
-            'Root copy success scope differs')
         _, linux_raw = qualification._read(op/'linux-provision-request.json',request['linux_request_sha256'])
         linux = validate_linux_request(linux_raw)
-        target = Path(linux['mount_root']); archive_root = target/'migration'/request['volume_id']
-        expected_roots = {role:str(target/'payload'/Path(pin['canonical_root']).relative_to(linux['storage_root']))
-                          for role,pin in linux['source_roots'].items()}
-        qualification.require(result['filesystem_uuid'] == linux['filesystem_uuid'] and
-            result['manifest_path'] == str(archive_root/'source-manifest.json') and
-            result['archive_path'] == str(archive_root/'originals.pax') and result['copied_roots'] == expected_roots and
-            all(type(result[k]) is str and re.fullmatch('[0-9a-f]{64}',result[k])
-                for k in ('data_sha256','manifest_sha256','archive_sha256')),
-            'Root copy terminal paths or content pins differ')
+        validate_result(result,request,linux,request_sha256)
     else:
         qualification.require(not os.path.lexists(success) and event.get('state') == 'failed-confirmed',
                               'Root copy client failed without a confirmed terminal root failure')

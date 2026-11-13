@@ -91,6 +91,45 @@ class CopyContextTests(unittest.TestCase):
         self.assertEqual(value['request'],self.request)
         self.assertEqual(value['roots']['state'],Path(self.linux['source_roots']['state']['canonical_root']))
 
+    def completed_copy(self,request_sha='f'*64):
+        receipt_sha='c'*64
+        self.journal=append_terminal(append_started(self.journal,'copy-verified',request_sha),'succeeded',receipt_sha)
+        target=Path(self.linux['mount_root']);archive=target/'migration'/self.request['volume_id']
+        result={'schema':'fullmag.data-volume-linux-copy-result.v1','state':'copied-and-verified-not-switched',
+            'volume_id':self.request['volume_id'],'token':self.request['token'],'request_sha256':'f'*64,
+            'filesystem_uuid':self.linux['filesystem_uuid'],'data_sha256':'d'*64,
+            'manifest_path':str(archive/'source-manifest.json'),'manifest_sha256':'e'*64,
+            'archive_path':str(archive/'originals.pax'),'archive_sha256':'a'*64,
+            'copied_roots':{role:str(target/'payload'/Path(pin['canonical_root']).relative_to(self.request['storage_root']))
+                            for role,pin in self.linux['source_roots'].items()},
+            'namespace_admitted':False,'originals_retired':False}
+        self.expected['linux-copy-result.json']=receipt_sha;self.evidence['linux-copy-result.json']=result
+        return receipt_sha,result
+
+    def test_completed_context_requires_exact_terminal_and_does_not_reenable_copy(self):
+        receipt_sha,result=self.completed_copy()
+        with self.patches():
+            context=stage.load_context(self.path,'f'*64,completed_receipt_sha256=receipt_sha)
+        self.assertEqual(context['copy_result'],result)
+        self.assertEqual(context['plan_sha256'],digest(self.plan_raw))
+        self.assertEqual(context['drain'],self.drain)
+        with self.patches(),self.assertRaises(ValueError):
+            stage.load_context(self.path,'f'*64)
+
+    def test_completed_context_rejects_foreign_request_terminal_or_copy_result_scope(self):
+        receipt_sha,result=self.completed_copy()
+        for key,value in [('token','9'*32),('copied_roots',{}),('archive_path','/tmp/other.pax'),
+                          ('namespace_admitted',True),('unexpected',False)]:
+            changed=copy.deepcopy(result);changed[key]=value
+            self.evidence['linux-copy-result.json']=changed
+            with self.subTest(key=key),self.patches(),self.assertRaises(ValueError):
+                stage.load_context(self.path,'f'*64,completed_receipt_sha256=receipt_sha)
+        self.evidence['linux-copy-result.json']=result
+        self.journal['events'][-1]['inputs_sha256']='0'*64
+        self.journal['events'][-2]['inputs_sha256']='0'*64
+        with self.patches(),self.assertRaises(ValueError):
+            stage.load_context(self.path,'f'*64,completed_receipt_sha256=receipt_sha)
+
     def test_refuses_nonroot_before_reading_any_evidence(self):
         with mock.patch.object(stage.os,'geteuid',return_value=1000),mock.patch.object(stage.qualification,'_read') as read:
             with self.assertRaisesRegex(ValueError,'root'):stage.load_context(self.path,'f'*64)

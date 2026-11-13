@@ -146,8 +146,9 @@ odmawia przed pierwszym zapisem, także gdy brak zwykłej rejestracji. Uszkodzon
 obcy lub niepełny marker oznacza odmowę; nie uruchamia recovery automatycznie.
 Końcowa pasująca rejestracja nadal musi przejść pełne guardy UUID/inode.
 Marker pozostaje historycznie zachowany. Grupy bez markerów nie zmieniają
-zachowania. Implementacja interlocka nie publikuje markerów i nie udziela
-wyjątku migracyjnemu recreate; te dwa etapy wymagają osobnej integracji.
+zachowania. Sam interlock pozostaje odczytowy i nie udziela wyjątku
+migracyjnemu recreate. Publikację markera realizuje oddzielny etap root
+opisany poniżej; jego nadrzędny sterownik nadal wymaga integracji.
 
 Decyzja nie zmienia Python DSL, ProblemIR, fizyki, backendu realizującego krok,
 OpenAPI ani zachowania UI. Migracja nie powtarza Solve. Dane wymagane do
@@ -220,9 +221,28 @@ do recovery. Twarda śmierć całego supervisora wymaga osobnego uzgodnienia
 zachowanych lease i native guardów; nie deklarujemy przeżycia hostowego flock
 po `SIGKILL` jego właściciela.
 
-Integracja źródłowa obejmuje wyłącznie kopię. Rzeczywista kopia, przełączenie
-bindów, admission, odtworzenie grupy, kwalifikacja Zarr, rejestracja i usunięcie
-starych duplikatów pozostają **NOT VERIFIED**.
+Etap `linux_data_volume_bind` udostępnia API bez samodzielnego CLI. Przyjmuje
+zamknięty request z SHA istniejącego requestu kopii, jej terminalnego wyniku,
+nowej obserwacji guardów i źródeł etapu. Odczytowy widok zakończonej kopii
+w `linux_data_volume_copy.load_context` wymaga dokładnego receiptu i journalu
+oczekującego na `binds-switched`; zwykłe wejście kopii nadal odmawia jego
+ponowienia. Wspólny walidator wyniku kopii służy także supervisorowi WSL.
+
+Przed cutover etap sprawdza źródłowy manifest i strumieniowo SHA zachowanego
+PAX oraz zajmuje istniejący writer lock skopiowanego accepted-store. Nie
+tworzy zastępczego pliku blokady. Pod mutexem migracji i wymaganymi żywymi
+guardami nadrzędnego sterownika publikuje niezmienny marker pending przez
+create-new i fsync, przed pierwszym rename. Każdy callback prymitywu zapisuje
+oddzielny trwały intent lub obserwację poza oboma datasetami. Błąd po
+publikacji markera zachowuje stan wymagający jawnego recovery, w tym
+wszystkie drzewa i blokadę zwykłego startupu. Etap nie wykonuje admission,
+startu, rejestracji, rollback ani usuwania.
+
+Zarządzana recepta obejmuje obecnie kopię; root bind API musi zostać podłączone
+do supervisora utrzymującego rzeczywiste guardy aż do zgodnego terminalu.
+Same zapisane acknowledgements nie dowodzą ich utrzymania. Rzeczywista kopia,
+przełączenie bindów, admission, odtworzenie grupy, kwalifikacja Zarr,
+rejestracja i usunięcie starych duplikatów pozostają **NOT VERIFIED**.
 
 ## Weryfikacja
 
