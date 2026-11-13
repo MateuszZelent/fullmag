@@ -63,6 +63,22 @@ class HistoryInventoryTests(unittest.TestCase):
             with self.subTest(root=name),self.assertRaises(HistoryError):control_references(self.root,TOKEN)
             path.unlink();path.parent.rmdir()
 
+    def test_storage_operation_roots_preserve_live_pins(self):
+        self.terminal(TOKEN, RUN)
+        for name in ("data-volume-migration", "profile-storage-copy", "profile-storage-index"):
+            with self.subTest(root=name):
+                path = self.put(name + "/current.json", {"state": "succeeded"})
+                try:
+                    result = control_references(self.root, TOKEN)
+                    self.assertIn(name + "/current.json", result["pins"])
+                    self.assertNotIn(TOKEN, result["protected"])
+                    path.write_bytes(raw({"activation": TOKEN}))
+                    with self.assertRaisesRegex(HistoryError, "referenced by live control/recovery roots"):
+                        control_references(self.root, TOKEN)
+                finally:
+                    path.unlink()
+                    path.parent.rmdir()
+
     def test_terminal_diagnostic_stop_records_remain_pinned_references(self):
         self.terminal(TOKEN, RUN)
         stop_attempt = "a" * 32

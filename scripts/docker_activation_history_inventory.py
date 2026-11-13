@@ -32,6 +32,7 @@ KNOWN_ROOTS = frozenset({
     "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
     "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
     "bootstrap-namespace-proof", "bootstrap-container-proof",
+    "data-volume-migration", "profile-storage-copy", "profile-storage-index",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
