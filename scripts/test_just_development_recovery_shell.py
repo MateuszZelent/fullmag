@@ -532,5 +532,40 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 self.assertFalse(refused.stdout)
 
 
+
+    def test_failed_run_resume_real_recipe_has_closed_preview_and_apply_argv(self):
+        repo=Path(__file__).resolve().parents[1]
+        source='/selected/worktree with spaces/$(printf injected);literal'
+        base=['a'*32,'b'*64,source,'c'*32,'d'*64,'run-existing',
+              '11111111-1111-4111-8111-111111111111','3243']
+        for suffix,expected in (([],[b'--preview']),(['true','f'*64],
+                                      [b'--apply',b'--expected-plan-sha256',b'f'*64])):
+            tail=suffix
+            dry=subprocess.run(['just','--justfile',str(repo/'justfile'),'--dry-run',
+                'docker-dev-resume-failed-run',*base,*tail],capture_output=True,text=True,timeout=15)
+            self.assertEqual(dry.returncode,0,dry.stderr)
+            recipe=dry.stderr.strip()
+            marker='  *"scripts/docker_dev.py"*)\n'
+            result=self.dispatch(recipe,marker=marker)
+            self.assertEqual(result.returncode,0,result.stderr)
+            argv=result.stdout.split(b'\0')[:-1]
+            expected_args=['--attempt',base[0],'--config-sha256',base[1],
+                '--source-root',base[2],'--stop-attempt',base[3],
+                '--stop-terminal-sha256',base[4],'--run-id',base[5],
+                '--request-id',base[6],'--port',base[7]]
+            self.assertEqual(argv,[b'/recorded/python',
+                b'/registered/checkout/scripts/docker_dev.py',b'--repo-root',
+                b'/registered/checkout',b'resume-failed-run-volume']
+                +[value.encode() for value in expected_args]+expected)
+            self.assertEqual(argv[argv.index(b'--source-root')+1],source.encode())
+            self.assertEqual(argv[argv.index(b'--run-id')+1],b'run-existing')
+            for bad in (recipe+' --fresh-state',recipe+' --script replay.py',
+                        recipe+'; printf injected',recipe+' --preview',
+                        recipe.replace('run-existing','run/foreign')):
+                denied=self.dispatch(bad,marker=marker)
+                self.assertEqual(denied.returncode,2,denied.stderr)
+                self.assertFalse(denied.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
