@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -2136,6 +2137,57 @@ void large_tetrahedral_projection_uses_sparse_kkt_lane()
         "large OE-T0 sparse KKT field is not elementwise conservative");
     require(view->balance().electrode_balance_relative <= 1.0e-10,
         "large OE-T0 sparse KKT terminal fluxes do not balance");
+}
+
+void native_current_build_benchmark_preserves_owned_fingerprints()
+{
+    ChargeFixture fixture(mfem::Mesh::MakeCartesian3D(
+        12, 12, 12, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0));
+    const auto ids = stable_vertex_ids(fixture.mesh);
+    const auto request = periodic_request(fixture, ids, identity_input());
+    require(fixture.mesh.GetNE() == 10368 &&
+            fixture.mesh.GetNumFaces() == 21600,
+        "native current-build benchmark changed its frozen fixture");
+    std::array<std::string, 3> first_fingerprints;
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        const auto started = std::chrono::steady_clock::now();
+        const auto view = ConservativeCurrentView::Build(request);
+        const double elapsed_s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        const auto *potential = view->charge_potential_vertex_values_v();
+        require(potential != nullptr && std::isfinite(elapsed_s) &&
+                elapsed_s >= 0.0,
+            "native current-build benchmark lost its owned potential or timer");
+        Bytes state;
+        const auto append_raw_f64 = [&](double value) {
+            require(std::isfinite(value), "benchmark retained a non-finite state");
+            uint64_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            append_u64_le(state, bits);
+        };
+        append_u64_le(state, potential->size());
+        for (const double value : *potential) append_raw_f64(value);
+        append_u64_le(state, view->field().Size());
+        for (int dof = 0; dof < view->field().Size(); ++dof) {
+            append_raw_f64(view->field()[dof]);
+        }
+        const auto &balance = view->canonical_balance_certificate_bytes();
+        const std::array<std::string, 3> fingerprints{
+            sha256_hex(state),
+            sha256_hex(encode_canonical_records(records(view))),
+            sha256_hex(Bytes(balance.begin(), balance.end()))};
+        if (repeat == 0) first_fingerprints = fingerprints;
+        require(fingerprints == first_fingerprints,
+            "native current-build benchmark changed an owned state or certificate");
+        std::cout << "RT0_NATIVE_BUILD_BENCHMARK"
+                  << " elements=" << fixture.mesh.GetNE()
+                  << " faces=" << fixture.mesh.GetNumFaces()
+                  << " repeat=" << repeat
+                  << " elapsed_s=" << elapsed_s
+                  << " owned_state_sha256=" << fingerprints[0]
+                  << " canonical_flux_sha256=" << fingerprints[1]
+                  << " balance_sha256=" << fingerprints[2] << '\n';
+    }
 }
 
 void identity_and_source_snapshot_are_immutable()
@@ -5878,6 +5930,7 @@ int main(int argc, char **argv)
         incomplete_external_lead_extension_fails_closed();
         coupled_volumetric_external_lead_extension_is_accepted();
         canonical_records_ignore_real_mesh_face_and_rt_dof_permutations();
+        native_current_build_benchmark_preserves_owned_fingerprints();
         std::cout << "fem conservative current view contract: PASS\n";
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {
