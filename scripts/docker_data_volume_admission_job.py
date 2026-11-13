@@ -7,6 +7,7 @@ or retires the originals.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -469,8 +470,11 @@ def validate_terminal(operation_root, request, request_sha256, exit_code, *, exp
     return {"state": result["state"], "receipt_sha256": hashlib.sha256(raw).hexdigest(), "result": result}
 
 
-def run_root_admission(fence, source, distro, request_path, request_sha256, *, poll_interval=2.0):
+def run_root_admission(fence, source, distro, request_path, request_sha256, *, poll_interval=2.0,
+                       retain_native_snapshot=False):
     """Keep the old copy fence until exact successful admission preparation."""
+    qualification.require(type(retain_native_snapshot) is bool,
+                          "Native snapshot retention must be an internal boolean")
     qualification.require(type(poll_interval) in (int, float) and 0 < poll_interval <= 5,
                           "Bounded root-client polling interval required")
     fence.check()
@@ -482,9 +486,12 @@ def run_root_admission(fence, source, distro, request_path, request_sha256, *, p
     def validate(op, request, request_sha, exit_code):
         return validate_terminal(op, request, request_sha, exit_code, expected_before=expected_before)
 
-    return run_prepared_root(
+    terminal = run_prepared_root(
         "admission", fence, context["command"], context["operation_root"], context["request"],
         context["request_sha256"], validate,
         release_copy_sha256=context["bind_request"]["copy_receipt_sha256"],
         poll_interval=poll_interval,
     )
+    if retain_native_snapshot:
+        return terminal, deepcopy(expected_before)
+    return terminal

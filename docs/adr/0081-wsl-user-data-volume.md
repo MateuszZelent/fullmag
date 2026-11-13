@@ -350,6 +350,10 @@ oryginalny copy receipt, a osobny receipt opisuje przygotowanie admission.
 
 Zwrócony kontekst przygotowania jest ważny tylko w oryginalnym host scope,
 procesie i wątku; zapisany lub zmieniony słownik nie zastępuje tej kontynuacji.
+Parent zachowuje w nim głęboką kopię obserwacji pięciu plików native i inode
+certyfikatu sprzed tego samego wywołania supervisora. Dane pozostają w RAM,
+poza receiptem i prywatnym archiwum root; podlegają kontroli niezmienności
+kontekstu, a zmiana zwróconej kopii nie modyfikuje obserwacji joba.
 Nie daje prawa do namespace, startupu, rejestracji ani usunięcia oryginałów.
 Kontrolowany startup przy pending oraz świeża kwalifikacja pozostają osobnym
 etapem integracji. Nie jest to wykonanie migracji ani readmission na hoście.

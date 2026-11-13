@@ -29,7 +29,9 @@ class AdmissionParentTests(TestCase):
         relocated=object()
         class Fence(fixtures.FakeFence):
             def __init__(self,*args,relocated=None):super().__init__(*args);self.relocated=relocated
-        def job(fence,source,distro,path,digest):
+        native_before={'new_files':{'certificate':b'captured-before-root'}}
+        def job(fence,source,distro,path,digest,*,retain_native_snapshot=False):
+            self.assertTrue(retain_native_snapshot)
             self.assertEqual(case.calls,['host-held']);self.assertIsNone(case.control._active_operation)
             self.assertIs(control._active_operation,control.op);self.assertIs(fence.relocated,relocated)
             self.assertTrue(fence.inside);self.assertFalse(fence.released)
@@ -39,8 +41,8 @@ class AdmissionParentTests(TestCase):
             self.assertEqual(request['token'],'c'*32)
             self.assertEqual(request['fence_ready_sha256'],hashlib.sha256((case.op/'admission-fence-ready.json').read_bytes()).hexdigest())
             fence.finish('9'*64)
-            return {'state':'admission-prepared-not-admitted','receipt_sha256':'6'*64,
-                'result':{'namespace_admitted':False,'data_migrated':False,'originals_retired':False}}
+            return ({'state':'admission-prepared-not-admitted','receipt_sha256':'6'*64,
+                'result':{'namespace_admitted':False,'data_migrated':False,'originals_retired':False}},native_before)
         with case.patches(),copy_parent.copied_group(case.source,case.volume,case.stop,case.stop_sha) as copied:
             with ExitStack() as stack:
                 stack.enter_context(mock.patch.object(parent,'_load_bound',return_value=(context,relocated)))
@@ -55,7 +57,11 @@ class AdmissionParentTests(TestCase):
                 original=result['terminal']['state'];result['terminal']['state']='changed'
                 with self.assertRaises(ValueError):parent.require_prepared_group(result)
                 result['terminal']['state']=original
-                forged=parent._PreparedGroup(copied,context,bound['terminal'],result['terminal'],relocated)
+                result['native_before']['new_files']['certificate']=b'changed'
+                with self.assertRaises(ValueError):parent.require_prepared_group(result)
+                self.assertEqual(native_before['new_files']['certificate'],b'captured-before-root')
+                result['native_before']['new_files']['certificate']=b'captured-before-root'
+                forged=parent._PreparedGroup(copied,context,bound['terminal'],result['terminal'],relocated,native_before)
                 with self.assertRaises(ValueError):parent.require_prepared_group(forged)
                 with self.assertRaisesRegex(ValueError,'already prepared'):parent.prepare_bound_group(copied,bound)
             self.assertEqual(result['terminal']['receipt_sha256'],'6'*64);self.assertEqual(case.calls,['host-held'])

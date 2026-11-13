@@ -75,19 +75,20 @@ def _load_bound(copied,bound):
 
 
 class _PreparedGroup(dict):
-    def __init__(self,copied,context,bound_terminal,terminal,relocated):
-        super().__init__(context=context,bound_terminal=bound_terminal,terminal=terminal,relocated=relocated)
+    def __init__(self,copied,context,bound_terminal,terminal,relocated,native_before):
+        super().__init__(context=context,bound_terminal=bound_terminal,terminal=terminal,relocated=relocated,
+                         native_before=deepcopy(native_before))
         self._copied=copied;self._relocated=relocated;self._pid=os.getpid();self._thread=threading.get_ident()
-        self._snapshot=deepcopy({key:self[key] for key in ('context','bound_terminal','terminal')})
+        self._snapshot=deepcopy({key:self[key] for key in ('context','bound_terminal','terminal','native_before')})
 
 
 def require_prepared_group(value):
     require(type(value) is _PreparedGroup,'The original prepared-group scope is required')
     copy_parent.require_live_copied_group(value._copied)
     require(getattr(value._copied,'_prepared_admission',None) is value and value._pid == os.getpid() and
-        value._thread == threading.get_ident() and set(value) == {'context','bound_terminal','terminal','relocated'} and
+        value._thread == threading.get_ident() and set(value) == {'context','bound_terminal','terminal','relocated','native_before'} and
         value['relocated'] is value._relocated and
-        {key:value[key] for key in ('context','bound_terminal','terminal')} == value._snapshot,
+        {key:value[key] for key in ('context','bound_terminal','terminal','native_before')} == value._snapshot,
         'Prepared group was not issued by the live admission parent or its inputs changed')
     _check_bound(value._copied,value['context'],value._relocated)
     return value
@@ -129,7 +130,8 @@ def prepare_bound_group(copied,bound):
                 'token':token,'bind_request_sha256':bound['terminal']['result']['request_sha256'],
                 'bind_receipt_sha256':bound['terminal']['receipt_sha256'],'fence_ready_sha256':ready_sha,'components':components}
             root_admission.validate_request(root_request);request_sha=_document(op,'linux-admission-request.json',root_request)
-            terminal=run_root_admission(fence,source,plan['provision_request']['wsl_distro'],op/'linux-admission-request.json',request_sha)
+            terminal,native_before=run_root_admission(fence,source,plan['provision_request']['wsl_distro'],
+                op/'linux-admission-request.json',request_sha,retain_native_snapshot=True)
             require(terminal['state'] == 'admission-prepared-not-admitted' and fence.released is True and
                 operation['daemon_pending'] is False and all(terminal['result'].get(key) is False for key in
                 ('namespace_admitted','data_migrated','originals_retired')),
@@ -138,6 +140,6 @@ def prepare_bound_group(copied,bound):
             bind_receipt_sha256=bound['terminal']['receipt_sha256'],copy_receipt_sha256=context['copy_receipt_sha256'],
             namespace_admitted=False,data_migrated=False,originals_retired=False)
     _check_bound(copied,context,relocated)
-    prepared=_PreparedGroup(copied,context,bound['terminal'],terminal,relocated)
+    prepared=_PreparedGroup(copied,context,bound['terminal'],terminal,relocated,native_before)
     copied._prepared_admission=prepared
     return prepared

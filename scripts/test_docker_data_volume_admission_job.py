@@ -462,6 +462,38 @@ class AdmissionPrepareCommandTests(unittest.TestCase):
 
 
 class AdmissionRunnerDelegationTests(unittest.TestCase):
+    def test_snapshot_retention_requires_boolean_before_any_fence_or_process(self):
+        from scripts import docker_data_volume_admission_job as job
+        for value in (None, 1, "true", {}, []):
+            with self.subTest(value=value):
+                fence = SimpleNamespace(check=Mock())
+                with self.assertRaisesRegex(ValueError, "retention must be an internal boolean"):
+                    job.run_root_admission(fence, Path('/source'), 'Ubuntu', Path('/request'), 'a'*64,
+                                           retain_native_snapshot=value)
+                fence.check.assert_not_called()
+
+    def test_retained_snapshot_comes_from_the_same_supervision_and_is_not_aliased(self):
+        from scripts import docker_data_volume_admission_job as job
+
+        fixture = AdmissionJobScenario(self)
+        context = fixture.terminal_context()
+        context["command"] = ["fixed-admission-client"]
+        native_before = {"new_files": {"certificate": b"before"}}
+        terminal = {"state": "admission-prepared-not-admitted", "receipt_sha256": "f" * 64}
+        with patch.object(job, "_prepare_context", return_value=context), \
+             patch.object(job, "_snapshot_native_before", return_value=native_before), \
+             patch.object(job.relocated, "require_relocated"), \
+             patch.object(job, "run_prepared_root", return_value=terminal):
+            actual, retained = job.run_root_admission(
+                fixture.fence, fixture.source, fixture.distro, fixture.request_path,
+                fixture.request_sha256, retain_native_snapshot=True,
+            )
+        self.assertIs(actual, terminal)
+        self.assertEqual(retained, native_before)
+        retained["new_files"]["certificate"] = b"changed"
+        self.assertEqual(native_before["new_files"]["certificate"], b"before")
+        self.assertNotIn("native_before", terminal)
+
     def test_root_runner_uses_admission_stage_and_original_copy_acknowledgement(self):
         from scripts import docker_data_volume_admission_job as job
 
