@@ -960,8 +960,8 @@ mfem::Vector element_centroid(const mfem::Mesh &mesh, int element);
 struct BoundaryFaceSample {
     int element = -1;
     mfem::IntegrationPoint element_point;
-    mfem::Vector physical_centroid{3};
-    mfem::Vector outward_area{3};
+    mfem::Vector physical_centroid = mfem::Vector(3);
+    mfem::Vector outward_area = mfem::Vector(3);
 };
 
 BoundaryFaceSample locate_boundary_face(
@@ -976,6 +976,9 @@ BoundaryFaceSample locate_boundary_face(
         mfem::Array<int> vertices;
         mesh.GetBdrElementVertices(boundary, vertices);
         BoundaryFaceSample sample;
+        require(sample.physical_centroid.Size() == 3 &&
+                sample.outward_area.Size() == 3,
+            "periodic oracle boundary vectors must have three components");
         sample.physical_centroid = 0.0;
         for (int i = 0; i < vertices.Size(); ++i) {
             sample.physical_centroid += coordinate_copy(mesh, vertices[i]);
