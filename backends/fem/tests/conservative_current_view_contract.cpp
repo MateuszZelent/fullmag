@@ -1,6 +1,8 @@
 #include "cpu/mfem/transport/conservative_constraint_rank.hpp"
 #include "cpu/mfem/transport/affine_trace_relations.hpp"
 #include "cpu/mfem/transport/affine_rt0_element.hpp"
+#include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
+#include "cpu/mfem/interactions/oersted/surface_rt0.hpp"
 #include "cpu/mfem/transport/conservative_current_view.hpp"
 #include "cpu/mfem/transport/periodic_charge_potential.hpp"
 #include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
@@ -153,6 +155,32 @@ std::array<Rt0Point, 5> retained_rt0_samples(const std::array<Rt0Point, 4> &vert
     }
     const AffineRt0Element evaluator(field, 0);
     const AffineRt0Element basis_only(space, 0);
+    auto input = evaluator.frozen_input();
+    const auto original = input;
+    const AffineRt0Element detached(input);
+    input.vertices_m[0][0] += 16.;
+    input.signed_coefficients_a.fill(0.);
+    const auto roundtrip = detached.frozen_input();
+    require(std::memcmp(original.vertices_m.data(), roundtrip.vertices_m.data(),
+                12 * sizeof(double)) == 0 &&
+            std::memcmp(original.signed_coefficients_a.data(), roundtrip.signed_coefficients_a.data(),
+                4 * sizeof(double)) == 0,
+        "detached RT0 changed ordered geometry or signed coefficient bits");
+    for (int opposite = 0; opposite < 4; ++opposite) {
+        AffineRt0Element::Face face;
+        int row = 0;
+        for (int local = 0; local < 4; ++local) {
+            if (local != opposite) face[row++] = vertices[local];
+        }
+        const double owned_moment = evaluator.face_moment(face);
+        const double imported_moment = detached.face_moment(face);
+        require(std::memcmp(&owned_moment, &imported_moment, sizeof(double)) == 0,
+            "detached RT0 changed a physical face moment");
+        require(std::isfinite(basis_only.signed_face_weight(face, opposite)),
+            "MFEM basis-only evaluator lost its signed DOF map");
+        require_rejected([&] { (void)detached.signed_face_weight(face, opposite); },
+            "detached RT0 invented a signed MFEM DOF map");
+    }
     require_rejected([&] { (void)basis_only.retained_current_at(vertices[0]); },
         "retained RT0 accepted an unfrozen coefficient set");
     require_rejected([&] {
@@ -169,6 +197,21 @@ std::array<Rt0Point, 5> retained_rt0_samples(const std::array<Rt0Point, 4> &vert
         for (int local = 0; local < 4; ++local) value += static_cast<long double>(vertices[local][axis]) / 4.0L;
         center[axis] = static_cast<double>(value);
     }
+    for (const auto &point : std::array<Rt0Point, 5>{vertices[0], vertices[1], vertices[2], vertices[3], center}) {
+        const auto owned_current = evaluator.current_at(point);
+        const auto imported_current = detached.current_at(point);
+        const auto owned_retained = evaluator.retained_current_at(point);
+        const auto imported_retained = detached.retained_current_at(point);
+        require(std::memcmp(owned_current.data(), imported_current.data(), 3 * sizeof(double)) == 0 &&
+                std::memcmp(owned_retained.data(), imported_retained.data(), 3 * sizeof(double)) == 0,
+            "detached RT0 changed its corresponding current realization");
+        for (int local = 0; local < 4; ++local) {
+            const auto owned_basis = evaluator.basis_value_at(point, local);
+            const auto imported_basis = detached.basis_value_at(point, local);
+            require(std::memcmp(owned_basis.data(), imported_basis.data(), 3 * sizeof(double)) == 0,
+                "detached RT0 changed a basis value");
+        }
+    }
     for (int local = 0; local < 4; ++local) samples[local] = evaluator.retained_current_at(vertices[local]);
     samples[4] = evaluator.retained_current_at(center);
     return samples;
@@ -179,6 +222,10 @@ void retained_rt0_sampling_is_exact_frozen_and_fail_closed()
     const std::array<Rt0Point, 4> unit{{{0., 0., 0.}, {1., 0., 0.},
         {0., 1., 0.}, {0., 0., 1.}}};
     const auto dyadic = retained_rt0_samples(unit, {1., 2., 4., 8.});
+    const std::array<Rt0Point, 4> skew{{{2., -3., 1.}, {3., -3., .5},
+        {2.25, -2.5, 1.}, {1.75, -3., 2.}}};
+    (void)retained_rt0_samples(skew, {.125, -.75, 1.5, -2.125});
+    (void)retained_rt0_samples(unit, {1., -2.5, .125, -0.});
     const std::array<Rt0Point, 5> dyadic_expected{{{-2., -4., -8.},
         {13., -4., -8.}, {-2., 11., -8.}, {-2., -4., 7.}, {1.75, -.25, -4.25}}};
     require(dyadic == dyadic_expected, "retained RT0 lost exact dyadic sample values");
@@ -226,6 +273,238 @@ void retained_rt0_sampling_is_exact_frozen_and_fail_closed()
     require_rejected([&] {
         (void)retained_rt0_samples(unit, {std::numeric_limits<double>::denorm_min(), 0., 0., 0.});
     }, "retained RT0 silently rounded a nonzero exact sample to zero");
+}
+
+void detached_rt0_input_is_owned_and_rejects_invalid_data()
+{
+    using fullmag::fem::transport::AffineRt0Element;
+    const std::array<Rt0Point, 4> unit_vertices{{{0., 0., 0.}, {1., 0., 0.},
+        {0., 1., 0.}, {0., 0., 1.}}};
+    const AffineRt0Element::FrozenInput unit{unit_vertices, {{1., -2.5, .125, -0.}}};
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+        for (int vertex = 0; vertex < 4; ++vertex) {
+            for (int axis = 0; axis < 3; ++axis) {
+                auto input = unit;
+                input.vertices_m[vertex][axis] = bad;
+                require_rejected([&] { (void)AffineRt0Element(input); },
+                    "detached RT0 accepted a nonfinite coordinate");
+            }
+            auto input = unit;
+            input.signed_coefficients_a[vertex] = bad;
+            require_rejected([&] { (void)AffineRt0Element(input); },
+                "detached RT0 accepted a nonfinite coefficient");
+        }
+    }
+    auto degenerate = unit;
+    degenerate.vertices_m[3] = degenerate.vertices_m[2];
+    require_rejected([&] { (void)AffineRt0Element(degenerate); },
+        "detached RT0 accepted a repeated vertex");
+    degenerate.vertices_m[3] = {.5, .5, 0.};
+    require_rejected([&] { (void)AffineRt0Element(degenerate); },
+        "detached RT0 accepted a coplanar tetrahedron");
+    auto overflow = unit;
+    overflow.signed_coefficients_a = {{std::numeric_limits<double>::max(),
+        std::numeric_limits<double>::max(), 0., 0.}};
+    const AffineRt0Element large(overflow);
+    require_rejected([&] { (void)large.current_at({0., 1., 0.}); },
+        "detached RT0 rounded current overflow");
+    require_rejected([&] { (void)large.retained_current_at({0., 1., 0.}); },
+        "detached RT0 rounded exact retained current overflow");
+    auto underflow = unit;
+    underflow.signed_coefficients_a = {{std::numeric_limits<double>::denorm_min(), 0., 0., 0.}};
+    const AffineRt0Element small(underflow);
+    require_rejected([&] { (void)small.current_at({.25, 0., 0.}); },
+        "detached RT0 rounded nonzero current to zero");
+    require_rejected([&] { (void)small.retained_current_at({.25, 0., 0.}); },
+        "detached RT0 rounded nonzero exact retained current to zero");
+
+    std::unique_ptr<AffineRt0Element> detached;
+    Rt0Point expected{}, retained_expected{};
+    const Rt0Point point{.25, .375, .5};
+    {
+        auto mesh = mfem::Mesh::MakeCartesian3D(
+            1, 1, 1, mfem::Element::TETRAHEDRON, 1., 1., 1.);
+        mfem::RT_FECollection collection(0, 3);
+        mfem::FiniteElementSpace space(&mesh, &collection);
+        mfem::GridFunction current(&space);
+        for (int i = 0; i < current.Size(); ++i) current[i] = .125 * (i + 1);
+        const AffineRt0Element owned(current, 0);
+        expected = owned.current_at(point);
+        retained_expected = owned.retained_current_at(point);
+        detached = std::make_unique<AffineRt0Element>(owned.frozen_input());
+    }
+    const auto actual = detached->current_at(point);
+    const auto retained = detached->retained_current_at(point);
+    require(std::memcmp(actual.data(), expected.data(), 3 * sizeof(double)) == 0 &&
+            std::memcmp(retained.data(), retained_expected.data(), 3 * sizeof(double)) == 0,
+        "detached RT0 retained pointers to destroyed MFEM data");
+}
+
+void frozen_direct_field_reuses_identical_quadrature_and_admission()
+{
+    using fullmag::fem::transport::AffineRt0Element;
+    using fullmag::fem::oersted::DirectTetraQuadrature;
+    using fullmag::fem::oersted::DirectTetraQuadratureOptions;
+    using fullmag::fem::oersted::DirectTetraQuadratureResult;
+    auto mesh = mfem::Mesh::MakeCartesian3D(
+        1, 1, 1, mfem::Element::TETRAHEDRON, 1., 1., 1.);
+    mfem::RT_FECollection collection(0, 3);
+    mfem::FiniteElementSpace space(&mesh, &collection);
+    mfem::GridFunction current(&space);
+    mfem::Vector value(3);
+    value = 0.;
+    value[0] = 4.;
+    mfem::VectorConstantCoefficient coefficient(value);
+    current.ProjectCoefficient(coefficient);
+    std::vector<AffineRt0Element::FrozenInput> frozen;
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        frozen.push_back(AffineRt0Element(current, element).frozen_input());
+    }
+    Rt0Point center{};
+    for (const auto &vertex : frozen.front().vertices_m) {
+        for (int axis = 0; axis < 3; ++axis) center[axis] += .25 * vertex[axis];
+    }
+    const std::vector<Rt0Point> targets{{2., .5, .5}, center};
+    DirectTetraQuadratureOptions options;
+    options.base_quadrature_order = 8;
+    const auto same = [](const DirectTetraQuadratureResult &a,
+                         const DirectTetraQuadratureResult &b) {
+        const auto bits = [](double left, double right) {
+            return std::memcmp(&left, &right, sizeof(double)) == 0;
+        };
+        require(a.operator_version == DirectTetraQuadrature::operator_version &&
+                a.operator_version == b.operator_version &&
+                a.source_view_identity_digest.empty() && b.source_view_identity_digest.empty(),
+            "detached direct field changed version or invented source authentication");
+        require(a.h_xyz_apm.size() == b.h_xyz_apm.size() &&
+                (a.h_xyz_apm.empty() || std::memcmp(a.h_xyz_apm.data(), b.h_xyz_apm.data(),
+                    a.h_xyz_apm.size() * sizeof(double)) == 0),
+            "detached direct field H differs bitwise");
+        const auto &x = a.diagnostics;
+        const auto &y = b.diagnostics;
+        require(x.source_target_pairs == y.source_target_pairs &&
+                x.refined_pairs == y.refined_pairs &&
+                x.unconverged_pair_count == y.unconverged_pair_count &&
+                bits(x.maximum_pair_error_apm, y.maximum_pair_error_apm) &&
+                x.kernel_evaluations == y.kernel_evaluations &&
+                x.ledger_leaf_visits == y.ledger_leaf_visits,
+            "detached direct field global diagnostics differ");
+        require(a.target_diagnostics.size() == b.target_diagnostics.size(),
+            "detached direct field target diagnostics count differs");
+        for (std::size_t i = 0; i < a.target_diagnostics.size(); ++i) {
+            const auto &u = a.target_diagnostics[i];
+            const auto &v = b.target_diagnostics[i];
+            require(bits(u.estimated_error_apm, v.estimated_error_apm) &&
+                    bits(u.tolerance_apm, v.tolerance_apm) &&
+                    bits(u.roundoff_indicator_apm, v.roundoff_indicator_apm) &&
+                    u.final_leaf_count == v.final_leaf_count &&
+                    u.kernel_evaluations == v.kernel_evaluations &&
+                    u.ledger_leaf_visits == v.ledger_leaf_visits,
+                "detached direct field target diagnostics differ");
+        }
+    };
+    struct Progress { std::uint64_t calls = 0; bool valid = true; } progress;
+    const fullmag::fem::oersted::SurfaceRt0ProgressObserver observer{&progress,
+        [](void *context, fullmag::fem::oersted::AntennaProgressPhase phase,
+            std::uint64_t completed, std::uint64_t total, std::uint64_t cells) noexcept {
+            auto &p = *static_cast<Progress *>(context);
+            p.valid = p.valid && phase == fullmag::fem::oersted::AntennaProgressPhase::evaluating_field &&
+                completed == p.calls && total == 2 && cells == 6;
+            ++p.calls;
+        }};
+    const auto owned = DirectTetraQuadrature::EvaluateField(mesh, current, targets, options);
+    const auto detached = DirectTetraQuadrature::EvaluateFrozenField(frozen, targets, options, &observer);
+    same(owned, detached);
+    require(owned.diagnostics.refined_pairs > 0 && progress.valid && progress.calls == 3,
+        "detached field test missed refinement or progress sequencing");
+    current *= -1.;
+    for (auto &element : frozen) {
+        for (auto &coefficient : element.signed_coefficients_a) coefficient *= -1.;
+    }
+    const auto negative = DirectTetraQuadrature::EvaluateField(mesh, current, targets, options);
+    same(negative, DirectTetraQuadrature::EvaluateFrozenField(frozen, targets, options));
+    for (std::size_t i = 0; i < owned.h_xyz_apm.size(); ++i) {
+        require(std::abs(negative.h_xyz_apm[i] + owned.h_xyz_apm[i]) <=
+                1e-13 * std::max(1., std::abs(owned.h_xyz_apm[i])),
+            "detached direct field changed current reversal");
+    }
+    same(DirectTetraQuadrature::EvaluateField(mesh, current, {}, options),
+        DirectTetraQuadrature::EvaluateFrozenField(frozen, {}, options));
+    {
+        mfem::Mesh negative_mesh(3, 4, 1, 0, 3);
+        const double vertices[][3] = {{0., 0., 0.}, {1., 0., 0.},
+            {0., 1., 0.}, {0., 0., 1.}};
+        for (const auto &vertex : vertices) negative_mesh.AddVertex(vertex);
+        const int nodes[] = {0, 1, 2, 3};
+        negative_mesh.AddTet(nodes, 1);
+        negative_mesh.FinalizeTopology();
+        negative_mesh.Finalize(false, true);
+        for (int i = 0; i < 4; ++i) {
+            auto *vertex = negative_mesh.GetVertex(i);
+            std::swap(vertex[0], vertex[1]);
+        }
+        mfem::RT_FECollection negative_collection(0, 3);
+        mfem::FiniteElementSpace negative_space(&negative_mesh, &negative_collection);
+        mfem::GridFunction negative_current(&negative_space);
+        for (int i = 0; i < negative_current.Size(); ++i) negative_current[i] = .125 * (i + 1);
+        const auto negative_input = AffineRt0Element(negative_current, 0).frozen_input();
+        const std::vector<Rt0Point> far{{2., 2., 2.}};
+        same(DirectTetraQuadrature::EvaluateField(negative_mesh, negative_current, far, options),
+            DirectTetraQuadrature::EvaluateFrozenField({negative_input}, far, options));
+    }
+    const auto before = progress.calls;
+    auto bounded = options;
+    bounded.maximum_source_target_pairs = 1;
+    auto invalid_source = frozen;
+    invalid_source.front().vertices_m[0][0] = std::numeric_limits<double>::quiet_NaN();
+    bool pair_first = false;
+    try {
+        (void)DirectTetraQuadrature::EvaluateFrozenField(
+            invalid_source, targets, bounded, &observer);
+    } catch (const std::invalid_argument &error) {
+        pair_first = std::string(error.what()).find("pair budget exceeded") != std::string::npos;
+    }
+    require(pair_first, "detached field inspected source before pair admission");
+    auto invalid_targets = targets;
+    invalid_targets[0][0] = std::numeric_limits<double>::infinity();
+    require_rejected([&] {
+        (void)DirectTetraQuadrature::EvaluateFrozenField(
+            frozen, invalid_targets, options, &observer);
+    }, "detached field accepted a nonfinite target");
+    auto bad_options = options;
+    bad_options.base_quadrature_order = 1;
+    require_rejected([&] {
+        (void)DirectTetraQuadrature::EvaluateFrozenField(
+            frozen, targets, bad_options, &observer);
+    }, "detached field accepted invalid options");
+    require(progress.calls == before,
+        "detached field admission refusal emitted false progress");
+    bounded = options;
+    bounded.maximum_subdivision_depth = 0;
+    const auto depth_failure = [&](bool detached_source) {
+        std::ostringstream log;
+        auto *previous = std::cerr.rdbuf(log.rdbuf());
+        try {
+            if (detached_source) {
+                (void)DirectTetraQuadrature::EvaluateFrozenField(frozen, {center}, bounded);
+            } else {
+                (void)DirectTetraQuadrature::EvaluateField(mesh, current, {center}, bounded);
+            }
+        } catch (const std::runtime_error &error) {
+            std::cerr.rdbuf(previous);
+            return std::string(error.what());
+        } catch (...) {
+            std::cerr.rdbuf(previous);
+            throw;
+        }
+        std::cerr.rdbuf(previous);
+        return std::string{};
+    };
+    const auto owned_failure = depth_failure(false);
+    require(!owned_failure.empty() && depth_failure(true) == owned_failure,
+        "detached field did not preserve the exact exhausted-depth refusal");
+    std::cout << "PASS: frozen RT0 import and direct field parity\n";
 }
 
 void affine_trace_relations_preserve_independent_jumps_and_reject_cycles()
@@ -5884,6 +6163,8 @@ int main(int argc, char **argv)
 #endif
 
         retained_rt0_sampling_is_exact_frozen_and_fail_closed();
+        detached_rt0_input_is_owned_and_rejects_invalid_data();
+        frozen_direct_field_reuses_identical_quadrature_and_admission();
         affine_trace_relations_preserve_independent_jumps_and_reject_cycles();
         deterministic_constraint_rank_oracle_is_exact();
         constraint_rank_row_semantics_are_explicit_and_validated();

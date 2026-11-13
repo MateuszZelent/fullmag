@@ -871,6 +871,24 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
     return evaluate_prepared(elements, target_points, options, work, observer);
 }
 
+
+DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateFrozenField(
+    const std::vector<fullmag::fem::transport::AffineRt0Element::FrozenInput> &source,
+    const std::vector<std::array<double, 3>> &target_points,
+    const DirectTetraQuadratureOptions &options,
+    const SurfaceRt0ProgressObserver *observer)
+{
+    validate_pair_budget(static_cast<std::uint64_t>(source.size()),
+        static_cast<std::uint64_t>(target_points.size()), options);
+    std::vector<PreparedElement> elements;
+    elements.reserve(source.size());
+    for (const auto &input : source) {
+        elements.push_back({CurrentElement(input), input.vertices_m});
+    }
+    WorkBudget work(options);
+    return evaluate_prepared(elements, target_points, options, work, observer);
+}
+
 DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(
     const mfem::GridFunction &rt0_field,
     mfem::GridFunction &target_field,

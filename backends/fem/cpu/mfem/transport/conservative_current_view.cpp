@@ -917,9 +917,6 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
     }
     free_boundary_faces.insert(terminal_faces.begin(), terminal_faces.end());
 
-    std::vector<std::vector<int>> element_faces(mesh.GetNE());
-    for (auto &faces : element_faces) faces.reserve(4);
-
     std::vector<FaceKey> free_columns;
     std::map<FaceKey, int> key_to_face;
     for (int face = 0; face < mesh.GetNumFaces(); ++face) {
@@ -929,8 +926,6 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
         int first = -1;
         int second = -1;
         mesh.GetFaceElements(face, &first, &second);
-        if (first >= 0) element_faces[first].push_back(face);
-        if (second >= 0 && second != first) element_faces[second].push_back(face);
         if (second >= 0 || free_boundary_faces.count(key) != 0) {
             free_columns.push_back(key);
         }
@@ -996,7 +991,11 @@ ConstraintRankCertificate analyze_physical_constraint_rank(
             row.closed_component_anchor_element = anchor;
             row.row_element_key = element_key(mesh, ids, element);
         }
-        for (const int face : element_faces[element]) {
+        for (int face = 0; face < mesh.GetNumFaces(); ++face) {
+            int first = -1;
+            int second = -1;
+            mesh.GetFaceElements(face, &first, &second);
+            if (first != element && second != element) continue;
             const auto key = mesh_face_key(mesh, ids, face);
             const auto column = column_ids.find(key);
             if (column == column_ids.end()) continue;

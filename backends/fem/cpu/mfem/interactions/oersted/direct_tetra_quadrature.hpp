@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/mfem/transport/conservative_current_view.hpp"
+#include "cpu/mfem/transport/affine_rt0_element.hpp"
 
 #include <array>
 #include <cstdint>
@@ -80,6 +81,15 @@ public:
     static DirectTetraQuadratureResult EvaluateField(
         const mfem::Mesh &mesh,
         const mfem::GridFunction &rt0_field,
+        const std::vector<std::array<double, 3>> &target_points,
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
+
+
+    // Reuse the same quadrature with detached local coefficients. The caller must
+    // authenticate source ownership and closure; this result carries no view digest.
+    static DirectTetraQuadratureResult EvaluateFrozenField(
+        const std::vector<fullmag::fem::transport::AffineRt0Element::FrozenInput> &source,
         const std::vector<std::array<double, 3>> &target_points,
         const DirectTetraQuadratureOptions &options = {},
         const SurfaceRt0ProgressObserver *observer = nullptr);
