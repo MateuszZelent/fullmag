@@ -207,6 +207,11 @@ docker-dev-stop-startup-diagnostic source_root image_id request request_sha256 a
 docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_attempt="" preview="true":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-diagnostic-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if resume_attempt == "" { "" } else { " --resume-attempt " + quote(resume_attempt) } }}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
 
+# Resume only the exact accepted run after a Failed-owner diagnostic stop; never cancel tasks.
+# Preview first; apply requires the unchanged plan SHA and the same request UUID.
+docker-dev-resume-failed-run attempt config_sha256 source_root stop_attempt stop_terminal_sha256 run_id request_id port="3197" apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" resume-failed-run-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --stop-attempt {{quote(stop_attempt)}} --stop-terminal-sha256 {{quote(stop_terminal_sha256)}} --run-id {{quote(run_id)}} --request-id {{quote(request_id)}} --port {{quote(port)}}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires the reviewed plan SHA") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { " --preview" } else { error("preview cannot carry an apply plan SHA") } } else { error("apply must be true or false") } }}
+
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}

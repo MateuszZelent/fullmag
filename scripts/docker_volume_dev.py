@@ -2458,7 +2458,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None, prepared_recovery_constraints=None):
+          cold_budget_restore=None, prepared_recovery_constraints=None, failed_run_resume_context=None):
     from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
@@ -2519,6 +2519,14 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         raise BuildControlError("Recovery start requires both control and operation")
     if recreation_resume_proof is not None and (reuse_state is None or provided_operation is not None):
         raise BuildControlError("Recreation resume requires the retained state and a new managed start")
+    if failed_run_resume_context is not None:
+        if (reuse_state is None or args.script is not None or getattr(args, "fresh_state", False)
+                or any(value is not None for value in (
+                    recovery_environment, recovery_metadata, native_restart_metadata,
+                    accepted_reattach_environment, accepted_reattach_metadata,
+                    recreation_resume_proof, post_build_generation, startup_diagnostic_restart,
+                    terminal_observation, cold_budget_restore, maintenance, prepared_recovery_constraints))):
+            raise BuildControlError("Failed-run continuation requires its own retained authority without another restore")
     validated_recovery_environment = _validate_recovery_environment(recovery_environment)
     validated_recovery_metadata = _validate_recovery_metadata(recovery_metadata)
     validated_native_restart_metadata = _validate_recovery_metadata(native_restart_metadata)
@@ -2731,10 +2739,17 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation_inputs["unclaimed_cancellation_image_transition"] = image_transition
     if provided_operation is not None:
         _validate_existing_operation_inputs(provided_operation.get("receipt", {}), operation_inputs)
+    if failed_run_resume_context is not None:
+        operation_inputs["failed_run_resume"] = failed_run_resume_context["context"]
     operation_context = (control.operation("development", operation_inputs)
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        if failed_run_resume_context is not None:
+            _revalidate_failed_run_handoff(control, args, failed_run_resume_context, phase="before-start")
+            from docker_volume_failed_run_resume import bind_start_attempt
+            bind_start_attempt(control, failed_run_resume_context["context"], operation)
+            operation["receipt"]["failed_run_resume"] = failed_run_resume_context["context"]
         if recreation_resume_proof is not None and (
                 validated_startup_diagnostic_restart is not None or failed_frontend_resume):
             leased_records = _validate_recreation_resume_records(
@@ -3187,6 +3202,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation["receipt"].update(state="starting-services", state_root=str(state),
             frontend_volume=frontend_volume, backend_volumes=cache["volume_names"])
         _revalidate_helper_source_binding(helper_source_binding, selected)
+        if failed_run_resume_context is not None:
+            _revalidate_failed_run_handoff(control, args, failed_run_resume_context, phase="before-start")
         backend_id, frontend_id = _start_compose_services(
             control, operation, document, headless=headless,
         )
@@ -5747,6 +5764,23 @@ def _retired_recreation_result(control, receipt, source_root):
             "source_root": source_root, "removed_containers": removed,
             "results_preserved": True, "replacement_started": False,
             "runtime_control_archive": dict(archive)}
+
+
+def resume_failed_run(args):
+    """Continue the pinned accepted run through an explicit diagnostic-stop proof."""
+    return _retained_operation(args, recreate_services=True, failed_run_resume=True)
+
+
+def _revalidate_failed_run_handoff(control, args, handoff, *, phase):
+    if (not isinstance(handoff, Mapping) or set(handoff) != {
+            "context", "previous", "document", "actual", "state", "removal"}):
+        raise BuildControlError("Failed-run continuation handoff is malformed")
+    from docker_volume_failed_run_resume import revalidate_resume_request
+    return revalidate_resume_request(
+        control, args, handoff["context"], handoff["previous"], handoff["document"],
+        handoff["actual"], Path(handoff["state"]), phase=phase,
+        removal=handoff["removal"],
+    )
 
 
 def recreate(args):
@@ -8712,8 +8746,13 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
+    failed_run_resume=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    if failed_run_resume and (not recreate_services or restart_idle_service or stop_after_drain
+            or resume_recreation_id is not None or refresh_frontend_service or retire_only
+            or getattr(args, "fresh_state", False) or getattr(args, "script", None) is not None):
+        raise BuildControlError("Failed-run continuation requires retained recreation without a script")
     from docker_volume_frontend_start_resume import validate_options as frontend_resume_options
     frontend_resume_options(args)
     capture_terminal = getattr(args, "capture_terminal_observation", False)
@@ -9369,8 +9408,19 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
                 actual=actual, store_root=native_terminal_store,
             )
+        failed_resume_prepared = None
+        if failed_run_resume:
+            from docker_volume_failed_run_resume import prepare_resume_request
+            resume_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "failed-run retained sessions")
+            failed_resume_prepared = prepare_resume_request(
+                control, args, previous, document, actual, resume_state)
+            if args.preview:
+                return {"state": "preview-passed", "plan": failed_resume_prepared["plan"],
+                        "plan_sha256": failed_resume_prepared["context"]["plan_sha256"]}
         pre_activation_stop = None
-        if (document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
+        if (failed_resume_prepared is None
+                and document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
                 and preparation_abort is None and native_terminal_pin is None
                 and prelaunch_failure_pin is None):
             stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
@@ -9414,11 +9464,16 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 raise BuildControlError("Retained storage image differs")
         # A fresh session archives its entire old runtime namespace below.
         # It must not carry permissions to recover or restore the old owner.
-        recovery_context = {} if fresh_state else _retained_recovery_context(
-            control, previous, document, fresh_state=False,
-            backend_id=actual["backend"].get("Id"),
-            drained_successor=drained_successor_pins, actual=actual,
-        )
+        if failed_resume_prepared is not None:
+            if certificate.get("restart_verified") is not True:
+                raise BuildControlError("Failed-run continuation requires verified retained storage")
+            recovery_context = {"failed_run_resume_context": failed_resume_prepared["context"]}
+        else:
+            recovery_context = {} if fresh_state else _retained_recovery_context(
+                control, previous, document, fresh_state=False,
+                backend_id=actual["backend"].get("Id"),
+                drained_successor=drained_successor_pins, actual=actual,
+            )
         from docker_volume_drained_successor import DrainedSuccessorContext
         drained_successor = isinstance(recovery_context, DrainedSuccessorContext)
         from docker_volume_native_init_successor import NativeInitSuccessorContext
@@ -9455,7 +9510,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # marker and only lets that helper release its own technical lease.
         from docker_volume_activation_reconcile import reconcile_unknown_activation
         offline_attempt = getattr(args, "offline_reconciliation", None)
-        if prelaunch_failure_pin is not None:
+        if failed_resume_prepared is not None:
+            if offline_attempt is not None:
+                raise BuildControlError("Failed-run continuation cannot combine offline reconciliation")
+            reconciliation = None
+        elif prelaunch_failure_pin is not None:
             if offline_attempt is not None or getattr(args, "script", None) is not None:
                 raise BuildControlError("Prelaunch failure archival cannot reconcile or replay an old operation")
             reconciliation = None
@@ -9554,6 +9613,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if (not fresh_state and pre_activation_stop is None and not pre_api_stopped
                 and not original_after_ready_stop and not native_init_successor and not drained_successor
                 and not startup_diagnostic_stopped and not cold_budget_stopped and not linux_supervision_stop
+                and failed_resume_prepared is None
                 and certificate.get("restart_verified") is True):
             retained_environment = document["services"]["backend"]["environment"]
             retained_reattach_declared = (
@@ -9607,6 +9667,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # pre-admission path merely because the old storage probe was limited.
         if (not fresh_state and not pre_api_stopped and not native_init_successor and not drained_successor
                 and not startup_diagnostic_stopped and not cold_budget_stopped
+                and failed_resume_prepared is None
                 and not certificate.get("restart_verified")):
             retained_environment = document["services"]["backend"]["environment"]
             observed_environment = actual["backend"].get("Config", {}).get("Env") or []
@@ -9715,6 +9776,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             recreate_inputs["helper_source"] = helper_source_binding
         if offline_attempt is not None:
             recreate_inputs["offline_reconciliation"] = offline_attempt
+        if failed_resume_prepared is not None:
+            recreate_inputs["failed_run_resume"] = failed_resume_prepared["context"]
         with control.operation("recreate-services", recreate_inputs) as operation:
             if frontend_handoff is not None:
                 _validate_frontend_start_handoff(control, frontend_handoff, selected, state)
@@ -9734,11 +9797,19 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             # complete old runtime and its recovery authority without consuming
             # or carrying it. The fresh-state incarnation/archive fences below
             # still apply under this same lease.
-            leased_recovery_context = {} if fresh_state else _retained_recovery_context(
-                control, previous, document, fresh_state=fresh_state,
-                backend_id=actual["backend"].get("Id"),
-                drained_successor=drained_successor_pins, actual=successor_actual,
-            )
+            if failed_resume_prepared is not None:
+                from docker_volume_failed_run_resume import revalidate_resume_request
+                revalidate_resume_request(
+                    control, args, failed_resume_prepared["context"], previous, document,
+                    actual, state, phase="recreate-lease")
+                leased_recovery_context = {"failed_run_resume_context": failed_resume_prepared["context"]}
+                operation["receipt"]["failed_run_resume"] = failed_resume_prepared["context"]
+            else:
+                leased_recovery_context = {} if fresh_state else _retained_recovery_context(
+                    control, previous, document, fresh_state=fresh_state,
+                    backend_id=actual["backend"].get("Id"),
+                    drained_successor=drained_successor_pins, actual=successor_actual,
+                )
             if require_prepared_fresh_archive(
                     control, args, previous, document, actual,
                     recreate_services=recreate_services, allow_running_frontend=True,
@@ -10109,6 +10180,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 }
                 control.write(operation["root"] + "/receipt.json", operation["receipt"])
             _revalidate_helper_source_binding(helper_source_binding, selected)
+            if failed_resume_prepared is not None:
+                revalidate_resume_request(
+                    control, args, failed_resume_prepared["context"], previous, document,
+                    actual, state, phase="before-remove")
             docker_capture("rm", *ids.values())
             if helper_ids:
                 docker_capture("rm", *helper_ids)
@@ -10192,6 +10267,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if reuse is not None and frontend_handoff is not None:
             reuse["frontend_start_handoff"] = frontend_handoff
         recovery_context.update(accepted_reattach_context)
+        if failed_resume_prepared is not None:
+            recovery_context["failed_run_resume_context"] = {
+                "context": failed_resume_prepared["context"], "previous": previous,
+                "document": document, "actual": actual, "state": str(state),
+                "removal": dict(operation["receipt"]),
+            }
         if retained_restore_pin is not None and not fresh_state:
             recovery_context["cold_budget_restore"] = retained_restore_pin
         return start(

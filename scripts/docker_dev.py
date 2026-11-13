@@ -3026,6 +3026,33 @@ def _parser() -> argparse.ArgumentParser:
         help="include one exact untracked source file in the managed backend build; repeat as needed",
     )
 
+    failed_resume = subparsers.add_parser(
+        "resume-failed-run-volume",
+        help="resume the pinned existing accepted run after a diagnostic stop; never cancel or replay a script",
+    )
+    for flag, help_text in (
+        ("attempt", "exact retained development attempt UUID"),
+        ("config-sha256", "Compose configuration SHA-256 of that retained development"),
+        ("stop-attempt", "successful managed diagnostic-stop operation UUID"),
+        ("stop-terminal-sha256", "raw SHA-256 of that stop operation's outer terminal.json"),
+        ("run-id", "existing accepted run to preserve and continue"),
+        ("request-id", "new canonical recovery UUID; reuse it for preview and apply"),
+    ):
+        failed_resume.add_argument("--" + flag, required=True, help=help_text)
+    failed_resume.add_argument("--source-root", type=Path, required=True,
+                               help="exact registered checkout mounted by the retained group")
+    failed_resume.add_argument("--port", type=int, required=True,
+                               help="explicit retained frontend loopback port")
+    failed_resume_mode = failed_resume.add_mutually_exclusive_group(required=True)
+    failed_resume_mode.add_argument("--preview", action="store_true")
+    failed_resume_mode.add_argument("--apply", action="store_true")
+    failed_resume.add_argument("--expected-plan-sha256",
+                               help="unchanged plan SHA-256 returned by preview; required for apply")
+    failed_resume.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
+    )
+
     for name in ("build", "up"):
         command = subparsers.add_parser(name, help=(
             "start the fixed backend and frontend services; backend builds in-place"
@@ -3307,6 +3334,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "cancel-unclaimed-volume":
             from docker_volume_unclaimed_cancellation import cancel_unclaimed
             cancel_unclaimed(args)
+        elif args.action == "resume-failed-run-volume":
+            from docker_volume_failed_run_resume import run as resume_failed_run
+            print(json.dumps(resume_failed_run(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "recover-cancelled-volume":
             from docker_volume_cancelled_recovery import recover_cancelled
             recover_cancelled(args)
