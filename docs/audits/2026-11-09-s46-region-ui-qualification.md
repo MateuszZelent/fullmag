@@ -2028,3 +2028,22 @@ Regresja obejmuje rzeczywistą kolizję read_transaction z trzymanym writerem,
 pojedynczą próbę przed odroczeniem, udany odczyt po zwolnieniu oraz zachowanie
 błędów uprawnień i uszkodzonej kolejki. Testy natywne tej poprawki i ponowny
 odbiór runtime pozostają otwarte. Nie zmieniono solverów ani danych runu.
+
+
+Bootstrap cb `43398007913` zakończył Rust, Control Room, browser fixtures oraz
+FDM relaxation qualification powodzeniem. Python-contracts zatrzymał się na
+FrontendMetadataRefreshTests: fixture nie modelowała nowych opcjonalnych
+odczytów recovery i wywoływała prawdziwy helper Docker, po czym przekraczała
+limit czasu. Poprawiono wyłącznie fixture: brak jest modelowany dla dokładnie
+trzech oczekiwanych opcjonalnych journalów, z asercją pełnej listy odczytów.
+Walidatory recovery nadal się wykonują; nie zmieniono kodu produkcyjnego.
+Klasa: 12 PASS. Cały plik test_docker_volume_receipts.py: 65 PASS w 1,003 s,
+bez wywołania Dockera. Poprawka schedulera jest wypchnięta jako
+`5a278803937450573f8509d3b3e82d6d56da2f8b`; jej testy natywne nadal wymagają CI.
+
+Odczyt trwałych danych przyjętego runu doprecyzował stan po awarii: katalog
+rewizja20 zawiera A succeeded, terminalny event6 i worker-process-exit exit0.
+Odpowiadająca lokalna lease oraz jedyna rezerwacja host ledger są released.
+B i C są accepted bez attempt/epoch/resource. Nie jest to przypadek no-spawn
+ani unused-admission dla A. Należy zachować A i kwalifikować dalsze wykonanie
+istniejącego runu; nie ponawiać skryptu ani Compute.

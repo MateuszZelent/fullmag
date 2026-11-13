@@ -1158,9 +1158,19 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         import docker_dev_codegen as codegen
         import docker_development_inputs as frontend_inputs
         import windows_folder_host,linux_native_host,fullmag_storage,docker_volume_reconcile,docker_build_control
+        import docker_volume_cold_budget_restore,docker_volume_stop_unadmitted
         host = linux_native_host if linux else windows_folder_host
         certificate_name = Path(host.HOST_CERT_PATH).name
         control=mock.Mock(spec=BuildControl);control.project='own';control.volume='control';control.namespace=''
+        cold_journal, cold_intent = docker_volume_cold_budget_restore._paths('b'*64)
+        native_stop_journal = 'verification/stop-failed-' + 'b'*64 + '.json'
+        recovery_reads=[]
+        def read_absent_recovery_record(control_arg, relative, *, optional=False):
+            self.assertIs(control_arg, control)
+            self.assertTrue(optional)
+            self.assertIn(relative, (cold_journal, cold_intent, native_stop_journal))
+            recovery_reads.append((relative, optional))
+            return None
         control._active_operation=None
         control.operation=types.MethodType(BuildControl.operation,control)
         control._pin_operation_helper=types.MethodType(BuildControl._pin_operation_helper,control)
@@ -1211,6 +1221,10 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                     or (fault=='owner-drift' and name==host.OWNER_NAME)):
                 raw+=b' '
             return raw
+        cold_control_patch = mock.patch.object(
+            docker_volume_stop_unadmitted, '_control_bytes', side_effect=read_absent_recovery_record)
+        cold_control_patch.start()
+        self.addCleanup(cold_control_patch.stop)
         with mock.patch.object(docker_build_control.subprocess,'Popen',return_value=logger), \
              mock.patch.object(fullmag_storage,'validate_path',return_value=Path('/state')), \
              mock.patch.object(dev,'_session_host',return_value=host), \
@@ -1241,6 +1255,10 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                 if fault is None:raise
         if fault in ('source-mismatch','unknown-source','carry-preflight'):stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
+        self.assertEqual({relative for relative, _ in recovery_reads},
+                         {cold_journal, cold_intent, native_stop_journal})
+        self.assertTrue(all(optional for _, optional in recovery_reads))
+        cold_control_patch.stop()
         return writes,seeded,composed,logger
 
     def test_successful_handoff_recreates_only_frontend_and_retains_backend(self):
