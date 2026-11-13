@@ -1,0 +1,20 @@
+{
+  "schema": "p22.actual-shared-candidate-readonly-qualification.v1",
+  "state": "passed",
+  "helper_sha256": "5a1f7417de23229436f604cd8b39c1cea06832939e4a6ac96a92dd397f2e58f6",
+  "seconds": 19.364,
+  "ready_candidates": [
+    {
+      "path": "/opt/fullmag/package/.development/candidates/.backend-package-candidate-1g5v_gzj",
+      "receipt_sha256": "1cbc64954e9d680255d9bed71a308a753b898b9ecdb559b369b82f831d935796",
+      "artifact_count": 24,
+      "source_commit": "a59bbe843ea3ef373bca373c659ef5cfc989b891"
+    }
+  ],
+  "current_source_commit": "cbdfedb9477414de0d87ed47acaf6c2223e36121",
+  "fresh_source_capture_performed": false,
+  "package_promoted": false,
+  "candidate_retired": false,
+  "runtime_started": false,
+  "new_solve": false
+}

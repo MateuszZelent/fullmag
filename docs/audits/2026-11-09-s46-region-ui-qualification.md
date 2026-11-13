@@ -2047,3 +2047,71 @@ Odpowiadająca lokalna lease oraz jedyna rezerwacja host ledger są released.
 B i C są accepted bez attempt/epoch/resource. Nie jest to przypadek no-spawn
 ani unused-admission dla A. Należy zachować A i kwalifikować dalsze wykonanie
 istniejącego runu; nie ponawiać skryptu ani Compute.
+
+
+### Build a59 i kontrola gotowego kandydata — błąd sealed hardlinks
+
+Zarządzany build naprawczy `0fad18120bfd4062b6966eaab1086c75` zakończył się
+exit0; make trwał 707759 ms. Kandydat `.backend-package-candidate-1g5v_gzj`
+ma receipt SHA-256 `1cbc64954e9d680255d9bed71a308a753b898b9ecdb559b369b82f831d935796`,
+commit a59bbe843ea3ef373bca373c659ef5cfc989b891 i snapshot
+3f8194f32b32398a9e85db7f578822600b3988a41c6f6a7bd4cba7cadb43109b.
+Pakiet pozostaje ready i nieopublikowany; runtime_started=false.
+
+Wszystkie workflow a59 zakończyły się sukcesem, w tym bootstrap43406187008.
+Log Rust job131821117318 potwierdza oba scheduler_writer_busy_tests: odroczenie
+zajętego writera bez powtórzenia przebiegu oraz rzeczywisty konflikt shared
+reader z writerem, odczyt po zwolnieniu i zachowanie błędów krytycznych.
+Po dwukrotnej awarii transportu konektora pobrano ten sam log przez Linux gh API;
+wybrane linie zachowano w /tmp/p22-a59-scheduler-regression-ci.json.
+
+Candidate-history22af509f53fd4233a8a320c48a8825b6 zakończył operację diagnostyczną
+bez zmian donora. Wynik history-not-fully-proven jest oczekiwany: nowy CLI
+odrzucił terminal recovery dla runu, którego B/C nadal są Accepted. Nie jest
+to dowód terminalności runu ani kwalifikacja runtime. Kontrola zachowania
+potwierdziła 60/60 niezmienionych plików (973156 B), niezmienione SHA procesu,
+Failed ownera i released ledger oraz nadal żywe diagnostyczne API19133.
+
+Read-only kwalifikacja gotowego kandydata zatrzymała się w
+backend_candidate_retirement._candidate_file_records: wszystkie 24 artefakty
+wymienione w receipt mają nlink2 i sealed mode0555/0444. Są to linki celowo
+utworzone przez backend_shared_store.publish, ale kwalifikacja i pending
+deletion bezwarunkowo wymagały nlink1. Weryfikacja całego pakietu przed tym
+warunkiem przeszła. Dozwolone linki artefaktów wymagają oddzielnego dowodu
+sealed shared-store entry, także dla manifestów runtime i launcher-build-mode
+wymienionych w receipt. Kontrolne metadane spoza inventory artefaktów oraz
+wynikowe kopie archiwalne nadal muszą mieć pojedynczy link.
+Implementacja i testy tej korekty są w toku, nie oznaczają gotowego backendu.
+
+Stop-diagnostic-preview c74fc7d66f894fdaab6ba3430cdab0cf przeszedł ze
+stop_applied=false. Nie zatrzymano usług ani nie anulowano B/C. Istniejący
+candidate-recovery quarantine wrapper wymaga trzech osobnych wolumenów i
+odrzuca subpaths, więc nie obsługuje aktualnej topologii ADR0076. Nie użyto go
+ani nie rozszerzono scope o tę optymalizację. Następny właściwy krok to poprawka
+wspólnego kwalifikowania/retirement, nowy obraz helpera i kwalifikowany start
+maintenance zachowujący A; późniejszy odbiór całego cyklu UI pozostaje otwarty.
+
+
+Korekta kwalifikacji, rewalidacji, kopiowania metadanych i pending deletion
+jest zaimplementowana. Wielokrotny link jest dozwolony tylko dla artefaktu z
+receipt, po sprawdzeniu zgodnego sealed shared-store entry, klucza/inputs,
+rekordu i tego samego device/inode. Claim magazynu jest trzymany podczas
+kopiowania i usuwania aliasu kandydata. Pozostałe metadane i kopie archiwalne
+zachowują nlink1. Nie wprowadzono limitu nlink2: inne poprawne consumer aliases
+oraz ich usuwanie nie zmieniają treści sealed artefaktu.
+
+Przed poprawką test dodatni odtworzył odmowę na _fullmag_core.so. Po poprawce
+pełne suites ROOT: candidate-retirement 36 PASS, shared-store/recovery 16 PASS.
+Regresje obejmują publisher, verified-hardlinks consumer i błędny producer SHA,
+fresh promotion, stale retirement, przerwane usuwanie, zmianę nlink/ctime,
+zachowanie drugiego konsumenta i cache, prywatne kopie manifestów oraz odmowy
+błędnych kluczy, inputs, inode, hash, trybu zapisu i linków kontrolnych metadanych.
+
+Rzeczywisty read-only probe z końcowym helper SHA
+5a1f7417de23229436f604cd8b39c1cea06832939e4a6ac96a92dd397f2e58f6
+zakwalifikował dokładnie gotowy pakiet a59 z 24 artefaktami w 19,364 s.
+Dowód: 2026-11-13-shared-candidate-qualification.json. Nie wykonano fresh source
+capture, promocji, retirement, startu runtime ani Solve. To dowód poprawki
+walidacji, nie odbiór UI. Zmieniony helper wymaga nowego obrazu; po nowym commicie
+pakiet a59 będzie starym kandydatem i musi przejść kwalifikowane retirement
+z zachowaniem danych shared store przed buildem właściwego nowego źródła.
