@@ -1216,7 +1216,27 @@ fn authorize_host_worker_launch_with_timeout(
     retry_timeout: Duration,
     on_retry: impl FnMut(),
 ) -> Result<String> {
-    retry_host_worker_launch_with_timeout(
+    authorize_host_worker_launch_with_clock(
+        host,
+        store,
+        lease,
+        retry_timeout,
+        on_retry,
+        Instant::now,
+        std::thread::sleep,
+    )
+}
+
+fn authorize_host_worker_launch_with_clock(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    store: &SessionStore,
+    lease: &FmsResourceLease,
+    retry_timeout: Duration,
+    on_retry: impl FnMut(),
+    now: impl FnMut() -> Instant,
+    wait: impl FnMut(Duration),
+) -> Result<String> {
+    retry_host_worker_launch_with_clock(
         || {
             // Preserve the sampler's unavailable reason if the sample ages
             // between the second preflight read and the locked launch CAS.
@@ -1225,6 +1245,8 @@ fn authorize_host_worker_launch_with_timeout(
         },
         on_retry,
         retry_timeout,
+        now,
+        wait,
     )
     .context("authorize host worker launch")
 }
@@ -1237,21 +1259,37 @@ fn retry_host_worker_launch<T>(
 }
 
 fn retry_host_worker_launch_with_timeout<T>(
+    operation: impl FnMut() -> Result<T>,
+    on_retry: impl FnMut(),
+    retry_timeout: Duration,
+) -> Result<T> {
+    retry_host_worker_launch_with_clock(
+        operation,
+        on_retry,
+        retry_timeout,
+        Instant::now,
+        std::thread::sleep,
+    )
+}
+
+fn retry_host_worker_launch_with_clock<T>(
     mut operation: impl FnMut() -> Result<T>,
     mut on_retry: impl FnMut(),
     retry_timeout: Duration,
+    mut now: impl FnMut() -> Instant,
+    mut wait: impl FnMut(Duration),
 ) -> Result<T> {
     use std::hash::{Hash, Hasher};
 
     // Both retryable errors precede one-shot permit consumption: writer
     // contention prevents admission locks, while an unavailable compute-node
     // sample and transient GPU inventory are read-only validation failures.
-    let deadline = Instant::now() + retry_timeout;
+    let deadline = now() + retry_timeout;
     let mut attempt = 0_u64;
     loop {
         match operation() {
             Ok(value) => return Ok(value),
-            Err(error) if is_retryable_pre_spawn_host_error(&error) && Instant::now() < deadline =>
+            Err(error) if is_retryable_pre_spawn_host_error(&error) && now() < deadline =>
             {
                 on_retry();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1268,7 +1306,7 @@ fn retry_host_worker_launch_with_timeout<T>(
                     Duration::from_millis(5 + hasher.finish() % 36)
                 };
                 attempt = attempt.saturating_add(1);
-                std::thread::sleep(delay.min(deadline.saturating_duration_since(Instant::now())));
+                wait(delay.min(deadline.saturating_duration_since(now())));
             }
             Err(error) => return Err(error),
         }
@@ -1290,10 +1328,28 @@ fn current_compute_snapshot_before_worker_launch_with_timeout(
     retry_timeout: Duration,
     on_retry: impl FnMut(),
 ) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
-    retry_host_worker_launch_with_timeout(
+    current_compute_snapshot_before_worker_launch_with_clock(
+        host,
+        retry_timeout,
+        on_retry,
+        Instant::now,
+        std::thread::sleep,
+    )
+}
+
+fn current_compute_snapshot_before_worker_launch_with_clock(
+    host: &fullmag_runtime_control::host_runtime::HostRuntimeAdmission,
+    retry_timeout: Duration,
+    on_retry: impl FnMut(),
+    now: impl FnMut() -> Instant,
+    wait: impl FnMut(Duration),
+) -> Result<fullmag_session::compute_node_snapshot::ComputeNodeSnapshot> {
+    retry_host_worker_launch_with_clock(
         || host.required_current_compute_node_snapshot(),
         on_retry,
         retry_timeout,
+        now,
+        wait,
     )
 }
 
@@ -4181,35 +4237,86 @@ accepted worker failed: execute accepted worker Start: controlled failure\n";
             .publish_compute_node_snapshot_with_owner(&fixture._inventory_owner, &stale)
             .unwrap();
 
+        let sample_retry_started = Instant::now();
+        let sample_retry_elapsed = std::cell::Cell::new(Duration::ZERO);
+        let sample_retry_waits = std::cell::Cell::new(0);
         let mut sample_read_retries = 0;
-        let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
+        let sample_read_timeout = Duration::from_millis(250);
+        let second_read_error = current_compute_snapshot_before_worker_launch_with_clock(
             &fixture.host,
-            Duration::from_millis(250),
+            sample_read_timeout,
             || sample_read_retries += 1,
+            || sample_retry_started + sample_retry_elapsed.get(),
+            |delay| {
+                sample_retry_waits.set(sample_retry_waits.get() + 1);
+                sample_retry_elapsed.set(sample_retry_elapsed.get() + delay);
+            },
         )
         .unwrap_err();
-        assert!(
-            sample_read_retries > 0,
+        assert_eq!(
+            sample_read_retries, 1,
             "the sample read should be retried before deferral"
         );
+        assert_eq!(sample_retry_waits.get(), 1);
+        assert_eq!(sample_retry_elapsed.get(), sample_read_timeout);
         assert!(second_read_error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
         }));
         assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
 
-        let mut authorization_retries = 0;
-        let error = authorize_host_worker_launch_with_timeout(
+        let authorization_timeout = Duration::from_millis(100);
+        let expired_attempt_started = Instant::now();
+        let expired_attempt_now_calls = std::cell::Cell::new(0);
+        let expired_attempt_waits = std::cell::Cell::new(0);
+        let mut expired_attempt_retries = 0;
+        let first_attempt_error = authorize_host_worker_launch_with_clock(
             &fixture.host,
             &fixture.store,
             &fixture.lease,
-            Duration::from_millis(100),
-            || authorization_retries += 1,
+            authorization_timeout,
+            || expired_attempt_retries += 1,
+            || {
+                let call = expired_attempt_now_calls.get();
+                expired_attempt_now_calls.set(call + 1);
+                expired_attempt_started
+                    + if call == 0 {
+                        Duration::ZERO
+                    } else {
+                        authorization_timeout
+                    }
+            },
+            |_| expired_attempt_waits.set(expired_attempt_waits.get() + 1),
         )
         .unwrap_err();
-        assert!(
-            authorization_retries > 0,
+        assert_eq!(expired_attempt_retries, 0);
+        assert_eq!(expired_attempt_waits.get(), 0);
+        assert!(first_attempt_error.chain().any(|cause| {
+            cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
+        }));
+
+        let authorization_retry_started = Instant::now();
+        let authorization_retry_elapsed = std::cell::Cell::new(Duration::ZERO);
+        let authorization_retry_waits = std::cell::Cell::new(0);
+        let mut authorization_retries = 0;
+        let error = authorize_host_worker_launch_with_clock(
+            &fixture.host,
+            &fixture.store,
+            &fixture.lease,
+            authorization_timeout,
+            || authorization_retries += 1,
+            || authorization_retry_started + authorization_retry_elapsed.get(),
+            |delay| {
+                authorization_retry_waits.set(authorization_retry_waits.get() + 1);
+                authorization_retry_elapsed.set(authorization_retry_elapsed.get() + delay);
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            authorization_retries, 1,
             "stale authorization should be retried before deferral"
         );
+        assert_eq!(authorization_retry_waits.get(), 1);
+        assert_eq!(authorization_retry_elapsed.get(), authorization_timeout);
         assert!(error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
         }));
