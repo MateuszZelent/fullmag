@@ -92,6 +92,24 @@ hash obecnego owner tokenu. Nie dowodzi jego historycznej ciągłości:
 `historical_owner_continuity=not-proven`. Tę granicę zachowują także dwa
 obowiązkowe pola `namespace_admitted=false` i `data_migrated=false`.
 
+Producent `docker_dev_data_volume_runtime_binding.py` może zakwalifikować
+najnowszy endpoint po kolejnych przebudowach tej samej grupy. Nie zmienia przy
+tym `previous_runtime_pins`: nadal opisują one pierwotny plan. Stop i recreation
+muszą wskazywać tego samego rzeczywistego poprzednika aktualnego development;
+nie muszą to być kontenery pierwotnego planu. Oba snapshoty stopu i recreation
+muszą być identyczne, a recreation oraz development współdzielić dokładny
+uwierzytelniony stop/request/proof. Nadal nie twierdzimy bezpośredniej
+przyczynowości recreation → development ani historycznej ciągłości ownera.
+
+Domyślne wejście producenta jest odczytowe. Publikacja pod hostlock i lease
+grupy ponawia kontrolę trzech terminali, Compose, rzeczywistych kontenerów,
+bindów, pierwotnych device/inode, budżetów oraz bieżącego certyfikatu,
+owner markera i probe również w namespace backendu. Tworzy wyłącznie nowy
+rekord v1 i operacyjny receipt; stary loader oraz istniejące rekordy pozostają
+zachowane. Drift po publikacji zachowuje plik i nie zapisuje sukcesu.
+Binding nie poświadcza braku innych konsumentów danych: pełny aktualny
+inventory i żywe guardy nadal należą do późniejszych etapów migracji.
+
 Request `fullmag.data-volume-linux-provision.v2` wybiera wyłącznie jawny,
 niepusty SHA takiego rekordu. Przypina on także bajty modułu odczytującego
 binding. Request v1 zachowuje dotychczasowe zachowanie i nigdy sam nie wybiera
