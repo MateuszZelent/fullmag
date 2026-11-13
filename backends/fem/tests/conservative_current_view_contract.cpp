@@ -1170,6 +1170,66 @@ bool same_records(
     return true;
 }
 
+bool physical_oracle_records_agree(
+    const std::vector<CanonicalFaceFluxRecord> &left,
+    const std::vector<CanonicalFaceFluxRecord> &right)
+{
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        // MFEM's rounded Piola evaluation is an independent physical oracle,
+        // not the exact-rational canonical encoding. Use the same 1e-13 A
+        // comparison as the independently decoded balance face rows below.
+        if (left[i].face_vertex_ids != right[i].face_vertex_ids ||
+            !std::isfinite(left[i].flux_a) ||
+            !std::isfinite(right[i].flux_a) ||
+            std::abs(left[i].flux_a - right[i].flux_a) > 1.0e-13) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void physical_oracle_comparison_preserves_exact_identity_checks()
+{
+    const std::vector<CanonicalFaceFluxRecord> expected{
+        CanonicalFaceFluxRecord{{1, 2, 3}, 2.0},
+        CanonicalFaceFluxRecord{{1, 2, 4}, 0.0}};
+    auto changed = expected;
+    changed.front().flux_a = std::nextafter(2.0, 3.0);
+    changed.back().flux_a = 0x1p-52;
+    require(physical_oracle_records_agree(expected, changed) &&
+            !same_records(expected, changed),
+        "physical Piola comparison lost its distinction from exact identity");
+    changed = expected;
+    changed.pop_back();
+    require(!physical_oracle_records_agree(expected, changed),
+        "physical Piola comparison accepted a missing face");
+    changed = expected;
+    changed.front().face_vertex_ids[2] = 5;
+    require(!physical_oracle_records_agree(expected, changed),
+        "physical Piola comparison accepted a different stable face key");
+    changed = expected;
+    changed.front().flux_a = -2.0;
+    require(!physical_oracle_records_agree(expected, changed),
+        "physical Piola comparison accepted an inverted current sign");
+    changed = expected;
+    changed.back().flux_a = 1.0e-12;
+    require(!physical_oracle_records_agree(expected, changed),
+        "physical Piola comparison accepted a flux outside the existing gate");
+    for (const double nonfinite : {
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::infinity(),
+            -std::numeric_limits<double>::infinity()}) {
+        changed = expected;
+        changed.front().flux_a = nonfinite;
+        require(!physical_oracle_records_agree(expected, changed) &&
+                !physical_oracle_records_agree(changed, expected),
+            "physical Piola comparison accepted a non-finite flux");
+    }
+}
+
 Bytes encode_canonical_records(
     const std::vector<CanonicalFaceFluxRecord> &input)
 {
@@ -1962,31 +2022,7 @@ void orientation_conservation_and_source_cut_are_canonical()
     // face fluxes geometrically, and recomputes element/shared-face balances.
     // It does not consume the KKT residual or implementation certificate.
     const auto oracle = integrate_physical_piola_oracle(view->field(), ids);
-    if (!same_records(oracle.records, canonical_records)) {
-        std::cerr << "Piola record counts: oracle=" << oracle.records.size()
-                  << " published=" << canonical_records.size() << '\n';
-        std::size_t shown = 0;
-        for (std::size_t i = 0; i < std::min(
-                oracle.records.size(), canonical_records.size()); ++i) {
-            const auto &expected = oracle.records[i];
-            const auto &published = canonical_records[i];
-            if (expected.face_vertex_ids == published.face_vertex_ids &&
-                    expected.flux_a == published.flux_a) continue;
-            std::cerr << "Piola mismatch " << i << " oracle_key="
-                      << expected.face_vertex_ids[0] << ','
-                      << expected.face_vertex_ids[1] << ','
-                      << expected.face_vertex_ids[2] << " published_key="
-                      << published.face_vertex_ids[0] << ','
-                      << published.face_vertex_ids[1] << ','
-                      << published.face_vertex_ids[2] << std::hexfloat
-                      << " oracle_A=" << expected.flux_a
-                      << " published_A=" << published.flux_a
-                      << " difference_A=" << (published.flux_a - expected.flux_a)
-                      << std::defaultfloat << '\n';
-            if (++shown == 8) break;
-        }
-    }
-    require(same_records(oracle.records, canonical_records),
+    require(physical_oracle_records_agree(oracle.records, canonical_records),
         "published canonical records disagree with independent Piola quadrature");
     require(std::abs(oracle.max_internal_jump_a -
                 view->balance().max_internal_face_jump_a) <= 1.0e-13,
@@ -2711,7 +2747,7 @@ void certified_imported_rt0_is_accepted_and_deep_owned()
         "certified imported RT0 field did not survive caller destruction");
     const auto oracle = integrate_physical_piola_oracle(
         imported_view->field(), ids);
-    require(same_records(oracle.records, records(imported_view)),
+    require(physical_oracle_records_agree(oracle.records, records(imported_view)),
         "import certificate does not match independent field-to-record oracle");
     independently_decode_and_match_balance_artifact(
         imported_view, ids, boundary_roles, expected_pairs);
@@ -5802,6 +5838,7 @@ int main(int argc, char **argv)
         constraint_rank_handles_wide_exact_arithmetic_and_physical_rhs_gate();
         deterministic_constraint_rank_rejects_malformed_rows();
         global_kkt_norm_does_not_certify_a_local_current_balance();
+        physical_oracle_comparison_preserves_exact_identity_checks();
         orientation_conservation_and_source_cut_are_canonical();
         layered_conductor_preserves_series_current();
         if (std::getenv("FULLMAG_OET0_LARGE_MESH") != nullptr) {
