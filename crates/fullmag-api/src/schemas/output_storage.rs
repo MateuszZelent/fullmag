@@ -65,6 +65,7 @@ pub enum ExistingOutputSchema {
     #[default]
     Timestamp,
     Error,
+    Overwrite,
 }
 
 impl From<ExistingOutputSchema> for ExistingOutputIR {
@@ -72,6 +73,7 @@ impl From<ExistingOutputSchema> for ExistingOutputIR {
         match value {
             ExistingOutputSchema::Timestamp => Self::Timestamp,
             ExistingOutputSchema::Error => Self::Error,
+            ExistingOutputSchema::Overwrite => Self::Overwrite,
         }
     }
 }
@@ -81,6 +83,7 @@ impl From<ExistingOutputIR> for ExistingOutputSchema {
         match value {
             ExistingOutputIR::Timestamp => Self::Timestamp,
             ExistingOutputIR::Error => Self::Error,
+            ExistingOutputIR::Overwrite => Self::Overwrite,
         }
     }
 }

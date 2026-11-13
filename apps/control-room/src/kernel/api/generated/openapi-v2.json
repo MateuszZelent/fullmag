@@ -10206,7 +10206,8 @@
       "ExistingOutputSchema": {
         "enum": [
           "timestamp",
-          "error"
+          "error",
+          "overwrite"
         ],
         "type": "string"
       },

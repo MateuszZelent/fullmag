@@ -575,6 +575,7 @@ impl From<TempCleanupArg> for TempCleanupIR {
 pub(crate) enum ExistingOutputArg {
     Timestamp,
     Error,
+    Overwrite,
 }
 
 impl From<ExistingOutputArg> for ExistingOutputIR {
@@ -582,6 +583,7 @@ impl From<ExistingOutputArg> for ExistingOutputIR {
         match value {
             ExistingOutputArg::Timestamp => Self::Timestamp,
             ExistingOutputArg::Error => Self::Error,
+            ExistingOutputArg::Overwrite => Self::Overwrite,
         }
     }
 }
