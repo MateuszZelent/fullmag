@@ -882,9 +882,11 @@ def _validate_repeated_stop(read_control, root, current, actual, proof):
             "Repeated observation would discard a changed held queue")
     _, drain = managed(read_control, root + "backend-drain.json")
     process = drain.get("process_receipt", {})
+    # PID 1 normally terminates the API with SIGTERM before draining native.
+    # Its -15 return code is distinct from SIGKILL or an API failure.
     require(process.get("schema") == "fullmag.docker-process-tree.v1" and process.get("state") == "drained"
             and process.get("accepted_store") == "/state/runs/docker-all/session-store"
-            and type(process.get("api_exit_code")) is int and process["api_exit_code"] == 0
+            and type(process.get("api_exit_code")) is int and process["api_exit_code"] in (0, -15)
             and read_control("runtime-control/runtime-service/process-tree.json") == canonical(process) + b"\n",
             "Repeated observation has no current successful native drain")
     ready, terminal = process.get("service_owner", {}), process.get("terminal_service_owner", {})

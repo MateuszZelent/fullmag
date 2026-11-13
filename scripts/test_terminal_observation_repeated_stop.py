@@ -129,6 +129,27 @@ class RepeatedTerminalStopTests(unittest.TestCase):
         del self.records["iteration/current.json"]
         self.assertEqual(self.validate(stop_pin=pin), pin)
 
+    def _api_exit(self, code):
+        relative=self.base+'backend-drain.json'
+        drain=observation.decode(self.records[relative])
+        process=drain['process_receipt']
+        process['api_exit_code']=code
+        process_raw=raw(process)
+        drain['process_receipt_sha256']=observation.sha(process_raw)
+        self.records[relative]=raw(drain)
+        self.records['runtime-control/runtime-service/process-tree.json']=process_raw
+
+    def test_supervisor_sigterm_of_api_keeps_successful_native_drain_valid(self):
+        self._api_exit(-15)
+        self.assertEqual(self.validate()[0],self.token)
+
+    def test_api_kill_failure_or_boolean_exit_does_not_become_a_successful_stop(self):
+        for code in (-9,1,True):
+            with self.subTest(code=code):
+                self._api_exit(code)
+                with self.assertRaisesRegex(ValueError,'successful native drain'):
+                    self.validate()
+
     def test_a_new_run_scene_api_or_unpreserved_held_queue_is_rejected(self):
         baseline = deepcopy(self.records)
         for mutation in (

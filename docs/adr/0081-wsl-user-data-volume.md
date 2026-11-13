@@ -413,6 +413,8 @@ sceną, kolejką i hashami held intents. Sprawdza bieżące API/request epoch,
 observation installation, native config, aktualny process receipt oraz zgodność
 Ready/Drained właściciela z immutable Ready pinem i persisted OWNER. Nowy run,
 zmiana sceny/kolejki albo owner/config drift wymaga innej jawnej ścieżki.
+Zakończenie API przez supervisor może mieć kod 0 lub -15 (SIGTERM); oba nadal
+wymagają kompletnego native drain. SIGKILL, błąd API i wartość bool odmawiają.
 Przypięty stop i oryginalny proof nie zastępują się wzajemnie. Format proof
 odczytywany przez Rust pozostaje bez zmian. Są to źródłowe kontrole kontynuacji;
 nie dowodzą wykonania migracji lub nowej kwalifikacji naukowej na hoście.
