@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -39,7 +40,8 @@ class LinuxFrontendInputsTests(unittest.TestCase):
             # exercise real Linux reads/Git/volume metadata, independent of the
             # managed backend's readonly host Git layout and current UID.
             with mock.patch("docker_dev_host.validate_host_path", side_effect=lambda path, label="host path": Path(path)), \
-                    mock.patch.object(inputs.storage, "filesystem_type", return_value="ext4"):
+                    mock.patch.object(inputs.storage, "filesystem_type", return_value="ext4"), \
+                    mock.patch("docker_dev_host.shutil.disk_usage", return_value=SimpleNamespace(free=0)):
                 manifest = inputs.seed(source, state, 3197,
                                        write_file=lambda relative, payload: captured.setdefault(relative, payload))
             self.assertEqual(list(state.iterdir()), [])
@@ -95,7 +97,7 @@ class LinuxFrontendInputsTests(unittest.TestCase):
             actual = root / "actual-package.json"
             actual.write_text("{}")
             (source / "package.json").symlink_to(actual)
-            with mock.patch.object(inputs, "local_volume", return_value={}), \
+            with mock.patch.object(inputs, "readonly_source_volume", return_value={}), \
                     mock.patch.object(inputs.storage, "git", return_value="a" * 40):
                 with self.assertRaisesRegex((OSError, ValueError, RuntimeError), "symlink|reparse|regular|symbolic"):
                     inputs.seed(source, root, 3197, write_file=lambda *_: self.fail("unexpected capture"))

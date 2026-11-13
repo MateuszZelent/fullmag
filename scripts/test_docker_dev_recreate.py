@@ -203,7 +203,7 @@ class DockerDevRecreateContract(unittest.TestCase):
             native_test_os = types.SimpleNamespace(name="nt", fsync=development_inputs.os.fsync)
 
             with patch.object(development_inputs, "os", native_test_os), \
-                    patch.object(development_inputs, "local_volume", side_effect=lambda path: str(path)), \
+                    patch.object(development_inputs, "readonly_source_volume", side_effect=lambda path: str(path)), \
                     patch.object(development_inputs, "read_owned_regular",
                                  side_effect=lambda path, maximum: Path(path).read_bytes()), \
                     patch.object(development_inputs.storage, "git", return_value="a" * 40):
@@ -237,7 +237,7 @@ class DockerDevRecreateContract(unittest.TestCase):
             unknown_path.write_bytes(b"unexpected\n")
             unknown_state = root / "unknown-state"
             with patch.object(development_inputs, "os", native_test_os), \
-                    patch.object(development_inputs, "local_volume", side_effect=lambda path: str(path)), \
+                    patch.object(development_inputs, "readonly_source_volume", side_effect=lambda path: str(path)), \
                     patch.object(development_inputs, "read_owned_regular",
                                  side_effect=lambda path, maximum: Path(path).read_bytes()), \
                     patch.object(development_inputs.storage, "git", return_value="a" * 40):

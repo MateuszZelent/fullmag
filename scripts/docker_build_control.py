@@ -23,7 +23,7 @@ import threading
 import time
 import uuid
 
-from docker_dev_host import docker_argv, require_host, validate_host_path
+from docker_dev_host import docker_argv, readonly_source_volume, require_host, validate_host_path
 
 
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -872,6 +872,7 @@ def build_volume_toolchain(repo):
     # This checkout is an already validated read-only build input. Build
     # contexts, logs, compiler outputs and receipts stay in Docker volumes;
     # writable user storage and Docker capacity retain their own admission.
+    readonly_source_volume(repo)
     configured = toolchain_configuration(repo, identity)
     service = configured["services"]["fem-gpu-toolchain"]
     build = service["build"]

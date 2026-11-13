@@ -42,8 +42,8 @@ def validate_host_path(path, label="host path"):
     return root
 
 
-def local_volume(path):
-    """Describe local storage without issuing a Windows certificate on Linux."""
+def readonly_source_volume(path):
+    """Attest a local directory used only as a read-only source input."""
     require_host()
     if os.name == "nt":
         from windows_folder_host import local_volume as windows_local_volume
@@ -51,8 +51,14 @@ def local_volume(path):
     root = validate_host_path(path)
     if not root.is_dir():
         raise ValueError(f"Host storage directory does not exist: {root}")
-    if shutil.disk_usage(root).free < 32 * 1024**2:
-        raise ValueError("Host storage has insufficient space for startup preflight")
     return {"host_root": str(root), "host_filesystem": storage.filesystem_type(root),
             "host_platform": "linux", "host_device": root.stat().st_dev,
             "host_root_no_reparse": True}
+
+
+def local_volume(path):
+    """Attest writable storage and retain its startup-space requirement."""
+    description = readonly_source_volume(path)
+    if os.name != "nt" and shutil.disk_usage(path).free < 32 * 1024**2:
+        raise ValueError("Host storage has insufficient space for startup preflight")
+    return description
