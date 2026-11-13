@@ -2369,6 +2369,65 @@ class DeviceScalarPcgControlAccountingTests(unittest.TestCase):
 
 
 class MandatoryControlAttributionTests(unittest.TestCase):
+    def test_paired_poisson_norms_preserve_bytes_and_the_core_budget(self):
+        controls = self.controls()
+        for scope in controls.values():
+            scope["poisson_certificate_readbacks"] //= 2
+        result = verifier.validated_gpu_control_scalar_accounting(
+            {"runtime_solver": "HyprePCG"}, 687, 70816,
+            mandatory_controls=controls,
+        )
+        self.assertEqual(result["mandatory_control_readbacks"], 301)
+        self.assertEqual(result["mandatory_control_bytes"], 12032)
+        self.assertEqual(result["unattributed_control_scalar_host_sync_count"], 386)
+        self.assertEqual(result["unattributed_control_scalar_d2h_bytes"], 58784)
+        budget = verifier.validated_algorithm_counter_budget(
+            "projected_gradient_bb", 92, 202, 18)
+        self.assertEqual(budget["control_sync_budget"], 389)
+
+    def test_paired_norms_and_device_pcg_status_credit_remain_disjoint(self):
+        controls = self.controls()
+        controls["hot_loop"]["poisson_certificate_readbacks"] = 113
+        controls["physical"].update(
+            poisson_certificate_readbacks=114, poisson_certificate_bytes=1824)
+        runtime = {
+            "resolved_linear_engine": "device_scalar_pcg_amg",
+            "runtime_solver": "DeviceScalarPCG",
+            "runtime_preconditioner": "HypreBoomerAMG", "max_iterations": 500,
+            "device_pcg_hot_loop": {"solves": 113, "active_iterations": 7477,
+                "status_readbacks": 1017, "status_record_bytes": 104,
+                "control_d2h_bytes": 105768},
+            "device_pcg_physical": {"solves": 114, "active_iterations": 7544,
+                "status_readbacks": 1026, "status_record_bytes": 104,
+                "control_d2h_bytes": 106704},
+        }
+        result = verifier.validated_gpu_control_scalar_accounting(
+            runtime, 1704, 176584, mandatory_controls=controls)
+        self.assertEqual(result["unattributed_control_scalar_host_sync_count"], 386)
+        self.assertEqual(result["unattributed_control_scalar_d2h_bytes"], 58784)
+        self.assertEqual(result["mandatory_control_readbacks"], 301)
+        self.assertEqual(result["device_pcg_status_readbacks"], 1017)
+
+    def test_paired_norm_records_reject_bad_sizes_and_underflow(self):
+        for byte_count in (0, 904 + 8, 1808 - 8, 1808 + 8, 3 * 113 * 8):
+            controls = self.controls()
+            for scope in controls.values():
+                scope.update(poisson_certificate_readbacks=113,
+                             poisson_certificate_bytes=byte_count)
+            with self.subTest(bytes=byte_count), self.assertRaises(ContractError):
+                verifier.validated_gpu_control_scalar_accounting(
+                    {"runtime_solver": "HyprePCG"}, 687, 70816,
+                    mandatory_controls=controls)
+        controls = self.controls()
+        for scope in controls.values():
+            scope["poisson_certificate_readbacks"] = 113
+        for fences, byte_count in ((300, 70816), (687, 12031)):
+            with self.subTest(fences=fences, bytes=byte_count), self.assertRaisesRegex(
+                    ContractError, "underflow"):
+                verifier.validated_gpu_control_scalar_accounting(
+                    {"runtime_solver": "HyprePCG"}, fences, byte_count,
+                    mandatory_controls=controls)
+
     def test_physical_lifetime_cannot_be_zero_with_completed_hot_loop_controls(self):
         controls = self.controls()
         controls["physical"] = {key: 0 for key in controls["physical"]}

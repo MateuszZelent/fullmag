@@ -1115,27 +1115,29 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
     def test_gpu_mandatory_controls_flow_through_sp4_guard_without_budget_change(self) -> None:
         spec=next(case for case in executor.collect_execution_cases(self._plans())
                   if case["device"]=="gpu" and case["relaxation_algorithm"]=="projected_gradient_bb")
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);artifacts=root/"artifacts";log_path=root/executor.RUNTIME_LOG
-            self._successful_launch(spec,artifacts,{},log_path)
-            path=artifacts/"metadata.json";metadata=json.loads(path.read_text())
-            hot={"bb_certificate_record_bytes":96,"bb_certificate_readbacks":1,"bb_certificate_bytes":96,
-                "bb_descent_readbacks":1,"bb_descent_bytes":8,"poisson_certificate_readbacks":2,
-                "poisson_certificate_bytes":16,"confirmation_observations":0,
-                "confirmation_metric_readbacks":0,"confirmation_metric_bytes":0}
-            metadata["fem_gpu_solver_controls"]={"physical":dict(hot),"hot_loop":hot}
-            execution=metadata["execution_provenance"]
-            execution["hot_loop_control_scalar_host_sync_count"]+=4
-            execution["hot_loop_host_sync_count"]+=4
-            execution["hot_loop_control_scalar_d2h_bytes"]+=120
-            qualification=metadata["fem_gpu_relaxation_qualification"]
-            qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"]+=4
-            path.write_text(json.dumps(metadata))
-            evidence=executor._validate_case_artifacts(spec,artifacts,log_path,1,self.execution_identity)
-        telemetry=evidence["gpu_transfer_telemetry"]
-        self.assertEqual(telemetry["mandatory_control_readbacks"],4)
-        self.assertEqual(telemetry["unattributed_control_scalar_host_sync_count"],7)
-        self.assertEqual(telemetry["allowed_unattributed_control_scalar_host_sync_count"],7)
+        for poisson_reads in (2, 1):
+            with self.subTest(poisson_reads=poisson_reads), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);artifacts=root/"artifacts";log_path=root/executor.RUNTIME_LOG
+                self._successful_launch(spec,artifacts,{},log_path)
+                path=artifacts/"metadata.json";metadata=json.loads(path.read_text())
+                hot={"bb_certificate_record_bytes":96,"bb_certificate_readbacks":1,"bb_certificate_bytes":96,
+                    "bb_descent_readbacks":1,"bb_descent_bytes":8,"poisson_certificate_readbacks":poisson_reads,
+                    "poisson_certificate_bytes":16,"confirmation_observations":0,
+                    "confirmation_metric_readbacks":0,"confirmation_metric_bytes":0}
+                metadata["fem_gpu_solver_controls"]={"physical":dict(hot),"hot_loop":hot}
+                actual_reads=2+poisson_reads
+                execution=metadata["execution_provenance"]
+                execution["hot_loop_control_scalar_host_sync_count"]+=actual_reads
+                execution["hot_loop_host_sync_count"]+=actual_reads
+                execution["hot_loop_control_scalar_d2h_bytes"]+=120
+                qualification=metadata["fem_gpu_relaxation_qualification"]
+                qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"]+=actual_reads
+                path.write_text(json.dumps(metadata))
+                evidence=executor._validate_case_artifacts(spec,artifacts,log_path,1,self.execution_identity)
+            telemetry=evidence["gpu_transfer_telemetry"]
+            self.assertEqual(telemetry["mandatory_control_readbacks"],actual_reads)
+            self.assertEqual(telemetry["unattributed_control_scalar_host_sync_count"],7)
+            self.assertEqual(telemetry["allowed_unattributed_control_scalar_host_sync_count"],7)
 
     def test_typed_confirmation_rejections_use_receipt_not_accepted_csv(self) -> None:
         spec=next(case for case in executor.collect_execution_cases(self._plans())

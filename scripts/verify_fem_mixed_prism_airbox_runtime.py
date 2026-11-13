@@ -1592,8 +1592,15 @@ def validated_gpu_control_scalar_accounting(
             raise ContractError("BB certificate bytes do not equal count times record size")
         if values["bb_descent_bytes"] != values["bb_descent_readbacks"]*DOUBLE_BYTES or values["bb_descent_readbacks"] > cert:
             raise ContractError("BB descent count/bytes conflict with certificate")
-        if values["poisson_certificate_bytes"] != values["poisson_certificate_readbacks"]*DOUBLE_BYTES:
-            raise ContractError("Poisson certificate bytes do not match scalar count")
+        poisson_reads = values["poisson_certificate_readbacks"]
+        # Legacy/one-row validation returns each norm separately. The paired
+        # kernel returns both unchanged norms in one 16-byte readback. Credit
+        # the actual fences/bytes in either fixed record layout; never raise
+        # the remaining core budget or infer a second fence from two doubles.
+        if values["poisson_certificate_bytes"] not in {
+            poisson_reads * DOUBLE_BYTES, poisson_reads * 2 * DOUBLE_BYTES,
+        }:
+            raise ContractError("Poisson certificate bytes do not match single or paired norm records")
         confirmations = values["confirmation_observations"]
         if values["confirmation_metric_readbacks"] != 2*confirmations:
             raise ContractError("confirmation must retain current and final metric readbacks")
