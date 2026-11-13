@@ -1,8 +1,9 @@
-"""Short-lived pending-marker read capability for standard DEV startup.
+"""Short-lived pending-marker scopes for managed startup and qualification.
 
-This capability proves only that the exact group has a live, retained managed
-admission preparation. It does not admit a namespace, authorize execution, or
-resolve the pending marker through a registration.
+The pre-start scope proves that one exact group has a live retained admission
+preparation. The post-start scope proves the same group's genuine StartedGroup
+readback. Both only read the pending marker; neither authorizes execution,
+registration, data migration, or retirement.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from contextvars import ContextVar
 from copy import deepcopy
 import hashlib
 import importlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -27,6 +29,10 @@ _MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
 _ISSUER_NAMES = frozenset((
     "docker_dev_data_volume_admission",
     "scripts.docker_dev_data_volume_admission",
+))
+_STARTED_ISSUER_NAMES = frozenset((
+    "docker_dev_data_volume_restart",
+    "scripts.docker_dev_data_volume_restart",
 ))
 
 
@@ -60,6 +66,29 @@ def _require_prepared(prepared, expected_issuer=None):
     _require(isinstance(prepared, dict) and
              set(prepared) == {"context", "bound_terminal", "terminal", "relocated", "native_before"},
              "Closed live prepared admission group required")
+    return issuer
+
+
+def _canonical_snapshot(value, label):
+    try:
+        return json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise ValueError(label + " is not stable JSON data") from error
+
+
+def _resolve_started_issuer(started):
+    name = type(started).__module__
+    _require(name in _STARTED_ISSUER_NAMES,
+             "The original started-group issuer is required")
+    issuer = sys.modules.get(name)
+    expected = Path(__file__).with_name("docker_dev_data_volume_restart.py").resolve()
+    _require(issuer is not None and
+             type(started) is getattr(issuer, "StartedGroup", None) and
+             Path(getattr(issuer, "__file__", "")).resolve() == expected and
+             callable(getattr(issuer, "require_started_group", None)),
+             "Started-group capability did not come from its real local issuer")
     return issuer
 
 
@@ -158,7 +187,50 @@ class _StartupScope:
         raise AttributeError("startup scopes are immutable")
 
 
+class _QualificationScope:
+    __slots__ = ("_started", "_prepared", "_issuer", "_pid", "_thread",
+                 "_layout_json", "_record_json", "_lease", "_sealed")
+
+    def __init__(self, started, prepared, issuer, layout_json, record_json):
+        object.__setattr__(self, "_started", started)
+        object.__setattr__(self, "_prepared", prepared)
+        object.__setattr__(self, "_issuer", issuer)
+        object.__setattr__(self, "_pid", os.getpid())
+        object.__setattr__(self, "_thread", threading.get_ident())
+        object.__setattr__(self, "_layout_json", layout_json)
+        object.__setattr__(self, "_record_json", record_json)
+        object.__setattr__(self, "_lease", _Lease())
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name, _value):
+        raise AttributeError("qualification scopes are immutable")
+
+
+def _check_qualification_scope(scope):
+    _require(type(scope) is _QualificationScope and _ACTIVE.get() is scope,
+             "The exact active qualification-scope object is required")
+    _require(scope._lease.active is True and scope._pid == os.getpid() and
+             scope._thread == threading.get_ident(),
+             "Qualification scope expired or crossed its process/thread boundary")
+    issuer = _resolve_started_issuer(scope._started)
+    prepared = scope._prepared
+    _require(issuer is scope._issuer and getattr(scope._started, "_prepared", None) is prepared,
+             "Started-group issuer or prepared object changed during qualification scope")
+    context = prepared.get("context") if isinstance(prepared, dict) else None
+    _require(type(context) is dict and type(context.get("layout")) is dict and
+             _canonical_snapshot(context["layout"], "Prepared layout") == scope._layout_json,
+             "Started group changed its exact selected layout")
+    record = issuer.require_started_group(scope._started, prepared)
+    _require(_canonical_snapshot(record, "Started-group readback") == scope._record_json,
+             "Started-group readback changed during qualification scope")
+    _require(_canonical_snapshot(context["layout"], "Prepared layout") == scope._layout_json,
+             "Started group layout changed while its readback was checked")
+    return scope
+
+
 def _check_scope(scope, *, recheck_evidence=True):
+    if type(scope) is _QualificationScope:
+        return _check_qualification_scope(scope)
     _require(type(scope) is _StartupScope and _ACTIVE.get() is scope,
              "The exact active startup-scope object is required")
     _require(scope._lease.active is True and scope._pid == os.getpid() and
@@ -205,6 +277,36 @@ def startup_scope(prepared):
         _ACTIVE.reset(token)
 
 
+@contextmanager
+def qualification_scope(started):
+    """Expose a read-only pending marker for one genuinely started group."""
+    _require(_ACTIVE.get() is None, "Nested startup or qualification scopes are not permitted")
+    issuer = _resolve_started_issuer(started)
+    prepared = getattr(started, "_prepared", None)
+    context = prepared.get("context") if isinstance(prepared, dict) else None
+    _require(type(context) is dict and type(context.get("layout")) is dict,
+             "Started group lacks its exact selected layout")
+    layout_json = _canonical_snapshot(context["layout"], "Prepared layout")
+    record = issuer.require_started_group(started, prepared)
+    _require(type(record) is dict,
+             "Started-group issuer returned no exact terminal record")
+    record_json = _canonical_snapshot(record, "Started-group terminal")
+    _require(_canonical_snapshot(context["layout"], "Prepared layout") == layout_json,
+             "Prepared layout changed during started-group validation")
+    scope = _QualificationScope(started, prepared, issuer, layout_json, record_json)
+    token = _ACTIVE.set(scope)
+    try:
+        _check_scope(scope)
+        yield scope
+    except BaseException:
+        raise
+    else:
+        _check_scope(scope)
+    finally:
+        scope._lease.active = False
+        _ACTIVE.reset(token)
+
+
 def current_scope():
     """Return the current valid scope, or None only when none is active."""
     scope = _ACTIVE.get()
@@ -225,9 +327,15 @@ def verify_pending(scope, layout, compose_project, pending, *, state_root=None, 
     _check_scope(scope)
     prepared = scope._prepared
     context = prepared["context"]
-    _require(type(layout) is dict and layout == scope._layout and
-             layout == context["layout"],
-             "Pending marker layout differs from the selected prepared group")
+    if type(scope) is _QualificationScope:
+        _require(type(layout) is dict and
+                 _canonical_snapshot(layout, "Pending layout") == scope._layout_json and
+                 _canonical_snapshot(context["layout"], "Prepared layout") == scope._layout_json,
+                 "Pending marker layout differs from the selected started group")
+    else:
+        _require(type(layout) is dict and layout == scope._layout and
+                 layout == context["layout"],
+                 "Pending marker layout differs from the selected prepared group")
     identity = context.get("identity")
     _require(type(identity) is dict and compose_project == identity.get("project_name"),
              "Pending marker Compose project differs from the selected group")
@@ -266,12 +374,13 @@ def verify_pending(scope, layout, compose_project, pending, *, state_root=None, 
                                              maximum=pending_module.MAX_BYTES)
     _require(raw_after == raw, "Pending marker changed while it was being verified")
     _check_scope(scope)
+    started = type(scope) is _QualificationScope
     return {
-        "state": "pending-prepared-not-registered",
+        "state": "pending-started-not-registered" if started else "pending-prepared-not-registered",
         "pending": observed,
         "pending_path": str(path),
         "pending_sha256": marker_ref["sha256"],
-        "namespace_admitted": False,
+        "namespace_admitted": started,
         "data_migrated": False,
         "originals_retired": False,
     }

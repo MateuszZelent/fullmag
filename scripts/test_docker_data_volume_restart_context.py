@@ -127,6 +127,17 @@ class LiveContextTests(unittest.TestCase):
         self.case=Records(self.fixture.case.source,self.fixture.state_root)
         self.fixture.context['plan'].update(runtime_pins=self.case.pin,source_root=str(self.case.context['source']),
             compose_project=self.case.control.project,observation={'engine_id':'engine-fixture'})
+        self.case.previous['terminal_observation']={
+            'schema':'fullmag.terminal-observation-context.v1',
+            'proof_sha256':hashlib.sha256(b'fresh-proof').hexdigest(),
+            'request_sha256':hashlib.sha256(b'fresh-request').hexdigest(),
+            'stop_attempt':self.fixture.case.stop,'stop_sha256':self.fixture.case.stop_sha}
+        self.case.refresh()
+        self.stop_record=({'terminal_native_observation_sha256':'f'*64}
+                          if getattr(self,'captured_stop',True) else {})
+        self.stop_relative='iteration/attempts/'+self.fixture.context['drain']['stop_attempt']+'/terminal.json'
+        self.case.records[self.stop_relative]=encoded(self.stop_record)
+        self.fixture.context['drain']['stop_sha256']=hashlib.sha256(encoded(self.stop_record)).hexdigest()
         self.fixture.native_before={'certificate_inode':[1,2,3,4,1],
             'candidate_raw':encoded({'owner_token':'8'*32})}
         self.fixture.root_rows['state']['bound_identity']={'device':101,'inode':202}
@@ -152,6 +163,7 @@ class LiveContextTests(unittest.TestCase):
         self.view={'old_roots':{'state':self.fixture.state_root.parent/'old-backup'}}
         self.stack.enter_context(mock.patch.object(restart,'require_relocated',return_value=self.view))
         self.prepare=self.stack.enter_context(mock.patch.object(restart.observation,'prepare_captured_context',return_value=self.observation))
+        self.prepare_retained=self.stack.enter_context(mock.patch.object(restart.observation,'prepare_context',return_value=self.observation))
         self.revalidate=self.stack.enter_context(mock.patch.object(restart.observation,'revalidate_context'))
         self.original_read=self.case.read
         def read(control,path,*,optional=False):
@@ -179,6 +191,7 @@ class LiveContextTests(unittest.TestCase):
         self.assertEqual(kwargs['cold_budget_restore'],self.case.cold)
         self.assertNotIn('previous_config_sha256',kwargs)
         with self.assertRaises(ValueError):restart.start_arguments(context)
+
 
     def test_revalidation_refuses_changed_control_record_and_unissued_context(self):
         context=self.prepare_context()
@@ -272,6 +285,31 @@ class LiveContextTests(unittest.TestCase):
         with self.assertRaises(ValueError):restart.validate_started(self.control,self.prepared,context,captured)
         self.case.records[captured['relative']]=b'changed runtime terminal'
         with self.assertRaises(ValueError):restart.revalidate_started(self.control,self.prepared,context,evidence)
+
+
+class RetainedObservationContextTests(unittest.TestCase):
+    captured_stop=False
+    setUp=LiveContextTests.setUp
+    prepare_context=LiveContextTests.prepare_context
+
+    def test_already_installed_observation_uses_the_new_stop_and_original_proof(self):
+        self.prepare_context()
+        self.prepare.assert_not_called()
+        kwargs=self.prepare_retained.call_args.kwargs
+        self.assertEqual(kwargs['proof_sha256'],self.case.previous['terminal_observation']['proof_sha256'])
+        self.assertEqual(kwargs['proof_relative'],
+            'runtime-control/terminal-observation/'+kwargs['proof_sha256']+'/proof.json')
+        self.assertEqual(kwargs['stop_pin'],(self.fixture.context['drain']['stop_attempt'],
+                                            self.fixture.context['drain']['stop_sha256']))
+        self.assertIs(kwargs['owned_operation'],self.operation)
+        self.assertEqual(kwargs['store_root'],self.view['old_roots']['state']/'runs/docker-all/session-store')
+
+    def test_changed_stop_receipt_is_rejected_before_either_observation_producer(self):
+        self.case.records[self.stop_relative]=b'changed stop receipt'
+        with self.assertRaisesRegex(ValueError,'stopped receipt changed'):
+            self.prepare_context()
+        self.prepare.assert_not_called()
+        self.prepare_retained.assert_not_called()
 
 
 if __name__ == '__main__':

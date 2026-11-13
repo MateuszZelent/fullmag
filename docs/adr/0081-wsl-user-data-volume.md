@@ -373,17 +373,49 @@ root; nowy namespace lub inny root odmawia. Zwykły start nadal jest blokowany
 przez pending. Marker, zapisany słownik, CLI i zmienna środowiskowa nie dają
 takiego uprawnienia. Wynik kontroli pozostaje `pending-prepared-not-registered`.
 
+Po standardowym starcie odrębny wewnętrzny `qualification_scope(started)`
+może udostępnić te same dwa canonical roots istniejącej aktywacji
+kwalifikacyjnej. Wymaga rzeczywiście wydanego StartedGroup z lokalnego issuera,
+nadal żywego pierwotnego copy host scope, tego samego PID/wątku oraz dokładnego
+layoutu i rekordu. Każdy odczyt, kontrola pending i udane wyjście ponawiają
+readback StartedGroup; zmiana rekordu, utrata scope lub podmiana issuera odmawia.
+Nie ponawia kandydata native sprzed init i nie otwiera ponownie initial startup
+scope. Wynik to `pending-started-not-registered`: namespace admission jest już
+potwierdzonym faktem, lecz `data_migrated` i `originals_retired` pozostają false.
+To kontrola odczytowa pending, nie osobna autoryzacja Solve, rejestracji lub
+usuwania; standardowe sprawdzenia aktywacji i jej pinów pozostają wymagane.
+
 Captured terminal observation może przygotować prywatne proof/request pod
 posiadanym lease migracji przez wewnętrzny `owned_operation`. Publikacja
 korzysta z dokładnego aktywnego helpera, bez drugiego flocka i bez usuwania
 `active`. Dopuszcza tylko dwa rekordy o ścieżkach wyprowadzonych z proof SHA,
 identyczne istniejące bajty lub nowe pliki O_EXCL, z nofollow/CAS/fsync oraz
 ponawianiem tożsamości rootu, rodziców i tokena. Timeout nie uruchamia replay.
-Ten wariant obsługuje zwykły successful captured stop w rootowym control;
+Ten wariant obsługuje zwykły successful captured stop w rootowym control oraz
+zachowanie istniejącego historycznego proof po dokładnie przypiętym nowszym
+zwykłym stopie już odtworzonej sesji;
 diagnostic oraz current-backend pre-owner/cold odmawiają przed helper dispatch.
 Historyczny pin cold-budget musi być oddzielnie uwierzytelniony i przeniesiony
 przez sterownik. Bez `owned_operation` istniejąca ścieżka publikacji nie zmienia
 zachowania. Producer nie zastępuje żywych OLD fences callera ani readmission.
+
+Ponowny zwykły stop nie przepisuje API identity w immutable RunIntent ani
+oryginalnym proof. `build_stopped_proof` wybiera nowy capture wyłącznie wtedy,
+gdy stop zawiera jego pin; błąd takiego capture nigdy nie przełącza się na stary
+proof. Przy braku capture odczytuje wyłącznie observation przypięte w dokładnym
+successful parent development, sprawdza jego private request/proof i odbudowuje
+proof z autorytatywnych rekordów oraz OLD store. Osobny nowy stop SHA pozostaje
+w context metadata i podlega ponownej kontroli. Zwykły stopped-group observer
+nadal wymaga pełnego inventory kontenerów, braku konsumentów i native fences.
+
+`validate_empty_stop` wiąże ten nowszy drain z tą samą zainstalowaną sesją/runem,
+sceną, kolejką i hashami held intents. Sprawdza bieżące API/request epoch,
+observation installation, native config, aktualny process receipt oraz zgodność
+Ready/Drained właściciela z immutable Ready pinem i persisted OWNER. Nowy run,
+zmiana sceny/kolejki albo owner/config drift wymaga innej jawnej ścieżki.
+Przypięty stop i oryginalny proof nie zastępują się wzajemnie. Format proof
+odczytywany przez Rust pozostaje bez zmian. Są to źródłowe kontrole kontynuacji;
+nie dowodzą wykonania migracji lub nowej kwalifikacji naukowej na hoście.
 
 Readonly `docker_data_volume_removed_group.observe_removed_group` potwierdza
 brak dokładnych starych ID pod żywym lease i kontekstem relocated. Sprawdza

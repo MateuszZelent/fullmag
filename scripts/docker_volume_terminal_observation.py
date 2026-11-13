@@ -542,6 +542,67 @@ def build_captured_proof(read_control: Read, read_store: Read, *, iteration: str
     )
 
 
+def build_stopped_proof(read_control: Read, read_store: Read, *, iteration: str,
+                        stop_sha256: str, development_attempt: str,
+                        config_sha256: str, scope: Mapping[str, str]) -> dict:
+    """Read an exact capture or the retained proof of an already installed run.
+
+    The caller must independently validate this newer stop with
+    validate_empty_stop, including its current installed API and native owner.
+    An invalid capture is never replaced by a historical observation.
+    """
+    require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
+                for value in (iteration, development_attempt)), "Exact stopped/development attempts required")
+    digest(stop_sha256); digest(config_sha256)
+    require(set(scope) == {"compose_project", "control_volume", "source_root", "image_id"},
+            "Exact stopped observation scope required")
+    raw, stopped = managed(read_control, "iteration/attempts/" + iteration + "/terminal.json")
+    inputs = stopped.get("inputs", {})
+    require(sha(raw) == stop_sha256 and stopped.get("schema") == "fullmag.docker-build-operation.v1"
+            and stopped.get("phase") == "iteration" and stopped.get("state") == "succeeded"
+            and stopped.get("attempt") == iteration and stopped.get("idle_backend_stopped") is True
+            and stopped.get("config_sha256") == config_sha256
+            and inputs.get("attempt") == development_attempt
+            and inputs.get("config_sha256") == config_sha256
+            and inputs.get("source_root") == scope["source_root"] and inputs.get("image_id") == scope["image_id"]
+            and all(stopped.get(key) == scope[key] for key in ("compose_project", "control_volume")),
+            "Stopped source observation differs from its exact receipt/scope")
+    if stopped.get("terminal_native_observation_sha256") is not None:
+        return build_captured_proof(read_control, read_store, iteration=iteration, scope=scope)
+    _, parent = managed(read_control, "development/attempts/" + development_attempt + "/terminal.json")
+    parent_inputs = parent.get("inputs", {})
+    require(parent.get("phase") == "development" and parent.get("state") == "succeeded"
+            and parent.get("attempt") == development_attempt and parent.get("config_sha256") == config_sha256
+            and all(parent.get(key) == scope[key] for key in ("compose_project", "control_volume"))
+            and all(parent_inputs.get(key) == scope[key] for key in ("source_root", "image_id")),
+            "Retained observation parent belongs to another development/source/group")
+    metadata = parent.get("terminal_observation")
+    require(type(metadata) is dict, "A stop without capture requires its installed historical observation")
+    proof_sha = digest(metadata.get("proof_sha256"))
+    relative = "terminal-observation/" + proof_sha
+    validate_context({"metadata": metadata, "environment": {
+        REQUEST_ENV: relative + "/request.json", REQUEST_SHA_ENV: metadata.get("request_sha256")}})
+    request_raw, request = managed(read_control, "runtime-control/" + relative + "/request.json")
+    require(sha(request_raw) == metadata["request_sha256"] and request == {
+        "schema": "fullmag.terminal-observation-request.v1",
+        "proof_path": relative + "/proof.json", "proof_sha256": proof_sha},
+        "Retained observation request differs from its parent pin")
+    proof_raw, proof = managed(read_control, "runtime-control/" + relative + "/proof.json")
+    require(sha(proof_raw) == proof_sha and
+            all(proof.get(key) == scope[key] for key in ("compose_project", "control_volume", "source_root")),
+            "Retained observation proof differs from its parent pin/scope")
+    source_scope = {key: proof.get(key) for key in scope}
+    require(type(source_scope["image_id"]) is str and
+            re.fullmatch(r"sha256:[0-9a-f]{64}", source_scope["image_id"]),
+            "Retained observation original image is invalid")
+    rebuilt = build_proof(
+        read_control, read_store, iteration=proof.get("original_iteration"), run_id=proof.get("run_id"),
+        scope=source_scope, native_config_sha256=proof.get("native_config_sha256"),
+        terminal_evidence_sha256=proof.get("terminal_evidence_sha256"))
+    require(proof == rebuilt, "Retained observation differs from authoritative original records")
+    return rebuilt
+
+
 def build_proof(read_control: Read, read_store: Read, *, iteration: str,
                 run_id: str, scope: Mapping[str, str], native_config_sha256: str,
                 terminal_evidence_sha256: str, captured_binding_sha256: str | None = None) -> dict:
@@ -784,6 +845,74 @@ def _validate_diagnostic_stop(read_control, root, current, health, actual, proof
     return probe
 
 
+def _validate_repeated_stop(read_control, root, current, actual, proof):
+    """Keep an installed historical proof distinct from its newer genuine drain."""
+    original = proof.get("original_iteration")
+    require(type(original) is str and re.fullmatch(r"[0-9a-f]{32}", original) is not None,
+            "Repeated observation has no original managed stop")
+    scope = {"compose_project": current["compose_project"], "control_volume": current["control_volume"],
+             "source_root": current["inputs"]["source_root"], "image_id": actual["backend"].get("Image")}
+    require(all(proof.get(key) == scope[key] for key in ("compose_project", "control_volume", "source_root"))
+            and current["inputs"].get("image_id") == scope["image_id"],
+            "Repeated observation belongs to another source/group/image")
+    preflight_raw, preflight = managed(read_control, root + "terminal-session-preflight.json")
+    require(sha(canonical(preflight)) == current.get("terminal_session_preflight_sha256")
+            and preflight.get("schema") == "fullmag.docker-terminal-session-drain-preflight.v1",
+            "Repeated observation preflight CAS/schema differs")
+    source_raw, source = managed(read_control, "iteration/attempts/" + original + "/terminal-session-preflight.json")
+    require(sha(source_raw) == proof.get("preflight_raw_sha256"),
+            "Repeated observation original preflight changed")
+    run = preflight.get("run", {})
+    epoch, scene = proof.get("session_epoch"), proof.get("scene_revision")
+    runtime = preflight.get("runtime_service", {})
+    require(type(epoch) is int and epoch > 0 and type(scene) is int and scene >= 0
+            and preflight.get("session_id") == run.get("session_id") == proof.get("session_id")
+            and run.get("run_id") == proof.get("run_id")
+            and run.get("status") == source.get("run", {}).get("status") in {"completed", "failed"}
+            and run.get("started_at") == source.get("run", {}).get("started_at")
+            and preflight.get("session_epoch") == source.get("session_epoch")
+            and type(preflight.get("scene_revision")) is int and preflight["scene_revision"] == scene
+            and runtime.get("schema_version") == "application_service_status.v1"
+            and runtime.get("configured") is True and runtime.get("state") == "ready",
+            "Repeated observation no longer identifies the same terminal session/scene")
+    queue, source_queue = preflight.get("compute_queue", {}), source.get("compute_queue", {})
+    require(queue.get("schema_version") == "compute_queue.v1" and queue.get("next_cursor") is None
+            and type(queue.get("items")) is list and queue["items"] == source_queue.get("items")
+            and preflight.get("held_run_intent_sha256", {}) == source.get("held_run_intent_sha256", {}),
+            "Repeated observation would discard a changed held queue")
+    _, drain = managed(read_control, root + "backend-drain.json")
+    process = drain.get("process_receipt", {})
+    require(process.get("schema") == "fullmag.docker-process-tree.v1" and process.get("state") == "drained"
+            and process.get("accepted_store") == "/state/runs/docker-all/session-store"
+            and type(process.get("api_exit_code")) is int and process["api_exit_code"] == 0
+            and read_control("runtime-control/runtime-service/process-tree.json") == canonical(process) + b"\n",
+            "Repeated observation has no current successful native drain")
+    ready, terminal = process.get("service_owner", {}), process.get("terminal_service_owner", {})
+    require(ready.get("state") == "ready" and terminal.get("state") == "drained"
+            and owner_identity(ready) == owner_identity(terminal)
+            and all(child.get("status") == "running" for child in ready["children"])
+            and all(child.get("status") == "exited_success" for child in terminal["children"]),
+            "Repeated observation native owner continuity differs")
+    persisted = decode(read_control("runtime-control/runtime-services/OWNER.json"))
+    archived = decode(read_control("runtime-control/runtime-services/docker-client-"
+                                   + portable(ready.get("owner_token")) + ".json"))
+    require(persisted.get("state") == "drained" and archived.get("state") == "ready"
+            and owner_identity(persisted) == owner_identity(terminal) == owner_identity(archived),
+            "Repeated observation persisted or immutable owner differs")
+    annotation = process.get("terminal_observation")
+    _validate_terminal_observation_annotation(read_control, annotation, scope, ready)
+    require(annotation["proof_sha256"] == sha(canonical(proof) + b"\n")
+            and annotation["run_id"] == proof["run_id"] and annotation["session_id"] == proof["session_id"]
+            and annotation["api_instance_id"] == preflight.get("api_instance_id")
+            and preflight.get("request_scope_epoch") == f"{annotation['api_instance_id']}:{epoch}",
+            "Repeated observation installation does not bind this current API/session")
+    installed_raw, installed = managed(read_control, "runtime-control/" + annotation["installed_relative"])
+    require(sha(installed_raw) == annotation["installed_sha256"]
+            and installed.get("terminal_outcome") == run["status"]
+            and sha(read_control("runtime-control/runtime-service/docker-all.json")) == installed["native_config_sha256"],
+            "Repeated observation current native config or installed outcome changed")
+
+
 def validate_empty_stop(read_control, *, project, volume, source_root, attempt, config_sha256, actual,
                         stop_pin=None, source_proof=None):
     if stop_pin is None:
@@ -828,6 +957,9 @@ def validate_empty_stop(read_control, *, project, volume, source_root, attempt, 
     elif health.get("active_session") is False:
         # Preserve the original empty-stop observation path.
         pass
+    elif (health.get("active_session") is True and isinstance(source_proof, dict)
+          and token != source_proof.get("original_iteration")):
+        _validate_repeated_stop(read_control, root, current, actual, source_proof)
     elif health.get("active_session") is True and isinstance(source_proof, dict):
         proof_iteration = source_proof.get("original_iteration")
         if (not isinstance(proof_iteration, str)
@@ -1077,7 +1209,10 @@ def revalidate_context(control, context, *, store_root, source_root, attempt, co
 
 
 def prepare_context(control, *, proof_relative, proof_sha256, store_root, source_root,
-                    attempt, config_sha256, actual):
+                    attempt, config_sha256, actual, stop_pin=None, owned_operation=None):
+    if owned_operation is not None:
+        _owned_operation_identity(control, owned_operation)
+        require(stop_pin is not None, "Owned retained observation requires its exact stopped receipt")
     from docker_volume_accepted_reattach import _control_bytes, _read_store_regular
     read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
     if (not isinstance(proof_relative, str) or not proof_relative
@@ -1104,6 +1239,7 @@ def prepare_context(control, *, proof_relative, proof_sha256, store_root, source
     return _prepare_proof_context(
         control, read_control, proof, raw, source_root=source_root,
         attempt=attempt, config_sha256=config_sha256, actual=actual,
+        stop_pin=stop_pin, owned_operation=owned_operation,
     )
 
 

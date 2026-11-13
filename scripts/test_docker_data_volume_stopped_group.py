@@ -50,7 +50,7 @@ class StoppedCopySourceTests(unittest.TestCase):
         stack.enter_context(mock.patch.object(snapshot,'_migration_bind_identity',side_effect=lambda v,*_:(Path(v),None)))
         stack.enter_context(mock.patch.object(snapshot,'_control_bytes',return_value=json.dumps({'process_receipt_sha256':self.process_sha}).encode()))
         stack.enter_context(mock.patch.object(snapshot,'_store_reader',return_value=mock.Mock()))
-        self.proof=stack.enter_context(mock.patch.object(snapshot,'build_captured_proof',return_value={'operation_sha256':self.stop_sha}))
+        self.proof=stack.enter_context(mock.patch.object(snapshot,'build_stopped_proof',return_value={'operation_sha256':self.stop_sha}))
         self.validate=stack.enter_context(mock.patch.object(snapshot,'validate_empty_stop'))
         return stack
 
@@ -63,6 +63,11 @@ class StoppedCopySourceTests(unittest.TestCase):
         self.assertEqual(set(result['actual']),{'backend','frontend'})
         self.assertEqual(self.validate.call_args.kwargs['stop_pin'],(self.stop,self.stop_sha))
         self.assertEqual(self.validate.call_args.kwargs['attempt'],self.pins['attempt'])
+        self.proof.assert_called_once_with(
+            mock.ANY,mock.ANY,iteration=self.stop,stop_sha256=self.stop_sha,
+            development_attempt=self.pins['attempt'],config_sha256=self.pins['config_sha256'],
+            scope={'compose_project':self.control.project,'control_volume':self.control.volume,
+                   'source_root':str(self.source),'image_id':self.control.image})
         self.assertGreaterEqual(self.control._assert_live_operation_helper.call_count,2)
         self.control.write.assert_not_called()
 

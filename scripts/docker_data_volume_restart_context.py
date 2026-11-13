@@ -237,10 +237,24 @@ def prepare_context(control, prepared, snapshot, *, fence):
     terminal_context=None
     if previous.get('terminal_observation') is not None:
         view=require_relocated(prepared['relocated'],source,context['plan'])
-        terminal_context=observation.prepare_captured_context(control,
-            stop_attempt=context['drain']['stop_attempt'],store_root=view['old_roots']['state']/'runs/docker-all/session-store',
-            source_root=str(source),attempt=pins['attempt'],config_sha256=pins['config_sha256'],
-            actual=snapshot['actual'],owned_operation=operation)
+        drain=context['drain']; stop_relative='iteration/attempts/'+drain['stop_attempt']+'/terminal.json'
+        stop_raw=_read(control,stop_relative)
+        require(_sha(stop_raw) == drain['stop_sha256'], 'Retained stopped receipt changed before observation preparation')
+        stop=_decode(stop_raw); records[stop_relative]=drain['stop_sha256']
+        observation_arguments={'store_root':view['old_roots']['state']/'runs/docker-all/session-store',
+            'source_root':str(source),'attempt':pins['attempt'],'config_sha256':pins['config_sha256'],
+            'actual':snapshot['actual'],'owned_operation':operation}
+        if stop.get('terminal_native_observation_sha256') is not None:
+            terminal_context=observation.prepare_captured_context(control,
+                stop_attempt=drain['stop_attempt'],**observation_arguments)
+        else:
+            metadata=previous['terminal_observation']; proof_sha=metadata.get('proof_sha256')
+            require(type(proof_sha) is str and re.fullmatch('[0-9a-f]{64}',proof_sha),
+                'Retained observation lacks its original immutable proof pin')
+            terminal_context=observation.prepare_context(control,
+                proof_relative='runtime-control/terminal-observation/'+proof_sha+'/proof.json',
+                proof_sha256=proof_sha,stop_pin=(drain['stop_attempt'],drain['stop_sha256']),
+                **observation_arguments)
         observation.revalidate_context(control,terminal_context,
             store_root=view['old_roots']['state']/'runs/docker-all/session-store',source_root=str(source),
             attempt=pins['attempt'],config_sha256=pins['config_sha256'],actual=snapshot['actual'])

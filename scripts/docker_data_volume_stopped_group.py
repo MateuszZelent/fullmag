@@ -15,7 +15,7 @@ from docker_data_volume_relocated import require_relocated
 from docker_dev_data_volume import _decode, _migration_bind_identity, _runtime_pins
 from docker_volume_accepted_reattach import _control_bytes
 from docker_volume_reconcile import fingerprint
-from docker_volume_terminal_observation import build_captured_proof, _store_reader, validate_empty_stop
+from docker_volume_terminal_observation import build_stopped_proof, _store_reader, validate_empty_stop
 from linux_data_volume_copy import _source_roots
 
 
@@ -108,9 +108,12 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
         require(m.get('Type') == 'bind' and m.get('RW') is (target != '/opt/fullmag/source') and
             _migration_bind_identity(m.get('Source'))[0] == path,'Stopped source bind differs: '+target)
     read_control=lambda relative:_control_bytes(control,relative,maximum=8*1024**2)
-    proof=build_captured_proof(read_control,_store_reader(roots['state']/'runs/docker-all/session-store'),
-        iteration=stop_attempt,scope={'compose_project':control.project,'control_volume':control.volume,
-                                    'source_root':str(source),'image_id':control.image})
+    proof=build_stopped_proof(
+        read_control,_store_reader(roots['state']/'runs/docker-all/session-store'),
+        iteration=stop_attempt,stop_sha256=stop_sha256,development_attempt=pins['attempt'],
+        config_sha256=pins['config_sha256'],
+        scope={'compose_project':control.project,'control_volume':control.volume,
+               'source_root':str(source),'image_id':control.image})
     validate_empty_stop(read_control,project=control.project,volume=control.volume,source_root=str(source),
         attempt=pins['attempt'],config_sha256=pins['config_sha256'],actual=actual,
         stop_pin=(stop_attempt,stop_sha256),source_proof=proof)

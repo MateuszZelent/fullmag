@@ -68,8 +68,10 @@ jobs:
           scripts.test_docker_data_volume_bind_job scripts.test_docker_dev_data_volume_bind
           scripts.test_docker_data_volume_admission_job scripts.test_docker_dev_data_volume_admission
           scripts.test_docker_data_volume_startup_scope
+          scripts.test_docker_data_volume_qualification_scope
           scripts.test_docker_data_volume_removed_group
           scripts.test_terminal_observation_owned_publish scripts.test_data_volume_start_terminal
+          scripts.test_terminal_observation_repeated_stop scripts.test_data_volume_repeated_stop_observer
           scripts.test_docker_data_volume_restart_context scripts.test_docker_dev_data_volume_restart
           scripts.test_docker_data_volume_relocated
           scripts.test_just_data_volume_shell
