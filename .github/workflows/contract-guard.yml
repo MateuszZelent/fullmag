@@ -70,6 +70,7 @@ jobs:
           scripts.test_docker_data_volume_startup_scope
           scripts.test_docker_data_volume_removed_group
           scripts.test_terminal_observation_owned_publish scripts.test_data_volume_start_terminal
+          scripts.test_docker_data_volume_restart_context scripts.test_docker_dev_data_volume_restart
           scripts.test_docker_data_volume_relocated
           scripts.test_just_data_volume_shell
           scripts.test_data_volume_stopped_windows_bind

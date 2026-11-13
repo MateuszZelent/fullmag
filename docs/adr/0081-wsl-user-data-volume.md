@@ -396,10 +396,35 @@ wywołania po zamknięciu jego nowej operacji development. Sprawdza sukces, piny
 operacji i rzeczywiste bajty jej terminalu, bez odczytu wskaźnika `current`.
 Nie może przejąć operacji callera; domyślne API startu pozostaje bez zmian.
 
-Pełny sterownik musi jeszcze połączyć te elementy z kwalifikowanym usunięciem
-starej zatrzymanej pary, zachowaniem uwierzytelnionych observation/budget pinów
-oraz standardowym `start(reuse_state=...)` i świeżą kwalifikacją. Nie jest to
-wykonanie migracji ani readmission na hoście.
+Wewnętrzny `docker_dev_data_volume_restart.restart_prepared_group` łączy te
+elementy w jednej żywej kontynuacji. Przed usunięciem pary uwierzytelnia dokładny
+development/witness/Compose, namespace/ledger, intent GPU i resolved device,
+port/UI, operator record, native contracts, allowlist i subnet. Ordinary captured
+observation powstaje z OLD backup pod posiadanym lease; historyczny cold-budget
+pin jest osobno uwierzytelniony. Dla tej gałęzi `previous_config_sha256` pozostaje
+domyślnie None; Compose SHA nie jest zastępstwem native config ani observation.
+
+Osobna operacja migracji ponawia pełny stopped inventory i metadata pod OLD
+fences, zapisuje intencję O_EXCL, usuwa wyłącznie dwa przypięte pełne ID bez
+force, wymaga terminalnego sukcesu polecenia oraz potwierdzonego braku usług.
+Guard potwierdza oryginalny copy SHA. Dopiero po rzeczywistym zamknięciu tej
+operacji następuje standardowy start zachowanego state z `script=None`, świeżą
+guest admission i exact terminal capture. Weryfikacja po starcie porównuje cały
+retained intent, nową parę usług, rzeczywiste raw receipts i Compose oraz NEW
+cert/owner, ownerToken, root identity i zachowany inode certyfikatu.
+
+StartedGroup jest wydawany dopiero po udanym wyjściu z pending startup scope
+i kolejnym readbacku. Błąd, również późny, zachowuje częściowe rekordy i zasoby;
+nie wydaje nowego uprawnienia i nie wykonuje rollbacku lub replay. Każde użycie
+StartedGroup ponawia powiązane wyniki i aktualny epoch pod nadal żywym oryginalnym
+copy host scope. Wynik to `runtime-started-not-scientifically-qualified`, bez
+registration ani prawa do usunięcia oryginałów.
+
+To integracja źródłowa, nie dowód wykonania na hoście. Cała recepta nadal musi
+objąć aktywację kwalifikacyjną przy nierozwiązanym pending, nowy pełny Zarr,
+rejestrację i kwalifikowane usunięcie dokładnych starych duplikatów. Zwykła
+aktywacja/start pozostaje zablokowana przez pending; zapisany StartedGroup JSON
+nie zastępuje żywego kontekstu.
 
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,
