@@ -87,3 +87,9 @@ jobs:
           name: antenna-completed-receipt-contracts
           path: antenna-worker-contracts.log
           if-no-files-found: warn
+
+  native-current-view:
+    name: Native current-view baseline
+    uses: ./.github/workflows/fem-positive-mass-contract.yml
+    with:
+      contract_profile: conservative-current-view

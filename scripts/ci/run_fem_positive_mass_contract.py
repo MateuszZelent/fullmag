@@ -414,6 +414,19 @@ CONTRACT_PROFILES["floquet-source-moments"] = {
 }
 
 
+CONTRACT_PROFILES["conservative-current-view"] = {
+    **CONTRACT_PROFILES["positive-mass"],
+    "slug": "fem-conservative-current-view-contract",
+    "qualification_scope": "mfem_cpu_existing_current_view_source_contract_only",
+    "tests": [{
+        "name": "fem_conservative_current_view_contract",
+        "source_suffix": "backends/fem/tests/conservative_current_view_contract.cpp",
+        "marker": "fem conservative current view contract: PASS",
+        "compile_definitions": ["-std=gnu++17"],
+    }],
+}
+
+
 def _contract_profile(profile_id: str) -> dict[str, Any]:
     try:
         return CONTRACT_PROFILES[profile_id]
