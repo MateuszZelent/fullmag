@@ -29,6 +29,35 @@ def _original_roots(plan):
     return roots
 
 
+def _unqualified_consumers(control,actuals,allowed,consumer_roots,relocated=None):
+    """Apply the common group/volume/bind consumer policy to inspected IDs."""
+    cache={};windows_proofs=[];consumers=[]
+    def physical(mount,state):
+        key=(mount.get('Source'),hashlib.sha256(canonical(state)).hexdigest())
+        if key not in cache:
+            path,proof=_migration_bind_identity(mount.get('Source'),state)
+            cache[key]=path
+            if proof is not None:windows_proofs.append({'source':mount.get('Source'),'proof':proof})
+        return cache[key]
+    for a in actuals:
+        if a.get('Id') in allowed:continue
+        labels=a.get('Config',{}).get('Labels') or {}
+        if labels.get('com.docker.compose.project') == control.project:
+            consumers.append({'id':a['Id'],'reason':'additional-group-resource'})
+        for mount in a.get('Mounts',[]):
+            if mount.get('Name') == control.volume:
+                consumers.append({'id':a['Id'],'reason':'control-volume-reference'})
+            if mount.get('Type') == 'bind':
+                try:
+                    p=physical(mount,a.get('State'))
+                    if p is not None and (any(p == r or p in r.parents or r in p.parents for r in consumer_roots) or
+                            (relocated is not None and relocated.overlaps(p))):
+                        consumers.append({'id':a['Id'],'reason':'dataset-bind-reference'})
+                except (OSError,ValueError,RuntimeError) as error:
+                    consumers.append({'id':a['Id'],'reason':'unproven-bind-identity','error_type':type(error).__name__})
+    return consumers,windows_proofs
+
+
 def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=None,relocated=None):
     """Require exact stop/native records, unchanged incarnations and consumers."""
     require(type(stop_attempt) is str and re.fullmatch('[0-9a-f]{32}',stop_attempt) and
@@ -69,30 +98,9 @@ def observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,*,fence=N
             state.get('Running') is False and type(state.get('Pid')) is int and state['Pid'] == 0 and
             all(state.get(k) is False for k in ('Dead','Paused','Restarting','OOMKilled')),
             'Stopped source service incarnation/configuration differs: '+service)
-    cache={};windows_proofs=[];consumers=[]
-    def physical(mount,state):
-        key=(mount.get('Source'),hashlib.sha256(canonical(state)).hexdigest())
-        if key not in cache:
-            path,proof=_migration_bind_identity(mount.get('Source'),state)
-            cache[key]=path
-            if proof is not None:windows_proofs.append({'source':mount.get('Source'),'proof':proof})
-        return cache[key]
-    for a in actuals:
-        if a.get('Id') in allowed:continue
-        labels=a.get('Config',{}).get('Labels') or {}
-        if labels.get('com.docker.compose.project') == control.project:
-            consumers.append({'id':a['Id'],'reason':'additional-group-resource'})
-        for mount in a.get('Mounts',[]):
-            if mount.get('Name') == control.volume:
-                consumers.append({'id':a['Id'],'reason':'control-volume-reference'})
-            if mount.get('Type') == 'bind':
-                try:
-                    p=physical(mount,a.get('State'))
-                    if p is not None and (any(p == r or p in r.parents or r in p.parents for r in consumer_roots) or
-                            (relocated is not None and relocated.overlaps(p))):
-                        consumers.append({'id':a['Id'],'reason':'dataset-bind-reference'})
-                except (OSError,ValueError,RuntimeError) as error:
-                    consumers.append({'id':a['Id'],'reason':'unproven-bind-identity','error_type':type(error).__name__})
+    consumers,windows_proofs=_unqualified_consumers(
+        control,actuals,allowed,consumer_roots,relocated=relocated
+    )
     require(not consumers,'Unqualified source consumers: '+str(consumers))
     mounts={m.get('Destination'):m for m in actual['backend'].get('Mounts',[])}
     for target,path in [('/state',declared_roots['state']),('/user-data',declared_roots['user_data']),('/opt/fullmag/source',Path(source))]:
