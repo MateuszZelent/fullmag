@@ -3060,7 +3060,7 @@ def _load_held_ui_request_context(args, *, controller, expected_plan_sha256,
     except Exception as error:
         raise BuildControlError("Held UI immutable request is unavailable or changed: " + str(error)) from error
     request_sha256 = controller.sha(request_raw)
-    plan_sha256 = controller.sha(controller.canonical(request["plan"]))
+    plan_sha256 = request["plan"].get("plan_sha256")
     scope = request["source_scope"]
     accepted = request["accepted"]
     if (plan_sha256 != expected_plan_sha256

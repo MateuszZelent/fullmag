@@ -14,6 +14,7 @@ from unittest.mock import ANY, patch
 
 import docker_volume_dev as subject
 import docker_volume_held_ui_materialization as held_controller
+import test_docker_volume_held_ui_materialization as held_materialization_fixtures
 
 
 PLAN_SHA = "a" * 64
@@ -490,6 +491,96 @@ class HeldUiPrivateApplyDriver(unittest.TestCase):
         recreate.assert_not_called()
         start.assert_called_once()
         completed.assert_called_once()
+
+
+class HeldUiPublishedRequestLoader(unittest.TestCase):
+    def test_production_loader_accepts_published_compact_plan_reference(self):
+        initial = held_materialization_fixtures.request()
+        scope = initial["source_scope"]
+        document = {"name": scope["compose_project"], "services": {}}
+        config_sha256 = hashlib.sha256(held_controller.canonical(document)).hexdigest()
+        initial["source_scope"]["runtime_config_sha256"] = config_sha256
+        with patch.object(held_materialization_fixtures, "request", return_value=initial):
+            request_value, proofs = held_materialization_fixtures.valid_proof_chain()
+
+        scope = request_value["source_scope"]
+        attempt = request_value["plan"]["attempt"]
+        request_id = request_value["plan"]["maintenance_request_id"]
+
+        class Control:
+            def __init__(self):
+                self.project = scope["compose_project"]
+                self.volume = scope["control_volume"]
+                self.namespace = scope["namespace"]
+                self.namespace_registry_sha256 = scope["namespace_registry_sha256"]
+                self.identity = object()
+                self.records = {}
+
+            def read_bytes(self, relative, optional=False, maximum=None):
+                value = self.records.get(relative)
+                if value is None and not optional:
+                    raise AssertionError("missing fake control record: " + relative)
+                if value is not None and maximum is not None and len(value) > maximum:
+                    raise AssertionError("fake control record exceeded its limit")
+                return value
+
+            def write_bytes(self, relative, raw):
+                if relative in self.records:
+                    raise AssertionError("immutable fake control record was overwritten")
+                self.records[relative] = bytes(raw)
+
+        control = Control()
+        published_path, request_sha256 = held_controller.publish_request(control, request_value)
+        self.assertEqual(published_path, held_controller.request_relative(request_id))
+        for relative, raw in held_materialization_fixtures.proof_records(
+                request_value, proofs).items():
+            control_path = (relative if relative.startswith("held-ui-materialization-stop/")
+                            else "runtime-control/" + relative)
+            control.records[control_path] = raw
+
+        previous = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "development",
+            "state": "succeeded", "attempt": attempt,
+            "compose_project": scope["compose_project"], "control_volume": scope["control_volume"],
+            "control_namespace": scope["namespace"],
+            "namespace_registry_sha256": scope["namespace_registry_sha256"],
+            "config_sha256": config_sha256, "backend_container": scope["backend_container_id"],
+            "frontend_container": scope["frontend_container_id"],
+            "state_root": "/runtime/state",
+            "inputs": {"source_root": scope["source_root"]},
+        }
+        control.records["development/attempts/" + attempt + "/terminal.json"] = (
+            held_materialization_fixtures.encoded_record(previous)
+        )
+        control.records["development/attempts/" + attempt + "/compose.json"] = (
+            held_materialization_fixtures.encoded_record(document)
+        )
+        layout = {"runtime_root": "/runtime"}
+        args_value = SimpleNamespace(
+            repo_root="/repo", source_root=scope["source_root"], attempt=attempt,
+            request_id=request_id, run_id=request_value["accepted"]["run_id"],
+            config_sha256=config_sha256,
+        )
+
+        with TemporaryDirectory() as temporary, \
+             patch.object(subject, "_held_ui_control_for_args", return_value=(
+                 Path(scope["source_root"]), layout, control.identity, control)), \
+             patch("docker_volume_stop_unadmitted._control_bytes",
+                   side_effect=lambda selected_control, relative, **_kwargs:
+                   selected_control.read_bytes(relative)), \
+             patch.object(subject.storage, "validate_path", return_value=Path(temporary)):
+            loaded = subject._load_held_ui_request_context(
+                args_value, controller=held_controller,
+                expected_plan_sha256=request_value["plan"]["plan_sha256"],
+                expected_request_sha256=request_sha256,
+            )
+
+        self.assertEqual(loaded["request"], request_value)
+        self.assertEqual(loaded["request_raw"], control.records[
+            "runtime-control/" + published_path
+        ])
+        self.assertEqual(loaded["plan_sha256"], request_value["plan"]["plan_sha256"])
+        self.assertEqual(loaded["proofs"]["terminal"]["state"], "succeeded")
 
 
 if __name__ == "__main__":
