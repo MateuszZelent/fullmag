@@ -5,9 +5,9 @@ use crate::{
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmPrecisionPolicyIR,
     FdmProjectionPolicyIR, FemConnectivityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FrequencyExcitationIR,
-    FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR, IntegratorChoice,
-    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FieldTargetIR, FieldTimeOriginIR,
+    FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR,
+    IntegratorChoice, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
     RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedChargeTransportPlanIR,
@@ -729,6 +729,25 @@ pub struct ResolvedRegionalFieldDriveBasisIR {
     pub projection_signature: String,
 }
 
+/// One term of a mask field drive (`mask_field_drive.v1`, physics note 0922)
+/// resolved on the single FDM grid: the mask in A/m per cell and the time
+/// function as `fullmag_time_expr.v1` bytecode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedMaskFieldTermBasisIR {
+    pub drive_id: String,
+    pub term_index: u32,
+    pub time_origin: FieldTimeOriginIR,
+    /// Canonical text of the time function with locals substituted; `1.0` for
+    /// a static term. Provenance only; the solver reads `time_program`.
+    pub time_expression: String,
+    pub time_program: Vec<f64>,
+    /// `true` when the time function reads `t`.
+    pub time_dependent: bool,
+    /// Immutable cell-wise basis `B_i / mu0` in A/m, zero outside the support.
+    pub field_xyz: Vec<[f64; 3]>,
+    pub projection_signature: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedSolvedAntennaDriveBasisIR {
     pub drive: SolvedAntennaDriveIR,
@@ -812,6 +831,8 @@ pub struct FdmPlanIR {
     pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regional_field_drive_bases: Vec<ResolvedRegionalFieldDriveBasisIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_term_bases: Vec<ResolvedMaskFieldTermBasisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
     #[serde(default)]

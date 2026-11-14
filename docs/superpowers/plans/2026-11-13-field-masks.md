@@ -41,7 +41,7 @@
 
 `~/git/simulations/amumax/racetrack_3.6GHz/`: `original.mx3`, `clock_check.*`, `dump_inputs.*`, `inputs.npz`, `README.md`.
 
-### Task 1: Worktree and contract documents
+### Task 1: Worktree and contract documents — DONE 2026-11-13 (`c8390da6a`, `9578adb29`; source map deferred until the mapped symbols exist)
 
 **Files:**
 - Create worktree (skill `using-git-worktrees`; registry entry per `docs/guides/fullmag-build-storage-governance.md`)
@@ -70,7 +70,7 @@
 - [ ] **Step 2:** Run `python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0922-masks-for-field-excitation.source-map.json --repo-root .` — exit 0 once mapped symbols exist; rerun after each task that adds one.
 - [ ] **Step 3:** Commit `docs: define explicit masks for field excitation`.
 
-### Task 2: Crate `fullmag-expr`
+### Task 2: Crate `fullmag-expr` — DONE 2026-11-13 (`04f6fc28c`; tests run in CI only, the local test ban stays)
 
 **Files:**
 - Create: `crates/fullmag-expr/Cargo.toml` (no dependencies), `src/{lib.rs,lexer.rs,parser.rs,function.rs,bytecode.rs}`, `tests/expr_tests.rs`, `tests/function_tests.rs`, `tests/fixtures/time_program_golden.json`
@@ -120,7 +120,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 - [ ] **Step 5: Check.** If decision 1 lifts the ban for this crate: `cargo test -p fullmag-expr` in the worktree backend — all pass. Otherwise the crate is exercised by Task 5's probe.
 - [ ] **Step 6: Commit** `feat(expr): add field_expr.v1 functions and time bytecode`.
 
-### Task 3: IR types and validation
+### Task 3: IR types and validation — DONE 2026-11-13 (`c29ea5101`)
 
 **Files:**
 - Create: `crates/fullmag-ir/src/mask_field_drive.rs`
@@ -136,7 +136,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 - [ ] **Step 3: Check** `just check-api-source` and `just check-cli-source` in the worktree backend — exit 0.
 - [ ] **Step 4: Commit** `feat(ir): add mask field drives to ProblemIR`.
 
-### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna
+### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna — PARTIAL (`0e53f8a2a`: units, transpiler, `fm.mask`/`fm.time`, `MaskAntenna`, stage action; open: `VectorMask`/`study.new_vector_mask`, `fullmag.antennas.gaussian_k_source`)
 
 **Files:**
 - Create: `packages/fullmag-py/src/fullmag/units.py` (`nm, um, mT, T, GHz, MHz, ns, ps` as floats)
@@ -201,7 +201,7 @@ class MaskAntenna:
 - [ ] **Step 6: Run** the four files and `test_regional_field_drive.py` — pass.
 - [ ] **Step 7: Commit** `feat(py): add hand-written function and array masks, time functions and a ready antenna`.
 
-### Task 4b: Adopted from Mateusz's V4 (IR, Python)
+### Task 4b: Adopted from Mateusz's V4 (IR, Python) — DONE 2026-11-14 (`8f91dce64`)
 
 **Files:**
 - Modify: `crates/fullmag-ir/src/mask_field_drive.rs` (`target: FieldTargetIR` replaces `target_object_id`; `MaskTermIR.name`; validation of region targets and term names), `crates/fullmag-ir/tests/mask_field_drive_tests.rs`
@@ -214,35 +214,31 @@ class MaskAntenna:
 - [ ] **Step 1: Tests:** reassignment `g = ...; g = g * ...` transpiles to locals `g`, `g_2` and outputs use `g_2`; `g *= 2` works; `region.add_simpleantenna.arbitrary_mask` gives target `{"kind": "region", ...}`; `film.add_simpleantenna...` gives `{"kind": "object", ...}`; scoped `target=` rejected; duplicate term names rejected; Update: patched instance in the following stages, base antenna unchanged, re-Add after Remove installs the base values, unknown parameter / inactive id / missing term selector rejected; Rust IR tests for region target, unknown region, duplicate term names.
 - [ ] **Step 2: Implement.** **Step 3:** run Python tests (pytest, repo venv) and `cargo check -p fullmag-ir`. **Step 4: Commit** `feat: adopt scoped factories, region targets, term names, SSA and Update`.
 
-### Task 5: FDM planner
+### Task 5: FDM planner — DONE 2026-11-14 (probe 15/15; a regional-only plan is byte-identical to the `438d917ff` binary)
 
 **Files:**
 - Create: `crates/fullmag-plan/src/mask_field.rs`
-- Modify: `crates/fullmag-plan/src/selection/{certificate.rs,fdm.rs,mod.rs}`, `crates/fullmag-plan/src/fdm.rs` (call next to `resolve_fdm_regional_field_drives`; multilayer rejection), `crates/fullmag-plan/src/fem.rs` (rejection), `crates/fullmag-ir/src/plan.rs` (`ResolvedMaskFieldTermBasisIR`, `FdmPlanIR.mask_field_term_bases`)
+- Modify: `crates/fullmag-plan/src/selection/geometry.rs` (`GeometryPredicate::from_region_shape`), `crates/fullmag-plan/src/fdm.rs` (call next to `resolve_fdm_regional_field_drives`; multilayer rejection), `crates/fullmag-plan/src/fem.rs` (rejection), `crates/fullmag-plan/src/lib.rs` (a mask drive counts as a localized source for `spin_wave_response` finite k), `crates/fullmag-ir/src/plan.rs` (`ResolvedMaskFieldTermBasisIR`, `FdmPlanIR.mask_field_term_bases`), runner literals of `FdmPlanIR`
 - Create: `scripts/benchmarks/fdm_mask_plan_checks.py`, `scripts/benchmarks/test_fdm_mask_plan_checks.py`
 
-**Interfaces:**
-- Consumes: Tasks 2–4.
+**Interfaces (as implemented):**
+- Consumes: Tasks 2–4b.
 - Produces:
 
 ```rust
-// selection/fdm.rs — geometry-only selection over one FDM grid; result ∧ active_mask.
-pub fn compile_fdm_static_selection_mask(
-    domain: &FdmFrozenSpinsDomain<'_>, selector: &SelectionExprIR,
-    selections: &[SelectionDefinitionIR],
-    object_transforms: &BTreeMap<String, AffineTransform3>,
-    known_entities: &SelectionValidationContext,
-) -> Result<Vec<bool>, SelectionError>;
 // mask_field.rs
-pub(crate) fn resolve_fdm_mask_field_terms(
-    drives: &[&MaskFieldDriveIR], cell_centres_m: &[[f64; 3]],
-    support_masks: &[Vec<bool>],                 // aligned with drives
-    object_origins_m: &BTreeMap<String, [f64; 3]>,
-    stage_horizon_s: Option<f64>,
-) -> Result<Vec<ResolvedMaskFieldTermBasisIR>, PlanError>;
+pub(crate) struct FdmMaskFieldDomain<'a> {
+    pub cell_centres_m: &'a [[f64; 3]], pub active_mask: Option<&'a [bool]>,
+    pub region_mask: &'a [u32], pub region_legend: &'a [FdmRegionLegendEntryIR],
+    pub target_aliases: &'a [&'a str],           // magnet name, geometry name, object id
+    pub object_translation_m: [f64; 3], pub stage_start_time_s: f64,
+}
+pub(crate) fn active_mask_field_drives(problem: &ProblemIR) -> Vec<&MaskFieldDriveIR>;
+pub(crate) fn resolve_fdm_mask_field_terms(problem: &ProblemIR, domain: &FdmMaskFieldDomain<'_>)
+    -> Result<Vec<ResolvedMaskFieldTermBasisIR>, PlanError>;
 ```
 
-The support selector of a drive is `and(in_object(target), inside_geometry(shape at position, frame))`, built in `fdm.rs`.
+Support = active cell ∧ target cells (global: all; object: the magnet; region: the cells whose exclusive marker is the region) ∧ cell centre inside the shape placed at `frame_origin` (world: `position`; local: object translation + `position`; a global target uses the world frame). Signature = sha256 over `mask_field_term.v1`, drive id, term index, program words and field values (raw little-endian bytes). The time function is checked at the stage start (the horizon is not in ProblemIR); the runner checks every evaluation (Task 6).
 
 - [ ] **Step 1: Write the plan probe** (pattern of `fdm_regions_pbc_abi_checks.py`: lower scripts with `python3 -m fullmag.runtime.helper export-run-config`, plan each stage with `fullmag-bin plan-json --execution-plan`, assert on `backend_plan.mask_field_term_bases`) and the unit test of its helpers. Cases on a 16×8×4 grid of 5 nm, magnet `film` centred at the origin:
 
@@ -253,20 +249,21 @@ The support selector of a drive is `and(in_object(target), inside_geometry(shape
 | `local_frame` | mask `(B*x/L, 0, 0)`; `frame="local"`, `position=(20nm,0,0)` | value at each cell = `B*(x_cell − 20nm)/L` within 1e-15 relative |
 | `formula` | mask `(B*x/L, 0, B*cos(2*pi*y/L))`, world | closed form at every cell centre within 1e-15 relative |
 | `two_terms` | `add(mask_sin_kx, cos_wt)`, `add(mask_minus_cos_kx, sin_wt)` | 2 bases with `term_index` 0, 1 and the two time programs |
-| `ready_antenna` | `gaussian_k_source(...)` vs the hand-written pair | identical `field_xyz` and `time_program` |
-| `loop_mask` | `formula` written as a loop function filling `study.new_vector_mask()` | `field_xyz` equals the `formula` case within 1e-6 relative (float32 array) |
-| `loop_mask_resampled` | array on a 8×4×2 lattice of 10 nm over the same film | each cell takes the value of the nearest lattice point; cells outside the lattice are 0 |
+| `reassigned_locals` | Mateusz-style mask with `g = …; g = g * …; g *= B01` and a time function that reassigns `t` | field and time program equal to the Python functions |
 | `region_overlap` | `uniform_static`; region `a` (x<0, priority 1) under region `b` (all, priority 2); shape = box over x<0 | 8·8·4 non-zero cells |
 | `regional_unchanged` | existing `RegionalFieldDrive` script | plan JSON equals the master plan; no `mask_field_term_bases` key |
 | `empty_support` | shape outside the film | fails, `mask_support_empty` |
 | `non_finite_time` | time `log(t)` | fails, `mask_expression_non_finite` |
 | `region_target` | `region.add_simpleantenna...`, region `a` covering x<0 | non-zero cells = the cells whose `region_mask` is region `a` |
+| `region_target_shadowed` | region `a` under region `b` of higher priority, target `a` | fails, `mask_support_empty` |
 | `global_target` | `target="global"` | every active cell inside the shape |
 | `fem` | `uniform_static` with `engine("fem")` | fails, `mask_field_drive_unsupported_lane:fem` |
 | `multilayer` | `uniform_static` with a second magnet | fails, `mask_field_drive_unsupported_lane:fdm_multilayer` |
 
 - [ ] **Step 2: Implement** the support compiler (reuse `prepare_expression_realization`/`evaluate_expression`; reject state-dependent input), term resolution (evaluate the function mask at supported cell centres, or read the `.npy` file — verify sha256, size and dtype, else `mask_array_invalid` — and copy/resample it; divide by μ0; compile the time program; signature = sha256 of the serde JSON of (drive, term_index, field_xyz)), the time sampling check (4097 uniform samples over the stage horizon), lane rejections.
-- [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `14/14 cases passed`, exit 0.
+Deferred to the tasks that add the features: `ready_antenna` (`gaussian_k_source` vs the hand-written pair: identical `field_xyz` and `time_program`), `loop_mask` (`formula` as a loop filling `study.new_vector_mask()`: within 1e-6 relative) and `loop_mask_resampled` (8×4×2 lattice of 10 nm: nearest lattice point, 0 outside) — with `VectorMask` and `fullmag.antennas` of Task 4.
+
+- [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `15/15 cases passed`, exit 0.
 - [ ] **Step 4: Commit** `feat(plan): resolve hand-written masks into FDM bases`.
 
 ### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU

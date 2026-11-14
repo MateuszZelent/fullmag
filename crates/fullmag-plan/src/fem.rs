@@ -4094,6 +4094,14 @@ pub(crate) fn plan_fem(
             "object-scoped RotatedInterfacialDmi is not implemented for FEM CPU/GPU; use FDM or global rDMI".to_string()
         ] });
     }
+    if !crate::mask_field::active_mask_field_drives(problem).is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "mask_field_drive_unsupported_lane:fem: mask antennas are not realized on FEM yet (physics note 0922, section 8.3)"
+                    .to_string(),
+            ],
+        });
+    }
     let mut errors = Vec::new();
 
     let fem_hints = match &problem.backend_policy.discretization_hints {
