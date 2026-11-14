@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 757922,
+    "sha256": "fc32546bb7e963b48b46b84142039edf3228c6e69771f678ec55f7be4763f1fa"
+  },
+  "after": {
+    "bytes": 758192,
+    "sha256": "09c2d941a7663462b4cb2e330faa0a0b6d767ed4e56963870e12f9eb29979c86"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 757922,
+      "text": "\n# Authenticated source-only Task4 acceptance uses the existing managed CPU service/library/cache.\nverify-fem-retained-dtq-authenticated-fixture-contract:\n    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_authenticated_fixture_contract.sh\n"
+    }
+  ]
+}

@@ -271,6 +271,27 @@ jobs:
         run: |
           set -o pipefail
           just verify-fem-retained-dtq-quantity-contract 2>&1 | tee antenna-retained-dtq-task5-quantity-ui-contracts.log
+      - name: Install pinned source-only Task 4 authenticated fixture wiring
+        run: |
+          python -B - <<'PYCI'
+          import hashlib
+          from pathlib import Path
+          path = Path('.github/antenna-retained-dtq/apply-task4-fixture-ci.py')
+          raw = path.read_bytes()
+          if len(raw) != 3567 or hashlib.sha256(raw).hexdigest() != 'e0b2165c141dbd0ffcddc1812b64558a7eafa08e4ea656c3dfefc76d8305b4d0':
+              raise ValueError('Exact Task4 fixture CI applier pin differs')
+          namespace = {'__name__': 'ci_fixture_wiring'}
+          exec(compile(raw, str(path), 'exec'), namespace)
+          import sys
+          sys.argv = [str(path), 'install']
+          namespace['__file__'] = str(path.resolve())
+          namespace['main']()
+          PYCI
+      - name: Verify authenticated publication completion and cold read using source-only fixture
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-authenticated-fixture-contract 2>&1 | tee antenna-retained-dtq-task4-authenticated-fixture.log
       - name: Require the full native quadrature contract
         if: always()
         env:
@@ -294,5 +315,8 @@ jobs:
             .github/antenna-retained-dtq/task-5-source-pins.json
             .github/antenna-retained-dtq/task-5-ui-baseline-pins.json
             .github/antenna-retained-dtq/task-5-wiring-pins.json
+            .github/antenna-retained-dtq/task-4-fixture/task-4-fixture-ci-inputs.json
+            .github/antenna-retained-dtq/task-4-fixture/task-4-fix3-source-pins.json
+            .github/antenna-retained-dtq/task-4-fixture/task-4-fixture-justfile-insertions.json
           if-no-files-found: error
           include-hidden-files: true
