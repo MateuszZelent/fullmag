@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 756990,
+    "sha256": "d5971fa423fc9642120efdfcb771884053a6ccdb2616aecabd56f878ea508833"
+  },
+  "after": {
+    "bytes": 757204,
+    "sha256": "49431b482590792744f82121232062394b207ed4855d35c44a00d5afbe164ebd"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 320769,
+      "text": "# Reuse the audited OE-F1 CPU build for the retained DTQ Rust/FFI gate.\nverify-fem-retained-dtq-rust-cpu-contract:\n    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_rust_contract.sh\n\n"
+    }
+  ]
+}

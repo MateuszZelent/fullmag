@@ -1,0 +1,43 @@
+{
+  "archive": "task-5-green.tar.gz",
+  "sha256": "bd774a7948571e637d8dfb7b3704ddcd3b62f20c8e1d1a09c5111ee7b8c0131e",
+  "bytes": 36696,
+  "files": {
+    "crates/fullmag-api/src/quantities.rs": {
+      "sha256": "357f8e57a8552cb7515e5d3e39928f4bc4a2f9e4e8d45db71d5816464f03a438",
+      "bytes": 35240,
+      "before_sha256": "dfcc81b9fca75594698a36b5936e140906c00d5209a5dd8dd4637087ac6c1cd5"
+    },
+    "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_payload.rs": {
+      "sha256": "66bf43e4349f633e0166e8a4a1f525cd633c09cf03d67c86a672795deaa6bcbb",
+      "bytes": 11864,
+      "before_sha256": "ef6a92ba148186fa364ed6d142ccfd214543588d95aa9533e4fa724d3a0dcd93"
+    },
+    "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs": {
+      "sha256": "1895121a1595b9578bad6726dd319d84bb12f18075c42b2aed73bfb4944e0bda",
+      "bytes": 64826,
+      "before_sha256": "86d48edcb8c9f5125553ce8d049fa298ef63c70095d1cd48bd1647c776578d0f"
+    },
+    "apps/control-room/src/kernel/resources/savedAntennaSourceContextResources.ts": {
+      "sha256": "ae6f431b2c55693f5643fb011b3a6115dd8c68e04fcd32176da91a37e8acd87e",
+      "bytes": 18031,
+      "before_sha256": "2efd0d1e6a1516be45c15a4725dacddd030f314dc422956b5c2a42a78275374b"
+    },
+    "apps/control-room/src/kernel/resources/savedAntennaSourceContextResources.test.ts": {
+      "sha256": "1511f921f17c01d72a82286fee1faa4002df127f258142fb768e9ce4467a3bb4",
+      "bytes": 21856,
+      "before_sha256": "8418656992cc41a3eb25ad7c3d77e4d2e7b002ea346751b8d338185d54ce81cf"
+    },
+    "apps/control-room/src/modules/inspector/panels/SavedFieldVisualizationPanel.tsx": {
+      "sha256": "7a9d9b75c64b7e7f57b9ab0fd2340a94f9dfd767350aa9c4e4e9c8c76645a2c5",
+      "bytes": 14970,
+      "before_sha256": "1242f29daea6d34d385321531ffc6cefa9aaf103729f19294656f98a8785e647"
+    },
+    "apps/control-room/src/modules/inspector/panels/SavedFieldVisualizationPanel.test.tsx": {
+      "sha256": "977fdaf18f4f8163d3bdb7622e6bbf9a561ddba98b71231321e492426f921e05",
+      "bytes": 5000,
+      "before_sha256": "e12e05a774d4fa2fdb45112e3487442f79446089e02787c1b1a1c9fee5a1b253"
+    }
+  },
+  "status": "LOCAL_NOT_UPLOADED_NOT_COMPILED"
+}

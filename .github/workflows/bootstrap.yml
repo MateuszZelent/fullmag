@@ -7,7 +7,8 @@ concurrency:
   group: antenna-retained-dtq-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  rust-contracts:
+  native-retained-dtq-contracts:
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: 2
@@ -25,12 +26,10 @@ jobs:
           cache: pip
           cache-dependency-path: packages/fullmag-py/pyproject.toml
 
-      - name: Install Rust
-        id: install-rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3
+        with:
+          just-version: '1.51.0'
 
       - name: Install Python runtime and mesh preparation dependencies
         id: install-python-runtime
@@ -104,14 +103,132 @@ jobs:
           assert hashlib.sha256(data).hexdigest()=='3b89b8424b5eeb86e885bc5101716c7b13be4247b2140bd73d81e30d403712ea'
           Path('crates/fullmag-antenna-artifacts/src/retained_current/tests_v2.rs').write_bytes(data)
           PYCI
-      - name: Verify full historical v1 bundle hash after review
+      - name: Apply exact Task 2 Rust adapter snapshot
+        run: python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-rust-green
+      - name: Apply preserved pre-ABI RED snapshot
+        run: python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-native-red
+      - name: Apply pinned minimal Task 2 recipe insertion
+        run: |
+          python -B - <<'PYCI'
+          import hashlib
+          from pathlib import Path
+          data = Path('.github/antenna-retained-dtq')
+          expected = {'apply-justfile-insertions.py': {'bytes': 1957, 'sha256': '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'}, 'task-2-justfile-insertions.json': {'bytes': 559, 'sha256': 'd2045b46ea17a0b1510a72220f293d489f261d462cfa2ef318dbdd43c568a24f'}}
+          checked = {}
+          for name, pin in expected.items():
+              raw = (data / name).read_bytes()
+              if len(raw) != pin['bytes'] or hashlib.sha256(raw).hexdigest() != pin['sha256']:
+                  raise ValueError('Recipe transport pin mismatch: ' + name)
+              checked[name] = raw
+          namespace = {'__name__': 'ci_recipe_insertions'}
+          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
+          namespace['apply_insertions'](Path('justfile'), checked['task-2-justfile-insertions.json'])
+          PYCI
+      - name: Prove RED from missing numeric C ABI through container-backed just
+        shell: bash
+        run: |
+          set +e
+          just verify-fem-oersted-oef1-cpu-contract > antenna-retained-dtq-red.log 2>&1
+          result=$?
+          set -e
+          cat antenna-retained-dtq-red.log
+          test "$result" -ne 0
+          grep -E 'error:.*(fullmag_fem_frozen_rt0_direct_(request|result)_v1|fullmag_fem_evaluate_frozen_rt0_direct_observed_v1)' antenna-retained-dtq-red.log
+          printf 'Task 2 RED: missing new ABI confirmed; exit=%s\n' "$result"
+      - name: Apply exact reviewed GREEN native snapshot
+        run: |
+          python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-native-green
+          python -B .github/antenna-retained-dtq/apply-task2-source.py --verify
+      - name: Verify GREEN C++ numerical and ABI contracts
+        shell: bash
         run: |
           set -o pipefail
-          cargo test --locked -p fullmag-antenna-artifacts --lib retained_current::tests_v2::surface_v1_golden_stays_exact -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
-      - name: Preserve artifact contract log
+          just verify-fem-oersted-oef1-cpu-contract 2>&1 | tee antenna-retained-dtq-green-native.log
+      - name: Verify Rust adapter against the same CPU shared library in container
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-rust-cpu-contract 2>&1 | tee antenna-retained-dtq-green-rust.log
+      - name: Install pinned Task 3 CI contracts
+        run: python -B .github/antenna-retained-dtq/apply-task3-source.py install-contract-tests
+      - name: Independently verify historical v7 serializer bytes
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-public-contract baseline-v7 2>&1 | tee antenna-retained-dtq-task3-v7-baseline.log
+      - name: Apply preserved corrected RED tests against old producer
+        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-red-corrected.tar.gz
+      - name: Prove missing typed producer in the historical source
+        shell: bash
+        run: |
+          set +e
+          just verify-fem-retained-dtq-public-contract red > antenna-retained-dtq-task3-red.log 2>&1
+          result=$?
+          set -e
+          cat antenna-retained-dtq-task3-red.log
+          test "$result" -ne 0
+          grep -E 'error\[E(0425|0433|0599)\]' antenna-retained-dtq-task3-red.log
+          grep -E '(AntennaRetainedDirectFieldInspection|validate_retained_direct_field_operation)' antenna-retained-dtq-task3-red.log
+          printf 'Task 3 reconstructed RED: old producer rejects new test; exit=%s\n' "$result"
+      - name: Apply exact reviewed Task 3 GREEN source and fixture emitter
+        run: |
+          python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-green.tar.gz
+          python -B .github/antenna-retained-dtq/apply-task3-source.py append-real-backend-fixture
+      - name: Verify public producer, typed v7 output and exhaustive consumers
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-public-contract green 2>&1 | tee antenna-retained-dtq-task3-green.log
+      - name: Restore exact historical IR parser
+        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-historical-ir.tar.gz
+      - name: Verify historical real parser rejects the generated new backend plan
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-public-contract historical-parser 2>&1 | tee antenna-retained-dtq-task3-historical-parser.log
+          emitted="$(sed -n 's/^DTQ_REAL_BACKEND_FIXTURE_SHA256=//p' antenna-retained-dtq-task3-green.log)"
+          rejected="$(sed -n 's/^DTQ_OLD_REAL_PARSER_REJECTED_SHA256=//p' antenna-retained-dtq-task3-historical-parser.log)"
+          test -n "$emitted"
+          test "$emitted" = "$rejected"
+      - name: Restore reviewed Task 3 sources after the historical parser gate
+        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-green.tar.gz
+      - name: Apply reviewed publication sources and compile-contract module
+        run: |
+          python -B .github/antenna-retained-dtq/apply-task4-source.py task-4-green
+          python -B .github/antenna-retained-dtq/apply-task4-source.py install-compile-contract-module
+      - name: Verify portable publication contracts and compile authenticated harness without executing it
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-publication-contract 2>&1 | tee antenna-retained-dtq-task4-source-contracts.log
+      - name: Recheck numerical Rust adapter after the portable binder move
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-rust-cpu-contract 2>&1 | tee antenna-retained-dtq-task4-native-binder-integration.log
+      - name: Install exact existing frontend dependency baseline and reviewed Task 5 changes
+        run: |
+          python -B .github/antenna-retained-dtq/apply-task5-source.py ui-baseline
+          python -B .github/antenna-retained-dtq/apply-task5-source.py task-5-green
+          python -B .github/antenna-retained-dtq/apply-task5-source.py install-wiring
+      - name: Verify canonical quantities and raw-field UI contracts in the existing CPU container
+        shell: bash
+        run: |
+          set -o pipefail
+          just verify-fem-retained-dtq-quantity-contract 2>&1 | tee antenna-retained-dtq-task5-quantity-ui-contracts.log
+      - name: Preserve exact source pins and RED/GREEN logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: antenna-retained-dtq-task1-fix1
-          path: antenna-retained-dtq-artifact.log
-          if-no-files-found: warn
+          name: antenna-retained-dtq-plan-source-contracts
+          path: |
+            antenna-retained-dtq-*.log
+            .github/antenna-retained-dtq/task-2-ci-source-pins.json
+            .github/antenna-retained-dtq/task-3-source-pins.json
+            .github/antenna-retained-dtq/task-3-wiring-pins.json
+            .github/antenna-retained-dtq/task-4-source-pins.json
+            .github/antenna-retained-dtq/task-4-wiring-pins.json
+            .github/antenna-retained-dtq/task-5-source-pins.json
+            .github/antenna-retained-dtq/task-5-ui-baseline-pins.json
+            .github/antenna-retained-dtq/task-5-wiring-pins.json
+          if-no-files-found: error

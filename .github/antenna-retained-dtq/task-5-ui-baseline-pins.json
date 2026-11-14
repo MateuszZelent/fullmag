@@ -1,0 +1,401 @@
+{
+  "archive": "task-5-ui-baseline.tar.gz",
+  "base_commit": "8a09a0e19d855e34ffb3765683418a185151bd74",
+  "sha256": "6a0153c1c1631a5617b01115d0f4158c4596ae98bcc4cc471907f1466c154538",
+  "bytes": 658560,
+  "entries": [
+    {
+      "path": "apps/control-room/scripts/check-antenna-cpw-circuit-authoring.mjs",
+      "sha256": "44417656c60e7594e40f7c539b117a7819c786e47b9be9f014846954cea132af",
+      "bytes": 9667
+    },
+    {
+      "path": "apps/control-room/scripts/check-antenna-cpw-circuit-geometry.mjs",
+      "sha256": "497bbb1d37baac8d1f3762ea599b109694a54aeaafc482186059891efcdea93c",
+      "bytes": 4547
+    },
+    {
+      "path": "apps/control-room/scripts/check-saved-camera-fit.mjs",
+      "sha256": "5d46b90ac93840363113ddadb181a0769a54f32e35fb20506a1498f423c066e7",
+      "bytes": 4395
+    },
+    {
+      "path": "apps/control-room/scripts/check-saved-field-vector-length.mjs",
+      "sha256": "c90e5a463bdb7187e3aa6433857c5ae39d1daaedc42bcb9a26299c769d2310f2",
+      "bytes": 4539
+    },
+    {
+      "path": "apps/control-room/scripts/check-saved-planar-identity.mjs",
+      "sha256": "daea8e23734e936b0258fe7913fa7d7221f625c06d859e5b3596cdcc6df8290c",
+      "bytes": 2809
+    },
+    {
+      "path": "apps/control-room/scripts/check-saved-run-navigation.mjs",
+      "sha256": "bd2db124e3a7141710c53fd1ba07647839886b66f503bf4abf859edde1a38a97",
+      "bytes": 5073
+    },
+    {
+      "path": "apps/control-room/scripts/check-viewport-committed-frames.mjs",
+      "sha256": "767d3a24ebf7e81ee0c9b38a890d9bda472150f27e6d739fdd2172957c2c4200",
+      "bytes": 1430
+    },
+    {
+      "path": "apps/control-room/scripts/fixtures/antenna-cpw-viewport-page.tsx",
+      "sha256": "3fa4c33152bd3cab2735e81a0b3090ed8b7c1fa95de3250f33b92277aacec4a0",
+      "bytes": 10546
+    },
+    {
+      "path": "apps/control-room/scripts/fixtures/antenna-microstrip-stations-page.tsx",
+      "sha256": "bd8d935a0ef5b40ac0f111a41ba622c933a675def57f89c22f10e7416ae0f18f",
+      "bytes": 23762
+    },
+    {
+      "path": "apps/control-room/scripts/smoke-antenna-cpw-viewport.mjs",
+      "sha256": "b735f8fb4fd9066e9fc9f0485f2758472e3b85b50297455e592b9e8facfd479b",
+      "bytes": 11451
+    },
+    {
+      "path": "apps/control-room/scripts/smoke-antenna-microstrip-stations.mjs",
+      "sha256": "0a464d96fb28fda894d2bbb4ce4a5369cce096a2c1ea2b022a6c93577aa6d84a",
+      "bytes": 72108
+    },
+    {
+      "path": "apps/control-room/src/design/styles/field-map.css",
+      "sha256": "292a02faba993bd90c92f14bb19e411c1c0a879379903d8a953eeb0dc84935fa",
+      "bytes": 14583
+    },
+    {
+      "path": "apps/control-room/src/design/styles/inspector.css",
+      "sha256": "22897245bde7fe971dbb608b68e7deda05bc2050a6b700cafed9995b937e8ede",
+      "bytes": 43593
+    },
+    {
+      "path": "apps/control-room/src/design/styles/start-screen.css",
+      "sha256": "3b90eaef6f18055404c6be860b09ff8bb4c9219be1e24e007cb8094a355729fc",
+      "bytes": 70980
+    },
+    {
+      "path": "apps/control-room/src/kernel/KernelProvider.tsx",
+      "sha256": "669f830c1d81b73670263b5ba0b7148721978925471986e4784cd5a7bbb934e8",
+      "bytes": 36134
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+      "sha256": "ddc3a582bc84be72be62968821aa8025c01fcccb6beae3115c5b3679734c237a",
+      "bytes": 188920
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/apiPaths.ts",
+      "sha256": "c927833bc15cd7535a53647c84d5d77dcc0ab4a81aae81bd4c9458440d9c59db",
+      "bytes": 43161
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/apiTypes.ts",
+      "sha256": "83c026c3ec74c6e6ea6bcf52ed213aadef1a52ebc6ca930608535c1d9fe5afc3",
+      "bytes": 54727
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts",
+      "sha256": "651319984d0e03c54465db10ab80d05348ac7934fe12152f143ce5f95b58b052",
+      "bytes": 21616
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/generated/openapi-v2-types.ts",
+      "sha256": "6016127c1a49b1c575d675c0a74dc1221ec140d70d7b7da0d9b2ebc8ae58eb45",
+      "bytes": 1359666
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/generated/openapi-v2.json",
+      "sha256": "9a15b1ab002c1074a40396a703a81d215e2428c5c5e120881ef5ce36dfa2ac39",
+      "bytes": 1910539
+    },
+    {
+      "path": "apps/control-room/src/kernel/api/savedPlanarIdentity.ts",
+      "sha256": "5a0f9ea523d4063f7735006900613bdf1dbed7ec72bd2af555f85d60d525a8fe",
+      "bytes": 1277
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/AppMenuBar.tsx",
+      "sha256": "636a940d8b9eab71a3f10deb4fd5fc58c64ead67d8e656a95007a3ed5bdbdd37",
+      "bytes": 28708
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/ReadinessHelperDialog.tsx",
+      "sha256": "2931ccf9f05b05a0918a40f75e87bfc05c8c641e6b5540bd57af068f3841e7f8",
+      "bytes": 4766
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/ViewportTabHost.tsx",
+      "sha256": "b6a0ead5252ddf4ba676fc12a9e344e7d41e5623cb2215df9c6f73d2b8e080ae",
+      "bytes": 5066
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/WorkspaceDockLayout.tsx",
+      "sha256": "06456a23fe6694dd5364c1db7b5f737b9ab7e15d38a3583c94578d8edc2c96f5",
+      "bytes": 13372
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/WorkspaceShellClient.test.tsx",
+      "sha256": "40f9bdd73f56360cecafa7d7dd34046599537735f85644c201999aa8d2e8bd64",
+      "bytes": 33259
+    },
+    {
+      "path": "apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx",
+      "sha256": "cda807fd2196f20015480e980d53143e0cc22cd7f5f310a3bf88639d9cc6fd4e",
+      "bytes": 18386
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/projectRunResources.test.ts",
+      "sha256": "4626208ee35a9b2d91e555d8776397c52d3d9404284647231f062fdf2f126880",
+      "bytes": 2423
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/projectRunResources.ts",
+      "sha256": "8e085530c63bfa3a57af8714379e09af9020a17bd0b418b9eda45b2f2dfe13a1",
+      "bytes": 8691
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/savedAntennaSourceContextResources.test.ts",
+      "sha256": "8418656992cc41a3eb25ad7c3d77e4d2e7b002ea346751b8d338185d54ce81cf",
+      "bytes": 20463
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/savedAntennaSourceContextResources.ts",
+      "sha256": "2efd0d1e6a1516be45c15a4725dacddd030f314dc422956b5c2a42a78275374b",
+      "bytes": 17941
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/savedAntennaSourceContextRetry.test.tsx",
+      "sha256": "3209ddfe42695dbdbb5d95d5615016a26933c96a8a170f63b6fea139e1283673",
+      "bytes": 2949
+    },
+    {
+      "path": "apps/control-room/src/kernel/resources/savedPlanarResources.ts",
+      "sha256": "e4f6b3251b3a191fda3292c2a0cc499921cb3282ee287b30cdb940ee1ae64285",
+      "bytes": 1482
+    },
+    {
+      "path": "apps/control-room/src/kernel/runtime/livePreparationMaterialization.test.ts",
+      "sha256": "a3bc39b2df696cd62a7f9e0fc146b1fa8ec60b14c501c1d92727ef0aa7f68421",
+      "bytes": 6750
+    },
+    {
+      "path": "apps/control-room/src/kernel/runtime/livePreparationMaterialization.ts",
+      "sha256": "aa9b7e627741b038f6815f72481b9d143a716e32c1e98773215a5801e12287e0",
+      "bytes": 7349
+    },
+    {
+      "path": "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.test.ts",
+      "sha256": "6646482d316e4e111745104f5deefba105f107cbaf574a5deb175d3d96bd6a63",
+      "bytes": 142014
+    },
+    {
+      "path": "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts",
+      "sha256": "ecc36b8dd64bb47d7932c24d540920d0d089f46fe79f8600ff69c2ce1dbd41fb",
+      "bytes": 110197
+    },
+    {
+      "path": "apps/control-room/src/kernel/saved-results/SavedRunController.ts",
+      "sha256": "58f9f388a2b30bd314ddbe6347065dcf110149c84323a5aaea62f44570be7f01",
+      "bytes": 1340
+    },
+    {
+      "path": "apps/control-room/src/kernel/saved-results/openSavedRun.ts",
+      "sha256": "fdb988d4282617c7c08d2cbf29d1d9e39bc67b556c87c6e202330389763a6502",
+      "bytes": 1844
+    },
+    {
+      "path": "apps/control-room/src/kernel/saved-results/useSavedRun.ts",
+      "sha256": "2ebb183b1ce7a0bebe421a60215fb196b093d660e8a744382bd39d3f6266f4eb",
+      "bytes": 1073
+    },
+    {
+      "path": "apps/control-room/src/kernel/types.ts",
+      "sha256": "8560d645ba9bbc6275badb0809ced3e7ed85b6bdef18229bdff8f57da68ec875",
+      "bytes": 5271
+    },
+    {
+      "path": "apps/control-room/src/kernel/visualization/ObjectVisualizationController.ts",
+      "sha256": "510bb91b24ecdc02c92a0c78dc7f9924940e95cbe06dbddd1466c58258bb2b8b",
+      "bytes": 99752
+    },
+    {
+      "path": "apps/control-room/src/kernel/visualization/savedFieldSectionPreferences.test.ts",
+      "sha256": "ad423fc96634c57f9836322fef7380b3dc486b1a8a0b3c9ae940748726555bc7",
+      "bytes": 3045
+    },
+    {
+      "path": "apps/control-room/src/kernel/visualization/savedSourceGeometryVisibility.test.ts",
+      "sha256": "a84b0e694c55783149b71228ba024d8c8fe292bc17183e9fd95704a8461cd16c",
+      "bytes": 2205
+    },
+    {
+      "path": "apps/control-room/src/kernel/visualization/useObjectVisualization.ts",
+      "sha256": "2ce3f1e9d085a1d52c019f6f9d87256ce3283acddaee38eeaf836f8e7e7e0b81",
+      "bytes": 1908
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/FieldMapModule.test.tsx",
+      "sha256": "367a2f42031c9e4711423f2c66b3b73198fac0bad8ed6ac49ae205fa5d32d8df",
+      "bytes": 34699
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/FieldMapModule.tsx",
+      "sha256": "f3e606377fbd52cf23e8583a4ed5e2d6651b2db23d24189148c410fced5c3df6",
+      "bytes": 46393
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/SavedFieldMap.tsx",
+      "sha256": "6e86b664b1f25bbcb06fe72951731ac27bdcf629c28d79eb720996c8279869b2",
+      "bytes": 9444
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/PlanarSurface.test.tsx",
+      "sha256": "88deb3b0434e1d3caaff8389f74a2d25dc4344eaf669249bc389b4fed775aee0",
+      "bytes": 34749
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx",
+      "sha256": "b702723e59e37aaee28f4a20b06eb61f0f3a38325fb86bf777ec0e8579177c73",
+      "bytes": 18717
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/planarRenderer.ts",
+      "sha256": "cfc226805bb7f60c4e6051604a311d27ff92361dad62527d0a18d0e60694bab8",
+      "bytes": 17831
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/usePlanarSurfaceRenderer.ts",
+      "sha256": "490616166057d7b09153d5f72446670d58c99e1d1a4cd406eeb97c7ae9cb9a1e",
+      "bytes": 14755
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/vectorGlyphs.test.ts",
+      "sha256": "a4242ea0c48f55cab8bc8e786d1096e32147e6d7c9f62c1390a9e9135ff1db5f",
+      "bytes": 4474
+    },
+    {
+      "path": "apps/control-room/src/modules/field-map/renderer/vectorGlyphs.ts",
+      "sha256": "82c72d7611eb09c1b19508c43ad24bb1b8fc62df36d1de31f1615400680e9f5f",
+      "bytes": 6841
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/MaterializedDatasetInspectorPanel.tsx",
+      "sha256": "55b19a6228df9b0d85139d1aae045d7f204c0fd86ae249b62dfa4499754b3c2e",
+      "bytes": 7972
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/SavedFieldVisualizationPanel.tsx",
+      "sha256": "1242f29daea6d34d385321531ffc6cefa9aaf103729f19294656f98a8785e647",
+      "bytes": 14584
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaCompositionPanels.dom.test.tsx",
+      "sha256": "c5d517c01054cfb99eac7c83193107716e9eee181e4ed2f36ec808de9c878881",
+      "bytes": 68939
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaGeometryAcknowledgement.ts",
+      "sha256": "3c8cb46b5f1d9b38e263f821678e1ca9d2606f32bb09c9aebaad39a6f7b2471d",
+      "bytes": 5148
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaGeometryAuthoring.tsx",
+      "sha256": "bbd35e998014635a8ad5b2df082db6309b2e546da53373ce1d206d08c7efc52d",
+      "bytes": 2052
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/AntennaGeometryPanel.tsx",
+      "sha256": "f5ffe1858debefc938ce900ebfc9f94bed36b73858d1a31284edb2408d002e00",
+      "bytes": 4749
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx",
+      "sha256": "02f4dcedcaf23727535e8e866aa0e9931202228d6475307c427d76f57c962a74",
+      "bytes": 17167
+    },
+    {
+      "path": "apps/control-room/src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts",
+      "sha256": "9bdf0cf37437aaf482fb6ed10354cf8da62cad50511f3c7cff80a491aa478a5a",
+      "bytes": 23568
+    },
+    {
+      "path": "apps/control-room/src/modules/results-navigator/SavedResultsBrowser.execution.test.tsx",
+      "sha256": "7f8af26fb287784ad4a451901ec85be4d8b24bbc3f9fc75ab12875637b0f3674",
+      "bytes": 7218
+    },
+    {
+      "path": "apps/control-room/src/modules/results-navigator/SavedResultsBrowser.fields.test.tsx",
+      "sha256": "a8569a821ac7546f7bcc6fe475cb6a7708cfa0df7e34557c85d5fba5b685e8f5",
+      "bytes": 12899
+    },
+    {
+      "path": "apps/control-room/src/modules/results-navigator/SavedResultsBrowser.tsx",
+      "sha256": "0b6280abca106823d89b7102febd0179d95c423b65ceb7dd324a20c828c015b2",
+      "bytes": 28618
+    },
+    {
+      "path": "apps/control-room/src/modules/start/OpenSavedRunForm.tsx",
+      "sha256": "0171fc235910e55e67ad58a939e13aec5bded1c1c77739a0bc83ef1df9136339",
+      "bytes": 2082
+    },
+    {
+      "path": "apps/control-room/src/modules/start/StartScreen.tsx",
+      "sha256": "9e8855d904f8479168bf82a49b111c12dd2402e49fe14a60e690ce607dabf873",
+      "bytes": 25181
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx",
+      "sha256": "f9ecd172bd223c2a6f1445444fb047d71655259ab1b1a9a84dc7061608527da8",
+      "bytes": 143253
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/hooks/useSavedViewportCamera.ts",
+      "sha256": "9b19725da27a5f88afb84b95376ec588255e119db4ff96763abda089c089cb79",
+      "bytes": 16916
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/hooks/useViewport3DChunkedScalarColors.test.ts",
+      "sha256": "efc8b2ea66029f63d8905bf984283c5102c1bfa3f88f2ae2157109da02887e93",
+      "bytes": 35423
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/hooks/useViewport3DChunkedScalarColors.ts",
+      "sha256": "a59ef58e763bda1e2064ec3a4c94e63c49fbb9b80d8faa7e5340510fccca71dd",
+      "bytes": 51262
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts",
+      "sha256": "dca4f1854ffcb38742cab262a9fe30343e8b22877b5eb2095eaf22a48f5a81b1",
+      "bytes": 287496
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/savedFieldViewportAdapter.test.ts",
+      "sha256": "14ae209819283dd30b94d4fb5064dcb3e3c5705681b0c29f38f067e7fe36f8b8",
+      "bytes": 4691
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/savedFieldViewportAdapter.ts",
+      "sha256": "03d7599133acb1c698ae088642adc8145c482cd7e5a36c046f25509e63e480de",
+      "bytes": 15224
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/savedFieldViewportColors.dom.test.tsx",
+      "sha256": "1e5ac1784b50cdfd7af51a86ed5d4f730e6243ddd1a2b846b7b21dcbf7ec8ace",
+      "bytes": 8806
+    },
+    {
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dDiagnostics.ts",
+      "sha256": "93c5809ba612e2012b437dc3b9af16f28b631987db9433d85b62e79590607d36",
+      "bytes": 23698
+    },
+    {
+      "path": "apps/control-room/src/shared/domain/geometry/authoredMicrostripGeometry.ts",
+      "sha256": "59f8b86188afa1466d827b7a871fc7261586ff8bbda81366d38697f03158664f",
+      "bytes": 13770
+    }
+  ],
+  "deletions": [],
+  "purpose": "Exact pre-Task5 frontend dependency input, not Task5 production changes",
+  "status": "LOCAL_NOT_UPLOADED_NOT_REVIEWED_AS_TASK5_CHANGES"
+}

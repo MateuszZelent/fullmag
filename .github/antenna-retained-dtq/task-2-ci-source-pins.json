@@ -1,0 +1,60 @@
+{
+  "schema": "fullmag.retained-dtq-task2-ci-source.v1",
+  "task_pins": {
+    "crates/fullmag-runner/src/native_fem/retained_surface_rt0.rs": "d7c1ce935a19709e9a6f83a4b3d83f2f4f44872ab9baf838e05089cf593d8ae8",
+    "crates/fullmag-runner/src/native_fem/steady_transport.rs": "51f22494eb96c95d5cbc8ae8558daf7a4301d75bf11d0758e052f4d5622dd293",
+    "crates/fullmag-fem-sys/src/lib.rs": "65dccfe8efe9ab2abc7cda4a45cf93604d4f6bb22dbdd594d54ec08189db3a04",
+    "native/include/fullmag_fem.h": "04c4547cf7016f82b92a24f313dd03125d77868b04f1f966435fef19efdbeb63",
+    "backends/fem/CMakeLists.txt": "6a25821047c101abb0c046e9530e3f5e6d7fce42fbde7b4fcec7021127985ce3",
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.hpp": "e73301980084e7871c92a98c7165d0f2cecfd4c8f7a6783a66b1cb0c699cdca8",
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp": "0f8402d1302139fa16d57069998587f4518d31108d5d60df950ecac8e11ab3e5",
+    "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp": "36e49847fe3812dcf8e11db9e2ec72097071205ae4db1bae9feab7b4ed85c166",
+    "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp": "6698e75e56c2e0a96c28afc33eef49a6e331aafb2571fac596a1131f4932d356",
+    "backends/fem/tests/conservative_current_view_contract.cpp": "34943da88ccaa748982899920f7771f8e6dc76c7dd4b2c2b937faf28755c8abe",
+    "crates/fullmag-runner/src/native_fem.rs": "98d419e8bdd4210a51c6a0ea92c0e7571d925e71f919aa22f64e27a50e77791b",
+    "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs": "a740c2458a58725d7978fa7b54d78972f7a3cab01fa49bfc9c6ef035ee31275a",
+    "crates/fullmag-runner/src/native_fem/retained_direct_rt0.rs": "70b94865830bc6e6375fe9d3894d9bb937239bccd12932ef18ce2561033ebc3b",
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp": "bd00ddfaeae6b8cb18f9435902ab909e6834644928083386e316f0943bf016c0"
+  },
+  "archives": {
+    "task-2-native-red": {
+      "sha256": "bc3506e8d523c61e215e64baba4d490d7335e69a038db6546e8bf80b6f020ce5",
+      "bytes": 111697,
+      "files": {
+        "backends/fem/tests/conservative_current_view_contract.cpp": "4a6d78b56b32fd3ac8248df059076389eceb356e10f1e8cdd5b6a5b7bb52ec16",
+        "native/include/fullmag_fem.h": "f0b76b0441ed8eddfcfcb5e901e21d61503e1a949ca26692783e8c839427b4ae",
+        "backends/fem/CMakeLists.txt": "d8f162d388529a7fa1b79bf600806cbd7a6efc9de0366c3f0d7bf15358be11e7"
+      }
+    },
+    "task-2-native-green": {
+      "sha256": "12d55d5b775c558ff3b2b221a4da75e33a2a76b4a3fd1bf7dc4cf0ec283ec757",
+      "bytes": 172928,
+      "files": {
+        "backends/fem/CMakeLists.txt": "6a25821047c101abb0c046e9530e3f5e6d7fce42fbde7b4fcec7021127985ce3",
+        "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp": "c7663a5656f244a0b16cb8b9ffa2cddb0bc0eeef715fd10f9ad666c2b7d3b68f",
+        "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp": "5d230d4f8a3f404612e69450daf36dd64e93e97c2318bec373e9dbfaed4f7186",
+        "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp": "280c53aa3a985698e8f4ebed887ecc0d20aa9e82e9c5f7318e75b769169b13ba",
+        "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp": "bd00ddfaeae6b8cb18f9435902ab909e6834644928083386e316f0943bf016c0",
+        "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_surface_rt0.cpp": "ebf4e98c2f74a7cdb98575cc44e7a810675fd91277648a87cb6fcc4b7573f10f",
+        "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.cpp": "c882a1b75d875585f3234665390dcff548f36576d7e940a29720fbcf22d6a50c",
+        "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.hpp": "cadb09a2a586514c4386ecd2487a94699704780664a58f857745fc9fc59552ea",
+        "backends/fem/tests/conservative_constraint_rank_contract.cpp": "b0403a5f81a77eb6c41a49a997e63f10d15142cfce30ca0f16c3974890fa4a47",
+        "backends/fem/tests/conservative_current_view_contract.cpp": "34943da88ccaa748982899920f7771f8e6dc76c7dd4b2c2b937faf28755c8abe",
+        "backends/fem/tests/oersted_direct_tetra_contract.cpp": "37587502803d7378be3fd2267fe259e6724ad6bff5890af6ea386b5ec61b9709",
+        "native/include/fullmag_fem.h": "04c4547cf7016f82b92a24f313dd03125d77868b04f1f966435fef19efdbeb63"
+      }
+    },
+    "task-2-rust-green": {
+      "sha256": "d7e7eeb0f2ee0b4216728719663b38fc03bf82d2f1a272c5207db648cd7c30f4",
+      "bytes": 158807,
+      "files": {
+        "crates/fullmag-runner/src/native_fem/retained_surface_rt0.rs": "d7c1ce935a19709e9a6f83a4b3d83f2f4f44872ab9baf838e05089cf593d8ae8",
+        "crates/fullmag-runner/src/native_fem/steady_transport.rs": "51f22494eb96c95d5cbc8ae8558daf7a4301d75bf11d0758e052f4d5622dd293",
+        "crates/fullmag-fem-sys/src/lib.rs": "65dccfe8efe9ab2abc7cda4a45cf93604d4f6bb22dbdd594d54ec08189db3a04",
+        "crates/fullmag-runner/src/native_fem.rs": "98d419e8bdd4210a51c6a0ea92c0e7571d925e71f919aa22f64e27a50e77791b",
+        "crates/fullmag-runner/src/native_fem/retained_rt0_source.rs": "a740c2458a58725d7978fa7b54d78972f7a3cab01fa49bfc9c6ef035ee31275a",
+        "crates/fullmag-runner/src/native_fem/retained_direct_rt0.rs": "70b94865830bc6e6375fe9d3894d9bb937239bccd12932ef18ce2561033ebc3b"
+      }
+    }
+  }
+}

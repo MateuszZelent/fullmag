@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 757204,
+    "sha256": "49431b482590792744f82121232062394b207ed4855d35c44a00d5afbe164ebd"
+  },
+  "after": {
+    "bytes": 757453,
+    "sha256": "f0e43e1551936ee497a5d831646baf43cd63b1e55fef01b4bce7db85e8ecc51f"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 320983,
+      "text": "# Use the same audited CPU image/library for public retained-DTQ contracts.\nverify-fem-retained-dtq-public-contract phase=\"green\":\n    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_public_contract.sh {{quote(phase)}}\n\n"
+    }
+  ]
+}

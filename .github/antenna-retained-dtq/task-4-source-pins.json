@@ -1,0 +1,31 @@
+{
+  "archive": "task-4-green.tar.gz",
+  "sha256": "dbe4f1c6a9e10d04f88d5ba22795d721d7364cff87d42517984252420306230a",
+  "bytes": 261264,
+  "entries": 22,
+  "source_pins": {
+    "crates/fullmag-application/src/study_artifact.rs": "7bb40c664538e9eee66e617d9bf1c26499a05465dba46019e04e33286db79c6e",
+    "crates/fullmag-runtime-control/src/study_imported_retained_current_field.rs": "809597bfb46720a2ac10b2c964521a67683ff80d9b8be054597d58a8accf7987",
+    "crates/fullmag-runtime-control/src/study_inspection_integrity.rs": "985f8e3578d8cfc7bdf0287bdb3384bd693e31b9264aafceaba692e447ecfb18",
+    "crates/fullmag-runtime-control/src/study_retained_current_field.rs": "583daafcf1866d8fb91f46b0860d3afb182a09590beaad48505b86ec852479e3",
+    "crates/fullmag-runtime-control/src/study_retained_current_publication.rs": "cb9f84e8c9c8fe4441a9cf0d438f7668760b8879b9feae952ec8347b5b6d5e11",
+    "crates/fullmag-runtime-control/src/study_retained_current_tensor.rs": "a6e45030300b9561d6092c011c129a9d8c98f85fc162adb1f614035d7607ebef",
+    "crates/fullmag-session/src/accepted_provenance_retained.rs": "646fa208f1b361dd430058452425a3e4f5827b1d7edf73f75123ab1804e9923a",
+    "crates/fullmag-api/src/accepted_retained_current_worker.rs": "7ac96c81efb433df2d790aa7d37c48ab10ce5409245b7e61ce2e42d448c7b63a",
+    "crates/fullmag-runtime-control/src/study.rs": "6b99627a606064b93dcba7d81131b4031a92adf846e993ad63c3fce4599f3691",
+    "crates/fullmag-runtime-control/src/lib.rs": "8b8f08619eb3f6d65b545b58d38bcac91cc8427482adce95f80b837022504a04",
+    "crates/fullmag-runner/src/antenna_field_solution.rs": "069ab5f996930ded6dc82a075168d6a63a54b48c1eb68dd8120b261051ecb9e1",
+    "crates/fullmag-runner/src/lib.rs": "64fd75957d3c0b834943cd949f75f5a69ea2a57a3838537163e757f94a329e56",
+    "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution.rs": "508a9791fff2f2e148bf3e6c44ccc2f01e0daf0dc6274478519f643e739980d5",
+    "crates/fullmag-runner/src/antenna_field_solution/retained_current_execution/retained_direct_execution.rs": "54927bad0f666e896244f079e6608008b57f0d50415b02918d318097b67f6f09",
+    "crates/fullmag-session/src/accepted_provenance.rs": "38bad4f9363999f9dc3bcb8fc16def3c3ec9b8ac2af0e0b6508787610cff67e5",
+    "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_inspection.rs": "2d000d0556f76ca7cc3f1f51c375d2a85b7b7f1d63c1ed4fd0442b4651cb8b66",
+    "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_payload.rs": "ef6a92ba148186fa364ed6d142ccfd214543588d95aa9533e4fa724d3a0dcd93",
+    "crates/fullmag-api/src/router_v2/handlers/data/accepted_inspection_fields.rs": "da4ed2640c4bed1a8233ae6c74ecb6997e0e377917b2d6f3cf5c678a60ef6cd8",
+    "crates/fullmag-api/src/router_v2/handlers/data/inspection_field_provider.rs": "86d48edcb8c9f5125553ce8d049fa298ef63c70095d1cd48bd1647c776578d0f",
+    "crates/fullmag-api/src/router_v2/handlers/data/accepted_antenna_resource.rs": "05d193b116515455be3c95ddb90533ab2c6dec1376b2c933cec1fd6646904f72",
+    "crates/fullmag-runner/src/native_fem/retained_direct_rt0.rs": "22f56d5c75eaeff55ff419dc44899b7712563af06e3de1c17e340ee77a628b24",
+    "crates/fullmag-runner/src/antenna_field_solution/retained_dtq_binding.rs": "8a635a3c4ef8aa767ffcaf9ed1b5f07112697eac9462a659419fe4b6c3435d52"
+  },
+  "status": "LOCAL_FROZEN_SOURCE_NOT_UPLOADED_NOT_COMPILED"
+}

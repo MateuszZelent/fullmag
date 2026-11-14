@@ -1,0 +1,26 @@
+{
+  "historical_v7_contract.rs": {
+    "sha256": "6ec834882d72914f4f97a835fac0877f553c898e4c626f299ac6454a64a91263",
+    "bytes": 2686
+  },
+  "historical_worker_contract.rs": {
+    "sha256": "a92d306cc9cfb1accf9b28db37d1982000619110bffe9860a7e345cffa572d40",
+    "bytes": 707
+  },
+  "run_retained_dtq_public_contract.sh": {
+    "sha256": "c70b28b675819cfeef92c40b5f1d41974c7b52e9539f86271b10550ca6f47e61",
+    "bytes": 2039
+  },
+  "emit_real_backend_fixture.rs": {
+    "sha256": "2e4304f05992841abfae6acaea96a660fd092485e81ef06ac156352d6de96f55",
+    "bytes": 907
+  },
+  "apply-justfile-insertions.py": {
+    "bytes": 1957,
+    "sha256": "3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa"
+  },
+  "task-3-justfile-insertions.json": {
+    "bytes": 596,
+    "sha256": "c872072c7178281e93a0bc40285cbf2f3a8bfb159ec37dd8ce6f9b763587f0ee"
+  }
+}

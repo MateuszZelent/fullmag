@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 757453,
+    "sha256": "f0e43e1551936ee497a5d831646baf43cd63b1e55fef01b4bce7db85e8ecc51f"
+  },
+  "after": {
+    "bytes": 757696,
+    "sha256": "922ab989904eaa808b5e38277ce209d93cab4e0befb76515fb78059a61e55df2"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 757453,
+      "text": "\n# Source contracts compile the portable reader and native consumers; no scientific solve.\nverify-fem-retained-dtq-publication-contract:\n    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_publication_contract.sh\n\n"
+    }
+  ]
+}
