@@ -1,6 +1,8 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, fields, init, select, shapes
+from . import couplings, fields, init, select, shapes, units
+from .units import GHz, MHz, T, mT, mm, nm, ns, ps, um
+from .model.mask_function import mask, time
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -176,6 +178,10 @@ from .model import (
     FieldAutosave,
     QuasistaticElasticity,
     RegionalFieldDrive,
+    MaskAntenna,
+    MaskFunction,
+    MaskFunctionError,
+    TimeFunction,
     SolvedAntennaDrive,
     RfDrive,
     Region,
@@ -479,6 +485,22 @@ class _MeshNamespace:
 mesh = _MeshNamespace()
 
 __all__ = [
+    "GHz",
+    "MHz",
+    "MaskAntenna",
+    "MaskFunction",
+    "MaskFunctionError",
+    "T",
+    "TimeFunction",
+    "mT",
+    "mask",
+    "mm",
+    "nm",
+    "ns",
+    "ps",
+    "time",
+    "um",
+    "units",
     "LiveModeError",
     "LiveSession",
     "connect",

@@ -1,5 +1,7 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
 from .absorbing_boundary import AbsorbingBoundaryLayer
+from .mask_function import FunctionParameter, MaskFunction, MaskFunctionError, TimeFunction
+from .mask_field_drive import MaskAntenna
 from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
@@ -223,6 +225,11 @@ from .eigen import (
 )
 
 __all__ = [
+    "FunctionParameter",
+    "MaskAntenna",
+    "MaskFunction",
+    "MaskFunctionError",
+    "TimeFunction",
     "AbsorbingBoundaryLayer",
     "Selection",
     "SelectionDefinition",

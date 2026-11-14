@@ -65,6 +65,7 @@ from fullmag.model.antenna import (
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.mask_field_drive import MaskAntenna
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.constraints import FrozenSpins, merge_constraint_stage_ids
@@ -2647,6 +2648,11 @@ class _WorldState:
         default_factory=AntennaAuthoringInventory
     )
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
+    _mask_field_drives: list[MaskAntenna] = field(default_factory=list)
+    # Antennas created with study.add_simpleantenna.mask(...), and the ids that
+    # were added to the physics; the difference is reported at capture end.
+    _created_mask_antennas: list[MaskAntenna] = field(default_factory=list)
+    _added_mask_antenna_ids: set[str] = field(default_factory=set)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
     _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
@@ -4080,8 +4086,21 @@ def set_script_capture_lightweight_assets(enabled: bool) -> None:
     _capture_binding.current().skip_geometry_assets = bool(enabled)
 
 
+def _warn_unused_mask_antennas() -> None:
+    for antenna in _state._created_mask_antennas:
+        if antenna.id not in _state._added_mask_antenna_ids:
+            warnings.warn(
+                f"antenna {antenna.id!r} was created with study.add_simpleantenna.mask(...) "
+                "but never added; use study.stages.add_field_drive(antenna) or "
+                "study.field_drives.add(antenna)",
+                UserWarning,
+                stacklevel=3,
+            )
+
+
 def finish_script_capture() -> list[CapturedStage]:
     """Return captured flat-script execution data and clear capture mode."""
+    _warn_unused_mask_antennas()
     captured = list(_capture_binding.current().stages)
     _capture_binding.replace(_CaptureState())
     reset()
@@ -4499,13 +4518,29 @@ class StudyStagesBuilder:
 
     def add_field_drive(
         self,
-        drive: RegionalFieldDrive,
+        drive: RegionalFieldDrive | MaskAntenna,
         *,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
-        """Add a regional field drive after all preceding pipeline stages."""
+        """Add a regional field drive or a mask antenna after all preceding stages."""
+        if isinstance(drive, MaskAntenna):
+            resolved_id = self._allocate_stage_id("add-field-drive", stage_id)
+            problem_before_action = _build_problem()
+            StudyFieldDriveRegistry().add(drive)
+            _state._declared_stages.append(
+                CapturedStage(
+                    problem=problem_before_action,
+                    entrypoint_kind="flat_add_mask_field_drive",
+                    default_until_seconds=None,
+                    action={"kind": "add_mask_field_drive", "drive": drive.to_ir()},
+                    stage_id=resolved_id,
+                )
+            )
+            if _state._interactive:
+                _state._wait_for_solve = True
+            return self
         if not isinstance(drive, RegionalFieldDrive):
-            raise TypeError("add_field_drive() requires RegionalFieldDrive")
+            raise TypeError("add_field_drive() requires a RegionalFieldDrive or a mask antenna")
         resolved_id = self._allocate_stage_id("add-field-drive", stage_id)
         problem_before_action = _build_problem()
         StudyFieldDriveRegistry().add(drive)
@@ -4587,7 +4622,7 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
     ) -> "StudyStagesBuilder":
-        """Remove one persistent regional field drive from subsequent stages."""
+        """Remove one persistent field drive or mask antenna from subsequent stages."""
         if not isinstance(drive_id, str):
             raise TypeError("remove_field_drive() drive_id must be a string")
         if not drive_id.strip():
@@ -4597,11 +4632,19 @@ class StudyStagesBuilder:
             for index, drive in enumerate(_state._field_drives)
             if drive.id == drive_id
         ]
-        if not matching:
+        matching_masks = [
+            index
+            for index, antenna in enumerate(_state._mask_field_drives)
+            if antenna.id == drive_id
+        ]
+        if not matching and not matching_masks:
             raise ValueError(f"field drive id '{drive_id}' does not exist")
         resolved_id = self._allocate_stage_id("remove-field-drive", stage_id)
         problem_before_action = _build_problem()
-        del _state._field_drives[matching[0]]
+        if matching:
+            del _state._field_drives[matching[0]]
+        else:
+            del _state._mask_field_drives[matching_masks[0]]
         _state._declared_stages.append(
             CapturedStage(
                 problem=problem_before_action,
@@ -5909,12 +5952,23 @@ class StudyCouplingsHandle:
 
 
 class StudyFieldDriveRegistry:
-    """Typed authoring registry for prescribed regional magnetic-field drives."""
+    """Typed authoring registry for prescribed magnetic-field drives."""
 
-    def add(self, drive: RegionalFieldDrive) -> RegionalFieldDrive:
+    def add(self, drive: RegionalFieldDrive | MaskAntenna) -> RegionalFieldDrive | MaskAntenna:
+        if isinstance(drive, MaskAntenna):
+            if any(existing.id == drive.id for existing in _state._field_drives) or any(
+                existing.id == drive.id for existing in _state._mask_field_drives
+            ):
+                raise ValueError(f"duplicate field drive id {drive.id!r}")
+            drive._freeze()
+            _state._mask_field_drives.append(drive)
+            _state._added_mask_antenna_ids.add(drive.id)
+            return drive
         if not isinstance(drive, RegionalFieldDrive):
-            raise TypeError("study.field_drives.add() requires RegionalFieldDrive")
-        if any(existing.id == drive.id for existing in _state._field_drives):
+            raise TypeError("study.field_drives.add() requires RegionalFieldDrive or a mask antenna")
+        if any(existing.id == drive.id for existing in _state._field_drives) or any(
+            existing.id == drive.id for existing in _state._mask_field_drives
+        ):
             raise ValueError(f"duplicate field drive id {drive.id!r}")
         if any(existing.name == drive.name for existing in _state._field_drives):
             raise ValueError(f"duplicate field drive name {drive.name!r}")
@@ -5923,6 +5977,58 @@ class StudyFieldDriveRegistry:
 
     def items(self) -> tuple[RegionalFieldDrive, ...]:
         return tuple(_state._field_drives)
+
+
+class StudySimpleAntennaFactory:
+    """``study.add_simpleantenna``: prescribed antennas written by hand."""
+
+    def mask(
+        self,
+        target: object,
+        shape: object,
+        position: Sequence[float] = (0.0, 0.0, 0.0),
+        *,
+        frame: str = "local",
+        time_origin: str = "stage_local",
+        activation: DriveActivation | None = None,
+        name: str | None = None,
+        id: str | None = None,
+    ) -> MaskAntenna:
+        """Create a mask antenna on ``target``; add terms with ``antenna.add(...)``.
+
+        Creating the antenna only authors it. It acts from the pipeline point of
+        ``study.stages.add_field_drive(antenna)`` or, for the whole study, after
+        ``study.field_drives.add(antenna)``.
+        """
+        if isinstance(target, MagnetHandle):
+            target_name = target._name
+        elif isinstance(target, str):
+            target_name = require_non_empty(target, "target")
+        else:
+            raise TypeError("target must be a magnet returned by study.geometry(...) or its name")
+        used = {antenna.id for antenna in _state._created_mask_antennas}
+        used |= {drive.id for drive in _state._field_drives}
+        if id is None:
+            base = "antenna" if name is None else "_".join(name.lower().split()) or "antenna"
+            id = base
+            suffix = 2
+            while id in used:
+                id = f"{base}_{suffix}"
+                suffix += 1
+        elif id in used:
+            raise ValueError(f"duplicate antenna id {id!r}")
+        antenna = MaskAntenna(
+            id=id,
+            target_object_id=target_name,
+            shape=shape,
+            position=position,
+            frame=frame,
+            time_origin=time_origin,
+            activation=activation,
+            name=name,
+        )
+        _state._created_mask_antennas.append(antenna)
+        return antenna
 
 
 class StudyEnergyTermRegistry:
@@ -6049,6 +6155,7 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.field_drives = StudyFieldDriveRegistry()
+        self.add_simpleantenna = StudySimpleAntennaFactory()
         self.terms = StudyEnergyTermRegistry()
         self.monitors = StudyMonitorRegistry(_state._planar_monitors)
         self.universe = StudyUniverseHandle(self)
@@ -10152,6 +10259,7 @@ def _build_problem(
         solved_antenna_drives=tuple(s._solved_antenna_drives),
         antenna_spectrum_requests=tuple(s._antenna_spectrum_requests),
         field_drives=tuple(s._field_drives),
+        mask_field_drives=tuple(s._mask_field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),
         spin_torque_activation=dict(s._spin_torque_activation),

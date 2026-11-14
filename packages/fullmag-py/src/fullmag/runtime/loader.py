@@ -205,7 +205,7 @@ class LoadedProblem:
             if not isinstance(action, dict):
                 continue
             kind = action.get("kind")
-            if kind == "add_field_drive":
+            if kind in {"add_field_drive", "add_mask_field_drive"}:
                 drive = action.get("drive")
                 drive_id = getattr(drive, "id", None)
                 if drive_id is None and isinstance(drive, dict):
@@ -396,6 +396,11 @@ def load_problem_from_script(
         module = ModuleType(f"fullmag_user_script_{uuid4().hex}")
         module.__file__ = str(source_path)
         module.__package__ = ""
+        # Mask and time functions are transpiled from their source; let
+        # inspect read the captured text instead of the file on disk.
+        from fullmag.model.mask_function import register_script_source
+
+        register_script_source(str(source_path), source_text)
         script_source = source_text
         dont_inherit = False
 

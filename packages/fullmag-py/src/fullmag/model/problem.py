@@ -26,6 +26,7 @@ from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.cuda_device_identity import legacy_cuda_binding
 from fullmag.model._incomplete import IncompletePhysicsError
 from fullmag.init.textures import PresetTexture
+from fullmag.model.mask_field_drive import MaskAntenna
 from fullmag.model.antenna import (
     AntennaFieldSolveStage,
     AntennaSpectrumRequest,
@@ -2747,6 +2748,7 @@ class Problem:
     auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
+    mask_field_drives: Sequence[MaskAntenna] = ()
     # Composition-first microwave antenna resources.  These are immutable
     # authoring records; the solved field asset is produced by a dedicated
     # stage and is never inferred from a field drive.
@@ -2841,7 +2843,13 @@ class Problem:
         if field_only:
             if not self.auxiliary_geometries:
                 raise ValueError("FieldOnly requires explicitly authored non-magnetic geometry")
-            if self.magnets or self.energy or self.field_drives or self.solved_antenna_drives:
+            if (
+                self.magnets
+                or self.energy
+                or self.field_drives
+                or self.mask_field_drives
+                or self.solved_antenna_drives
+            ):
                 raise ValueError("FieldOnly cannot contain magnetic state, energy or LLG drives")
             if self.spin_torque is not None or self.spin_torques or self.spin_transports or self.magnetization_constraints:
                 raise ValueError("FieldOnly cannot contain magnetic torque, spin transport or constraints")
@@ -2955,6 +2963,13 @@ class Problem:
         ensure_unique_names((drive.name for drive in self.field_drives), "field drive names")
         if any(not isinstance(drive, RegionalFieldDrive) for drive in self.field_drives):
             raise TypeError("Problem.field_drives must contain RegionalFieldDrive objects")
+        if any(not isinstance(drive, MaskAntenna) for drive in self.mask_field_drives):
+            raise TypeError("Problem.mask_field_drives must contain MaskAntenna objects")
+        ensure_unique_names(
+            [drive.id for drive in self.field_drives]
+            + [drive.id for drive in self.mask_field_drives],
+            "field drive ids",
+        )
         for name, values, expected in (
             ("antenna_port_modes", self.antenna_port_modes, AntennaPortMode),
             ("antenna_field_solve_stages", self.antenna_field_solve_stages, AntennaFieldSolveStage),
@@ -2972,6 +2987,12 @@ class Problem:
         geometry_ids = {
             getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
         }
+        for antenna in self.mask_field_drives:
+            if antenna.target_object_id not in magnetic_object_ids:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target "
+                    f"{antenna.target_object_id!r} is not a magnet"
+                )
         for drive in self.field_drives:
             target = drive.target
             if target.kind in {"object", "region"} and target.object_id not in magnetic_object_ids:
@@ -3351,6 +3372,11 @@ class Problem:
             "couplings": [coupling.to_ir() for coupling in self.couplings],
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "field_drives": [drive.to_ir() for drive in self.field_drives],
+            **(
+                {"mask_field_drives": [antenna.to_ir() for antenna in self.mask_field_drives]}
+                if self.mask_field_drives
+                else {}
+            ),
             "antenna_port_modes": [mode.to_ir() for mode in self.antenna_port_modes],
             "antenna_field_solve_stages": [
                 stage.to_ir() for stage in self.antenna_field_solve_stages
