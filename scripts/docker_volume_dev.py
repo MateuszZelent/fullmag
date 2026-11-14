@@ -3471,7 +3471,11 @@ def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup
     the existing native drain receipt remains mandatory before restart.
     """
     script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
-        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,urllib.error,urllib.request
+        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,sys,urllib.error,urllib.request
+from pathlib import Path
+sys.path.insert(0,"/opt/fullmag/source/scripts")
+from docker_terminal_source_origin import capture_source_origin,revalidate_source_origin
+SOURCE_ROOT=Path("/opt/fullmag/source")
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
 MAX_STARTUP_MARKERS=256
@@ -3866,6 +3870,13 @@ if (not STARTUP_ENABLED and run is None
 elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared):
     print("null")
 else:
+    source_script=session.get("script")
+    try:
+        source_origin=capture_source_origin(source_script,source_root=SOURCE_ROOT)
+    except (OSError,ValueError) as error:
+        raise RuntimeError("terminal source origin could not be captured") from error
+    source_script_key=((source_script.get("origin"),source_script.get("path"))
+        if isinstance(source_script,dict) else None)
     run_id=run.get("run_id")
     if (not isinstance(run_id,str) or not run_id
             or run.get("session_id")!=identity[0]
@@ -3902,6 +3913,18 @@ else:
         raise RuntimeError("terminal restart requires a live native runtime for drain")
     after=get("/v2/sessions/current/status")
     after_run=get("/v2/sessions/current/simulation/runs/current")
+    after_session=after.get("session") or {}
+    after_script=after_session.get("script")
+    after_script_key=((after_script.get("origin"),after_script.get("path"))
+        if isinstance(after_script,dict) else None)
+    if after_script_key!=source_script_key:
+        raise RuntimeError("terminal source origin script path changed during observation")
+    try:
+        revalidated_origin=revalidate_source_origin(source_origin,after_script,root=SOURCE_ROOT)
+    except (OSError,ValueError) as error:
+        raise RuntimeError("terminal source origin changed during observation") from error
+    if revalidated_origin!=source_origin:
+        raise RuntimeError("terminal source origin changed during observation")
     if (tuple((after.get("session") or {}).get(k) for k in
               ("session_id","session_epoch","request_scope_epoch"))!=identity
             or after.get("run",{}).get("run_id")!=run_id
@@ -3927,6 +3950,7 @@ else:
     if type(scene_revision) is int and scene_revision>=0:
         result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
+    if source_origin is not None: result["source_origin"]=source_origin
     print(json.dumps(result,sort_keys=True))
 '''
     )

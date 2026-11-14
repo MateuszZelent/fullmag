@@ -2,6 +2,8 @@
 //! Kept separate from held activation and accepted-successor ACK contracts.
 use super::*;
 
+pub(super) mod source_origin;
+
 pub(super) const ENV: &str = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN";
 const SCHEMA: &str = "fullmag.development-terminal-observation-input.v1";
 const PROOF_SCHEMA: &str = "fullmag.development-terminal-observation-proof.v1";
@@ -608,6 +610,9 @@ fn restore(
     if scene.revision != proof.scene_revision {
         bail!("terminal observation scene revision differs");
     }
+    let source_origin = source_origin::verify_optional(
+        Path::new(source_origin::SOURCE_ROOT), preflight.get("source_origin"),
+    )?;
 
     // Native RuntimeServiceConfig has its own digest. It is not Compose config.
     let configuration_path = std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG")
@@ -742,6 +747,7 @@ fn restore(
             run_id, project_id, specification: specification.clone(), scene,
             logical_session_id: proof.session_id, session_epoch: proof.session_epoch,
             source_request_id, source_sha256,
+            source_origin,
             startup_provenance_sha256: None, config_sha256: proof.config_sha256,
             proof_sha256: input.proof_sha256.clone(), total_steps: catalog.tasks.len(),
             terminal_outcome: Some(terminal_outcome.into()), preparation_failure: None,

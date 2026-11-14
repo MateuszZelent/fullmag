@@ -904,6 +904,22 @@ przygotowanego Study z potwierdzeniem Compute. Odtworzenie API zachowuje
 pierwotny czas startu sesji i uzupełnia brakujące potwierdzenie terminalne
 w pamięci na podstawie kwalifikowanego katalogu.
 
+Nowy terminal preflight może zawierać opcjonalny `source_origin` o schemacie
+`fullmag.selected-script-origin.v1`: względną ścieżkę skryptu w wybranym
+mountcie źródeł, SHA-256 i dodatni rozmiar do 64 MiB. Producent odczytuje
+wyłącznie źródło `user_file` z tego mountu, bez podążania za symlinkami,
+i ponawia kontrolę po drugim odczycie tej samej sesji. Brak wspieranego
+źródła pomija pole; starsze preflighty i proofy zachowują dotychczasowe bajty.
+
+Odtworzenie API ponownie sprawdza plik oraz jego pin. Tylko zweryfikowany
+typ wewnętrzny może ustawić `SessionManifest.script_path`, z którego
+istniejący lowering rozwiązuje względne assety. Nie jest to zgoda na Solve
+ani obiekt CAS z fizycznym stanem. Starszy proof bez origin nadal odtwarza
+widok terminalny; próba przygotowania jego względnej siatki FEM zwraca
+`restored_asset_origin_unavailable` przed lowering i utworzeniem RunIntent.
+Zwykłe sceny UI zachowują własną ścieżkę assetów. Ten kontrakt wymaga
+odrębnej weryfikacji zarządzanego runtime; sam diff nie stanowi jej dowodu.
+
 `just docker-dev-capture-terminal <attempt> <config_sha256> <source_root> <port>`
 wykonuje zarządzane zatrzymanie. Przed wygaszeniem zapisuje pin natywnego
 odczytu, właściciela, RunIntent i katalogu w obrębie próby zatrzymania.

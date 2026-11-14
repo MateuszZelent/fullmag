@@ -30,11 +30,20 @@
 
 Pliki: `crates/fullmag-api/src/accepted_fem_preparer.rs`, `accepted_fem_preparer_main.rs`, `accepted_fem_preparation_supervisor.rs`; typ i testy `crates/fullmag-session/src/types.rs`; istniejący ścisły konsumenci exit receipt w `scripts/` i ich testy.
 
-- [ ] Zdefiniować opcjonalny typ `FmsPreparationPhaseTimings` i walidację zakresów/sumy faz oraz round-trip starych rekordów.
-- [ ] Zmierzyć osobno load, replay validation, mesh/space, fizyczne evaluate, bundle/CAS, commit observation i commit task receipt.
-- [ ] Przekazać podsumowanie przez istniejący bounded stdout; supervisor przyjmuje wyłącznie metryki procesu z dokładnie zgodnymi identyfikatorami, bez nadawania im roli authority.
-- [ ] Uaktualnić wszystkie ścisłe czytniki; dodać testy starego schematu, uszkodzonych metryk i retry.
+- [x] Zdefiniować opcjonalny typ `FmsPreparationPhaseTimings` i walidację zakresów/sumy faz oraz round-trip starych rekordów.
+- [x] Zmierzyć osobno load, replay validation, mesh/space, fizyczne evaluate, bundle/CAS, commit observation i commit task receipt.
+- [x] Przekazać podsumowanie przez istniejący bounded stdout; supervisor przyjmuje wyłącznie metryki procesu z dokładnie zgodnymi identyfikatorami, bez nadawania im roli authority.
+- [x] Uaktualnić wszystkie ścisłe czytniki; dodać testy starego schematu, uszkodzonych metryk i retry.
 - [ ] Wykonać adekwatne testy w zarządzanej ścieżce/CI, review, commit spójnego fragmentu; dopiero potem runtime baseline na tej samej fizyce SP4 z pełnym Zarr.
+
+Stan etapu 1: commit `cbbf162dc108e7b600ca27c9983871a65f123e6e`, sześć workflow CI i zarządzana bramka natywnego Poissona PASS. Nowy SP4 baseline odmówiony HTTP 400 przed RunIntent: terminal restore gubi ścieżkę skryptu i względnej siatki. Nie ma nowego pomiaru faz ani nowego Zarr z tej odmówionej próby.
+
+## Etap 1b: odtworzenie origin potrzebne do porównywalnych powtórzeń
+
+- [ ] Zachować opcjonalny, zahashowany `source_origin` przy nowym managed terminal capture; plik readonly/nofollow, zamknięty DTO i parytet walidacji Python/Rust.
+- [ ] Przekazywać do hydratacji wyłącznie zweryfikowany locator; stare proofy bez origin zachowują widok, a względna siatka otrzymuje jawny błąd przed lowering/RunIntent.
+- [ ] Dla aktualnej starej sesji wykonać nowy capture z jawnymi pinami aktywacji, zgodnymi oboma RunIntentami i kompletnym inventory obu rodzin lease; nie przepisywać proofu `c7`, nie kopiować assetów ani nie zwiększać limitu aktywacji.
+- [ ] Dokończyć review, CI i zarządzany build w tej samej grupie SP4; restore nie może wykonać Solve ani nowego RunIntent. Następnie wykonać baseline z metrykami faz i pełnym Zarr.
 
 ## Etap 2: jednokrotne początkowe obserwacje GPU
 

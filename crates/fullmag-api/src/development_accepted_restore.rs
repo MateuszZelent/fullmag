@@ -3356,6 +3356,7 @@ struct SnapshotHydration {
     session_epoch: u64,
     source_request_id: String,
     source_sha256: String,
+    source_origin: Option<terminal_observation::source_origin::VerifiedSourceOrigin>,
     startup_provenance_sha256: Option<String>,
     config_sha256: String,
     proof_sha256: String,
@@ -3373,6 +3374,7 @@ pub(crate) struct AcceptedSnapshotProjection<'a> {
     pub(crate) specification: &'a RunSpecification,
     pub(crate) scene: &'a SceneDocument,
     pub(crate) logical_session_id: &'a str,
+    pub(crate) source_origin: Option<&'a terminal_observation::source_origin::VerifiedSourceOrigin>,
     pub(crate) total_steps: usize,
     pub(crate) terminal_outcome: Option<&'a str>,
     pub(crate) preparation_failure: Option<&'a Value>,
@@ -3389,6 +3391,7 @@ fn build_snapshot(
         specification: loaded.specification.clone(), scene: loaded.scene.clone(),
         logical_session_id: loaded.logical_session_id.clone(), session_epoch: loaded.session_epoch,
         source_request_id: loaded.source_request_id.clone(), source_sha256: loaded.source_sha256.clone(),
+        source_origin: None,
         startup_provenance_sha256: Some(loaded.startup_provenance_sha256.clone()),
         config_sha256: loaded.config_sha256.clone(), proof_sha256: loaded.proof_sha256.clone(),
         total_steps: loaded.total_steps, terminal_outcome: loaded.terminal_outcome.clone(),
@@ -3407,6 +3410,7 @@ fn build_snapshot_from_hydration(
         specification: &loaded.specification,
         scene: &loaded.scene,
         logical_session_id: &loaded.logical_session_id,
+        source_origin: loaded.source_origin.as_ref(),
         total_steps: loaded.total_steps,
         terminal_outcome: loaded.terminal_outcome.as_deref(),
         preparation_failure: loaded.preparation_failure.as_ref(),
@@ -3472,7 +3476,8 @@ pub(crate) fn build_accepted_snapshot(
         run_id: run_id.clone(),
         status: session_status.clone(),
         interactive_session_requested: true,
-        script_path: String::new(),
+        script_path: loaded.source_origin.map(|origin| origin.script_path().display().to_string())
+            .unwrap_or_default(),
         problem_name: loaded.scene.scene.name.clone(),
         requested_backend: requested.backend.clone(),
         explicit_selection: requested.backend != "auto"
@@ -3890,6 +3895,7 @@ mod tests {
             specification: loaded.specification.clone(), scene: loaded.scene.clone(),
             logical_session_id: loaded.logical_session_id.clone(), session_epoch: loaded.session_epoch,
             source_request_id: loaded.source_request_id.clone(), source_sha256: loaded.source_sha256.clone(),
+            source_origin: None,
             startup_provenance_sha256: Some(loaded.startup_provenance_sha256.clone()),
             config_sha256: loaded.config_sha256.clone(), proof_sha256: loaded.proof_sha256.clone(),
             total_steps: loaded.total_steps, terminal_outcome: loaded.terminal_outcome.clone(),
@@ -3911,6 +3917,34 @@ mod tests {
         assert!(snapshot.field_publication_bundles.is_empty());
         assert!(snapshot.fem_mesh.is_none());
         assert!(snapshot.live_state.is_none());
+    }
+
+    #[test]
+    fn terminal_hydration_preserves_only_a_verified_source_locator() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("model.py");
+        let bytes = b"# retained source\n";
+        fs::write(&source, bytes).unwrap();
+        let origin = terminal_observation::source_origin::verify_optional(root.path(), Some(&json!({
+            "schema": "fullmag.selected-script-origin.v1", "source_relative": "model.py",
+            "source_sha256": fullmag_session::hex_sha256(bytes), "source_size_bytes": bytes.len(),
+        }))).unwrap().unwrap();
+        let loaded = loaded_snapshot_fixture(AcceptedRestoreMode::Consumed, Some("completed"), None);
+        let hydration = SnapshotHydration {
+            run_id: loaded.run_id.clone(), project_id: loaded.project_id.clone(),
+            specification: loaded.specification.clone(), scene: loaded.scene.clone(),
+            logical_session_id: loaded.logical_session_id.clone(), session_epoch: loaded.session_epoch,
+            source_request_id: loaded.source_request_id.clone(), source_sha256: loaded.source_sha256.clone(),
+            source_origin: Some(origin), startup_provenance_sha256: None,
+            config_sha256: loaded.config_sha256.clone(), proof_sha256: loaded.proof_sha256.clone(),
+            total_steps: loaded.total_steps, terminal_outcome: Some("completed".into()),
+            preparation_failure: None, metadata_schema: INPUT_SCHEMA, started_at_unix_ms: None,
+            stage_execution: None,
+        };
+        let snapshot = build_snapshot_from_hydration(Path::new("test-workspace"), &hydration).unwrap();
+        assert_eq!(snapshot.session.script_path, source.display().to_string());
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
 
     #[test]
