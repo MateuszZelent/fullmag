@@ -266,7 +266,7 @@ Deferred to the tasks that add the features: `ready_antenna` (`gaussian_k_source
 - [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `15/15 cases passed`, exit 0 (18/18 with the deferred cases, 2026-11-14).
 - [ ] **Step 4: Commit** `feat(plan): resolve hand-written masks into FDM bases`.
 
-### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU — PARTIAL (`2f35afe73`: descriptor v3 and HOST_MULTIPLIER on CUDA, `DriveTimeFunction::Expression` on CPU, horizon check, E_drive; verified through the API, see Task 7; open: Step 0 `H_drive` readback)
+### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU — DONE 2026-11-14 (`2f35afe73`: descriptor v3 and HOST_MULTIPLIER on CUDA, `DriveTimeFunction::Expression` on CPU, horizon check, E_drive; verified through the API, see Task 7; `e23e0a6a9`: Step 0 `H_drive` readback — CPU preview dispatcher, CUDA resolved on the host like `H_ant`, `H_drive`/`E_drive` outputs legal with mask antennas; saved `H_drive` equals the sum of the drive terms to 1.3e-14 on CPU and CUDA, `~/git/simulations/fullmag/field_masks/h_drive`; the live-preview path shares the resolver but was not exercised at run time)
 
 **Files:**
 - Create: `native/include/fullmag_time_expression.h` (header-only host C function `fullmag_time_expression_eval(const double *code, uint64_t len, double t)`; `FULLMAG_TIME_EXPRESSION_VERSION 1`)
@@ -428,6 +428,10 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
    `"dt_initial": null` into the scene, which the API rejects.
 3. CPU and CUDA adaptive RK45 differ by about 1e-4 in m after 1 ns at max_error 1e-9,
    for regional drives and masks alike.
+4. FDM CUDA saves fields and table rows at the first accepted step at or after the
+   output time (11.27 fs late in the `H_drive` check; FDM CPU lands on the time). The
+   `separate` Zarr field layout does not record the sample times, so the offset is
+   invisible in a field store.
 
 ## User decisions (2026-11-13)
 

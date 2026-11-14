@@ -376,6 +376,12 @@ uniform times of the stage and stop with `mask_expression_non_finite`; CUDA also
 checks each host evaluation. At upload the CUDA runner compares the library's
 interpreter with the Rust interpreter on every program (4 ulp).
 
+The sum in {eq}`mask-fdm-update`, together with the built-in regional drives, is
+published as the field `H_drive` (A/m). FDM CPU takes it from the solver's drive
+terms; FDM CUDA resolves it on the host from the same double-precision bases and
+time functions at the time of the saved state, so it reports the prescribed drive,
+not a readback of the device buffers.
+
 ### 8.3 FEM CPU and FEM GPU
 
 Not realized. Planning fails with `mask_field_drive_unsupported_lane:fem`. The
@@ -444,6 +450,10 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
 - Stage pipeline, Add → Run → Update → Run → Remove → Run → Add → Run: Update
   equals Remove plus Add of an antenna with the new values bit for bit on CPU and
   CUDA; $E_{\mathrm{drive}}=0$ exactly while the antenna is removed.
+- `H_drive` readback: with a time-dependent mask term, a static mask term and a
+  built-in regional drive active together, the saved `H_drive` equals the sum of
+  the three terms to 1.3e-14 (relative) on FDM CPU and FDM CUDA at the time of
+  each sample (`~/git/simulations/fullmag/field_masks/h_drive`).
 
 - Reference (item 4, inputs): the antenna of the mumax3 script `racetrack 3.6 GHz`
   written by hand (`~/git/simulations/fullmag/racetrack_3.6GHz.py`) plans on the
