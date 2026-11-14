@@ -779,6 +779,21 @@ fn validate_live_workspace_binding(live: &Value, accepted: &AcceptedPins) -> Res
     Ok(())
 }
 
+fn validate_held_fdm_scope(
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+) -> Result<()> {
+    for step in accepted.lowered.steps.iter().filter(|step|
+        matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
+    ) {
+        let plan = step.execution_plan.as_ref()
+            .context("held UI planned step has no resolved execution plan")?;
+        if plan.common.resolved_backend != fullmag_ir::BackendTarget::Fdm {
+            bail!("held UI materialization supports only resolved FDM execution plans");
+        }
+    }
+    Ok(())
+}
+
 fn validate_run_directory(
     store: &fullmag_session::SessionStore,
     run_id: &str,
@@ -943,6 +958,8 @@ fn validate_store(input: &Input, store_root: &Path, inventory: &InventoryProof, 
     if accepted.run.intent != intent || accepted.run.specification != specification {
         bail!("held UI immutable accepted snapshot differs from its RunIntent");
     }
+    validate_held_fdm_scope(&accepted)
+        .context("validate held UI resolved execution backend scope")?;
     let scene = super::scene_from_definition(&accepted.run.definition_bytes, &specification)?;
     validate_inventory_files(&store, input, inventory, &specification, &scene, preflight)?;
     let planned = accepted.lowered.steps.iter()
@@ -2502,6 +2519,12 @@ mod tests {
     }
 
     fn accepted_catalog_fixture() -> (tempfile::TempDir, ValidatedHeldAuthority, Vec<u8>) {
+        accepted_catalog_fixture_with_backend("fdm")
+    }
+
+    fn accepted_catalog_fixture_with_backend(
+        requested_backend: &str,
+    ) -> (tempfile::TempDir, ValidatedHeldAuthority, Vec<u8>) {
         use fullmag_application::{
             ProjectEnvelope, ProjectId, ProjectSnapshot, RequestedExecution,
             RequestedResourceBudget, RunIntent, RunSpecification, StudyId, StudyReference,
@@ -2648,7 +2671,7 @@ mod tests {
                 "live_workspace": live_workspace,
             }),
             RequestedExecution {
-                backend: "fdm".into(),
+                backend: requested_backend.into(),
                 device: "cpu".into(),
                 precision: "double".into(),
                 mode: "strict".into(),
@@ -2790,6 +2813,39 @@ mod tests {
         for prohibited in ["task_attempts", "task_admissions", "resource_leases", "outputs"] {
             assert!(!names.contains(prohibited), "unexpected progress directory: {prohibited}");
         }
+    }
+
+    #[test]
+    fn held_restore_requires_resolved_fdm_but_accepts_auto_resolving_to_fdm() {
+        use fullmag_session::SessionStore;
+
+        let (_temporary, authority, _) = accepted_catalog_fixture_with_backend("auto");
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let mut accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &authority.loaded.run_id,
+            &authority.loaded.project_id,
+        )
+        .unwrap();
+        assert_eq!(accepted.run.specification.requested_execution.backend, "auto");
+        assert_eq!(
+            accepted.lowered.steps[0]
+                .execution_plan
+                .as_ref()
+                .unwrap()
+                .common
+                .resolved_backend,
+            fullmag_ir::BackendTarget::Fdm,
+        );
+        validate_held_fdm_scope(&accepted).unwrap();
+
+        accepted.lowered.steps[0]
+            .execution_plan
+            .as_mut()
+            .unwrap()
+            .common
+            .resolved_backend = fullmag_ir::BackendTarget::Fem;
+        assert!(validate_held_fdm_scope(&accepted).is_err());
     }
 
     #[test]
