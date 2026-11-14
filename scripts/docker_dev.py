@@ -3043,6 +3043,8 @@ def _parser() -> argparse.ArgumentParser:
     held_mode.add_argument("--preview", action="store_true")
     held_mode.add_argument("--apply", action="store_true")
     held_ui.add_argument("--expected-plan-sha256", help="unchanged reviewed preview SHA; required for apply")
+    held_ui.add_argument("--pre-signal-stop-attempt", help="exact failed stop before API exec; apply only")
+    held_ui.add_argument("--pre-signal-stop-terminal-sha256", help="raw digest of that failed stop terminal")
     held_ui.set_defaults(
         profile="dev", image=None, toolchain_image=None, source_manifest=None,
         include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,

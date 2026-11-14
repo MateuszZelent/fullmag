@@ -108,14 +108,17 @@ class DurableHeldControl:
         self.records = records
         self._active_operation = None
 
-    def read_bytes(self, path, optional=False):
+    def read_bytes(self, path, optional=False, maximum=None):
         value = self.records.get(path)
         if value is None and not optional:
             raise BuildControlError("missing durable control record")
+        if value is not None and maximum is not None and len(value) > maximum:
+            raise BuildControlError("durable control record exceeds its byte limit")
         return value
 
     def helper_args(self, script):
-        return ("CONTROL_HELPER", script)
+        return ("docker", "run", "--rm", "-i", "--entrypoint", "/bin/bash",
+                "sha256:" + "9" * 64, "-euo", "pipefail", "-c", script)
 
     @staticmethod
     def path(relative):
@@ -1023,15 +1026,18 @@ class ApiQuiescenceIntentContracts(unittest.TestCase):
         durable_control = DurableHeldControl(durable_records, self.value["source_scope"])
         operation = production_held_stop_operation(durable_control, "c" * 32)
 
+        def helper_capture(command, *, data=b"", timeout=90, **_kwargs):
+            self.assertEqual(tuple(command[:2]), ("docker", "run"))
+            self.assertNotIn(control_root + "api-quiescence-start.json", durable_records)
+            durable_records[control_root + "api-quiescence-start.json"] = data
+            return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
+
         def capture(*args, **kwargs):
-            if args[0] == "CONTROL_HELPER":
-                self.assertNotIn(control_root + "api-quiescence-start.json", durable_records)
-                durable_records[control_root + "api-quiescence-start.json"] = kwargs["data"]
-                return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
             self.assertEqual(args[:4], ("exec", "-i", expected_backend, "python3"))
             return SimpleNamespace(stdout=canonical(captured), returncode=0)
 
-        with patch("docker_build_control.docker_capture", side_effect=capture) as docker:
+        with patch("docker_build_control.bounded_capture", side_effect=helper_capture) as helper, \
+             patch("docker_build_control.docker_capture", side_effect=capture) as docker:
             result = subject.capture_held_api_quiescence(
                 durable_control, expected_backend, intent,
                 operation=operation, expected_plan_sha256=self.plan_sha256,
@@ -1044,9 +1050,15 @@ class ApiQuiescenceIntentContracts(unittest.TestCase):
         claim = json.loads(durable_records[control_root + "api-quiescence-start.json"])
         self.assertEqual(claim["state"], "started")
         self.assertEqual(claim["intent_sha256"], intent_sha)
-        claim_script = docker.call_args_list[0].args[1]
-        self.assertIn("os.O_EXCL", claim_script)
-        self.assertIn("os.fsync", claim_script)
+        claim_command = helper.call_args.args[0]
+        claim_script = claim_command[-1]
+        self.assertEqual(tuple(claim_command[:2]), ("docker", "run"))
+        self.assertIn("set -C", claim_script)
+        self.assertIn("head -c 16385", claim_script)
+        self.assertIn("sha256sum", claim_script)
+        self.assertIn("sync -f", claim_script)
+        self.assertNotIn("python", claim_script)
+        self.assertEqual(docker.call_count, 1)
         self.assertEqual(operation["receipt"]["held_ui_api_quiescence_claim"]["state"],
                          "consumed")
 
@@ -1063,19 +1075,22 @@ class ApiQuiescenceIntentContracts(unittest.TestCase):
         api_execs = []
         claim_helpers = []
 
+        def helper_capture(command, *, data=b"", timeout=90, **_kwargs):
+            claim_helpers.append(tuple(command))
+            self.assertEqual(tuple(command[:2]), ("docker", "run"))
+            claim_path = control_root + "api-quiescence-start.json"
+            self.assertNotIn(claim_path, durable_records)
+            durable_records[claim_path] = data
+            return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
+
         def capture(*args, **kwargs):
-            if args[0] == "CONTROL_HELPER":
-                claim_helpers.append(args)
-                claim_path = control_root + "api-quiescence-start.json"
-                self.assertNotIn(claim_path, durable_records)
-                durable_records[claim_path] = kwargs["data"]
-                return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
             if args[0] == "exec":
                 api_execs.append(args)
                 raise DockerObservationBudgetExceeded("simulated Docker capture timeout")
             self.fail("unexpected Docker call")
 
-        with patch("docker_build_control.docker_capture", side_effect=capture):
+        with patch("docker_build_control.bounded_capture", side_effect=helper_capture), \
+             patch("docker_build_control.docker_capture", side_effect=capture):
             with self.assertRaises(BuildControlError):
                 subject.capture_held_api_quiescence(
                     control, self.value["source_scope"]["backend_container_id"], intent,
@@ -1098,10 +1113,124 @@ class ApiQuiescenceIntentContracts(unittest.TestCase):
                     expected_intent_sha256=intent_sha,
                 )
         self.assertEqual(len(claim_helpers), 1)
+        self.assertEqual(claim_helpers[0][:2], ("docker", "run"))
+        self.assertNotIn("python", claim_helpers[0][-1])
         self.assertEqual(len(api_execs), 1)
         self.assertTrue(operation["daemon_pending"])
         self.assertEqual(operation["receipt"]["held_ui_api_quiescence_claim"]["state"],
                          "outcome-unknown")
+
+
+class PreSignalStopContracts(unittest.TestCase):
+    def setUp(self):
+        request_value, self.proofs = valid_proof_chain()
+        self.attempt = request_value["plan"]["attempt"]
+        self.maintenance_id = request_value["plan"]["maintenance_request_id"]
+        self.run_id = request_value["accepted"]["run_id"]
+        self.source_scope = request_value["source_scope"]
+        self.accepted = request_value["accepted"]
+        self.plan, self.plan_sha256 = subject.build_preview_plan(
+            attempt=self.attempt,
+            maintenance_request_id=self.maintenance_id,
+            source_scope=self.source_scope,
+            accepted=self.accepted,
+            preflight=self.proofs["preflight"],
+            inventory=self.proofs["inventory"],
+        )
+        self.intent, self.intent_raw, self.intent_sha256 = subject.prepare_api_quiescence_intent(
+            attempt=self.attempt,
+            maintenance_request_id=self.maintenance_id,
+            plan_sha256=self.plan_sha256,
+            source_scope=self.source_scope,
+            accepted=self.accepted,
+            preflight=self.proofs["preflight"],
+            inventory=self.proofs["inventory"],
+        )
+        self.stop_attempt = "f" * 32
+        self.control_root = subject.request_relative(self.maintenance_id).rsplit("/", 1)[0]
+        inputs = {
+            "attempt": self.attempt,
+            "source_root": self.source_scope["source_root"],
+            "config_sha256": self.source_scope["runtime_config_sha256"],
+            "source_scope": self.source_scope,
+            "maintenance_request_id": self.maintenance_id,
+            "plan_sha256": self.plan_sha256,
+            "run_id": self.run_id,
+            "accepted_run_id": self.run_id,
+            "capture_held_ui_materialization": True,
+        }
+        self.parent_terminal = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "held-ui-materialization-stop",
+            "attempt": self.stop_attempt,
+            "state": "failed-confirmed",
+            "held_ui_stop_stage": "frontend-stopped",
+            "error": subject.PRE_SIGNAL_STOP_FAILURE,
+            "api_quiescence_intent_sha256": self.intent_sha256,
+            "compose_project": self.source_scope["compose_project"],
+            "control_volume": self.source_scope["control_volume"],
+            "inputs": inputs,
+        }
+        self.terminal_relative = (
+            "held-ui-materialization-stop/attempts/" + self.stop_attempt + "/terminal.json"
+        )
+        self.records = {
+            "runtime-control/" + self.control_root + "/preflight.json": encoded_record(
+                self.proofs["preflight"]),
+            "runtime-control/" + self.control_root + "/inventory.json": encoded_record(
+                self.proofs["inventory"]),
+            "runtime-control/" + subject.quiescence_intent_relative(self.maintenance_id):
+                self.intent_raw,
+            self.terminal_relative: encoded_record(self.parent_terminal),
+        }
+        self.control = DurableHeldControl(self.records, self.source_scope)
+
+    def validate_parent(self, *, terminal_sha256=None):
+        terminal_raw = self.records[self.terminal_relative]
+        return subject.validate_pre_signal_stop_parent(
+            self.control,
+            stop_attempt=self.stop_attempt,
+            terminal_sha256=terminal_sha256 or subject.sha(terminal_raw),
+            expected_attempt=self.attempt,
+            expected_maintenance_request_id=self.maintenance_id,
+            expected_run_id=self.run_id,
+            expected_plan_sha256=self.plan_sha256,
+        )
+
+    def test_exact_confirmed_frontend_stopped_failure_reuses_the_saved_intent_basis(self):
+        recovered = self.validate_parent()
+
+        self.assertEqual(recovered["terminal_raw"], self.records[self.terminal_relative])
+        self.assertEqual(recovered["intent_raw"], self.intent_raw)
+        self.assertEqual(recovered["intent"], self.intent)
+        self.assertEqual(recovered["proof_refs"]["preflight"]["path"],
+                         self.control_root + "/preflight.json")
+        self.assertEqual(recovered["proof_refs"]["inventory"]["path"],
+                         self.control_root + "/inventory.json")
+
+    def test_parent_terminal_and_no_claim_absence_are_mandatory(self):
+        with self.assertRaisesRegex(BuildControlError, "explicit pin"):
+            self.validate_parent(terminal_sha256="1" * 64)
+
+        claim_path = "runtime-control/" + subject.quiescence_start_claim_relative(
+            self.maintenance_id,
+        )
+        self.records[claim_path] = b"unknown claim bytes"
+        with self.assertRaisesRegex(BuildControlError, "start claim"):
+            self.validate_parent()
+
+    def test_parent_error_stage_or_immutable_plan_drift_is_rejected(self):
+        self.parent_terminal["held_ui_stop_stage"] = "api-quiescence-start-unknown"
+        changed = encoded_record(self.parent_terminal)
+        self.records[self.terminal_relative] = changed
+        with self.assertRaisesRegex(BuildControlError, "exact no-API-exec frontend stop"):
+            self.validate_parent()
+
+        self.parent_terminal["held_ui_stop_stage"] = "frontend-stopped"
+        self.parent_terminal["inputs"]["plan_sha256"] = "0" * 64
+        self.records[self.terminal_relative] = encoded_record(self.parent_terminal)
+        with self.assertRaisesRegex(BuildControlError, "exact no-API-exec frontend stop"):
+            self.validate_parent()
 
 
 class PreviewPlanLifecycleContracts(unittest.TestCase):

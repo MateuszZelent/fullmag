@@ -69,7 +69,8 @@ def drained_process():
 
 def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False,
              fresh_scope_drift=False, malformed_fresh_scope=False,
-             fail_publish_admission=False):
+             fail_publish_admission=False, pre_signal_resume=False,
+             parent_terminal_drift=False, artifact_on_stop_lease=None):
     events = []
     records = {}
     source_scope = {
@@ -121,10 +122,48 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
             "maintenance_request_id": MAINTENANCE_ID, "source_scope": source_scope,
             "accepted": accepted, "current": {"api_instance_id": API_ID},
             "native": {"config_sha256": "d" * 64}, "inventory": inventory_side}
+    plan_sha = sha(canon(plan))
     service_pins = {"backend": {"id": BACKEND_ID, "image_id": BACKEND_IMAGE,
                     "started_at": source_scope["backend_started_at"]},
                     "frontend": {"id": FRONTEND_ID, "image_id": FRONTEND_IMAGE,
                     "started_at": source_scope["frontend_started_at"]}}
+    pre_signal_parent = None
+    if pre_signal_resume:
+        intent = {
+            "schema": "fullmag.held-ui-materialization-api-quiescence-intent.v1",
+            "plan_sha256": plan_sha,
+            "preflight_sha256": sha(encoded(preflight)),
+            "inventory_sha256": sha(encoded(inventory)),
+            "ready_owner_identity": OWNER_ID,
+            "plan": plan,
+        }
+        intent_raw = encoded(intent)
+        stop_attempt = "f" * 32
+        terminal = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "held-ui-materialization-stop", "attempt": stop_attempt,
+            "state": "failed-confirmed", "held_ui_stop_stage": "frontend-stopped",
+            "error": "Held UI materialization: API quiescence start claim could not be confirmed; no API exec was attempted",
+            "api_quiescence_intent_sha256": sha(intent_raw),
+            "compose_project": source_scope["compose_project"],
+            "control_volume": source_scope["control_volume"],
+            "inputs": {"attempt": ATTEMPT, "source_root": source_scope["source_root"],
+                "config_sha256": source_scope["runtime_config_sha256"],
+                "source_scope": source_scope, "maintenance_request_id": MAINTENANCE_ID,
+                "plan_sha256": plan_sha, "run_id": RUN_ID, "accepted_run_id": RUN_ID,
+                "capture_held_ui_materialization": True},
+        }
+        terminal_raw = encoded(terminal)
+        terminal_relative = ("held-ui-materialization-stop/attempts/"
+                             + stop_attempt + "/terminal.json")
+        proof_root = "runtime-control/held-ui-materialization/" + MAINTENANCE_ID
+        records.update({
+            proof_root + "/preflight.json": encoded(preflight),
+            proof_root + "/inventory.json": encoded(inventory),
+            proof_root + "/api-quiescence-intent.json": intent_raw,
+            terminal_relative: terminal_raw,
+        })
+        pre_signal_parent = {"attempt": stop_attempt, "terminal_sha256": sha(terminal_raw)}
 
     class Control:
         project = "project-p22"
@@ -133,6 +172,7 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
         namespace_registry_sha256 = None
         _active_operation = None
         _fail_publish_admission_once = fail_publish_admission
+        _artifact_on_stop_lease = artifact_on_stop_lease
 
         def read_bytes(self, relative, *, optional=False, maximum=None):
             if relative not in records:
@@ -163,6 +203,9 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
                          "lease_ready": True, "daemon_pending": False}
             self._active_operation = operation
             events.append(("lease", phase))
+            if phase == subject.STOP_PHASE and self._artifact_on_stop_lease is not None:
+                relative, payload = self._artifact_on_stop_lease
+                records[relative] = payload
             try:
                 yield operation
             except BaseException:
@@ -179,8 +222,6 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
                 events.append(("lease-released", receipt.get("state")))
 
     control = Control()
-
-    plan_sha = sha(canon(plan))
 
     class Controller:
         REQUEST_SCHEMA = "fullmag.held-ui-materialization-request.v1"
@@ -239,6 +280,38 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
                       "ready_owner_identity": OWNER_ID}
             raw = encoded(intent)
             return intent, raw, sha(raw)
+
+        def validate_pre_signal_stop_parent(self, control_value, **kwargs):
+            events.append(("validate-pre-signal-parent", None))
+            relative = ("held-ui-materialization-stop/attempts/"
+                        + kwargs["stop_attempt"] + "/terminal.json")
+            terminal_raw = control_value.read_bytes(relative)
+            if parent_terminal_drift or sha(terminal_raw) != kwargs["terminal_sha256"]:
+                raise ValueError("pre-signal parent terminal differs")
+            terminal = json.loads(terminal_raw)
+            if (terminal.get("state") != "failed-confirmed"
+                    or terminal.get("held_ui_stop_stage") != "frontend-stopped"
+                    or terminal.get("error") != "Held UI materialization: API quiescence start claim could not be confirmed; no API exec was attempted"):
+                raise ValueError("pre-signal parent is not a confirmed no-API-exec stop")
+            intent_relative = self.quiescence_intent_relative(MAINTENANCE_ID)
+            intent_raw = control_value.read_bytes("runtime-control/" + intent_relative)
+            intent = json.loads(intent_raw)
+            if (intent.get("plan") != plan or intent.get("plan_sha256") != plan_sha
+                    or terminal.get("api_quiescence_intent_sha256") != sha(intent_raw)):
+                raise ValueError("pre-signal immutable basis differs")
+            for leaf in ("api-quiescence-start.json", "api-quiescence.json",
+                         "native-drain.json", "request.json"):
+                path = "runtime-control/held-ui-materialization/" + MAINTENANCE_ID + "/" + leaf
+                if control_value.read_bytes(path, optional=True) is not None:
+                    raise ValueError("pre-signal resume has a spent API action")
+            return {"intent": intent, "intent_raw": intent_raw,
+                    "intent_sha256": sha(intent_raw),
+                    "proof_refs": {
+                        "preflight": {"path": "held-ui-materialization/" + MAINTENANCE_ID + "/preflight.json",
+                                      "sha256": sha(encoded(preflight))},
+                        "inventory": {"path": "held-ui-materialization/" + MAINTENANCE_ID + "/inventory.json",
+                                      "sha256": sha(encoded(inventory))},
+                    }}
 
         def publish_api_quiescence_intent(self, control_value, intent, *, expected_plan_sha256):
             events.append(("publish-intent", None))
@@ -329,6 +402,8 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
 
     current_service_state = {name: {**value, "running": True, "exit_code": 0}
                              for name, value in service_pins.items()}
+    if pre_signal_resume:
+        current_service_state["frontend"]["running"] = False
     if foreign_service:
         current_service_state["backend"]["id"] = "f" * 64
 
@@ -360,6 +435,7 @@ def fixtures(*, stop_backend_error=None, stale_plan=False, foreign_service=False
         stale_plan=stale_plan, foreign_service=foreign_service,
         fresh_scope_drift=fresh_scope_drift, malformed_fresh_scope=malformed_fresh_scope,
         fail_publish_admission=fail_publish_admission,
+        pre_signal_parent=pre_signal_parent, current_service_state=current_service_state,
     )
 
 
@@ -415,6 +491,20 @@ class HeldStopLifecycle(unittest.TestCase):
                         read_drain=fx.read_drain,
                     )
                 self.assertFalse(any(event[0] in {"stop", "api-close"} for event in fx.events))
+
+    def test_capture_artifact_racing_stop_lease_is_rejected_before_frontend_stop(self):
+        path = ("runtime-control/held-ui-materialization/" + MAINTENANCE_ID
+                + "/preflight.json")
+        fx = fixtures(artifact_on_stop_lease=(path, b"raced immutable artifact\n"))
+        with self.assertRaisesRegex(ValueError, "existing preflight artifact"):
+            subject.execute_stop_only(
+                control=fx.control, controller=fx.controller, plan=fx.plan,
+                expected_plan_sha256=fx.plan_sha256, expected_services=fx.service_pins,
+                capture_fresh=fx.capture_fresh, inspect_services=fx.inspect_services,
+                stop_service=fx.stop_service, preflight_drain=fx.preflight_drain,
+                read_drain=fx.read_drain,
+            )
+        self.assertFalse(any(event[0] in {"stop", "api-close"} for event in fx.events))
 
     def test_foreign_service_id_is_rejected_before_any_stop(self):
         fx = fixtures(foreign_service=True)
@@ -524,6 +614,41 @@ class HeldStopLifecycle(unittest.TestCase):
         self.assertEqual(sum(event[0] == "stop" and event[1] == "frontend" for event in fx.events), 1)
         self.assertEqual(sum(event[0] == "stop" and event[1] == "backend" for event in fx.events), 1)
         self.assertEqual(sum(event[0] == "api-close" for event in fx.events), 1)
+
+    def test_confirmed_presignal_parent_reuses_basis_and_skips_second_frontend_stop(self):
+        fx = fixtures(pre_signal_resume=True)
+        result = subject.execute_stop_only(
+            control=fx.control, controller=fx.controller, plan=fx.plan,
+            expected_plan_sha256=fx.plan_sha256, expected_services=fx.service_pins,
+            capture_fresh=fx.capture_fresh, inspect_services=fx.inspect_services,
+            stop_service=fx.stop_service, preflight_drain=fx.preflight_drain,
+            read_drain=fx.read_drain, pre_signal_parent=fx.pre_signal_parent,
+        )
+
+        self.assertEqual(result["state"], "stopped-awaiting-typed-recreate")
+        self.assertEqual(sum(event[0] == "stop" and event[1] == "frontend" for event in fx.events), 0)
+        self.assertEqual(sum(event[0] == "stop" and event[1] == "backend" for event in fx.events), 1)
+        self.assertEqual(sum(event[0] == "api-close" for event in fx.events), 1)
+        self.assertNotIn(("publish-inputs", None), fx.events)
+        self.assertNotIn(("publish-intent", None), fx.events)
+        self.assertLess(fx.events.index(("lease", subject.STOP_PHASE)),
+                        fx.events.index(("validate-pre-signal-parent", None)))
+        terminal = json.loads(fx.records[subject.STOP_PHASE + "/attempts/" + "d" * 32 + "/terminal.json"])
+        self.assertEqual(terminal["inputs"]["pre_signal_stop_attempt"], fx.pre_signal_parent["attempt"])
+        self.assertEqual(terminal["inputs"]["pre_signal_stop_terminal_sha256"],
+                         fx.pre_signal_parent["terminal_sha256"])
+
+    def test_presignal_parent_drift_refuses_backend_stop_and_api_close(self):
+        fx = fixtures(pre_signal_resume=True, parent_terminal_drift=True)
+        with self.assertRaisesRegex(ValueError, "parent terminal differs"):
+            subject.execute_stop_only(
+                control=fx.control, controller=fx.controller, plan=fx.plan,
+                expected_plan_sha256=fx.plan_sha256, expected_services=fx.service_pins,
+                capture_fresh=fx.capture_fresh, inspect_services=fx.inspect_services,
+                stop_service=fx.stop_service, preflight_drain=fx.preflight_drain,
+                read_drain=fx.read_drain, pre_signal_parent=fx.pre_signal_parent,
+            )
+        self.assertFalse(any(event[0] in {"stop", "api-close"} for event in fx.events))
 
 
 if __name__ == "__main__":

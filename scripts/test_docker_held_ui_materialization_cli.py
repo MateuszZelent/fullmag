@@ -42,6 +42,31 @@ class HeldUiMaterializationCliTests(unittest.TestCase):
             self.assertEqual(args.request_id, "11111111-1111-4111-8111-111111111111")
             self.assertFalse(args.fresh_state)
 
+    def test_pre_signal_continuation_preserves_exact_parent_stop_pins(self):
+        pins = ["--pre-signal-stop-attempt", "e" * 32,
+                "--pre-signal-stop-terminal-sha256", "f" * 64]
+        args = docker_dev._parser().parse_args(
+            self.arguments() + ["--apply", "--expected-plan-sha256", "d" * 64] + pins)
+        self.assertEqual(args.pre_signal_stop_attempt, "e" * 32)
+        self.assertEqual(args.pre_signal_stop_terminal_sha256, "f" * 64)
+        suffix = (f" --apply --expected-plan-sha256 '{'d'*64}'"
+                  f" --pre-signal-stop-attempt '{'e'*32}'"
+                  f" --pre-signal-stop-terminal-sha256 '{'f'*64}'")
+        result = self.dispatch(suffix)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)[-4:], pins)
+
+    def test_shell_rejects_partial_or_preview_pre_signal_parent_pins(self):
+        pair = (f" --pre-signal-stop-attempt '{'e'*32}'"
+                f" --pre-signal-stop-terminal-sha256 '{'f'*64}'")
+        for suffix in (" --preview" + pair,
+                       f" --apply --expected-plan-sha256 '{'d'*64}' --pre-signal-stop-attempt '{'e'*32}'",
+                       f" --apply --expected-plan-sha256 '{'d'*64}' --pre-signal-stop-terminal-sha256 '{'f'*64}'",
+                       f" --apply --expected-plan-sha256 '{'d'*64}'" + pair + "; printf injected"):
+            result = self.dispatch(suffix)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertNotIn("injected", result.stdout)
+
     def test_missing_or_conflicting_mode_is_rejected(self):
         for mode in ([], ["--preview", "--apply"]):
             with self.subTest(mode=mode), redirect_stderr(StringIO()), self.assertRaises(SystemExit):

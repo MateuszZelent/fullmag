@@ -17,10 +17,10 @@ def _canonical_lf(controller, value):
     return controller.canonical(value) + b"\n"
 
 
-def _operation_inputs(plan, expected_plan_sha256):
+def _operation_inputs(plan, expected_plan_sha256, pre_signal_parent=None):
     scope = plan["source_scope"]
     accepted = plan["accepted"]
-    return {
+    inputs = {
         "attempt": plan["attempt"],
         "source_root": scope["source_root"],
         "config_sha256": scope["runtime_config_sha256"],
@@ -31,6 +31,10 @@ def _operation_inputs(plan, expected_plan_sha256):
         "accepted_run_id": accepted["run_id"],
         "capture_held_ui_materialization": True,
     }
+    if pre_signal_parent is not None:
+        inputs["pre_signal_stop_attempt"] = pre_signal_parent["attempt"]
+        inputs["pre_signal_stop_terminal_sha256"] = pre_signal_parent["terminal_sha256"]
+    return inputs
 
 
 def _assert_plan(controller, plan, expected_plan_sha256, capture_fresh):
@@ -157,7 +161,8 @@ def _build_request(controller, plan, stop_attempt, terminal_raw, proof_refs):
 
 def execute_stop_only(*, control, controller, plan: Mapping, expected_plan_sha256: str,
                       expected_services: Mapping, capture_fresh, inspect_services,
-                      stop_service, preflight_drain, read_drain) -> dict:
+                      stop_service, preflight_drain, read_drain,
+                      pre_signal_parent: Mapping | None = None) -> dict:
     """Stop and authenticate one approved held run; never starts its replacement."""
     _require(controller, isinstance(plan, Mapping), "approved held UI plan is missing")
     expected_plan_sha256 = controller._digest(expected_plan_sha256, "approved plan digest")
@@ -169,8 +174,22 @@ def execute_stop_only(*, control, controller, plan: Mapping, expected_plan_sha25
     request_id = plan.get("maintenance_request_id")
     _require(controller, isinstance(accepted, Mapping) and isinstance(source_scope, Mapping),
              "approved held UI plan has no accepted/source bindings")
-    inputs = _operation_inputs(plan, expected_plan_sha256)
+    if pre_signal_parent is not None:
+        _require(controller, isinstance(pre_signal_parent, Mapping)
+                 and set(pre_signal_parent) == {"attempt", "terminal_sha256"},
+                 "pre-signal parent pin shape differs")
+        pre_signal_parent = {
+            "attempt": pre_signal_parent.get("attempt"),
+            "terminal_sha256": controller._digest(pre_signal_parent.get("terminal_sha256"),
+                                                   "pre-signal terminal digest"),
+        }
+        _require(controller, isinstance(pre_signal_parent["attempt"], str)
+                 and len(pre_signal_parent["attempt"]) == 32
+                 and all(character in "0123456789abcdef" for character in pre_signal_parent["attempt"]),
+                 "pre-signal stop attempt is not an exact operation token")
+    inputs = _operation_inputs(plan, expected_plan_sha256, pre_signal_parent)
     request_relative = controller.request_relative(request_id)
+    request_root = request_relative.rsplit("/", 1)[0]
     intent_relative = controller.quiescence_intent_relative(request_id)
     claim_relative = controller.quiescence_start_claim_relative(request_id)
     for relative, label in ((request_relative, "completed request"),
@@ -191,6 +210,21 @@ def execute_stop_only(*, control, controller, plan: Mapping, expected_plan_sha25
                  name + " approved service incarnation differs from source scope")
     attempt = plan.get("attempt")
 
+    if pre_signal_parent is None:
+        pre_signal_artifacts = (
+            ("preflight.json", "preflight"),
+            ("inventory.json", "inventory"),
+            ("api-quiescence-intent.json", "API quiescence intent"),
+            ("api-quiescence.json", "API quiescence receipt"),
+            ("native-drain.json", "native drain proof"),
+        )
+        for leaf, label in pre_signal_artifacts:
+            existing = control.read_bytes(
+                "runtime-control/" + request_root + "/" + leaf, optional=True,
+            )
+            _require(controller, existing is None,
+                     "existing " + label + " artifact forbids a new held stop attempt")
+
     with control.operation(STOP_PHASE, inputs) as operation:
         stop_attempt = controller._require_held_stop_operation(control, operation)
         _require(controller, stop_attempt != attempt,
@@ -203,56 +237,80 @@ def execute_stop_only(*, control, controller, plan: Mapping, expected_plan_sha25
         _require(controller, claim is None,
                  "API quiescence start claim already exists; replay is prohibited")
 
+        if pre_signal_parent is None:
+            for leaf, label in pre_signal_artifacts:
+                existing = control.read_bytes(
+                    "runtime-control/" + request_root + "/" + leaf, optional=True,
+                )
+                _require(controller, existing is None,
+                         "existing " + label + " artifact forbids a new held stop attempt")
+
+        parent_authority = None
+        if pre_signal_parent is not None:
+            parent_authority = controller.validate_pre_signal_stop_parent(
+                control,
+                stop_attempt=pre_signal_parent["attempt"],
+                terminal_sha256=pre_signal_parent["terminal_sha256"],
+                expected_attempt=plan["attempt"],
+                expected_maintenance_request_id=request_id,
+                expected_run_id=accepted["run_id"],
+                expected_plan_sha256=expected_plan_sha256,
+            )
+            _require(controller, parent_authority.get("intent", {}).get("plan") == plan,
+                     "pre-signal parent basis differs from the approved plan")
+            _require(controller, set(parent_authority.get("proof_refs", {}))
+                     == {"preflight", "inventory"},
+                     "pre-signal parent API/store proof references are incomplete")
+            operation["receipt"]["held_ui_pre_signal_stop_parent"] = dict(pre_signal_parent)
+
         accepted, preflight, inventory = _assert_plan(
             controller, plan, expected_plan_sha256, capture_fresh,
         )
-        request_root = request_relative.rsplit("/", 1)[0]
-        for leaf, label in (
-            ("preflight.json", "preflight"),
-            ("inventory.json", "inventory"),
-            ("api-quiescence-intent.json", "API quiescence intent"),
-            ("api-quiescence.json", "API quiescence receipt"),
-            ("native-drain.json", "native drain proof"),
-        ):
-            existing = control.read_bytes(
-                "runtime-control/" + request_root + "/" + leaf, optional=True,
-            )
-            _require(controller, existing is None,
-                     "existing " + label + " artifact forbids a new held stop attempt")
         before_services = inspect_services()
         _assert_service_pins(controller, before_services, expected_services,
-                             backend_running=True, frontend_running=True)
+                             backend_running=True, frontend_running=pre_signal_parent is None)
         preflight_drain(before_services["backend"])
 
-        operation["daemon_pending"] = True
-        operation["receipt"]["held_ui_stop_stage"] = "frontend-stop-outcome-unknown"
-        stop_service("frontend", expected_services["frontend"]["id"])
-        after_frontend = inspect_services()
-        _assert_service_pins(controller, after_frontend, expected_services,
-                             backend_running=True, frontend_running=False)
-        operation["receipt"]["held_ui_stop_stage"] = "frontend-stopped"
-        operation["daemon_pending"] = False
+        if pre_signal_parent is None:
+            operation["daemon_pending"] = True
+            operation["receipt"]["held_ui_stop_stage"] = "frontend-stop-outcome-unknown"
+            stop_service("frontend", expected_services["frontend"]["id"])
+            after_frontend = inspect_services()
+            _assert_service_pins(controller, after_frontend, expected_services,
+                                 backend_running=True, frontend_running=False)
+            operation["receipt"]["held_ui_stop_stage"] = "frontend-stopped"
+            operation["daemon_pending"] = False
 
-        accepted_after_frontend, preflight, inventory = _assert_plan(
-            controller, plan, expected_plan_sha256, capture_fresh,
-        )
-        _require(controller, accepted_after_frontend == accepted,
-                 "accepted RunIntent changed after frontend quiescence")
-        proof_refs = controller.publish_api_quiescence_inputs(
-            control, request_id, source_scope=source_scope, accepted=accepted,
-            preflight=preflight, inventory=inventory,
-        )
-        intent, intent_raw, intent_sha256 = controller.prepare_api_quiescence_intent(
-            attempt=plan["attempt"], maintenance_request_id=request_id,
-            plan_sha256=expected_plan_sha256, source_scope=source_scope,
-            accepted=accepted, preflight=preflight, inventory=inventory,
-        )
-        published_intent_path, published_intent_sha256 = controller.publish_api_quiescence_intent(
-            control, intent, expected_plan_sha256=expected_plan_sha256,
-        )
-        _require(controller, published_intent_path == intent_relative
-                 and published_intent_sha256 == intent_sha256,
-                 "published quiescence intent differs from its immutable bytes")
+            accepted_after_frontend, preflight, inventory = _assert_plan(
+                controller, plan, expected_plan_sha256, capture_fresh,
+            )
+            _require(controller, accepted_after_frontend == accepted,
+                     "accepted RunIntent changed after frontend quiescence")
+            proof_refs = controller.publish_api_quiescence_inputs(
+                control, request_id, source_scope=source_scope, accepted=accepted,
+                preflight=preflight, inventory=inventory,
+            )
+            intent, intent_raw, intent_sha256 = controller.prepare_api_quiescence_intent(
+                attempt=plan["attempt"], maintenance_request_id=request_id,
+                plan_sha256=expected_plan_sha256, source_scope=source_scope,
+                accepted=accepted, preflight=preflight, inventory=inventory,
+            )
+            published_intent_path, published_intent_sha256 = controller.publish_api_quiescence_intent(
+                control, intent, expected_plan_sha256=expected_plan_sha256,
+            )
+            _require(controller, published_intent_path == intent_relative
+                     and published_intent_sha256 == intent_sha256,
+                     "published quiescence intent differs from its immutable bytes")
+        else:
+            _require(controller, parent_authority.get("intent", {}).get("plan") == plan,
+                     "pre-signal intent changed after fresh API capture")
+            intent = parent_authority["intent"]
+            intent_raw = parent_authority["intent_raw"]
+            intent_sha256 = parent_authority["intent_sha256"]
+            proof_refs = dict(parent_authority["proof_refs"])
+            operation["receipt"]["held_ui_stop_stage"] = "frontend-stopped"
+            controller._validate_durable_quiescence_inputs(control, intent)
+
         control.write_bytes(operation["root"] + "/api-quiescence-intent.json", intent_raw)
         operation["receipt"]["api_quiescence_intent_sha256"] = intent_sha256
 

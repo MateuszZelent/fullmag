@@ -2325,6 +2325,7 @@ def _run_held_ui_materialization(args, *, controller):
     """Preview or continue one retained manual HTTP Compute through its typed handoff."""
     if getattr(args, "apply", False):
         return _apply_held_ui_materialization(args, controller=controller)
+    _held_ui_pre_signal_stop_pin_args(args, controller=controller, applying=False)
     if getattr(args, "preview", False) is not True:
         raise BuildControlError("Held UI materialization requires --preview")
 
@@ -2499,7 +2500,8 @@ def _capture_held_ui_fresh_plan(controller, *, backend_container_id, plan,
     }
 
 
-def _capture_held_ui_stop_context(args, plan, *, controller, require_running=True):
+def _capture_held_ui_stop_context(args, plan, *, controller, require_running=True,
+                                  frontend_stopped=False):
     """Bind the stop driver to the exact retained Compose and state roots."""
     from docker_dev import _select_source, _compose_identity
     from docker_build_control import toolchain_configuration
@@ -2583,6 +2585,10 @@ def _capture_held_ui_stop_context(args, plan, *, controller, require_running=Tru
                 or hashlib.sha256(canonical(document_now)).hexdigest()
                     != scope["runtime_config_sha256"]):
             raise BuildControlError("Held UI stop DEV receipt or Compose changed after preview")
+        retained_receipt_raw = controller.canonical(receipt_now) + b"\n"
+        if (control.read_bytes("development/current.json", optional=True) != retained_receipt_raw
+                or control.read_bytes("development/verified.json", optional=True) != retained_receipt_raw):
+            raise BuildControlError("Held UI stop DEV current/verified pointers changed")
         state_root = storage.validate_path(
             Path(receipt_now["state_root"]), layout_now["runtime_root"],
             "held UI retained session state",
@@ -2651,12 +2657,21 @@ def _capture_held_ui_stop_context(args, plan, *, controller, require_running=Tru
             for name in ("backend", "frontend")
         }
 
+    if require_running and frontend_stopped:
+        raise BuildControlError("Held UI stop context cannot require a running and stopped frontend")
     initial = inspect_services()
     if require_running:
         if (initial["backend"]["running"] is not True
                 or initial["frontend"]["running"] is not True
                 or initial["backend"]["_actual"].get("State", {}).get("Health", {}).get("Status") != "healthy"):
             raise BuildControlError("Held UI stop requires the exact healthy running service pair")
+    elif frontend_stopped:
+        if (initial["backend"]["running"] is not True
+                or initial["frontend"]["running"] is not False
+                or initial["backend"]["_actual"].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+            raise BuildControlError(
+                "Pre-signal held UI resume requires the exact healthy backend and stopped frontend"
+            )
     elif initial["backend"]["running"] is not False or initial["frontend"]["running"] is not False:
         raise BuildControlError("Publish-only resume requires both exact pinned services to remain stopped")
     expected_services = {
@@ -2697,6 +2712,111 @@ def _capture_held_ui_stop_context(args, plan, *, controller, require_running=Tru
         "preflight_drain": preflight_drain,
         "read_drain": read_drain,
     }
+
+
+def _held_ui_pre_signal_stop_pin_args(args, *, controller, applying):
+    stop_attempt = getattr(args, "pre_signal_stop_attempt", None)
+    terminal_sha256 = getattr(args, "pre_signal_stop_terminal_sha256", None)
+    if (stop_attempt is None) != (terminal_sha256 is None):
+        raise BuildControlError("Pre-signal continuation requires both the exact stop attempt and terminal SHA")
+    if stop_attempt is None:
+        return None
+    if not applying or getattr(args, "apply", False) is not True or getattr(args, "preview", False) is not False:
+        raise BuildControlError("Pre-signal stop evidence is accepted only with the explicit private --apply action")
+    if not isinstance(stop_attempt, str) or re.fullmatch(r"[0-9a-f]{32}", stop_attempt) is None:
+        raise BuildControlError("Pre-signal stop attempt is not an exact operation token")
+    if not isinstance(terminal_sha256, str) or _SHA256.fullmatch(terminal_sha256) is None:
+        raise BuildControlError("Pre-signal stop terminal SHA is not lowercase SHA-256")
+    controller._digest(terminal_sha256, "pre-signal stop terminal digest")
+    return {"attempt": stop_attempt, "terminal_sha256": terminal_sha256}
+
+
+def _load_held_ui_pre_signal_stop_context(args, expected_plan_sha256, *, controller):
+    """Read and validate only an explicitly pinned no-API-exec frontend-stop failure."""
+    parent = _held_ui_pre_signal_stop_pin_args(args, controller=controller, applying=True)
+    if parent is None:
+        raise BuildControlError("Pre-signal resume requires explicit parent stop pins")
+    try:
+        expected_plan_sha256 = controller._digest(
+            expected_plan_sha256, "approved pre-signal plan digest",
+        )
+        attempt = args.attempt
+        request_id = args.request_id
+        run_id = args.run_id
+        selected, layout, identity, control = _held_ui_control_for_args(args)
+        if control.read_bytes("active", optional=True) is not None:
+            raise BuildControlError("Pre-signal resume requires no active control operation")
+
+        previous_raw, previous = _read_canonical_control_record(
+            control, "development/attempts/" + str(attempt) + "/terminal.json",
+            "pre-signal retained DEV terminal",
+        )
+        document_raw, document = _read_canonical_control_record(
+            control, "development/attempts/" + str(attempt) + "/compose.json",
+            "pre-signal retained DEV Compose document",
+        )
+        if (control.read_bytes("development/current.json", optional=True) != previous_raw
+                or control.read_bytes("development/verified.json", optional=True) != previous_raw):
+            raise BuildControlError("Pre-signal resume requires the exact retained DEV current/verified pins")
+
+        parent_authority = controller.validate_pre_signal_stop_parent(
+            control,
+            stop_attempt=parent["attempt"],
+            terminal_sha256=parent["terminal_sha256"],
+            expected_attempt=attempt,
+            expected_maintenance_request_id=request_id,
+            expected_run_id=run_id,
+            expected_plan_sha256=expected_plan_sha256,
+        )
+        plan = parent_authority["intent"]["plan"]
+        source_scope = plan["source_scope"]
+        if (plan.get("attempt") != attempt
+                or plan.get("maintenance_request_id") != request_id
+                or plan.get("accepted", {}).get("run_id") != run_id
+                or source_scope.get("source_root") != str(selected)
+                or source_scope.get("compose_project") != control.project
+                or source_scope.get("control_volume") != control.volume
+                or source_scope.get("namespace") != control.namespace
+                or source_scope.get("namespace_registry_sha256") != control.namespace_registry_sha256
+                or source_scope.get("runtime_config_sha256") != args.config_sha256
+                or source_scope.get("backend_container_id") != previous.get("backend_container")
+                or source_scope.get("frontend_container_id") != previous.get("frontend_container")
+                or previous.get("state") != "succeeded"
+                or previous.get("attempt") != attempt
+                or previous.get("compose_project") != control.project
+                or previous.get("control_volume") != control.volume
+                or previous.get("config_sha256") != args.config_sha256
+                or previous.get("inputs", {}).get("source_root") != str(selected)
+                or document.get("name") != control.project
+                or hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256
+                or expected_plan_sha256 != controller.sha(controller.canonical(plan))):
+            raise BuildControlError("Pre-signal parent intent differs from the retained DEV/source/run pins")
+
+        context = _capture_held_ui_stop_context(
+            args, plan, controller=controller,
+            require_running=False, frontend_stopped=True,
+        )
+        if (context["control"].project != control.project
+                or context["control"].volume != control.volume
+                or context["control"].namespace != control.namespace
+                or context["control"].identity != identity
+                or context["expected_plan_sha256"] != expected_plan_sha256):
+            raise BuildControlError("Pre-signal capture context changed the exact source/control pins")
+
+        from docker_volume_held_ui_lifecycle import _assert_plan
+        _assert_plan(controller, plan, expected_plan_sha256, context["capture_fresh"])
+        return {
+            "state": "pre-signal-resume-read-only-passed",
+            "plan": plan,
+            "plan_sha256": expected_plan_sha256,
+            "parent": parent_authority,
+            "pre_signal_parent": parent,
+            "stop_context": context,
+        }
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Pre-signal held UI stop evidence is invalid: " + str(error)) from error
 
 
 def _load_held_ui_publish_context(args, expected_plan_sha256, *, controller):
@@ -2835,6 +2955,19 @@ def _stop_held_ui_materialization(args, *, controller):
     expected_plan_sha256 = controller._digest(
         getattr(args, "expected_plan_sha256", None), "approved preview plan digest",
     )
+    pre_signal_parent = _held_ui_pre_signal_stop_pin_args(
+        args, controller=controller, applying=True,
+    )
+    if pre_signal_parent is not None:
+        loaded = _load_held_ui_pre_signal_stop_context(
+            args, expected_plan_sha256, controller=controller,
+        )
+        from docker_volume_held_ui_lifecycle import execute_stop_only
+        result = execute_stop_only(
+            **loaded["stop_context"], pre_signal_parent=pre_signal_parent,
+        )
+        return {**result, "plan_sha256": expected_plan_sha256}
+
     resume = _load_held_ui_publish_context(
         args, expected_plan_sha256, controller=controller,
     )
@@ -3604,11 +3737,16 @@ def _apply_held_ui_materialization(args, *, controller):
     expected_plan_sha256 = controller._digest(
         getattr(args, "expected_plan_sha256", None), "approved preview plan digest",
     )
+    pre_signal_parent = _held_ui_pre_signal_stop_pin_args(
+        args, controller=controller, applying=True,
+    )
     _selected, _layout, _identity, existing_control = _held_ui_control_for_args(args)
     request_relative = controller.request_relative(args.request_id)
     existing_request_raw = existing_control.read_bytes(
         "runtime-control/" + request_relative, optional=True,
     )
+    if pre_signal_parent is not None and existing_request_raw is not None:
+        raise BuildControlError("Pre-signal continuation cannot resume a published held UI request")
     stop_result = None
     if existing_request_raw is None:
         stop_result = _stop_held_ui_materialization(args, controller=controller)

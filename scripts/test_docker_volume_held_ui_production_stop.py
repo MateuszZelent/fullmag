@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import json
 import unittest
 from types import SimpleNamespace
@@ -37,8 +38,9 @@ class MemoryControl:
             raise AssertionError("attempted to overwrite immutable record: " + path)
         self.records[path] = bytes(data)
 
-    def helper_args(self, _command):
-        return ("test-claim-writer",)
+    def helper_args(self, command):
+        return ("docker", "run", "--rm", "-i", "--entrypoint", "/bin/bash",
+                "sha256:" + "9" * 64, "-euo", "pipefail", "-c", command)
 
     @staticmethod
     def path(relative):
@@ -129,13 +131,16 @@ class ProductionHeldStop(unittest.TestCase):
             events.append(("read-drain", None))
             return encoded_record(native_drain), native_drain
 
+        def fake_helper_capture(command, *, data=b"", **_kwargs):
+            self.assertEqual(tuple(command[:2]), ("docker", "run"))
+            self.assertNotIn("python", command[-1])
+            path = "runtime-control/" + controller.quiescence_start_claim_relative(
+                plan["maintenance_request_id"],
+            )
+            control.write_bytes(path, data)
+            return SimpleNamespace(returncode=0, stdout=b"CLAIMED\n", stderr=b"")
+
         def fake_docker_capture(*args, data=b"", **_kwargs):
-            if args and args[0] == "test-claim-writer":
-                path = "runtime-control/" + controller.quiescence_start_claim_relative(
-                    plan["maintenance_request_id"],
-                )
-                control.write_bytes(path, data)
-                return SimpleNamespace(returncode=0, stdout=b"CLAIMED\n", stderr=b"")
             if args[:2] == ("exec", "-i"):
                 envelope = json.loads(data)
                 intent = envelope["intent"]
@@ -156,7 +161,8 @@ class ProductionHeldStop(unittest.TestCase):
                 )
             raise AssertionError("unexpected daemon command in production proof test: " + repr(args))
 
-        with patch("docker_build_control.docker_capture", side_effect=fake_docker_capture):
+        with patch("docker_build_control.bounded_capture", side_effect=fake_helper_capture), \
+             patch("docker_build_control.docker_capture", side_effect=fake_docker_capture):
             result = lifecycle.execute_stop_only(
                 control=control, controller=controller, plan=plan,
                 expected_plan_sha256=plan_sha, expected_services=expected_services,
@@ -185,6 +191,222 @@ class ProductionHeldStop(unittest.TestCase):
                          [("stop", "frontend"), ("stop", "backend")])
         self.assertEqual(sum(event[0] == "read-drain" for event in events), 1)
         self.assertEqual(produced_request["accepted"]["run_id"], RUN_ID)
+
+    def test_confirmed_presignal_parent_reuses_exact_basis_without_frontend_resignal(self):
+        request_value, source_proofs = valid_proof_chain()
+        accepted = request_value["accepted"]
+        source_scope = request_value["source_scope"]
+        attempt = request_value["plan"]["attempt"]
+        maintenance_id = request_value["plan"]["maintenance_request_id"]
+        preflight = source_proofs["preflight"]
+        inventory = source_proofs["inventory"]
+        plan, plan_sha = controller.build_preview_plan(
+            attempt=attempt, maintenance_request_id=maintenance_id,
+            source_scope=source_scope, accepted=accepted,
+            preflight=preflight, inventory=inventory,
+        )
+        intent, intent_raw, intent_sha = controller.prepare_api_quiescence_intent(
+            attempt=attempt, maintenance_request_id=maintenance_id,
+            plan_sha256=plan_sha, source_scope=source_scope, accepted=accepted,
+            preflight=preflight, inventory=inventory,
+        )
+        parent_attempt = "f" * 32
+        parent_inputs = {
+            "attempt": attempt, "source_root": source_scope["source_root"],
+            "config_sha256": source_scope["runtime_config_sha256"],
+            "source_scope": source_scope, "maintenance_request_id": maintenance_id,
+            "plan_sha256": plan_sha, "run_id": accepted["run_id"],
+            "accepted_run_id": accepted["run_id"],
+            "capture_held_ui_materialization": True,
+        }
+        parent_terminal = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "held-ui-materialization-stop", "attempt": parent_attempt,
+            "state": "failed-confirmed", "held_ui_stop_stage": "frontend-stopped",
+            "error": controller.PRE_SIGNAL_STOP_FAILURE,
+            "api_quiescence_intent_sha256": intent_sha,
+            "compose_project": source_scope["compose_project"],
+            "control_volume": source_scope["control_volume"],
+            "inputs": parent_inputs,
+        }
+        parent_terminal_raw = encoded_record(parent_terminal)
+        parent_terminal_relative = (
+            "held-ui-materialization-stop/attempts/" + parent_attempt + "/terminal.json"
+        )
+        proof_root = "runtime-control/held-ui-materialization/" + maintenance_id
+        control = MemoryControl(source_scope)
+        control.records.update({
+            proof_root + "/preflight.json": encoded_record(preflight),
+            proof_root + "/inventory.json": encoded_record(inventory),
+            "runtime-control/" + controller.quiescence_intent_relative(maintenance_id): intent_raw,
+            parent_terminal_relative: parent_terminal_raw,
+        })
+        parent = {"attempt": parent_attempt,
+                  "terminal_sha256": controller.sha(parent_terminal_raw)}
+        event_log = []
+        services = {
+            "backend": {"id": source_scope["backend_container_id"],
+                        "image_id": "sha256:" + "5" * 64,
+                        "started_at": source_scope["backend_started_at"],
+                        "running": True, "exit_code": 0},
+            "frontend": {"id": source_scope["frontend_container_id"],
+                         "image_id": "sha256:" + "6" * 64,
+                         "started_at": source_scope["frontend_started_at"],
+                         "running": False, "exit_code": 0},
+        }
+        expected_services = {
+            name: {key: service[key] for key in ("id", "image_id", "started_at")}
+            for name, service in services.items()
+        }
+
+        def capture_fresh():
+            fresh_preflight = json.loads(json.dumps(preflight))
+            fresh_snapshot = fresh_preflight["api_response"]["snapshot"]
+            fresh_snapshot["health"]["uptime_seconds"] = 927
+            fresh_snapshot["status"]["metrics"] = {"uptime_seconds": 928}
+            for name in ("health", "status"):
+                raw = controller.canonical(fresh_snapshot[name])
+                fresh_preflight["api_response"]["responses"][name] = {
+                    "raw_base64": base64.b64encode(raw).decode("ascii"),
+                    "sha256": controller.sha(raw),
+                }
+            return {"accepted": accepted, "preflight": fresh_preflight, "inventory": inventory,
+                    "source_scope": source_scope, "attempt": attempt,
+                    "maintenance_request_id": maintenance_id}
+
+        def inspect_services():
+            return {name: dict(value) for name, value in services.items()}
+
+        def stop_service(name, container_id):
+            event_log.append(("stop", name, container_id))
+            self.assertEqual(container_id, source_scope[name + "_container_id"])
+            services[name]["running"] = False
+            services[name]["exit_code"] = 1 if name == "backend" else 0
+
+        def preflight_drain(_service):
+            event_log.append(("preflight-drain", None))
+
+        def read_drain(_service):
+            event_log.append(("read-drain", None))
+            process = source_proofs["native_drain"]
+            return encoded_record(process), process
+
+        def fake_helper_capture(command, *, data=b"", **_kwargs):
+            self.assertEqual(tuple(command[:2]), ("docker", "run"))
+            self.assertNotIn("python", command[-1])
+            claim_path = "runtime-control/" + controller.quiescence_start_claim_relative(
+                maintenance_id,
+            )
+            control.write_bytes(claim_path, data)
+            return SimpleNamespace(returncode=0, stdout=b"CLAIMED\n", stderr=b"")
+
+        def fake_docker_capture(*args, data=b"", **_kwargs):
+            self.assertEqual(args[:4], ("exec", "-i", source_scope["backend_container_id"], "python3"))
+            envelope = json.loads(data)
+            selected_intent = envelope["intent"]
+            retained = source_proofs["api_quiescence"]["retained_process"]
+            retained_sha = controller.sha(controller.canonical(retained) + b"\n")
+            quiescence = {
+                "schema": "fullmag.native-terminal-api-quiescence.v1",
+                "intent_sha256": envelope["intent_sha256"],
+                "api_pin": selected_intent["plan"]["native"]["api_pin"],
+                "api_closed": True, "signal": "SIGTERM", "retained_process": retained,
+                "retained_process_sha256": retained_sha,
+            }
+            fences = controller._expected_api_quiescence_fences(selected_intent, retained_sha)
+            return SimpleNamespace(returncode=0,
+                                   stdout=canonical({"receipt": quiescence, "fences": fences}),
+                                   stderr=b"")
+
+        with patch("docker_build_control.bounded_capture", side_effect=fake_helper_capture), \
+             patch("docker_build_control.docker_capture", side_effect=fake_docker_capture):
+            result = lifecycle.execute_stop_only(
+                control=control, controller=controller, plan=plan,
+                expected_plan_sha256=plan_sha, expected_services=expected_services,
+                capture_fresh=capture_fresh, inspect_services=inspect_services,
+                stop_service=stop_service, preflight_drain=preflight_drain,
+                read_drain=read_drain, pre_signal_parent=parent,
+            )
+
+        self.assertEqual(result["state"], "stopped-awaiting-typed-recreate")
+        self.assertEqual([(event[0], event[1]) for event in event_log if event[0] == "stop"],
+                         [("stop", "backend")])
+        self.assertEqual(sum(event[0] == "read-drain" for event in event_log), 1)
+        self.assertEqual(services["backend"]["running"], False)
+        self.assertEqual(services["frontend"]["running"], False)
+        new_terminal = json.loads(control.records[
+            "held-ui-materialization-stop/attempts/" + "d" * 32 + "/terminal.json"
+        ])
+        self.assertEqual(new_terminal["inputs"]["pre_signal_stop_attempt"], parent_attempt)
+        self.assertEqual(new_terminal["inputs"]["pre_signal_stop_terminal_sha256"],
+                         parent["terminal_sha256"])
+
+    def test_presignal_parent_drift_is_rejected_before_api_close_or_service_stop(self):
+        request_value, source_proofs = valid_proof_chain()
+        accepted = request_value["accepted"]
+        source_scope = request_value["source_scope"]
+        attempt = request_value["plan"]["attempt"]
+        maintenance_id = request_value["plan"]["maintenance_request_id"]
+        plan, plan_sha = controller.build_preview_plan(
+            attempt=attempt, maintenance_request_id=maintenance_id,
+            source_scope=source_scope, accepted=accepted,
+            preflight=source_proofs["preflight"], inventory=source_proofs["inventory"],
+        )
+        intent, intent_raw, intent_sha = controller.prepare_api_quiescence_intent(
+            attempt=attempt, maintenance_request_id=maintenance_id,
+            plan_sha256=plan_sha, source_scope=source_scope, accepted=accepted,
+            preflight=source_proofs["preflight"], inventory=source_proofs["inventory"],
+        )
+        parent_attempt = "f" * 32
+        parent_terminal = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "held-ui-materialization-stop", "attempt": parent_attempt,
+            "state": "failed-confirmed", "held_ui_stop_stage": "frontend-stopped",
+            "error": controller.PRE_SIGNAL_STOP_FAILURE,
+            "api_quiescence_intent_sha256": intent_sha,
+            "compose_project": source_scope["compose_project"],
+            "control_volume": source_scope["control_volume"],
+            "inputs": {"attempt": attempt, "source_root": source_scope["source_root"],
+                "config_sha256": source_scope["runtime_config_sha256"],
+                "source_scope": source_scope, "maintenance_request_id": maintenance_id,
+                "plan_sha256": plan_sha, "run_id": accepted["run_id"],
+                "accepted_run_id": accepted["run_id"],
+                "capture_held_ui_materialization": True},
+        }
+        parent_relative = "held-ui-materialization-stop/attempts/" + parent_attempt + "/terminal.json"
+        parent_raw = encoded_record(parent_terminal)
+        parent = {"attempt": parent_attempt, "terminal_sha256": controller.sha(parent_raw)}
+        control = MemoryControl(source_scope)
+        proof_root = "runtime-control/held-ui-materialization/" + maintenance_id
+        control.records.update({proof_root + "/preflight.json": encoded_record(source_proofs["preflight"]),
+            proof_root + "/inventory.json": encoded_record(source_proofs["inventory"]),
+            "runtime-control/" + controller.quiescence_intent_relative(maintenance_id): intent_raw,
+            parent_relative: encoded_record({**parent_terminal, "held_ui_stop_stage": "unknown"})})
+        service_pins = {
+            "backend": {"id": source_scope["backend_container_id"], "image_id": "sha256:" + "5" * 64,
+                        "started_at": source_scope["backend_started_at"]},
+            "frontend": {"id": source_scope["frontend_container_id"], "image_id": "sha256:" + "6" * 64,
+                         "started_at": source_scope["frontend_started_at"]},
+        }
+        event_log = []
+
+        def stop_service(name, container_id):
+            event_log.append(("stop", name, container_id))
+
+        with patch("docker_build_control.bounded_capture") as helper, \
+             patch("docker_build_control.docker_capture") as docker:
+            with self.assertRaisesRegex(Exception, "parent terminal bytes differ"):
+                lifecycle.execute_stop_only(
+                    control=control, controller=controller, plan=plan,
+                    expected_plan_sha256=plan_sha, expected_services=service_pins,
+                    capture_fresh=lambda: None,
+                    inspect_services=lambda: {}, stop_service=stop_service,
+                    preflight_drain=lambda _service: None,
+                    read_drain=lambda _service: None, pre_signal_parent=parent,
+                )
+        self.assertEqual(event_log, [])
+        helper.assert_not_called()
+        docker.assert_not_called()
 
 
 if __name__ == "__main__":

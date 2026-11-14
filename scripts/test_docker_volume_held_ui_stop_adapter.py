@@ -105,6 +105,50 @@ class HeldStopAdapter(unittest.TestCase):
         resume.assert_called_once_with(**resume_context)
         self.assertEqual(result["state"], "stopped-awaiting-typed-recreate")
 
+    def test_explicit_presignal_apply_uses_readonly_loader_without_preview_or_publish_resume(self):
+        args = SimpleNamespace(
+            apply=True, preview=False, expected_plan_sha256="a" * 64,
+            pre_signal_stop_attempt="f" * 32,
+            pre_signal_stop_terminal_sha256="b" * 64,
+        )
+        controller = SimpleNamespace(_digest=lambda value, _label: value)
+        stop_context = {"control": object(), "controller": controller, "plan": {},
+                        "expected_plan_sha256": "a" * 64, "expected_services": {},
+                        "capture_fresh": Mock(), "inspect_services": Mock(),
+                        "stop_service": Mock(), "preflight_drain": Mock(), "read_drain": Mock()}
+        loaded = {"stop_context": stop_context, "pre_signal_parent": {
+            "attempt": args.pre_signal_stop_attempt,
+            "terminal_sha256": args.pre_signal_stop_terminal_sha256,
+        }}
+        with patch.object(subject, "_load_held_ui_pre_signal_stop_context", return_value=loaded) as load, \
+             patch.object(subject, "_run_held_ui_materialization") as preview, \
+             patch.object(subject, "_load_held_ui_publish_context") as publish, \
+             patch("docker_volume_held_ui_lifecycle.execute_stop_only",
+                   return_value={"state": "stopped-awaiting-typed-recreate"}) as execute:
+            result = subject._stop_held_ui_materialization(args, controller=controller)
+
+        load.assert_called_once_with(args, "a" * 64, controller=controller)
+        preview.assert_not_called()
+        publish.assert_not_called()
+        execute.assert_called_once_with(**stop_context, pre_signal_parent=loaded["pre_signal_parent"])
+        self.assertEqual(result["plan_sha256"], "a" * 64)
+
+    def test_presignal_parent_pins_are_all_or_none_and_apply_only(self):
+        controller = SimpleNamespace(_digest=lambda value, _label: value)
+        empty = SimpleNamespace(pre_signal_stop_attempt=None, pre_signal_stop_terminal_sha256=None)
+        self.assertIsNone(subject._held_ui_pre_signal_stop_pin_args(
+            empty, controller=controller, applying=True,
+        ))
+        partial = SimpleNamespace(pre_signal_stop_attempt="f" * 32,
+                                  pre_signal_stop_terminal_sha256=None)
+        with self.assertRaisesRegex(subject.BuildControlError, "both the exact stop attempt"):
+            subject._held_ui_pre_signal_stop_pin_args(partial, controller=controller, applying=True)
+        preview = SimpleNamespace(apply=False, preview=True,
+                                  pre_signal_stop_attempt="f" * 32,
+                                  pre_signal_stop_terminal_sha256="b" * 64)
+        with self.assertRaisesRegex(subject.BuildControlError, "only with the explicit"):
+            subject._held_ui_pre_signal_stop_pin_args(preview, controller=controller, applying=False)
+
     def test_public_apply_uses_typed_lifecycle_driver(self):
         args = SimpleNamespace(apply=True, preview=False)
         controller = SimpleNamespace()

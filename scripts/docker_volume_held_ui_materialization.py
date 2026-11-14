@@ -1362,6 +1362,140 @@ def validate_api_quiescence_intent(
     return dict(intent)
 
 
+PRE_SIGNAL_STOP_FAILURE = (
+    "Held UI materialization: API quiescence start claim could not be confirmed; no API exec was attempted"
+)
+
+
+def validate_pre_signal_stop_parent(control, *, stop_attempt: str,
+                                    terminal_sha256: str,
+                                    expected_attempt: str,
+                                    expected_maintenance_request_id: str,
+                                    expected_run_id: str,
+                                    expected_plan_sha256: str) -> dict:
+    """Load the exact confirmed frontend-stop failure that spent no API claim."""
+    stop_attempt = _token(stop_attempt, "pre-signal stop attempt")
+    terminal_sha256 = _digest(terminal_sha256, "pre-signal stop terminal digest")
+    expected_attempt = _token(expected_attempt, "pre-signal development attempt")
+    maintenance_id = _uuid(expected_maintenance_request_id, "pre-signal maintenance request id")
+    _text(expected_run_id, "pre-signal accepted run id", maximum=200)
+    expected_plan_sha256 = _digest(expected_plan_sha256, "pre-signal approved plan digest")
+
+    terminal_relative = (
+        "held-ui-materialization-stop/attempts/" + stop_attempt + "/terminal.json"
+    )
+    terminal_raw = control.read_bytes(terminal_relative, maximum=MAX_PROOF_BYTES)
+    _require(sha(terminal_raw) == terminal_sha256,
+             "pre-signal parent terminal bytes differ from the explicit pin")
+    terminal = decode(terminal_raw, "pre-signal parent terminal", maximum=MAX_PROOF_BYTES)
+    _require(terminal_raw == canonical(terminal) + b"\n",
+             "pre-signal parent terminal is not canonical JSON plus LF")
+
+    intent_relative = quiescence_intent_relative(maintenance_id)
+    intent_raw = control.read_bytes("runtime-control/" + intent_relative,
+                                    maximum=MAX_PROOF_BYTES)
+    intent_sha256 = sha(intent_raw)
+    preflight_relative = REQUEST_PATHS["preflight"]
+    inventory_relative = REQUEST_PATHS["inventory"]
+    proof_root = request_relative(maintenance_id).rsplit("/", 1)[0]
+    preflight_path = proof_root + "/" + preflight_relative
+    inventory_path = proof_root + "/" + inventory_relative
+    preflight_raw = control.read_bytes("runtime-control/" + preflight_path,
+                                      maximum=MAX_PROOF_BYTES)
+    inventory_raw = control.read_bytes("runtime-control/" + inventory_path,
+                                       maximum=MAX_PROOF_BYTES)
+    preflight = decode(preflight_raw, "pre-signal preflight", maximum=MAX_PROOF_BYTES)
+    inventory = decode(inventory_raw, "pre-signal inventory", maximum=MAX_PROOF_BYTES)
+    _require(preflight_raw == canonical(preflight) + b"\n"
+             and inventory_raw == canonical(inventory) + b"\n",
+             "pre-signal API/store basis is not canonical JSON plus LF")
+    intent = decode(intent_raw, "pre-signal API quiescence intent",
+                    maximum=MAX_PROOF_BYTES)
+    intent = validate_api_quiescence_intent(
+        intent, expected_sha256=intent_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+    )
+    plan = intent["plan"]
+    accepted = plan["accepted"]
+    source_scope = plan["source_scope"]
+    _require(plan.get("attempt") == expected_attempt
+             and plan.get("maintenance_request_id") == maintenance_id
+             and accepted.get("run_id") == expected_run_id,
+             "pre-signal intent differs from the exact DEV/request/run pins")
+
+    preflight = validate_preflight(preflight, accepted)
+    inventory = validate_inventory(inventory, accepted)
+    _require(sha(preflight_raw) == intent.get("preflight_sha256")
+             and sha(inventory_raw) == intent.get("inventory_sha256")
+             and preflight.get("source_scope") == source_scope,
+             "pre-signal immutable API/store basis differs from its intent")
+    rebuilt_plan, rebuilt_sha256 = build_preview_plan(
+        attempt=expected_attempt,
+        maintenance_request_id=maintenance_id,
+        source_scope=source_scope,
+        accepted=accepted,
+        preflight=preflight,
+        inventory=inventory,
+    )
+    _require(rebuilt_plan == plan and rebuilt_sha256 == expected_plan_sha256,
+             "pre-signal API/store basis does not reproduce the approved plan")
+
+    inputs = terminal.get("inputs")
+    expected_inputs = {
+        "attempt": expected_attempt,
+        "source_root": source_scope["source_root"],
+        "config_sha256": source_scope["runtime_config_sha256"],
+        "source_scope": source_scope,
+        "maintenance_request_id": maintenance_id,
+        "plan_sha256": expected_plan_sha256,
+        "run_id": expected_run_id,
+        "accepted_run_id": expected_run_id,
+        "capture_held_ui_materialization": True,
+    }
+    _require(terminal.get("schema") == "fullmag.docker-build-operation.v1"
+             and terminal.get("phase") == "held-ui-materialization-stop"
+             and terminal.get("attempt") == stop_attempt
+             and terminal.get("state") == "failed-confirmed"
+             and terminal.get("held_ui_stop_stage") == "frontend-stopped"
+             and terminal.get("error") == PRE_SIGNAL_STOP_FAILURE
+             and terminal.get("api_quiescence_intent_sha256") == intent_sha256
+             and terminal.get("held_ui_api_quiescence_claim") is None
+             and terminal.get("compose_project") == source_scope["compose_project"]
+             and terminal.get("control_volume") == source_scope["control_volume"]
+             and terminal.get("control_namespace", "") == source_scope["namespace"]
+             and terminal.get("namespace_registry_sha256")
+                 == source_scope["namespace_registry_sha256"]
+             and isinstance(inputs, Mapping)
+             and all(inputs.get(key) == value for key, value in expected_inputs.items()),
+             "pre-signal parent terminal does not prove the exact no-API-exec frontend stop")
+
+    absence_paths = {
+        "API quiescence start claim": quiescence_start_claim_relative(maintenance_id),
+        "API quiescence receipt": proof_root + "/api-quiescence.json",
+        "native drain proof": proof_root + "/native-drain.json",
+        "published request": request_relative(maintenance_id),
+    }
+    for label, relative in absence_paths.items():
+        _require(control.read_bytes("runtime-control/" + relative,
+                                    optional=True, maximum=MAX_PROOF_BYTES) is None,
+                 "pre-signal parent has a " + label + "; no retry is permitted")
+
+    return {
+        "attempt": stop_attempt,
+        "terminal_sha256": terminal_sha256,
+        "terminal_raw": terminal_raw,
+        "intent": intent,
+        "intent_raw": intent_raw,
+        "intent_sha256": intent_sha256,
+        "preflight": preflight,
+        "inventory": inventory,
+        "proof_refs": {
+            "preflight": {"path": preflight_path, "sha256": sha(preflight_raw)},
+            "inventory": {"path": inventory_path, "sha256": sha(inventory_raw)},
+        },
+    }
+
+
 def prepare_api_quiescence_intent(*, attempt: str, maintenance_request_id: str,
                                   plan_sha256: str, source_scope: Mapping, accepted: Mapping,
                                   preflight: Mapping, inventory: Mapping) -> tuple[dict, bytes, str]:
@@ -1540,7 +1674,7 @@ def _require_held_stop_operation(control, operation: Mapping) -> str:
 def _exclusive_start_claim(control, operation: dict, intent: Mapping,
                            intent_sha256: str) -> dict:
     """Create a durable no-replay claim with O_EXCL while the group lease is held."""
-    from docker_build_control import docker_capture
+    from docker_build_control import bounded_capture
 
     operation_attempt = _require_held_stop_operation(control, operation)
     plan = intent["plan"]
@@ -1565,33 +1699,33 @@ def _exclusive_start_claim(control, operation: dict, intent: Mapping,
     raw = canonical(claim) + b"\n"
     _require(len(raw) <= 16 * 1024, "API quiescence start claim exceeds its byte limit")
     path = control.path(control_relative)
-    program = "\n".join((
-        "import os,sys",
-        "path=" + repr(path),
-        "parent=os.path.dirname(path)",
-        "data=sys.stdin.buffer.read(16385)",
-        "if not data or len(data)>16384: raise SystemExit('claim size differs')",
-        "if not os.path.isdir(parent) or os.path.realpath(parent)!=parent: raise SystemExit('claim parent differs')",
-        "flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0)",
-        "fd=os.open(path,flags,0o640)",
-        "try:",
-        " view=memoryview(data)",
-        " while view:",
-        "  written=os.write(fd,view)",
-        "  if written<=0: raise OSError('claim write made no progress')",
-        "  view=view[written:]",
-        " os.fsync(fd)",
-        "finally: os.close(fd)",
-        "dirfd=os.open(parent,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0))",
-        "try: os.fsync(dirfd)",
-        "finally: os.close(dirfd)",
-        "sys.stdout.write('CLAIMED\\n')",
-    ))
     import shlex
+    expected_sha256 = sha(raw)
+    program = "\n".join((
+        "set -euo pipefail",
+        "umask 027",
+        "path=" + shlex.quote(path),
+        'parent=${path%/*}',
+        "expected_length=" + str(len(raw)),
+        "expected_sha256=" + shlex.quote(expected_sha256),
+        'test -d "$parent"',
+        'test "$(readlink -f -- "$parent")" = "$parent"',
+        'test ! -e "$path" && test ! -L "$path"',
+        "set -C",
+        'exec 3>"$path"',
+        "head -c 16385 >&3",
+        "exec 3>&-",
+        'actual_length=$(wc -c <"$path")',
+        'test "$actual_length" -eq "$expected_length"',
+        'actual_sha256=$(sha256sum "$path")',
+        'actual_sha256=${actual_sha256%% *}',
+        'test "$actual_sha256" = "$expected_sha256"',
+        'sync -f "$path"',
+        'sync -f "$parent"',
+        "printf 'CLAIMED\\n'",
+    ))
     try:
-        result = docker_capture(*control.helper_args(
-            "exec /usr/local/bin/python3 -I -c " + shlex.quote(program),
-        ), data=raw, timeout=90)
+        result = bounded_capture(control.helper_args(program), data=raw, timeout=90)
     except Exception as error:
         raise _error("API quiescence start claim could not be confirmed; no API exec was attempted") from error
     _require(result.returncode == 0 and result.stdout == b"CLAIMED\n",
