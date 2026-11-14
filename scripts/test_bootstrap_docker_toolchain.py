@@ -28,9 +28,9 @@ class ToolchainBootstrapTests(unittest.TestCase):
         (self.repo / "docker/fem-gpu/nvidia-entrypoint/run.sh").write_text("true\n")
         patch_path = self.repo / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff"
         patch_path.parent.mkdir(parents=True)
-        patch_path.write_text("pinned patch fixture\n")
-        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp").write_text(
-            "pinned header fixture\n"
+        patch_path.write_bytes(b"pinned patch fixture\n")
+        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp").write_bytes(
+            b"pinned header fixture\n"
         )
         (self.repo / ".dockerignore").write_text("**\n!docker/\n!docker/**\n")
         (self.repo / "compose.toolchain.yaml").write_text("services: {}\n")
