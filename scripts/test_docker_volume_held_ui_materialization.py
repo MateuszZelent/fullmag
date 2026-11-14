@@ -220,7 +220,7 @@ def valid_proof_chain():
         "request_scope_epoch": accepted["old_request_scope_epoch"],
     }, "resources": {"scene_revision": accepted["scene_revision"]}}
     run = {"run_id": accepted["run_id"], "session_id": accepted["session_id"],
-           "status": "waiting_for_compute"}
+           "resolved_backend": "fdm", "status": "waiting_for_compute"}
     queue = {"schema_version": "compute_queue.v1", "revision": "sha256:" + "1" * 64,
              "next_cursor": None, "items": [{"run_id": accepted["run_id"],
              "project_id": accepted["project_id"], "state": "pending_materialization", "task_id": None}]}
@@ -500,6 +500,16 @@ class RequestContracts(unittest.TestCase):
                              if name != "FULLMAG_STARTUP_ENABLED"))
         self.assertFalse(any(name in target for name in subject.RECOVERY_ENV_NAMES))
 
+    def test_ordinary_start_clears_all_held_restore_environment(self):
+        target = {
+            subject.REQUEST_ENV: subject.request_relative(MAINTENANCE_ID),
+            subject.REQUEST_DIGEST_ENV: "a" * 64,
+            subject.STDIN_ENV: "1",
+            "KEEP": "pinned",
+        }
+        self.assertIs(subject.clear_start_environment(target), target)
+        self.assertEqual(target, {"KEEP": "pinned"})
+
 
 class CompletedProofContracts(unittest.TestCase):
     def setUp(self):
@@ -521,6 +531,27 @@ class CompletedProofContracts(unittest.TestCase):
             raw = proof_records(value, proofs)
             with self.assertRaises(BuildControlError):
                 subject.validate_stop_proofs(value, raw.__getitem__)
+
+    def test_preview_requires_the_accepted_run_to_be_resolved_to_fdm(self):
+        for backend in ("fem", "auto", None):
+            value, proofs = valid_proof_chain()
+            run = proofs["preflight"]["api_response"]["snapshot"]["run"]
+            run["resolved_backend"] = backend
+            raw = canonical(run)
+            response = proofs["preflight"]["api_response"]["responses"]["run"]
+            response["raw_base64"] = __import__("base64").b64encode(raw).decode()
+            response["sha256"] = hashlib.sha256(raw).hexdigest()
+            with self.subTest(backend=backend), self.assertRaises(BuildControlError):
+                subject.validate_preflight(proofs["preflight"], value["accepted"])
+
+    def test_quiescence_capture_rechecks_resolved_fdm_before_pidfd_close(self):
+        script = subject.HELD_API_QUIESCE_CAPTURE_BODY
+        authority = script.split("def read_held_authority(intent):", 1)[1].split(
+            "request_raw=", 1,
+        )[0]
+        self.assertIn('current["run"].get("resolved_backend")!="fdm"', authority)
+        self.assertLess(authority.index('current["run"].get("resolved_backend")!="fdm"'),
+                        script.index("retained_raw,retained=pidfd_close_api("))
 
     def test_inventory_requires_exact_accepted_intent_and_execution_input(self):
         for field, change in (
@@ -567,6 +598,56 @@ class CompletedProofContracts(unittest.TestCase):
         raw = proof_records(value, proofs)
         with self.assertRaisesRegex(BuildControlError, "proof references differ"):
             subject.validate_stop_proofs(value, raw.__getitem__)
+
+
+class RecreateClaimContracts(unittest.TestCase):
+    def test_claim_is_leased_immutable_and_request_bound(self):
+        value = request()
+        relative = subject.request_relative(MAINTENANCE_ID)
+        request_sha256 = "a" * 64
+        environment = subject.start_environment(relative, request_sha256)
+        metadata = {
+            "schema": subject.HANDOFF_SCHEMA,
+            "request_path": relative,
+            "request_sha256": request_sha256,
+            "run_id": value["accepted"]["run_id"],
+            "command_id": value["accepted"]["command_id"],
+        }
+        recreate_input = subject.recreate_input(environment, metadata, value)
+        attempt = "e" * 32
+        operation = {
+            "root": "recreate-services/attempts/" + attempt,
+            "receipt": {"phase": "recreate-services", "attempt": attempt},
+        }
+
+        class Control:
+            _active_operation = operation
+
+            def __init__(self):
+                self.records = {}
+
+            def read_bytes(self, path, optional=False):
+                raw = self.records.get(path)
+                if raw is None and not optional:
+                    raise BuildControlError("missing control record")
+                return raw
+
+            def write_bytes(self, path, raw):
+                if path in self.records:
+                    raise BuildControlError("immutable record already exists")
+                self.records[path] = raw
+
+        control = Control()
+        claim, digest = subject.publish_recreate_claim(control, operation, recreate_input)
+        path = "runtime-control/" + subject.recreate_claim_relative(MAINTENANCE_ID)
+        raw = control.read_bytes(path)
+        self.assertEqual(raw, encoded_record(claim))
+        self.assertEqual(digest, subject.sha(raw))
+        self.assertEqual(subject.validate_recreate_claim(
+            claim, request=value, request_sha256=request_sha256, expected_sha256=digest,
+        ), claim)
+        with self.assertRaisesRegex(BuildControlError, "already exists"):
+            subject.publish_recreate_claim(control, operation, recreate_input)
 
 
 class PreviewPlanContracts(unittest.TestCase):
@@ -1024,10 +1105,19 @@ class ApiQuiescenceIntentContracts(unittest.TestCase):
 
 
 class PreviewPlanLifecycleContracts(unittest.TestCase):
-    def test_apply_fails_before_any_host_or_docker_observation(self):
+    def test_apply_dispatches_only_to_typed_driver(self):
         args = SimpleNamespace(apply=True, preview=False)
+        result = {"state": "restored"}
+        with patch.object(volume_dev, "require_host") as require_host, \
+             patch.object(volume_dev, "_apply_held_ui_materialization", return_value=result) as apply:
+            self.assertEqual(volume_dev._run_held_ui_materialization(args, controller=subject), result)
+        apply.assert_called_once_with(args, controller=subject)
+        require_host.assert_not_called()
+
+    def test_conflicting_apply_mode_is_rejected_before_observation(self):
+        args = SimpleNamespace(apply=True, preview=True)
         with patch.object(volume_dev, "require_host") as require_host:
-            with self.assertRaisesRegex(BuildControlError, "not available in this read-only preview slice"):
+            with self.assertRaisesRegex(BuildControlError, "exact private --apply action"):
                 volume_dev._run_held_ui_materialization(args, controller=subject)
         require_host.assert_not_called()
 
@@ -1125,7 +1215,7 @@ class PreviewPlanLifecycleContracts(unittest.TestCase):
              patch("docker_volume_stop_diagnostic._port_matches"):
             result = volume_dev._run_held_ui_materialization(args, controller=controller)
         self.assertEqual(result["state"], "preview-passed")
-        self.assertFalse(result["apply_available"])
+        self.assertTrue(result["apply_available"])
         self.assertEqual(docker_calls, [("volume", "inspect", "control-p22")])
 
 

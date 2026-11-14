@@ -1244,6 +1244,7 @@ jobs:
           python -B scripts/test_runtime_service_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_lifecycle.py -v
+          python -B scripts/test_docker_volume_held_ui_driver.py -v
           python -B scripts/test_docker_volume_held_ui_stop_adapter.py -v
           python -B scripts/test_docker_volume_held_ui_production_stop.py -v
           python -B scripts/test_docker_volume_failed_run_resume.py -v

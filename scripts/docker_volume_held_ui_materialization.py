@@ -22,9 +22,11 @@ INVENTORY_SCHEMA = "fullmag.held-ui-materialization-inventory.v1"
 API_QUIESCE_INTENT_SCHEMA = "fullmag.held-ui-materialization-api-quiescence-intent.v1"
 PRIVATE_SCHEMA = "fullmag.development-held-ui-materialization-restore.v1"
 HANDOFF_SCHEMA = "fullmag.docker-held-ui-materialization-handoff.v1"
+RECREATE_CLAIM_SCHEMA = "fullmag.held-ui-materialization-recreate-claim.v1"
 PREFLIGHT_CAPTURE_MAX = 3 * 1024 * 1024
 REQUEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST"
 REQUEST_DIGEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST_SHA256"
+STDIN_ENV = "FULLMAG_DEVELOPMENT_HELD_UI_MATERIALIZATION_STDIN"
 STARTUP_ENV_NAMES = (
     "FULLMAG_STARTUP_ENABLED", "FULLMAG_STARTUP_SCRIPT", "FULLMAG_STARTUP_PROVENANCE",
     "FULLMAG_STARTUP_API", "FULLMAG_STARTUP_PROVENANCE_SHA256",
@@ -267,6 +269,7 @@ if not isinstance(expected_run,str) or not isinstance(source_scope,dict): fail("
 before,responses=snapshot()
 run_id=before["run"].get("run_id")
 if run_id!=expected_run: fail("current API run differs from the selected run")
+if before["run"].get("resolved_backend")!="fdm": fail("held materialization requires an already resolved FDM run")
 run_root=paths.store/"runs"/run_id
 intent_raw=read_record(run_root/"run_intent.json","accepted RunIntent")
 intent=obj(intent_raw,"accepted RunIntent")
@@ -431,6 +434,7 @@ def detail_is_pinned_404(accepted):
 def read_held_authority(intent):
  plan=intent["plan"]; accepted=plan["accepted"]; native=plan["native"]
  current,responses=snapshot()
+ if current["run"].get("resolved_backend")!="fdm": fail("held materialization run is not resolved to FDM")
  if held_api_context(current,responses["scene"]["sha256"])!=plan["current"] or current["status"].get("solver",{}).get("state")!="waiting_for_compute":
   fail("API/session/request-scope/scene/queue changed after preview")
  owner=native_owner(); identity=owner_identity(owner)
@@ -605,6 +609,146 @@ def start_environment(relative_path: str, request_sha256: str) -> dict[str, str]
              "handoff request path is invalid")
     _digest(request_sha256, "handoff request digest")
     return {REQUEST_ENV: relative_path, REQUEST_DIGEST_ENV: request_sha256}
+
+
+def clear_start_environment(environment: dict) -> dict:
+    """Remove held-restore controls from every ordinary retained start render."""
+    _require(isinstance(environment, dict), "held UI start environment must be mutable")
+    for name in (REQUEST_ENV, REQUEST_DIGEST_ENV, STDIN_ENV):
+        environment.pop(name, None)
+    return environment
+
+
+def start_handoff(relative_path: str, request_sha256: str, request: Mapping) -> tuple[dict[str, str], dict]:
+    """Create the small host-to-Compose handoff from one validated request."""
+    environment = start_environment(relative_path, request_sha256)
+    accepted = request.get("accepted") if isinstance(request, Mapping) else None
+    _require(isinstance(accepted, Mapping), "handoff request has no accepted Compute identity")
+    metadata = {
+        "schema": HANDOFF_SCHEMA,
+        "request_path": relative_path,
+        "request_sha256": request_sha256,
+        "run_id": accepted.get("run_id"),
+        "command_id": accepted.get("command_id"),
+    }
+    environment, metadata = validate_start_handoff(environment, metadata)
+    return environment, metadata
+
+
+def recreate_claim_relative(maintenance_request_id: str) -> str:
+    return request_relative(maintenance_request_id).rsplit("/", 1)[0] + "/recreate-start.json"
+
+
+def recreate_input(environment: Mapping, metadata: Mapping, request: Mapping) -> dict:
+    """Return the exact immutable request tuple recorded by managed recreation."""
+    environment, metadata = validate_start_handoff(environment, metadata)
+    plan = request.get("plan") if isinstance(request, Mapping) else None
+    authority = request.get("stop_authority") if isinstance(request, Mapping) else None
+    source = request.get("source_scope") if isinstance(request, Mapping) else None
+    _require(isinstance(plan, Mapping) and isinstance(authority, Mapping)
+             and isinstance(source, Mapping), "recreate input request is incomplete")
+    _require(metadata["run_id"] == request.get("accepted", {}).get("run_id")
+             and metadata["command_id"] == request.get("accepted", {}).get("command_id"),
+             "recreate input handoff differs from the accepted intent")
+    terminal = authority.get("terminal")
+    _require(isinstance(terminal, Mapping), "recreate input stop terminal pin is missing")
+    return {
+        "schema": "fullmag.held-ui-materialization-recreate-input.v1",
+        "request_path": environment[REQUEST_ENV],
+        "request_sha256": environment[REQUEST_DIGEST_ENV],
+        "maintenance_request_id": plan.get("maintenance_request_id"),
+        "plan_sha256": plan.get("plan_sha256"),
+        "stop_attempt": authority.get("stop_attempt"),
+        "stop_terminal_sha256": terminal.get("sha256"),
+        "source_scope": dict(source),
+        "run_id": metadata["run_id"],
+        "command_id": metadata["command_id"],
+    }
+
+
+def publish_recreate_claim(control, operation: Mapping, recreate_input_value: Mapping) -> tuple[dict, str]:
+    """Bind this maintenance UUID to the one leased recreate attempt before removal."""
+    receipt = operation.get("receipt") if isinstance(operation, Mapping) else None
+    attempt = receipt.get("attempt") if isinstance(receipt, Mapping) else None
+    _require(control._active_operation is operation
+             and isinstance(receipt, Mapping)
+             and receipt.get("phase") == "recreate-services"
+             and isinstance(attempt, str) and TOKEN_RE.fullmatch(attempt) is not None
+             and operation.get("root") == "recreate-services/attempts/" + attempt,
+             "held UI recreate claim requires its active exact recreation lease")
+    expected = _exact(recreate_input_value, {
+        "schema", "request_path", "request_sha256", "maintenance_request_id",
+        "plan_sha256", "stop_attempt", "stop_terminal_sha256", "source_scope",
+        "run_id", "command_id",
+    }, "held UI recreate input")
+    _require(expected.get("schema") == "fullmag.held-ui-materialization-recreate-input.v1",
+             "held UI recreate input schema differs")
+    claim = {
+        "schema": RECREATE_CLAIM_SCHEMA,
+        "state": "started",
+        "maintenance_request_id": expected["maintenance_request_id"],
+        "request_path": expected["request_path"],
+        "request_sha256": expected["request_sha256"],
+        "plan_sha256": expected["plan_sha256"],
+        "stop_attempt": expected["stop_attempt"],
+        "stop_terminal_sha256": expected["stop_terminal_sha256"],
+        "recreate_attempt": attempt,
+        "source_scope": expected["source_scope"],
+        "run_id": expected["run_id"],
+        "command_id": expected["command_id"],
+    }
+    raw = canonical(claim) + b"\n"
+    _require(len(raw) <= MAX_REQUEST_BYTES, "held UI recreate claim exceeds its byte limit")
+    relative = recreate_claim_relative(expected["maintenance_request_id"])
+    control_relative = "runtime-control/" + relative
+    existing = control.read_bytes(control_relative, optional=True)
+    _require(existing is None,
+             "held UI recreate claim already exists; remove/start replay is prohibited")
+    _publish_immutable_record(control, relative, raw, "recreate claim")
+    _require(control.read_bytes(control_relative) == raw,
+             "held UI recreate claim did not read back byte-exactly")
+    return claim, sha(raw)
+
+
+def validate_recreate_claim(value: object, *, request: Mapping, request_sha256: str,
+                            expected_sha256: str | None = None) -> dict:
+    """Check the durable one-shot recreate claim against the immutable request."""
+    fields = {
+        "schema", "state", "maintenance_request_id", "request_path", "request_sha256",
+        "plan_sha256", "stop_attempt", "stop_terminal_sha256", "recreate_attempt",
+        "source_scope", "run_id", "command_id",
+    }
+    claim = _exact(value, fields, "held UI recreate claim")
+    recreate_input_value = recreate_input(
+        {REQUEST_ENV: request_relative(request["plan"]["maintenance_request_id"]),
+         REQUEST_DIGEST_ENV: request_sha256},
+        {"schema": HANDOFF_SCHEMA,
+         "request_path": request_relative(request["plan"]["maintenance_request_id"]),
+         "request_sha256": request_sha256,
+         "run_id": request["accepted"]["run_id"],
+         "command_id": request["accepted"]["command_id"]},
+        request,
+    )
+    expected = {
+        "schema": RECREATE_CLAIM_SCHEMA,
+        "state": "started",
+        "maintenance_request_id": recreate_input_value["maintenance_request_id"],
+        "request_path": recreate_input_value["request_path"],
+        "request_sha256": recreate_input_value["request_sha256"],
+        "plan_sha256": recreate_input_value["plan_sha256"],
+        "stop_attempt": recreate_input_value["stop_attempt"],
+        "stop_terminal_sha256": recreate_input_value["stop_terminal_sha256"],
+        "source_scope": recreate_input_value["source_scope"],
+        "run_id": recreate_input_value["run_id"],
+        "command_id": recreate_input_value["command_id"],
+    }
+    _require(all(claim.get(key) == expected_value for key, expected_value in expected.items()),
+             "held UI recreate claim differs from the approved request")
+    _token(claim.get("recreate_attempt"), "held UI recreation attempt")
+    if expected_sha256 is not None:
+        _require(sha(canonical(claim) + b"\n") == _digest(expected_sha256, "held UI recreate claim digest"),
+                 "held UI recreate claim digest differs")
+    return dict(claim)
 
 
 def validate_start_handoff(environment: object, metadata: object) -> tuple[dict[str, str], dict]:
@@ -872,8 +1016,9 @@ def validate_preflight(value: object, accepted: Mapping) -> dict:
     run = snapshot["run"]
     _require(run.get("run_id") == accepted.get("run_id")
              and run.get("session_id") == accepted.get("session_id")
+             and run.get("resolved_backend") == "fdm"
              and run.get("status") == "waiting_for_compute",
-             "current public run differs from the held Compute")
+             "current public run differs from the held FDM Compute")
     queue = snapshot["queue"]
     items = queue.get("items")
     _require(queue.get("schema_version") == "compute_queue.v1"

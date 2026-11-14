@@ -59,10 +59,13 @@ class HeldStopAdapter(unittest.TestCase):
         resume.assert_called_once_with(**resume_context)
         self.assertEqual(result["state"], "stopped-awaiting-typed-recreate")
 
-    def test_public_read_only_preview_still_rejects_apply(self):
+    def test_public_apply_uses_typed_lifecycle_driver(self):
         args = SimpleNamespace(apply=True, preview=False)
-        with self.assertRaisesRegex(subject.BuildControlError, "read-only preview slice"):
-            subject._run_held_ui_materialization(args, controller=SimpleNamespace())
+        controller = SimpleNamespace()
+        with patch.object(subject, "_apply_held_ui_materialization", return_value={"state": "restored"}) as apply:
+            result = subject._run_held_ui_materialization(args, controller=controller)
+        apply.assert_called_once_with(args, controller=controller)
+        self.assertEqual(result["state"], "restored")
 
 
 if __name__ == "__main__":
