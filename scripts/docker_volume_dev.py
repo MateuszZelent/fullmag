@@ -3371,6 +3371,7 @@ def _held_ui_recreate_terminal(context, args):
     if (control.read_bytes("recreate-services/current.json") != raw
             or control.read_bytes("recreate-services/verified.json") != raw):
         raise BuildControlError("Held UI recreation was superseded or lacks exact succeeded phase pointers")
+    from docker_volume_container_recovery import _assert_container_absent
     for identifier in expected_removed:
         _assert_container_absent(identifier)
     return {"raw": raw, "terminal": terminal, "root": root}
@@ -3400,6 +3401,7 @@ def _held_ui_launch_and_ack(context, process_receipt):
             or _SHA256.fullmatch(runtime["input_sha256"]) is None):
         raise BuildControlError("Ready process receipt has no exact held UI runtime acknowledgement")
     try:
+        import uuid
         parsed_api_id = uuid.UUID(runtime["api_instance_id"])
         parsed_launch_id = uuid.UUID(runtime["launch_id"])
     except (ValueError, TypeError, AttributeError) as error:

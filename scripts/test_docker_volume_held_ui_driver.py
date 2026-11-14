@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 import docker_volume_dev as subject
 import docker_volume_held_ui_materialization as held_controller
@@ -514,6 +514,7 @@ class HeldUiPublishedRequestLoader(unittest.TestCase):
                 self.namespace = scope["namespace"]
                 self.namespace_registry_sha256 = scope["namespace_registry_sha256"]
                 self.identity = object()
+                self._active_operation = None
                 self.records = {}
 
             def read_bytes(self, relative, optional=False, maximum=None):
@@ -547,6 +548,8 @@ class HeldUiPublishedRequestLoader(unittest.TestCase):
             "config_sha256": config_sha256, "backend_container": scope["backend_container_id"],
             "frontend_container": scope["frontend_container_id"],
             "state_root": "/runtime/state",
+            "backend_volumes": ["retained-backend-volume"],
+            "frontend_volume": "retained-frontend-volume",
             "inputs": {"source_root": scope["source_root"]},
         }
         control.records["development/attempts/" + attempt + "/terminal.json"] = (
@@ -581,6 +584,108 @@ class HeldUiPublishedRequestLoader(unittest.TestCase):
         ])
         self.assertEqual(loaded["plan_sha256"], request_value["plan"]["plan_sha256"])
         self.assertEqual(loaded["proofs"]["terminal"]["state"], "succeeded")
+        loaded["controller"] = held_controller
+        self._assert_production_recreate_terminal(loaded, control, previous, scope, args_value)
+
+    def _assert_production_recreate_terminal(self, context, control, previous, scope, args_value):
+        attempt = "e" * 32
+        operation = {
+            "root": "recreate-services/attempts/" + attempt,
+            "receipt": {"phase": "recreate-services", "attempt": attempt},
+        }
+        control._active_operation = operation
+        claim, claim_sha256 = held_controller.publish_recreate_claim(
+            control, operation, context["recreate_input"],
+        )
+        control._active_operation = None
+        context["claim"] = held_controller.validate_recreate_claim(
+            claim, request=context["request"], request_sha256=context["request_sha256"],
+            expected_sha256=claim_sha256,
+        )
+        context["claim_sha256"] = claim_sha256
+        claim_ref = {
+            "path": held_controller.recreate_claim_relative(args_value.request_id),
+            "sha256": claim_sha256,
+        }
+        terminal = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "recreate-services",
+            "state": "succeeded", "attempt": attempt,
+            "compose_project": control.project, "control_volume": control.volume,
+            "control_namespace": control.namespace,
+            "namespace_registry_sha256": control.namespace_registry_sha256,
+            "fresh_state": False,
+            "inputs": {"held_ui_materialization": context["recreate_input"]},
+            "held_ui_materialization_recreate_claim": claim_ref,
+            "removed_containers": [scope["backend_container_id"], scope["frontend_container_id"]],
+            "previous_state_root": str(context["state"]),
+            "retained_volumes": previous["backend_volumes"],
+            "retained_frontend_volume": previous["frontend_volume"],
+        }
+        raw = held_materialization_fixtures.encoded_record(terminal)
+        root = "recreate-services/attempts/" + attempt
+        control.records[root + "/terminal.json"] = raw
+        control.records["recreate-services/current.json"] = raw
+        control.records["recreate-services/verified.json"] = raw
+
+        with patch("docker_volume_container_recovery._assert_container_absent") as absent:
+            result = subject._held_ui_recreate_terminal(context, args_value)
+        self.assertEqual(result, {"raw": raw, "terminal": terminal, "root": root})
+        self.assertEqual(absent.call_args_list, [
+            call(scope["backend_container_id"]),
+            call(scope["frontend_container_id"]),
+        ])
+
+        changed = dict(terminal)
+        changed["removed_containers"] = [scope["backend_container_id"], "f" * 64]
+        changed_raw = held_materialization_fixtures.encoded_record(changed)
+        control.records[root + "/terminal.json"] = changed_raw
+        control.records["recreate-services/current.json"] = changed_raw
+        control.records["recreate-services/verified.json"] = changed_raw
+        with patch("docker_volume_container_recovery._assert_container_absent") as absent:
+            with self.assertRaisesRegex(subject.BuildControlError, "claim or retained storage"):
+                subject._held_ui_recreate_terminal(context, args_value)
+        absent.assert_not_called()
+
+
+class HeldUiLaunchAckIdentity(unittest.TestCase):
+    def test_malformed_restored_api_uuid_is_rejected_before_control_reads(self):
+        class NoReadControl:
+            def __init__(self):
+                self.reads = []
+
+            def read_bytes(self, relative, **_kwargs):
+                self.reads.append(relative)
+                raise AssertionError("invalid API identity must be rejected before reads")
+
+        accepted = {
+            "run_id": RUN_ID,
+            "command_id": "fm-5886f18f-96bd-481b-a064-726f49b22d07",
+            "old_api_instance_id": "75c6d4d1-00a9-416d-b27e-6fda461ad85d",
+        }
+        control = NoReadControl()
+        context = {
+            "controller": held_controller,
+            "control": control,
+            "request": {"accepted": accepted},
+            "request_path": "held-ui-materialization/" + REQUEST_ID + "/request.json",
+            "request_sha256": "b" * 64,
+        }
+        process_receipt = {"held_ui_materialization": {
+            "schema": "fullmag.docker-held-ui-materialization-runtime.v1",
+            "launch_id": "ac3a6a55-33e4-4e19-b965-f62e91aec28e",
+            "request_sha256": context["request_sha256"],
+            "input_sha256": "c" * 64,
+            "ack_relative": "held-ui-materialization/" + REQUEST_ID + "/restore-ack.json",
+            "ack_sha256": "d" * 64,
+            "api_instance_id": "not-a-canonical-uuid",
+            "run_id": accepted["run_id"],
+            "command_id": accepted["command_id"],
+            "gate_action": "released",
+        }}
+
+        with self.assertRaisesRegex(subject.BuildControlError, "restored API or launch identity is invalid"):
+            subject._held_ui_launch_and_ack(context, process_receipt)
+        self.assertEqual(control.reads, [])
 
 
 if __name__ == "__main__":
