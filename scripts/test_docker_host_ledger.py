@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -675,11 +676,15 @@ class HostLedgerTests(unittest.TestCase):
                 ledger.validate_container(backend, profile, fake)
 
 
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "The actual guest probe requires Linux UID/GID, device metadata, statvfs and /proc/self/fd",
+)
 class HostVolumeProbeTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / "host-ledger"
+        self.root = Path(self.temporary.name).resolve() / "host-ledger"
         self.root.mkdir(mode=0o755)
         (self.root / "ledger").mkdir(mode=0o770)
         (self.root / "ledger").chmod(0o770)

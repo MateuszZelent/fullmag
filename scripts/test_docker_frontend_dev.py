@@ -46,7 +46,14 @@ def load_healthcheck_module() -> ModuleType:
         raise RuntimeError("cannot load healthcheck.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    # Import-time defaults must be native absolute paths; each readiness test
+    # supplies its own receipt. The production absolute-path guard stays active.
+    with tempfile.TemporaryDirectory(prefix="fullmag-healthcheck-control-") as raw:
+        with patch.dict(os.environ, {
+            "FULLMAG_RUNTIME_CONTROL_ROOT": str(Path(raw).resolve()),
+            "FULLMAG_RUNTIME_PROCESS_RECEIPT": str(Path(raw).resolve() / "process-tree.json"),
+        }):
+            spec.loader.exec_module(module)
     return module
 
 
@@ -89,7 +96,7 @@ class _RunningProcess:
 @contextmanager
 def isolated(module):
     with tempfile.TemporaryDirectory(prefix="fullmag-frontend-dev-") as raw:
-        root = Path(raw)
+        root = Path(raw).resolve()
         workspace = root / "workspace"
         source = root / "source"
         source.mkdir()
@@ -309,7 +316,7 @@ class BackendHealthcheckContractTests(TestCase):
     def test_native_ready_cannot_bypass_unconfirmed_supervisor_startup(self):
         health = load_healthcheck_module()
         with tempfile.TemporaryDirectory(prefix="fullmag-backend-health-") as raw:
-            receipt = Path(raw) / "process-tree.json"
+            receipt = Path(raw).resolve() / "process-tree.json"
             for state in ("starting", "failed_outcome_retained"):
                 receipt.write_text(json.dumps({
                     "schema": "fullmag.docker-process-tree.v1", "state": state,
@@ -323,7 +330,7 @@ class BackendHealthcheckContractTests(TestCase):
     def test_confirmed_supervisor_still_requires_live_native_readiness(self):
         health = load_healthcheck_module()
         with tempfile.TemporaryDirectory(prefix="fullmag-backend-health-") as raw:
-            receipt = Path(raw) / "process-tree.json"
+            receipt = Path(raw).resolve() / "process-tree.json"
             receipt.write_text(json.dumps({
                 "schema": "fullmag.docker-process-tree.v1", "state": "ready",
             }), encoding="utf-8")
@@ -367,7 +374,7 @@ class FrontendReadonlySourceFixtureLinkTests(TestCase):
     def test_allowlisted_fixtures_are_exact_readonly_links_and_never_copied(self):
         module = load_module()
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-fixtures-") as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             source = root / "source"
             workspace = root / "workspace"
             source.mkdir()
@@ -423,7 +430,7 @@ class FrontendReadonlySourceFixtureLinkTests(TestCase):
     def test_rejects_foreign_or_copied_fixture_destinations(self):
         module = load_module()
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-fixture-reject-") as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             source = root / "source"
             workspace = root / "workspace"
             source.mkdir()
@@ -525,6 +532,7 @@ class FrontendDevContractTests(TestCase):
                 b"Debugger listening on http://127.0.0.1:43127/7c7b9d0a-1\n"
             )
 
+    @skipIf(sys.platform != "linux", "frontend identity uses Linux /proc PID namespace and process stat records")
     def test_frontend_healthcheck_requires_owned_receipt_process_and_tcp(self):
         healthcheck = load_healthcheck_module()
         self.assertEqual(
@@ -532,7 +540,7 @@ class FrontendDevContractTests(TestCase):
             Path("/run/fullmag/frontend-owner/receipt.json"),
         )
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-health-") as raw:
-            root = Path(raw)
+            root = Path(raw).resolve()
             proc_root = root / "proc"
             pid = 4242
             process_root = proc_root / str(pid)
@@ -874,7 +882,7 @@ class FrontendDevContractTests(TestCase):
     @skipIf(os.name == "nt", "FIFO no-follow regression uses the Linux container filesystem")
     def test_log_tailer_rejects_fifo_without_blocking(self):
         with tempfile.TemporaryDirectory(prefix="fullmag-frontend-log-fifo-") as raw:
-            fifo = Path(raw) / "next.log"
+            fifo = Path(raw).resolve() / "next.log"
             os.mkfifo(fifo)
             script = """
 import importlib.util
@@ -966,11 +974,11 @@ else:
         with tempfile.TemporaryDirectory() as directory:
             for name, (table, expected) in cases.items():
                 with self.subTest(name=name):
-                    path = Path(directory) / "mountinfo"
+                    path = Path(directory).resolve() / "mountinfo"
                     path.write_text(table, encoding="utf-8")
                     self.assertEqual(self.module._source_watch_mode(path), expected)
             self.assertEqual(
-                self.module._source_watch_mode(Path(directory) / "missing"), "polling"
+                self.module._source_watch_mode(Path(directory).resolve() / "missing"), "polling"
             )
 
     def test_native_watch_mode_removes_polling_from_child_and_records_it(self):
@@ -1190,6 +1198,58 @@ else:
             receipt = json.loads(self.module.RECEIPT_PATH.read_text(encoding="utf-8"))
             self.assertEqual(receipt["state"], "unknown")
 
+    # Parser contracts run on both hosts; the complete freezing regressions
+    # below retain actual Linux directory fsync instead of stubbing durability.
+    def test_host_cache_manifest_parser_remains_compatible_with_the_pinned_v1_guest(self):
+        from docker_development_inputs import guest_manifest, HOST_CACHE_METADATA_KEYS
+
+        with isolated(self.module) as (_, _, inputs):
+            host = {**inputs.manifest, **{name: "host-only" for name in HOST_CACHE_METADATA_KEYS}}
+            legacy_optional = {"source_selection", "source_volume", "configuration_changes", "backend_build"}
+            with patch.object(self.module, "OPTIONAL_MANIFEST_KEYS", frozenset(legacy_optional)):
+                self.module.INPUTS_PATH.write_text(json.dumps(host))
+                with self.assertRaisesRegex(self.module.FrontendDevError, "unexpected field set"):
+                    self.module.read_inputs(self.module.INPUTS_PATH)
+                self.module.INPUTS_PATH.write_text(json.dumps(guest_manifest(host)))
+                compatible = self.module.read_inputs(self.module.INPUTS_PATH)
+                self.assertEqual(compatible.manifest, inputs.manifest)
+
+    def test_host_cache_metadata_parser_preserves_dependency_identity(self):
+        with isolated(self.module) as (_, _, inputs):
+            manifest = dict(inputs.manifest)
+            manifest.update(
+                worktree_id="fullmag-main-0123456789abcdef",
+                dependency_seed_files=["package.json", "pnpm-lock.yaml"],
+                dependency_seed_sha256="a" * 64,
+                toolpins={"node": "v24.18.0", "pnpm": "10.8.1", "watchpack_polling_ms": "500"},
+                toolpins_sha256="b" * 64,
+            )
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest))
+            parsed = self.module.read_inputs(self.module.INPUTS_PATH)
+            self.assertEqual(parsed.manifest, manifest)
+            changed = dict(manifest, dependency_seed_sha256="c" * 64)
+            self.module.INPUTS_PATH.write_text(json.dumps(changed))
+            changed_inputs = self.module.read_inputs(self.module.INPUTS_PATH)
+            self.assertEqual(changed_inputs.manifest["dependency_seed_sha256"], "c" * 64)
+
+    def test_linux_live_manifest_parser_preserves_provenance_and_rejects_unsafe_roots(self):
+        with isolated(self.module) as (_, _, inputs):
+            manifest = {**inputs.manifest, "source_root": "/home/user/fullmag",
+                        "source_selection": "live_linux_selected_checkout"}
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest))
+            parsed = self.module.read_inputs(self.module.INPUTS_PATH)
+            self.assertEqual(parsed.source_root, manifest["source_root"])
+            for root in ("relative/repo", "/", "//host/repo", "/home/../repo", "/home/./repo",
+                         "/home//repo", "/home/repo/", "/home/rep\\o", "/home/repo\n", "C:\\repo"):
+                with self.subTest(root=root):
+                    self.module.INPUTS_PATH.write_text(json.dumps({**manifest, "source_root": root}))
+                    with self.assertRaises(self.module.FrontendDevError):
+                        self.module.read_inputs(self.module.INPUTS_PATH)
+            self.module.INPUTS_PATH.write_text(json.dumps({**manifest, "source_selection": "live_windows_selected_checkout"}))
+            with self.assertRaisesRegex(self.module.FrontendDevError, "Windows"):
+                self.module.read_inputs(self.module.INPUTS_PATH)
+
+    @skipIf(sys.platform != "linux", "freezing input bytes performs actual Linux directory fsync")
     def test_host_cache_manifest_remains_compatible_with_the_pinned_v1_guest(self):
         from docker_development_inputs import guest_manifest, HOST_CACHE_METADATA_KEYS
 
@@ -1205,6 +1265,7 @@ else:
                 self.assertEqual(compatible.manifest, inputs.manifest)
                 self.module._freeze_inputs(compatible, allow_generated=False)
 
+    @skipIf(sys.platform != "linux", "freezing input bytes performs actual Linux directory fsync")
     def test_host_cache_metadata_is_accepted_and_frozen_with_the_seed(self):
         with isolated(self.module) as (_, _, inputs):
             manifest = dict(inputs.manifest)
@@ -1225,6 +1286,7 @@ else:
             with self.assertRaisesRegex(self.module.FrontendDevError, "configuration or source identity changed"):
                 self.module._freeze_inputs(changed_inputs, allow_generated=False)
 
+    @skipIf(sys.platform != "linux", "freezing input bytes performs actual Linux directory fsync")
     def test_linux_live_manifest_is_accepted_and_frozen_with_explicit_provenance(self):
         with isolated(self.module) as (_, _, inputs):
             manifest = {**inputs.manifest, "source_root": "/home/user/fullmag",
@@ -2055,6 +2117,7 @@ else:
                     {"state": "stop-timeout", "pid": os.getpid()}
                 )
 
+    @skipIf(sys.platform != "linux", "owner publication performs actual Linux directory fsync")
     def test_unknown_owner_is_authoritative_only_within_current_container(self):
         with isolated(self.module) as (_root, _workspace, _inputs):
             diagnostic = {
@@ -2088,6 +2151,7 @@ else:
             )
             self.assertIsNone(self.module._load_receipt())
 
+    @skipIf(sys.platform != "linux", "owner publication performs actual Linux directory fsync")
     def test_publish_receipt_keeps_owner_and_diagnostic_copies(self):
         with isolated(self.module) as (_root, _workspace, inputs):
             receipt = self.module._receipt_base(inputs, None)
