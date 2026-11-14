@@ -1,0 +1,40 @@
+{
+  "approved_plan_sha256": "681dafa18e72c92741cd6280478a6e2cb2065cc3104b011501e0a410caf06836",
+  "base_commit": "9244055c83b135b929a1f7d591bc48a544aeb580",
+  "compile_guard": "FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC",
+  "default_enabled": false,
+  "insertions": {
+    "task-2-stroud-dtq-insertions.json": {
+      "after": {
+        "bytes": 56291,
+        "sha256": "3dc87c8f2b85c7d00d9ab9a22f29288e7f9600b75141e5e28c5ec9367c099352"
+      },
+      "before": {
+        "bytes": 55692,
+        "sha256": "91351c1234b0b8e540dba5a65c8daa585b4bf7bfc120d371f1727ca674a4b2eb"
+      },
+      "bytes": 1070,
+      "sha256": "c4650d377d241b5e6d3121906a5c255de37cc08e5860ad0c0b190c5ab5f98463",
+      "target": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp"
+    },
+    "task-2-stroud-test-insertions.json": {
+      "after": {
+        "bytes": 47234,
+        "sha256": "935ecb2c894441334bdfab933cb6e4aa75b0877d2c6995cd7d42125be95ec214"
+      },
+      "before": {
+        "bytes": 37443,
+        "sha256": "25fe74b29b8d2a835cf2491f4f1f05d2a4cb5759b30bb587ff217ed126e99525"
+      },
+      "bytes": 10703,
+      "sha256": "cbc177d732f03f1a2a39c83e9bd5b18fb0eb7e3daf08affa87b4902295d27b82",
+      "target": "backends/fem/tests/oersted_direct_tetra_contract.cpp"
+    }
+  },
+  "maximum_additional_operator_calls": 4,
+  "original_native_failure_remains_fatal": true,
+  "production_solver_modified": false,
+  "purpose": "ci_experimental_regular_stroud_probe_only",
+  "schema": 1,
+  "unchanged_native_job_timeout_minutes": 90
+}

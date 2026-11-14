@@ -180,6 +180,24 @@ jobs:
           namespace['apply_insertions'](Path('backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp'), checked['task-2-leaf-dtq-insertions.json'])
           namespace['apply_insertions'](Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'), checked['task-2-leaf-test-insertions.json'])
           PYCI
+      - name: Apply exact private regular-Stroud experiment
+        run: |
+          python -B - <<'PYCI'
+          import hashlib
+          from pathlib import Path
+          data = Path('.github/antenna-retained-dtq')
+          expected = {'apply-justfile-insertions.py': (1957, '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'), 'task-2-stroud-dtq-insertions.json': (1070, 'c4650d377d241b5e6d3121906a5c255de37cc08e5860ad0c0b190c5ab5f98463'), 'task-2-stroud-test-insertions.json': (10703, 'cbc177d732f03f1a2a39c83e9bd5b18fb0eb7e3daf08affa87b4902295d27b82'), 'task-2-stroud-experiment-pins.json': (1524, 'a1623389069ec55f1a660e07f6100131c73d55aa87fb5b4d3a2073d14403ea8c')}
+          checked = {}
+          for name, (size, digest) in expected.items():
+              raw = (data / name).read_bytes()
+              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+                  raise ValueError('Private Stroud experiment pin mismatch: ' + name)
+              checked[name] = raw
+          namespace = {'__name__': 'ci_private_stroud_insertions'}
+          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
+          namespace['apply_insertions'](Path('backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp'), checked['task-2-stroud-dtq-insertions.json'])
+          namespace['apply_insertions'](Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'), checked['task-2-stroud-test-insertions.json'])
+          PYCI
       - name: Verify GREEN C++ numerical and ABI contracts
         id: native-green
         continue-on-error: true
@@ -199,6 +217,9 @@ jobs:
             .github/antenna-retained-dtq/task-2-singular-diagnostic-insertions.json
             .github/antenna-retained-dtq/task-2-leaf-dtq-insertions.json
             .github/antenna-retained-dtq/task-2-leaf-test-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-dtq-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-test-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-experiment-pins.json
       - name: Verify Rust adapter against the same CPU shared library in container
         shell: bash
         run: |
@@ -278,7 +299,7 @@ jobs:
           from pathlib import Path
           path = Path('.github/antenna-retained-dtq/apply-task4-fixture-ci.py')
           raw = path.read_bytes()
-          if len(raw) != 3567 or hashlib.sha256(raw).hexdigest() != 'e0b2165c141dbd0ffcddc1812b64558a7eafa08e4ea656c3dfefc76d8305b4d0':
+          if len(raw) != 3567 or hashlib.sha256(raw).hexdigest() != '89bb95e4d93b912c7e886742ddac59dfc5b0081170d3c15d0b598968e0e352bc':
               raise ValueError('Exact Task4 fixture CI applier pin differs')
           namespace = {'__name__': 'ci_fixture_wiring'}
           exec(compile(raw, str(path), 'exec'), namespace)
@@ -308,6 +329,9 @@ jobs:
             .github/antenna-retained-dtq/task-2-singular-diagnostic-insertions.json
             .github/antenna-retained-dtq/task-2-leaf-dtq-insertions.json
             .github/antenna-retained-dtq/task-2-leaf-test-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-dtq-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-test-insertions.json
+            .github/antenna-retained-dtq/task-2-stroud-experiment-pins.json
             .github/antenna-retained-dtq/task-3-source-pins.json
             .github/antenna-retained-dtq/task-3-wiring-pins.json
             .github/antenna-retained-dtq/task-4-source-pins.json

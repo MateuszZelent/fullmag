@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 55692,
+    "sha256": "91351c1234b0b8e540dba5a65c8daa585b4bf7bfc120d371f1727ca674a4b2eb"
+  },
+  "after": {
+    "bytes": 56291,
+    "sha256": "3dc87c8f2b85c7d00d9ab9a22f29288e7f9600b75141e5e28c5ec9367c099352"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 609,
+      "text": "#ifdef FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC\nbool &ci_regular_stroud_probe_enabled() noexcept\n{\n    static thread_local bool enabled = false;\n    return enabled;\n}\n#endif\n\n"
+    },
+    {
+      "offset_bytes": 6741,
+      "text": "    // Explicit replay rules always take precedence over this private probe.\n    if (ci_rule == nullptr && ci_regular_stroud_probe_enabled() && order > 20) {\n        ci_rule = &mfem::StroudIntRules.Get(mfem::Geometry::TETRAHEDRON, order);\n    }\n"
+    },
+    {
+      "offset_bytes": 43267,
+      "text": "// Private test seam; no declaration is added to a public header or C ABI.\nvoid set_dtq_ci_regular_stroud_probe(bool enabled) noexcept\n{\n    ci_regular_stroud_probe_enabled() = enabled;\n}\n\n"
+    }
+  ]
+}
