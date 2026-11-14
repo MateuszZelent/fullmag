@@ -2579,6 +2579,59 @@ mod tests {
         )
         .unwrap();
         let study_catalog_value = serde_json::to_value(&study_catalog).unwrap();
+
+        let mut input = fixture();
+        let compute_request: crate::schemas::commands::StructuredCommandRequest =
+            serde_json::from_value(json!({
+                "kind": "relax",
+                "target": {"kind": "stage_id", "stage_id": "relax-a"},
+                "client_intent_id": input.accepted.client_intent_id.as_str(),
+                "precondition": {"scene_revision": input.accepted.scene_revision},
+            }))
+            .unwrap();
+        let original_context = crate::types::CurrentLiveRequestContext {
+            session_id: input.accepted.session_id.clone(),
+            run_id: None,
+            session_epoch: input.accepted.session_epoch,
+            request_scope_epoch: input.accepted.old_request_scope_epoch.clone(),
+        };
+        let captured_request = crate::live_compute_request::LiveComputeRequest::capture(
+            &original_context,
+            &compute_request,
+            Some(&input.accepted.client_intent_id),
+            Some(input.accepted.request_id.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        let original_receipt = captured_request.receipt(input.accepted.command_id.clone());
+        let execution_input = crate::live_execution_binding::input_identity(&authored_scene).unwrap();
+        input.accepted.execution_input_sha256 = execution_input.sha256.clone();
+        input.accepted.request_key_sha256 = original_receipt.key_sha256.clone();
+        input.accepted.request_sha256 = original_receipt.request_sha256.clone();
+        input.accepted.request_receipt_sha256 = fullmag_session::canonical_json_sha256(
+            &serde_json::to_value(&original_receipt).unwrap(),
+        );
+        let original_command = json!({
+            "seq": 0,
+            "command_id": input.accepted.command_id.as_str(),
+            "kind": input.accepted.command_kind.as_str(),
+            "created_at_unix_ms": input.accepted.session_created_at_unix_ms,
+            "client_intent_id": input.accepted.client_intent_id.as_str(),
+            "precondition": {"scene_revision": input.accepted.scene_revision},
+            "target": {"kind": "stage_id", "stage_id": "relax-a"},
+        });
+        let live_workspace = json!({
+            "api_instance_id": input.accepted.old_api_instance_id.as_str(),
+            "session_id": input.accepted.session_id.as_str(),
+            "session_epoch": input.accepted.session_epoch,
+            "scene_revision": input.accepted.scene_revision,
+            "execution_input": execution_input,
+            "command_id": input.accepted.command_id.as_str(),
+            "request_idempotency_key": input.accepted.client_intent_id.as_str(),
+            "request_receipt": original_receipt.clone(),
+            "step_id": "relax-a",
+            "command": original_command,
+        });
         let specification = RunSpecification::new(
             ProjectSnapshot::from_envelope(&definition).unwrap(),
             StudyReference {
@@ -2591,7 +2644,8 @@ mod tests {
                 "fullmag.accepted_run_start": {
                     "schema_version": "accepted_run_start_policy.v1",
                     "mode": "manual"
-                }
+                },
+                "live_workspace": live_workspace,
             }),
             RequestedExecution {
                 backend: "fdm".into(),
@@ -2606,7 +2660,10 @@ mod tests {
                 }),
             },
         );
-        let run_intent = RunIntent::new("submit-held-ui-catalog", specification);
+        let run_intent = RunIntent::new(
+            format!("live-http-v2-{}", original_receipt.key_sha256),
+            specification,
+        );
         crate::run_intent_persistence::commit_validated_run_intent(
             &store,
             &run_intent,
@@ -2647,7 +2704,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(planned.len(), 1);
 
-        let mut input = fixture();
+        let persisted_receipt = crate::live_compute_request::receipt_from_intent(&persisted_intent)
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted_receipt, original_receipt);
+
         input.accepted.run_id = run_id.as_str().to_owned();
         input.accepted.project_id = typed_specification.snapshot.project_id.as_str().to_owned();
         input.accepted.run_intent_sha256 = sha256(&intent_raw);
@@ -2681,15 +2742,7 @@ mod tests {
                 specification: typed_specification,
                 scene: authored_scene,
                 intent: persisted_intent,
-                receipt: fullmag_session::LiveComputeRequestReceipt {
-                    key_sha256: "b".repeat(64),
-                    request_sha256: "c".repeat(64),
-                    command_id: "command-held-ui-catalog".into(),
-                    request_id: Some("request-held-ui-catalog".into()),
-                    command_kind: Some("relax".into()),
-                    client_intent_id: Some("study:relax:fixture".into()),
-                    requested_target: Some(json!({"kind": "stage_id", "stage_id": "relax-a"})),
-                },
+                receipt: persisted_receipt,
                 total_steps: planned.len(),
                 release_exists: false,
             },
