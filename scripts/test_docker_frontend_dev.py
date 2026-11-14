@@ -370,6 +370,7 @@ class FrontendControlVolumeContractTests(TestCase):
             with self.assertRaisesRegex(module.FrontendDevError, "lowercase SHA-256"):
                 module._validate_control_volume_contract()
 
+@skipIf(sys.platform != "linux", "readonly guest fixture links require exact Linux readlink target bytes")
 class FrontendReadonlySourceFixtureLinkTests(TestCase):
     def test_allowlisted_fixtures_are_exact_readonly_links_and_never_copied(self):
         module = load_module()
