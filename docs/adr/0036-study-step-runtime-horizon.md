@@ -382,8 +382,16 @@ częściowego Submit ani zwalniania niepotwierdzonego ownera. Ta zmiana budżetu
 operacyjnego nie pomija sprawdzeń, nie zwiększa limitów bajtów/plików i nie
 zmienia kwalifikacji naukowej ani istniejących manifestów. Rzeczywisty API
 musi zostać przebudowany i osobno zweryfikowany po zmianie źródeł.
-Limity: source 8 MiB, runtime 128 MiB, plik 32 MiB, 8192 rekordow;
-16 MiB dotyczy metadanych pipeline. Profil id/version jest wiazany raz,
+Limity: source 8 MiB, runtime 128 MiB, plik 32 MiB, 8192 rekordow.
+Odpowiedź inwentarza i eksport samej sceny mają limit 8 MiB. Pełny eksport
+`ScriptExecutionConfig`, obejmujący współdzielone geometry assets, ma limit
+16 MiB zgodny z granicą metadanych pipeline; zastosowanie do niego limitu
+inwentarza odrzucałoby poprawne konfiguracje FEM przed Submit. Wybrany limit
+jest przekazywany do bounded helpera i ponownie sprawdzany po jego zakończeniu.
+Stderr pozostaje ograniczony do 8 MiB; generator źródeł UI również zachowuje
+granicę 8 MiB. Nie ma konfigurowalnego podniesienia limitu ani pomijania
+weryfikacji źródeł, runtime, hashów lub post-inwentarza.
+Profil id/version jest wiazany raz,
 a materialized identity pozostaje w `study_problem_catalog.v3`.
 Sampling mutations sa zachowane; konfliktowy ChangeDevice odrzuca cale
 Submit z authored ID, bez rebindu profilu i oslabiania katalogu.
