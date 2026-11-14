@@ -2619,7 +2619,7 @@ mod tests {
 
         let run_id = run_intent.specification.run_id.clone();
         let persisted_intent = store.read_run_intent(run_id.as_str()).unwrap().unwrap();
-        let intent_relative = format!("runs/{run_id}/run_intent.json");
+        let intent_relative = format!("runs/{}/run_intent.json", run_id.as_str());
         let intent_raw = fullmag_session::repository_path::read_bounded_regular_file(
             &store_root,
             &intent_relative,
@@ -2648,8 +2648,8 @@ mod tests {
         assert_eq!(planned.len(), 1);
 
         let mut input = fixture();
-        input.accepted.run_id = run_id.to_string();
-        input.accepted.project_id = typed_specification.snapshot.project_id.to_string();
+        input.accepted.run_id = run_id.as_str().to_owned();
+        input.accepted.project_id = typed_specification.snapshot.project_id.as_str().to_owned();
         input.accepted.run_intent_sha256 = sha256(&intent_raw);
         input.accepted.run_intent_payload_sha256 = persisted_intent.payload_sha256.clone();
         input.accepted.definition_sha256 = typed_specification.snapshot.definition_sha256.clone();
@@ -2676,7 +2676,7 @@ mod tests {
             input_sha256: "a".repeat(64),
             store_root: store_root.clone(),
             loaded: LoadedRun {
-                run_id: RunId::parse(run_id.to_string()).unwrap(),
+                run_id: RunId::parse(run_id.as_str().to_owned()).unwrap(),
                 project_id: typed_specification.snapshot.project_id.clone(),
                 specification: typed_specification,
                 scene: authored_scene,
