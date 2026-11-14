@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-11-13
+- Last updated: 2026-11-14
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -81,6 +81,13 @@ absolute threshold is serialized or requested.
 | `\lVert\cdot\rVert_2` | Euclidean norm over algebraic coefficients | $\mathrm{A\,m}$; preserves its operand unit |
 | `\mathrm{rtol}` | Relative linear-solver tolerance | `$1$` |
 | `\mathrm{atol}` | Absolute residual tolerance for the unscaled system | `$\mathrm{A\,m}$` |
+| `\mathbf{A}_{\mathrm{Robin}}` | Native Robin Poisson system matrix | `$\mathrm{m}$` |
+| `\mathbf{B}_{\partial D}` | Mass matrix on the selected nonperiodic boundary | `$\mathrm{m^2}$` |
+| `\beta` | Native effective constant Robin coefficient | `$\mathrm{m^{-1}}$` |
+| `c` | Dimensionless coefficient resolved from the Robin mode | `$1$` |
+| `R_{\ast}` | Reference radius from the mesh bounding-box extents | `$\mathrm{m}$` |
+| `L_j` | Mesh bounding-box extent along coordinate axis j | `$\mathrm{m}$` |
+| `\mathcal{O}` | Set of nonperiodic coordinate-axis indices | `$1$` |
 
 All user-visible physical quantities remain SI-clean.
 
@@ -94,6 +101,43 @@ path also computes that certificate after every solve, including a reported
 CG success. A successful CG report alone is not an independent Euclidean
 certificate. The historical 50 fs SP4 transport experiments use `atol=None`
 and predate this correction; see the qualification boundary in section 5.1.
+
+(native-robin-coefficient)=
+### 2.2.1 Native Robin coefficient and retained provenance
+
+For the native FEM CPU/GPU `poisson_robin` realization, the implemented system is
+
+```{math}
+:label: eq-fem-demag-robin-coefficient
+\mathbf{A}_{\mathrm{Robin}}=\mathbf{K}+\beta\mathbf{B}_{\partial D},
+\qquad \beta=\frac{c}{R_{\ast}},
+\qquad R_{\ast}=\frac12\max_{j\in\mathcal{O}} L_j.
+```
+
+Here $\mathbf{B}_{\partial D}$ is the boundary mass matrix on the selected
+canonical boundary marker, excluding periodic markers, with units of
+$\mathrm{m^2}$. The dimensionless resolved coefficient $c$ is 1 for native mode 1,
+2 for native mode 2, or the configured factor for other modes. The adapter maps
+`legacy` to 1, `dipole` (including the default) to 2, and `user` to 3. Each $L_j$ is a
+mesh bounding-box extent in metres, and $\mathcal{O}$ contains the nonperiodic
+coordinate axes. With no open axis the implementation uses the largest extent
+over all axes. Thus $R_{\ast}$ has units of metres, $\beta$ has units of
+$\mathrm{m^{-1}}$, and $\mathbf{A}_{\mathrm{Robin}}$ has units of metres.
+This is a constant mesh-domain coefficient, not a pointwise distance from a
+chosen center. The operator keeps the input MeshIR coordinates; this boundary
+path does not rescale them.
+
+The retained JSON field `fem_poisson_demag.robin_beta` currently copies
+`air_box_config.robin_beta_factor`. Despite its historical name, it stores the
+dimensionless plan factor, not the native effective $\beta$. The resolved mode
+can override that factor. Do not interpret the field alone as an inverse
+length or as a measured native coefficient. This documents the existing
+serialization; no field, operator, boundary condition or tolerance changes.
+
+The volume-equivalent-radius formula in the historical bootstrap note 0520
+does not specify this native policy. A small algebraic residual certifies the
+assembled finite-airbox system. It does not certify the free-space limit;
+airbox and mesh convergence remain separate scientific gates.
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -1166,13 +1210,17 @@ telemetry.
 (source-code-index)=
 ## 10. Source-code index
 
-The links below are immutable links at the reviewed source revision
-`53a5d5171e06db3c4950511d4523f872f58317f1`. Runtime statements are bounded by
+Each immutable link below pins the reviewed source revision for its row.
+Runtime statements are bounded by
 the evidence column; source presence and tests do not replace scientific or
 managed-runtime qualification.
 
 | Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
 |---|---|---|---|---|---|---|
+| Native Robin coefficient | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `robin_reference_radius_for_mesh`; `initialize_demag_poisson_boundary_operator` | Resolves the open-axis reference radius, mode coefficient and positive boundary mass contribution. | FEM CPU/GPU | Source contract; no new free-space or runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L27) |
+| Legacy Robin provenance units | `crates/fullmag-runner/src/fem/runtime_contract.rs` | `fem_poisson_demag_provenance` | Copies the dimensionless plan factor into the historically named `robin_beta` JSON field. | FEM CPU/GPU artifacts | Existing serialization, not native effective-beta telemetry. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/fem/runtime_contract.rs#L318) |
+| Robin mode adapter | `crates/fullmag-runner/src/native_fem.rs` | `create_backend_with_initial_effective_field` | Maps `legacy`, `dipole` and `user` to native coefficient modes. | FEM CPU/GPU | Existing adapter contract; no policy change. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/native_fem.rs#L3802) |
+| Native coordinate preservation | `backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp` | `verify_finalized_mesh` | Checks exact preservation of input MeshIR node coordinates after native mesh finalization. | FEM CPU/GPU | Source invariant; no new runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp#L318) |
 | Paired scalar certificate readback | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `fullmag_cuda_demag_validation_norm_pair` | Both scaled norms complete before aliased scratch output; one 16-byte readback for at least two rows. | FEM GPU | Managed `fem-demag-poisson` native contract passed at attempt `c1321d9442c641bd910f25b1b67a4a0e`; SP4 timing/parity NOT VERIFIED. | [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu#L116) |
 | Typed terminal GPU performance snapshot | `crates/fullmag-runner/src/types.rs` | `FemGpuPerformanceSnapshotProvenance` | Holds all native v1 fields with schema, accepted source step, and backend-lifetime scope; no per-step record or ABI change. | FEM GPU direct minimizer | Source change present; managed runner validation pending. | Unpublished task candidate. |
 | Native snapshot mapping | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `to_provenance` | Preserves native integer values and rejects non-finite totals or a terminal-step mismatch. | FEM GPU direct minimizer | Unit regressions added; managed execution pending. | Unpublished task candidate. |

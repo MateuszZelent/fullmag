@@ -89,6 +89,26 @@
         "device-pcg-hot-loop-counters",
         "device-pcg-initial-batch-regression"
       ]
+    },
+    {
+      "id": "eq-fem-demag-robin-coefficient",
+      "symbols": [
+        "K",
+        "robin-A",
+        "robin-B",
+        "robin-beta",
+        "robin-factor",
+        "robin-radius",
+        "robin-extent",
+        "robin-open-axes"
+      ],
+      "sources": [
+        "native-robin-radius",
+        "native-robin-boundary",
+        "native-robin-provenance",
+        "native-coordinate-preservation",
+        "native-robin-mode-map"
+      ]
     }
   ],
   "symbols": [
@@ -246,6 +266,48 @@
       "id": "pcg-Rmax",
       "latex": "R_{\\max}",
       "meaning": "Cumulative readback upper bound for the selected batch sizes",
+      "si_unit": "1"
+    },
+    {
+      "id": "robin-A",
+      "latex": "\\mathbf{A}_{\\mathrm{Robin}}",
+      "meaning": "Native Robin Poisson system matrix",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-B",
+      "latex": "\\mathbf{B}_{\\partial D}",
+      "meaning": "Mass matrix on the selected nonperiodic boundary",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "robin-beta",
+      "latex": "\\beta",
+      "meaning": "Native effective constant Robin coefficient",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "robin-factor",
+      "latex": "c",
+      "meaning": "Dimensionless coefficient resolved from the Robin mode",
+      "si_unit": "1"
+    },
+    {
+      "id": "robin-radius",
+      "latex": "R_{\\ast}",
+      "meaning": "Reference radius from the mesh bounding-box extents",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-extent",
+      "latex": "L_j",
+      "meaning": "Mesh bounding-box extent along coordinate axis j",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-open-axes",
+      "latex": "\\mathcal{O}",
+      "meaning": "Set of nonperiodic coordinate-axis indices",
       "si_unit": "1"
     }
   ],
@@ -652,6 +714,46 @@
       "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
       "symbol": "terminal_hypre_relax7_async_copy",
       "responsibility": "Optionally reads private process-cumulative HYPRE host counters at terminal quiescence, omits missing symbols or detected count changes, and adds no GPU readback or native ABI fields."
+    },
+    {
+      "id": "native-robin-radius",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "robin_reference_radius_for_mesh",
+      "responsibility": "Uses half the largest nonperiodic mesh bounding-box extent, with the all-axis fallback for no open axis.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-boundary",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Resolves the dimensionless mode coefficient and positive beta-weighted mass on the selected nonperiodic boundary.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-provenance",
+      "path": "crates/fullmag-runner/src/fem/runtime_contract.rs",
+      "symbol": "fem_poisson_demag_provenance",
+      "responsibility": "Preserves the existing historically named robin_beta JSON field as the dimensionless plan factor, not native effective-beta telemetry.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-coordinate-preservation",
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp",
+      "symbol": "verify_finalized_mesh",
+      "responsibility": "Checks exact preservation of input MeshIR node coordinates after native mesh finalization.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-mode-map",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "create_backend_with_initial_effective_field",
+      "responsibility": "Maps legacy/dipole/user Robin plan modes to native mode integers before native FEM creation.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Existing adapter source contract; no policy change."
     }
   ],
   "public_api": {

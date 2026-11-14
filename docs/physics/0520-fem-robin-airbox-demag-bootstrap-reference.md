@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-07-14
+- Last updated: 2026-11-14
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -178,7 +178,7 @@ with:
 - $K$ assembled from the volumetric Laplacian form,
 - $M_{\partial D}$ assembled from boundary triangle mass matrices.
 
-The default bootstrap choice is
+The historical Rust helper's bootstrap choice was
 
 $$
 \beta \approx \frac{1}{R_{\mathrm{eq}}},
@@ -188,8 +188,11 @@ $$
 
 where $|D|$ is the total volume of the supplied mesh domain.
 
-This is not meant as the final far-field model.
-It is the first executable approximation that keeps the potential seam honest.
+This volume-equivalent-radius rule does not describe the current native MFEM
+CPU/GPU implementation. That implementation uses the resolved Robin mode and
+half the largest nonperiodic mesh bounding-box extent; see
+[the current native Robin contract](0532-fem-demag-solver-policy-and-runtime-threading.md#native-robin-coefficient).
+The historical rule remains an approximation, not an exact free-space boundary.
 
 ### 3.4 Exchange and external field consistency
 
