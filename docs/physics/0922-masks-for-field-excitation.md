@@ -437,8 +437,18 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   equals Remove plus Add of an antenna with the new values bit for bit on CPU and
   CUDA; $E_{\mathrm{drive}}=0$ exactly while the antenna is removed.
 
-Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Items 3
-(untouched cells, energy closed form) and 4 are open.
+- Reference (item 4, inputs): the antenna of the mumax3 script `racetrack 3.6 GHz`
+  written by hand (`~/git/simulations/fullmag/racetrack_3.6GHz.py`) plans on the
+  mumax3 grid (1200 × 200 × 15 cells, 2 404 728 active, identical) to a map equal
+  to the dumped `VectorMask` within 7.3e-12 T (3.7e-8 of the peak, the float32
+  rounding of the dump) on layers k = 0..8; the 661 896 cells that the dump stores
+  as 0 hold |B| < 7e-46 T (float32 underflow). The drive stage starts at 2 ns on
+  the absolute clock and the time factor equals mumax3's `B_ext` to 5.4e-8; Ms,
+  Aex and m0 are identical (report `~/git/simulations/compare_racetrack_antenna.md`).
+
+Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
+(untouched cells, energy closed form), the loop-style mask and the trajectory of
+item 4 are open.
 
 (limitations)=
 ## 11. Limitations and deferred work
