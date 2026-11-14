@@ -28,8 +28,8 @@
       ]
     },
     "task-3-green.tar.gz": {
-      "sha256": "16cba333249263ac46512f24b63884865dfad922fc23819944fe62470c1985b0",
-      "bytes": 907454,
+      "sha256": "444494224ad625a9e09ad4ee0ae2c4591b385232aaaf9443a122d35336012161",
+      "bytes": 908665,
       "entries": [
         {
           "path": "crates/fullmag-ir/src/antenna.rs",
@@ -57,7 +57,7 @@
         },
         {
           "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
-          "sha256": "e54b2a087cf12e8e2653cf4d685aa4424296c8d7964b3d51110e509b3d22097e"
+          "sha256": "760ca5dc10b0ba751202d9c421b8273ae3864d2dd2285351c799d92e3e0c31c5"
         },
         {
           "path": "crates/fullmag-api/src/accepted_retained_preparation_worker.rs",
