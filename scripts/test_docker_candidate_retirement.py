@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import argparse
 import inspect
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -260,6 +261,69 @@ class CandidateRetirementTests(unittest.TestCase):
                     "provenance_path": provenance_path,
                     "cache_sentinel": cache_sentinel,
                 }
+
+    @contextmanager
+    def _shared_candidate(self, fixture, *, third_consumer=False):
+        """Publish a ready candidate through the real sealed shared store."""
+
+        import backend_shared_store as shared
+
+        store_root = fixture["root"] / "shared-store"
+        store_root.mkdir()
+        receipt_path = fixture["candidate"] / "backend-build-receipt.json"
+        receipt, _ = backend._read_json(receipt_path, "shared candidate receipt")
+        identity = backend._shared_package_identity(
+            fixture["candidate_manifest"], fixture["toolchain"], None
+        )
+        receipt["source"]["runtime_source_digest"] = identity["runtime_source_digest"]
+        receipt["build"].update(identity["build"])
+        receipt["shared_package"] = {
+            "schema": shared.SCHEMA,
+            "key": shared.key_for(identity),
+            "inputs": identity,
+            "reuse": "publisher",
+        }
+        backend._write_json(receipt_path, receipt, "shared candidate receipt")
+
+        with (
+            patch.object(shared, "ROOT", store_root),
+            patch.dict(os.environ, {"FULLMAG_SHARED_BACKEND_STORE": str(store_root)}),
+        ):
+            store = shared.Store(store_root)
+            with store.claim(identity) as entry:
+                entry.publish(fixture["candidate"], receipt)
+                cached = entry.read()
+                consumer = None
+                if third_consumer:
+                    consumer = (
+                        store_root
+                        / "groups"
+                        / ("c" * 64)
+                        / ".development"
+                        / "candidates"
+                        / "retained-consumer"
+                    )
+                    consumer.mkdir(parents=True)
+                    entry.restore(consumer, cached)
+            yield store, identity, consumer, shared
+
+    @staticmethod
+    def _rewrite_as_shared_consumer(fixture, store, identity, shared, *, producer_sha256=None):
+        with store.claim(identity) as entry:
+            cached = entry.read()
+            producer = cached["receipt"]
+        receipt_path = fixture["candidate"] / "backend-build-receipt.json"
+        receipt, _ = backend._read_json(receipt_path, "shared consumer candidate receipt")
+        receipt["operation"] = "direct-compose-cache-reuse"
+        receipt["shared_package"] = {
+            "schema": shared.SCHEMA,
+            "key": shared.key_for(identity),
+            "producer_receipt_sha256": producer_sha256
+            or backend._sha256_bytes(shared.canonical(producer)),
+            "inputs": identity,
+            "reuse": "verified-hardlinks",
+        }
+        backend._write_json(receipt_path, receipt, "shared consumer candidate receipt")
 
     @staticmethod
     def _qualify(fixture):
@@ -1236,6 +1300,231 @@ class CandidateRetirementTests(unittest.TestCase):
                 self.assertEqual(self._current_snapshot(fixture), current_before)
                 staging = Path(backend.BACKEND_CONTROL_ROOT) / retirement.RETIREMENT_STAGING_NAMESPACE_NAME
                 self.assertFalse(staging.exists() and any(staging.iterdir()))
+
+    def test_shared_artifact_hardlinks_retire_without_changing_store_or_other_consumers(self):
+        with self._fixture("stale") as fixture:
+            with self._shared_candidate(fixture, third_consumer=True) as (
+                store,
+                identity,
+                consumer,
+                shared,
+            ):
+                artifact_paths = {
+                    item["path"]
+                    for item in backend._read_json(
+                        fixture["candidate"] / "backend-build-receipt.json",
+                        "shared candidate receipt",
+                    )[0]["artifacts"]
+                }
+                self.assertTrue(
+                    {"launcher-build-mode", *backend.RUNTIME_MANIFEST_PATHS}.issubset(
+                        artifact_paths
+                    )
+                )
+                self.assertTrue(all(
+                    (fixture["candidate"] / relative).stat().st_nlink >= 3
+                    for relative in artifact_paths
+                ))
+                consumer_before = {
+                    relative: (consumer / relative).read_bytes()
+                    for relative in artifact_paths
+                }
+                current_before = self._current_snapshot(fixture)
+                provenance_before = fixture["provenance_path"].read_bytes()
+
+                spec = self._qualify(fixture)
+                result = retirement.retire_candidate(
+                    backend,
+                    spec,
+                    fixture["current_manifest"],
+                    fixture["toolchain"],
+                    backend.BACKEND_CARGO_PROFILE,
+                    fixture["current"],
+                )
+
+                self.assertEqual((result.action, result.classification), ("retired", "stale"))
+                self.assertFalse(fixture["candidate"].exists())
+                self.assertEqual(self._current_snapshot(fixture), current_before)
+                self.assertEqual(fixture["provenance_path"].read_bytes(), provenance_before)
+                self.assertEqual(
+                    {relative: (consumer / relative).read_bytes() for relative in artifact_paths},
+                    consumer_before,
+                )
+                for relative in artifact_paths:
+                    self.assertEqual((consumer / relative).stat().st_nlink, 2)
+                with store.claim(identity) as entry:
+                    self.assertEqual(entry.read()["receipt"]["artifacts"], spec.receipt["artifacts"])
+                for path in result.archive.rglob("*"):
+                    if path.is_file():
+                        self.assertEqual(path.stat().st_nlink, 1)
+
+    def test_shared_cache_consumer_receipt_proves_producer_and_allows_stale_retirement(self):
+        with self._fixture("stale") as fixture:
+            with self._shared_candidate(fixture, third_consumer=True) as (
+                store,
+                identity,
+                consumer,
+                shared,
+            ):
+                self._rewrite_as_shared_consumer(fixture, store, identity, shared)
+                spec = self._qualify(fixture)
+                result = retirement.retire_candidate(
+                    backend,
+                    spec,
+                    fixture["current_manifest"],
+                    fixture["toolchain"],
+                    backend.BACKEND_CARGO_PROFILE,
+                    fixture["current"],
+                )
+
+                self.assertEqual((result.action, result.classification), ("retired", "stale"))
+                self.assertFalse(fixture["candidate"].exists())
+                with store.claim(identity) as entry:
+                    self.assertEqual(entry.read()["receipt"]["artifacts"], spec.receipt["artifacts"])
+                self.assertEqual(
+                    (consumer / "runtimes/fem-gpu/manifest.json").read_bytes(),
+                    (result.archive / "candidate-metadata/runtimes/fem-gpu/manifest.json").read_bytes(),
+                )
+
+    def test_fresh_shared_candidate_is_qualified_for_existing_promotion_path(self):
+        with self._fixture("fresh") as fixture:
+            with self._shared_candidate(fixture) as (store, identity, _consumer, _shared):
+                spec = self._qualify(fixture)
+                result = retirement.retire_candidate(
+                    backend,
+                    spec,
+                    fixture["candidate_manifest"],
+                    fixture["toolchain"],
+                    backend.BACKEND_CARGO_PROFILE,
+                    fixture["current"],
+                )
+
+                self.assertEqual(result.action, "promote")
+                self.assertTrue(fixture["candidate"].is_dir())
+                with store.claim(identity) as entry:
+                    self.assertEqual(entry.read()["receipt"]["artifacts"], spec.receipt["artifacts"])
+
+    def test_shared_artifact_pending_deletion_resumes_and_preserves_other_consumer(self):
+        with self._fixture("stale") as fixture:
+            with self._shared_candidate(fixture, third_consumer=True) as (
+                store,
+                identity,
+                consumer,
+                _shared,
+            ):
+                spec = self._qualify(fixture)
+                archive, manifest = self._action_prepared_archive(fixture, spec)
+                self.assertEqual(manifest["state"], "deletion-pending")
+                removed_before_crash = "bin/fullmag-bin"
+                removed_bytes = (consumer / removed_before_crash).read_bytes()
+                churned_alias = "_fullmag_core.so"
+                churned_candidate = fixture["candidate"] / churned_alias
+                churned_consumer = consumer / churned_alias
+                before_churn = churned_candidate.stat()
+                churned_consumer.unlink()
+                after_churn = churned_candidate.stat()
+                self.assertEqual(after_churn.st_nlink, before_churn.st_nlink - 1)
+                self.assertEqual(
+                    (after_churn.st_dev, after_churn.st_ino),
+                    (before_churn.st_dev, before_churn.st_ino),
+                )
+                retirement._candidate_matches_spec(backend, spec)
+                (fixture["candidate"] / removed_before_crash).unlink()
+
+                result = retirement.recover_pending_retirements(
+                    backend,
+                    fixture["package"],
+                    fixture["control_root"],
+                    fixture["build_root"],
+                    fixture["current"],
+                )
+
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0].action, "retired")
+                self.assertFalse(fixture["candidate"].exists())
+                self.assertEqual((consumer / removed_before_crash).read_bytes(), removed_bytes)
+                with store.claim(identity) as entry:
+                    self.assertEqual(entry.read()["receipt"]["artifacts"], spec.receipt["artifacts"])
+                completed, _ = retirement._read_archive_manifest(backend, archive)
+                self.assertEqual(completed["state"], "succeeded")
+
+    def test_shared_artifact_hardlink_requires_exact_sealed_shared_proof(self):
+        for mutation in (
+            "missing-binding",
+            "wrong-key",
+            "wrong-inputs",
+            "wrong-inode",
+            "wrong-producer-sha",
+            "writable",
+            "wrong-shared-hash",
+            "linked-marker",
+            "linked-receipt",
+            "linked-metadata",
+            "linked-make-log",
+        ):
+            with self.subTest(mutation=mutation), self._fixture("stale") as fixture:
+                with self._shared_candidate(fixture) as (store, _identity, _consumer, shared):
+                    receipt_path = fixture["candidate"] / "backend-build-receipt.json"
+                    receipt, _ = backend._read_json(receipt_path, "shared candidate receipt")
+                    relative = "bin/fullmag-bin"
+                    candidate_path = fixture["candidate"] / relative
+                    if mutation == "missing-binding":
+                        receipt.pop("shared_package")
+                        backend._write_json(receipt_path, receipt, "unbound shared candidate receipt")
+                    elif mutation == "wrong-key":
+                        receipt["shared_package"]["key"] = "0" * 64
+                        backend._write_json(receipt_path, receipt, "wrong-key candidate receipt")
+                    elif mutation == "wrong-inputs":
+                        receipt["shared_package"]["inputs"]["resolved_commit"] = "f" * 40
+                        receipt["shared_package"]["key"] = shared.key_for(
+                            receipt["shared_package"]["inputs"]
+                        )
+                        backend._write_json(receipt_path, receipt, "wrong-input candidate receipt")
+                    elif mutation == "wrong-producer-sha":
+                        self._rewrite_as_shared_consumer(
+                            fixture,
+                            store,
+                            _identity,
+                            shared,
+                            producer_sha256="0" * 64,
+                        )
+                    elif mutation == "wrong-inode":
+                        data = candidate_path.read_bytes()
+                        mode = candidate_path.stat().st_mode & 0o777
+                        candidate_path.unlink()
+                        candidate_path.write_bytes(data)
+                        candidate_path.chmod(mode)
+                        os.link(candidate_path, fixture["root"] / "unbound-copy")
+                    elif mutation == "writable":
+                        mode = candidate_path.stat().st_mode & 0o777
+                        candidate_path.chmod(mode | 0o200)
+                    elif mutation == "wrong-shared-hash":
+                        entry = next((store.root / "artifacts").iterdir())
+                        self.assertIsNotNone(entry)
+                        manifest_path = entry / "manifest.json"
+                        manifest = json.loads(manifest_path.read_text())
+                        manifest["receipt"]["artifacts"][0]["sha256"] = "0" * 64
+                        manifest_path.write_bytes(shared.canonical(manifest))
+                    elif mutation == "linked-marker":
+                        os.link(
+                            fixture["candidate"] / backend.PACKAGE_CANDIDATE_MARKER,
+                            fixture["root"] / "unbound-marker",
+                        )
+                    elif mutation == "linked-receipt":
+                        os.link(receipt_path, fixture["root"] / "unbound-receipt")
+                    elif mutation == "linked-metadata":
+                        metadata_path = fixture["candidate"] / "source-identity.json"
+                        metadata_path.write_bytes(b"private metadata\n")
+                        os.link(metadata_path, fixture["root"] / "unbound-metadata")
+                    elif mutation == "linked-make-log":
+                        os.link(
+                            fixture["candidate"] / backend.FAILED_MAKE_LOG_NAME,
+                            fixture["root"] / "unbound-make-log",
+                        )
+
+                    with self.assertRaises(backend.BackendBuildError):
+                        self._qualify(fixture)
+                    self.assertTrue(fixture["candidate"].is_dir())
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import type { ControlRoomApi } from "../api/ControlRoomApi";
 import type { RuntimeCommandPrecondition } from "../api/apiTypes";
 import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import type { ResourceStatus } from "../resources/resourceTypes";
 import type { SelectionController } from "../selection/SelectionController";
 import type { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
 import type { ChartViewportHandoffController } from "../visualization/ChartViewportHandoffController";
@@ -19,6 +20,7 @@ import type { ObjectEditSessionController } from "../authoring/object-edit/Objec
 import type { GeometryObjectDraft } from "../authoring/object-edit/objectEditTypes";
 import type { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 import type { ProjectDocumentController } from "../persistence/ProjectDocumentController";
+import type { CommandFeedbackController } from "./CommandFeedbackController";
 
 export type CommandId = string;
 type CommandGroupId = string;
@@ -50,6 +52,10 @@ export interface CommandContext {
   objectMoveTool?: ObjectMoveToolController;
   projectDocument?: ProjectDocumentController;
   resourceData?: Readonly<Record<string, unknown>>;
+  /** Freshness of the Study command queue projection shown by its owning panel. */
+  commandQueueResourceStatus?: ResourceStatus;
+  /** Existing session owner of unresolved Study Compute submissions. */
+  commandFeedback?: Pick<CommandFeedbackController, "hasUnresolvedStudyCompute" | "getRetryableStudyCompute">;
   resources?: ResourceInvalidationController;
   /** Session identity used to partition current-session API request coalescing. */
   sessionScopeKey?: string | null;
@@ -107,6 +113,8 @@ export interface CommandResult {
   clientIntentId?: string;
   /** Backend command kind paired with clientIntentId for exact reconciliation. */
   clientIntentKind?: string;
+  /** Set only when this pending result follows its own emitted Compute started event. */
+  studyComputeObservationStarted?: true;
   observation?: "waiting" | "disconnected" | "publication-unconfirmed";
   message?: string;
 }

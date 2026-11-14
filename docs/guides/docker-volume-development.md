@@ -203,6 +203,53 @@ Ta procedura nie przyznaje automatycznie prawa zapisu do `examples`.
 
 ## Iteracje i awarie
 
+### Nowa generacja po odmowie seedowania `next-env.d.ts`
+
+Ten jawny tryb dotyczy wyłącznie przypiętej, nieudanej próby frontendowej:
+receipt `failed-confirmed`, frontend dokładnie `Exited 1` z PID 0, końcowy log
+z odmową hasha `apps/control-room/next-env.d.ts`, plik w prywatnym workspace
+ma 0 bajtów, a `inputs-freeze.json` i `frozen-inputs` nie istnieją. Nie naprawia
+pliku na miejscu i nie próbuje ponownie historycznego startu.
+
+Read-only kontrole wiążą poprzedni terminal/current/verified i Compose CAS,
+stary seed oraz bieżący manifest źródeł. Commit backendu pochodzi z live
+package/provenance, których treść i hashe muszą zgadzać się z zachowanymi
+dokumentami danej próby. Input commit frontendu pochodzi z przypiętego Compose
+i musi zgadzać się z manifestem. Nieudany start może nie mieć końcowych pól
+commit; jeśli są obecne, muszą potwierdzać te same piny. Bieżący manifest frontendu musi być
+zgodny ze starym we wszystkich wejściach poza `source_commit`; receipt
+oddzielnie zapisuje commit pakietu aplikacji/backendu, commit starego manifestu
+frontendu, commit aktualnego manifestu kontrolera i hash helperów. Nie oznacza
+to ogólnej zgodności HEAD-ów ani odbioru S46. Proces tworzy
+`private/frontend/generations/<attempt>` i zachowuje stary workspace oraz jego
+receipty. Dopiero po ponownym odczycie starego CAS i drugiej kontroli
+konsumentów zapisuje nowy manifest, aktualizuje konfigurację wyłącznie frontendu i
+wykonuje `compose up --no-deps --force-recreate frontend`. Zdrowy, bezczynny
+backend zachowuje ten sam ID, StartedAt, PID, owner/certificate i proces API;
+żaden build ani restart backendu nie jest częścią tej procedury. Następne
+normalne resume i refresh biorą generację z receiptu i Compose, bez powrotu do
+domyślnego `private/frontend`.
+
+Zakres izolacji obejmuje wybraną grupę Linux-native, jej prywatne wolumeny,
+chronione direct binds i blokady/hashy. Kontrola korzysta z metadanych
+konsumentów Docker i odrzuca kolizje lub nieznane mapowania; nie bada zawartości
+obcych checkoutów Windows. Współdzielone zależności i wyniki pozostają poza
+nową generacją. Jeśli którakolwiek kontrola odmówi, nie ma automatycznego
+fallbacku ani replayu; zachowaj oba workspace’y i receipt nieznanego wyniku.
+
+Poniższy `--dry-run` wyłącznie renderuje wywołanie recepty. Nie wykonuje
+operacyjnych guardów i nie jest ich wynikiem. Zwykłe wywołanie jest zarządzanym
+apply: przed utworzeniem generacji wykonuje odczytowe kontrole, a pod lease
+powtarza CAS i kontrolę konsumentów przed Compose.
+
+```sh
+just --dry-run docker-dev-recover-frontend-seed \
+  <failed-attempt> <config-sha256> <source-root> <port>
+
+just docker-dev-recover-frontend-seed \
+  <failed-attempt> <config-sha256> <source-root> <port>
+```
+
 Gotowy kandydat pakietu po nieudanej publikacji jest odrębny od działającego
 pakietu. Backend najpierw sprawdza jego kompletność i dowody Make oraz
 zachowuje oryginalny manifest przed następnym capture źródeł. Dopiero świeże
@@ -228,6 +275,16 @@ wstrzymane zadania Study również po zakończonym zadaniu. Nadal wymagane są
 sprawdzenie ich historii i brak aktywnych konsumentów oraz natywny drain;
 tryb nie zwalnia Solve i nie anuluje zadań. Domyślne `false` zachowuje
 restrykcyjny restart; inne wartości argumentu są odrzucane.
+
+Dla nigdy niewykonanego, przygotowanego Study dziennik może być pusty albo
+zawierać wyłącznie ukończone `fdm_grid_refresh`, związane zachowanym targetem
+z dokładnie bieżącym runem. Liczniki, rewizje, identyfikatory i czasy receiptów
+muszą być spójne; synchroniczny Grid może nie mieć opcjonalnego czasu dispatch.
+Obce runy, polecenia solvera i komendy nieukończone lub z błędem blokują drain.
+Preflight zachowuje dopuszczony dziennik w dowodzie stopu. Nadal wymaga gotowej
+siatki, samych pending stages, manualnego Held gate bez `start_release` dla
+każdego zachowanego runu oraz właściwego natywnego drain; nie czyści kolejki
+ani historii w celu dopuszczenia restartu.
 
 Wyjątkiem od braku aktywnej sesji jest dokładnie przypięty model nieudanej
 aktywacji, którego przyjęte zadanie zostało jawnie anulowane przed rozpoczęciem
@@ -409,6 +466,60 @@ otwarty (audyt 21.10.2026, T3 oraz R0.7/R0.8).
 Frontend obserwuje katalogi `app`, `src`, `public`, `scripts` i aktualizuje UI
 przez HMR. Zmiana helperów obrazu wymaga przygotowania nowego obrazu i jawnego
 odtworzenia usług; sam restart zachowuje przypięty obraz.
+
+#### Odzyskanie zatrzymanej grupy po nieznanym wyniku nadzoru API
+
+Użyj wyłącznie dla dokładnej pary kontenerów zakończonej z PID 0, gdy receipt
+failed_outcome_retained zachował API w trybie diagnostycznym, api_liveness.state
+wynosi observation_unknown, failure fence wskazuje ten sam błąd i bieżący
+OWNER.json nadal potwierdza tę samą tożsamość Ready. Wymagane są również puste
+katalogi/run records zaakceptowanego store, wszystkie rezerwacje ledgeru w stanie
+Released, niezmienione surowe receipts, brak innych konsumentów oraz zgodność
+sieci, storage i dokładnych pinów Compose. Proof v5 archiwizuje oryginalny
+process receipt i bajty failure fence. Nie edytuj tych dokumentów ani nie
+zamieniaj failed_outcome_retained na shutdown_unknown.
+
+Najpierw wykonaj bezmutacyjny podgląd z jawnym wyborem wariantu:
+
+    python3 -B scripts/docker_prepare_container_recovery.py --repo-root <main-checkout> --source-root <registered-worktree> --operator-pins <exact-operator-pins.json> --failed-outcome-retained
+
+Publikacja proofu i operator authorization pod blokadą tej grupy wymaga dopisania
+--publish; nie uruchamia usług. Następnie jawny
+
+    just docker-dev-recover-container <development-attempt> <compose-config-sha256> <registered-worktree> <port> runtime-services/container-recovery/<request-uuid>/operator.json
+
+przechodzi przez native empty-request v1 i zwykły managed start. Recovery przekazuje
+script=None: nie ponawia Solve, Compute ani Stop, a stary process receipt i
+nieznany wynik pozostają w immutable proof. Wszelki niepusty store, nierozliczona
+rezerwacja, zmiana fence/owner/kontenerów lub obcy konsument blokuje tę ścieżkę;
+nie zastępuj jej zwykłym resume, nowym namespace ani świeżym stanem.
+
+Wyłącznie jawnie wybrana ścieżka v6 obejmuje grupowy zakres bez fizycznego
+badania cudzych drzew. Użyj `--failed-outcome-retained --group-local-direct-binds`;
+nie jest on domyślny ani odtwarzany z samego receipt. Wymaga przypiętego
+`linux-native-v1`, pustego requestu v1, zatrzymanej pary, niezmienionego
+diagnostic fence/owner/CAS, pustego store i wszystkich rezerwacji `Released`.
+Zamrożony proof zawiera `consumer_scope=group-local-direct-binds-v1`, a jego
+kanoniczny digest jest częścią operator authorization.
+
+Zakres v6 sprawdza pełne metadane mountów aktualnych kontenerów względem
+chronionych bindów wybranej grupy (/state, /user-data, /host-ledger i
+/opt/fullmag/script-output, jeśli są bindami) oraz prywatnych wolumenów
+control, ledger, backend build i frontend development-state. Kontrola obejmuje
+surowe źródła bindów, ich lokalne kanoniczne mapowanie WSL, nazwy prywatnych
+wolumenów i ich mountpointy. Nakładanie dokładne, nadrzędne i podrzędne,
+nieznane aliasy, UNC, brak źródła i kolizje blokują recovery. Źródła checkoutu,
+source-git oraz współdzielone wolumeny Cargo, pnpm i package pozostają
+współdzielonymi zależnościami; nie stają się wyłącznymi zasobami grupy.
+
+Wybrana grupa z profilem Windows lub Windows bindem w chronionym zbiorze jest
+odrzucana. Znane ścieżki dysków Windows i aliasy Desktop są osobną przestrzenią
+ścieżek; po bezpośrednich kontrolach ich fizycznych drzew nie skanuje się ani
+nie uruchamia Windows CLI. Ten zakres dowodzi wyłącznie braku bezpośredniego
+nakładania deklarowanych chronionych mountów; nie dowodzi braku pośrednich
+junction, symlinków ani innych aliasów poza nimi. Nie zmienia domyślnego
+fence'u proofów v1-v5 i nie daje uprawnień do zmian cudzych kontenerów lub
+storage.
 
 `docker-dev-resume` wznawia obserwację konkretnego potwierdzonego nieudanego
 startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backend, również po wcześniej udanym starcie.

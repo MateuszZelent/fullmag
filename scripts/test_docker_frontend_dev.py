@@ -1198,6 +1198,10 @@ else:
     @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
     def test_start_reconciles_ready_receipt_when_cache_is_empty(self):
         with isolated(self.module) as (_root, workspace, inputs):
+            manifest = json.loads(self.module.INPUTS_PATH.read_text(encoding="utf-8"))
+            manifest.update(dependency_seed_sha256="a" * 64, toolpins_sha256="b" * 64)
+            self.module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+            inputs = self.module.read_inputs(self.module.INPUTS_PATH)
             self.module._prepare_state_directories()
             self.module._prepare_managed_frontend(inputs)
             self.module._atomic_json(
@@ -1206,6 +1210,7 @@ else:
                     "schema": self.module.RECEIPT_SCHEMA,
                     "state": "failed",
                     "dependency_install": "ready",
+                    "dependency_install_key": self.module._dependency_install_key(inputs),
                 },
                 "frontend development receipt",
             )
@@ -1228,6 +1233,10 @@ else:
 
             stopping = type("Stopping", (), {"is_set": lambda self: False})()
             log_stream = io.BytesIO()
+            def fake_start_next(*args):
+                self.module._release_runtime_lock(args[-1])
+                return object()
+
             with patch.dict(os.environ, {"FULLMAG_DOCKER_FRONTEND": "dev"}, clear=False):
                 with patch.object(
                     self.module,
@@ -1237,10 +1246,93 @@ else:
                     with patch.object(self.module, "_log_stream", return_value=log_stream):
                         with patch.object(self.module, "_run_pnpm_install", side_effect=fake_install) as install:
                             with patch.object(self.module, "_start_log_tailer", return_value=None):
-                                with patch.object(self.module, "_start_next", return_value=object()):
+                                with patch.object(self.module, "_start_next", side_effect=fake_start_next):
                                     self.module.start(stopping)
             install.assert_called_once()
             log_stream.close()
+
+    @skipIf(os.name == "nt", "dependency reconciliation regression uses Linux symlink semantics")
+    def test_ready_receipt_reuses_next_tree_only_with_matching_install_key(self):
+        for previous_key in ("stale", "missing", "matching"):
+            with self.subTest(previous_key=previous_key):
+                with isolated(self.module) as (_root, workspace, _inputs):
+                    manifest = json.loads(self.module.INPUTS_PATH.read_text(encoding="utf-8"))
+                    manifest["dependency_seed_sha256"] = "a" * 64
+                    manifest["toolpins_sha256"] = "b" * 64
+                    self.module.INPUTS_PATH.write_text(json.dumps(manifest), encoding="utf-8")
+                    inputs = self.module.read_inputs(self.module.INPUTS_PATH)
+                    install_key = self.module._dependency_install_key(inputs)
+
+                    self.module._prepare_state_directories()
+                    self.module._prepare_managed_frontend(inputs)
+                    virtual_next = (
+                        workspace
+                        / "node_modules"
+                        / ".pnpm"
+                        / "next@16.3.8"
+                        / "node_modules"
+                        / "next"
+                    )
+                    binary = virtual_next / "dist" / "bin" / "next"
+                    binary.parent.mkdir(parents=True)
+                    binary.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+                    (workspace / "apps" / "control-room" / "node_modules" / "next").symlink_to(
+                        virtual_next, target_is_directory=True
+                    )
+                    self.assertTrue(self.module._dependency_tree_ready(inputs))
+
+                    history = {
+                        "schema": self.module.RECEIPT_SCHEMA,
+                        "state": "failed",
+                        "dependency_install": "ready",
+                    }
+                    if previous_key == "stale":
+                        history["dependency_install_key"] = "c" * 64
+                    elif previous_key == "matching":
+                        history["dependency_install_key"] = install_key
+                    self.module._atomic_json(
+                        self.module.RECEIPT_PATH, history, "frontend development receipt"
+                    )
+                    stopping = type("Stopping", (), {"is_set": lambda self: False})()
+                    log_stream = io.BytesIO()
+                    def fake_start_next(*args):
+                        self.module._release_runtime_lock(args[-1])
+                        return object()
+
+                    with patch.dict(os.environ, {"FULLMAG_DOCKER_FRONTEND": "dev"}, clear=False):
+                        with patch.object(
+                            self.module,
+                            "_tool_version",
+                            side_effect=[self.module.EXPECTED_NODE_VERSION, self.module.EXPECTED_PNPM_VERSION],
+                        ):
+                            with patch.object(self.module, "_log_stream", return_value=log_stream):
+                                with patch.object(self.module, "_run_pnpm_install") as install:
+                                    with patch.object(self.module, "_start_log_tailer", return_value=None):
+                                        with patch.object(self.module, "_start_next", side_effect=fake_start_next):
+                                            self.module.start(stopping)
+                    with self.subTest(history_key=previous_key):
+                        if previous_key == "matching":
+                            install.assert_not_called()
+                        else:
+                            install.assert_called_once()
+                    current = json.loads(self.module.RECEIPT_PATH.read_text(encoding="utf-8"))
+                    self.assertEqual(current.get("dependency_install_key"), install_key)
+                    log_stream.close()
+
+    def test_dependency_install_key_ignores_source_commit_and_tracks_dependency_pins(self):
+        with isolated(self.module) as (_root, _workspace, inputs):
+            inputs.manifest.update(
+                dependency_seed_sha256="a" * 64,
+                toolpins_sha256="b" * 64,
+            )
+            initial = self.module._dependency_install_key(inputs)
+            inputs.manifest["source_commit"] = "9" * 40
+            self.assertEqual(self.module._dependency_install_key(inputs), initial)
+            inputs.manifest["dependency_seed_sha256"] = "c" * 64
+            self.assertNotEqual(self.module._dependency_install_key(inputs), initial)
+            inputs.manifest["dependency_seed_sha256"] = "a" * 64
+            inputs.manifest["toolpins_sha256"] = "d" * 64
+            self.assertNotEqual(self.module._dependency_install_key(inputs), initial)
 
     @skipIf(os.name == "nt", "runtime flock regression uses POSIX file locking")
     def test_runtime_lock_rejects_a_second_active_consumer(self):

@@ -63,6 +63,7 @@ class RetainedRecoveryContextTests(unittest.TestCase):
 
     def test_ordinary_recreation_does_not_acquire_recovery(self):
         self.previous.pop('container_recovery')
+        self.previous.pop('container_recovery_environment')
         self.document['services']['backend']['environment'] = {}
         with patch('docker_volume_pre_ack_retry.storage.resolve_layout') as resolve:
             self.assertEqual(self.run_context(), {})
@@ -73,6 +74,17 @@ class RetainedRecoveryContextTests(unittest.TestCase):
             call(journal_root + 'intent.json', optional=True),
         ])
         self.control.write.assert_not_called()
+
+    def test_partial_receipt_cannot_be_treated_as_ordinary_recreation(self):
+        for missing in ('container_recovery', 'container_recovery_environment'):
+            with self.subTest(missing=missing):
+                original = dict(self.previous)
+                self.previous.pop(missing)
+                self.document['services']['backend']['environment'] = {}
+                with self.assertRaisesRegex(dev.BuildControlError, 'incomplete'):
+                    self.run_context()
+                self.control.write.assert_not_called()
+                self.previous = original
 
     def test_fresh_state_cannot_retarget_original_recovery(self):
         with self.assertRaisesRegex(dev.BuildControlError, 'original session'):

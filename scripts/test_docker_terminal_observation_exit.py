@@ -20,7 +20,7 @@ START = next(n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name =
 
 
 def guard(*, recreate=False, restart=False, stop=False, fresh=False, proof=None, declared=True,
-          failed=False, restart_backend=False):
+          failed=False, restart_backend=False, held=False):
     statements = []
     for n in RETAINED.body:
         if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {
@@ -29,13 +29,18 @@ def guard(*, recreate=False, restart=False, stop=False, fresh=False, proof=None,
         if isinstance(n, ast.If) and any(isinstance(x, ast.Name) and x.id == "retained_terminal_observation"
                                          for x in ast.walk(n.test)):
             statements.append(n)
-    assert len(statements) == 4
+    assigned = {target.id for statement in statements if isinstance(statement, ast.Assign)
+                for target in statement.targets if isinstance(target, ast.Name)}
+    assert assigned == {"retained_terminal_observation", "terminal_observation_exit",
+                        "terminal_observation_failed_resume"}
+    assert any(isinstance(statement, ast.If) for statement in statements)
     env = {"document": {"services": {"backend": {"environment":
             {"FULLMAG_TERMINAL_OBSERVATION_REQUEST": "fixture/request.json"} if declared else {}}}},
            "restart_idle_service": restart, "stop_after_drain": stop, "recreate_services": recreate,
             "args": SimpleNamespace(fresh_state=fresh, terminal_observation_proof=proof, restart_backend=restart_backend),
            "previous": {"state": "failed-confirmed" if failed else "succeeded"},
            "refresh_frontend_service": False, "resume_recreation_id": None,
+           "held_ui_context": {} if held else None,
            "BuildControlError": dev.BuildControlError}
     exec(compile(ast.Module(body=statements, type_ignores=[]), "<candidate-exit-guard>", "exec"), env)
     return env["terminal_observation_exit"]
@@ -103,6 +108,11 @@ class ExitRoute(unittest.TestCase):
                         {"failed": True, "restart_backend": True, "recreate": True}):
             with self.subTest(options=options), self.assertRaises(dev.BuildControlError):
                 guard(**options)
+
+    def test_held_ui_cannot_reuse_terminal_observation_controls(self):
+        with self.assertRaisesRegex(dev.BuildControlError, "cannot combine with terminal-observation"):
+            guard(restart=True, stop=True, held=True)
+        self.assertFalse(guard(declared=False, held=True))
 
     def test_exit_guard_runs_before_any_resume_dispatch(self):
         ids = {}

@@ -78,7 +78,8 @@ pub use fms::{
 };
 pub use store::{
     ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, LiveComputeRequestReceipt, CheckpointStillReferenced, GcPlan,
-    RunBacklogFull, SessionStore, accepted_run_start_policy_is_manual,
+    RunBacklogFull, SessionStore, StagedCasPublication, StagedRunIntentCommitDisposition,
+    accepted_run_start_policy_is_manual,
 };
 pub use task_cancellation::{
     FMS_TASK_CANCELLATION_INTENT_SCHEMA, FmsTaskCancellationIntent,

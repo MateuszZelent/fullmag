@@ -206,19 +206,30 @@ class AuthenticationTests(unittest.TestCase):
             and isinstance(node.items[0].context_expr, ast.Name)
             and node.items[0].context_expr.id == "operation_context")
         # Execute the real startup-diagnostic branch from start, with its actual lease binding.
-        branch = ast.With(items=leased.items, body=[leased.body[0]], type_comment=None)
+        diagnostic_branch = next(node for node in leased.body if isinstance(node, ast.If)
+            and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "_validate_recreation_resume_records" for call in ast.walk(node)))
+        branch = ast.With(items=leased.items,
+            body=leased.body[:leased.body.index(diagnostic_branch) + 1], type_comment=None)
         module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
-        operation, metadata, proof = {}, {"schema": restart.SCHEMA}, {"proof": "pinned"}
+        operation = {"receipt": {"state": "starting"}}
+        issued = {"receipt": {"state": "starting"}}
+        metadata, proof = {"schema": restart.SCHEMA}, {"proof": "pinned"}
         calls = []
         def validate(*args, **kwargs):
             calls.append(kwargs)
+            self.assertEqual(operation, issued)
             self.assertIs(kwargs.get("current_operation"), operation)
             self.assertIs(kwargs.get("expected_proof"), proof)
             return {"native_recovery_context": {"startup_diagnostic_restart": metadata}}
         scope = {"operation_context": nullcontext(operation), "validated_startup_diagnostic_restart": metadata,
                  "recreation_resume_proof": proof, "_validate_recreation_resume_records": validate,
                  "args": None, "control": None, "selected": None, "identity": None,
-                 "BuildControlError": BuildControlError}
+                 "failed_frontend_resume": False, "helper_source_binding": None,
+                 "_preflight_prepared_start_budget": lambda *args: None,
+                 "maintenance": None, "prepared_recovery_constraints": None,
+                 "native_contracts": [], "include_untracked": [], "ui_mode": "gui",
+                 "cold_budget_restore": None, "BuildControlError": BuildControlError}
         exec(compile(module, dev.__file__, "exec"), scope)
         self.assertEqual(len(calls), 1)
 

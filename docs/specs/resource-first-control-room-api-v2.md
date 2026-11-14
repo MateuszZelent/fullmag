@@ -2297,3 +2297,43 @@ journalu jest to jego monotoniczna rewizja, także po zmianach lifecycle; liczba
 wpisów ograniczonej historii nie zastępuje tej rewizji. Legacy bez trwałego
 journalu zachowuje dotychczasowy licznik. Niezgodność odmawia przed przyjęciem
 polecenia i nie uruchamia Solve ani materializacji.
+
+
+### Dowód odrzucenia jawnego Compute przed przyjęciem
+
+Płaska odpowiedź błędu może zawierać opcjonalne
+`intent_disposition: "not_accepted"`. Status HTTP, `code` i `message` zachowują
+swoje znaczenie. Brak pola nie jest dowodem odrzucenia; nie wolno wywnioskować
+go z kodu 400/409, pustej kolejki ani treści komunikatu.
+
+Marker wymaga zakończonego, trwałego wyszukania dokładnego klucza i body
+w zakresie właściciela sesji oraz ponownego sprawdzenia typowanej podstawy
+odrzucenia pod transition fence. Wcześniejsze trwałe przyjęcie ma pierwszeństwo
+i zwraca zapisany ACK. Niedostępny magazyn, niejednoznaczne legacy records,
+konflikt body lub niepotwierdzony release nie stają się pustym wynikiem skanu.
+
+Dowód negatywny dotyczy niezmienionego żądania wraz z jawnym, zwalidowanym
+`x-fullmag-session-scope`, ponownie sprawdzonym pod tą samą blokadą. Restore
+może zachować identyfikator sesji i jej epoch, ale zmienia scope instancji API;
+sam identyfikator sesji, epoch i rewizja nie dowodzą trwałej niemożności
+przyjęcia po restore. Żądania bez jawnego scope zachowują kompatybilność,
+ale nie otrzymują markera. Pozytywny replay ACK nie zależy od obecności tego
+nagłówka; klucz trwałego przyjęcia nie zawiera scope procesu.
+
+Podstawa brakujących materiałów wymaga dokładnego jawnego pinu skończonej
+rewizji i niezmienionej kanonicznej sceny. Brak pinu, przyszła rewizja lub
+`u64::MAX` nie dają takiego dowodu. UI może zwolnić oczekującą intencję dopiero
+po autorytatywnym odrzuceniu w aktualnym zakresie; nie ponawia POST automatycznie.
+
+Także ściśle starszy pin sceny (`expected < observed`) może dowodzić
+odrzucenia, jeśli pod transition nadal zachodzi ta nierówność i zgadza się
+jawny scope żądania. Rewizja sceny saturuje, nie zawija się; przyszły pin
+ani sam fingerprint domeny nie są taką podstawą. To pozwala rozstrzygnąć
+starą intencję po edycji materiału lub tekstury, zanim użytkownik jawnie
+uruchomi nowy Compute.
+
+Dowód ściśle starszej rewizji jest niezależny od pierwszego zgłoszonego błędu
+admission: wcześniejszy konflikt mesha lub nadal niepełny materiał nie może
+go maskować. Oryginalny status, code i message pozostają zachowane. Nadal
+wymagane są jawny aktualny scope, transition i zakończony trwały keyed miss;
+ACK, brak skanu, headerless oraz konflikt body zachowują dotychczasowe reguły.

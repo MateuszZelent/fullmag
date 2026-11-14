@@ -577,6 +577,7 @@ def serve():
         signal.signal(number, lambda *_: stopping.set())
     paths = service.prepare_storage()
     try:
+        held_ui_preflight = service.held_ui_materialization_preflight(paths)
         if (os.environ.get("FULLMAG_ISOLATED_SNAPSHOT_START") is not None
                 or os.environ.get("FULLMAG_ISOLATED_SNAPSHOT_START_SHA256") is not None):
             import runtime_service_snapshot
@@ -627,8 +628,9 @@ def serve():
     failure_fence = service.process_receipt_path(paths).parent / (
         "api-failure-" + uuid.uuid4().hex + ".json"
     )
-    with service.terminal_observation_api_input(
-        paths, terminal_preflight=terminal_preflight, accepted_preflight=accepted_preflight
+    with service.held_ui_materialization_api_input(
+        paths, preflight=held_ui_preflight, terminal_preflight=terminal_preflight,
+        accepted_preflight=accepted_preflight, store_binding=bootstrap["binding"]
     ) as (api_environment, restore_input, terminal_launch):
         api_environment = _api_environment_with_operator_capability(api_environment)
         api_environment["FULLMAG_API_RUNTIME_FAILURE_FENCE"] = str(failure_fence)
@@ -655,7 +657,7 @@ def serve():
         service._atomic_json(receipt_path, receipt, "process tree receipt")
         api_startup_timeout = (
             service.ACCEPTED_REATTACH_API_STARTUP_TIMEOUT_SECONDS
-            if accepted_preflight is not None or terminal_preflight is not None
+            if accepted_preflight is not None or terminal_preflight is not None or held_ui_preflight is not None
             else None
         )
         handle = service.start(paths, api_port=8081, expected_binding=bootstrap["binding"],
@@ -680,6 +682,11 @@ def serve():
         if terminal_preflight is not None:
             receipt["terminal_observation"] = service.terminal_observation_runtime_receipt(
                 paths, preflight=terminal_preflight, launch=terminal_launch, handle=handle
+            )
+            service._atomic_json(receipt_path, receipt, "process tree receipt")
+        if held_ui_preflight is not None:
+            receipt["held_ui_materialization"] = service.held_ui_materialization_runtime_receipt(
+                paths, preflight=held_ui_preflight, launch=terminal_launch, handle=handle
             )
             service._atomic_json(receipt_path, receipt, "process tree receipt")
         last_full_api_probe = time.monotonic()

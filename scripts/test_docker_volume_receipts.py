@@ -515,6 +515,39 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
         dev._saved_authoring_validate_services(pin, actual, quiesced=True)
         dev._saved_authoring_validate_probe(proof, pin, scene)
 
+    def test_live_probe_rejects_analysis_only_difference_from_durable_archive(self):
+        import copy, hashlib
+        import docker_volume_dev as dev
+        from docker_build_control import canonical
+        dev, pin, scene, raw, files, pack, _, proof = self.fixture()
+        scene = copy.deepcopy(scene)
+        scene['analysis'] = {'postprocessing_definitions': [{
+            'definition_id': 'mode-view-1', 'revision': 4,
+            'module_id': 'analysis.dispersion', 'module_version': '2',
+            'definition_schema': 'analysis.dispersion.mode_visualization.v1',
+            'node_kind': 'mode_visualization', 'label': 'Mode view',
+            'data_ref': {'run_id': 'run-1', 'dataset_id': 'spectrum', 'dataset_revision': 'r3'},
+            'settings': {'projection': {'axis': [1, 0, 0], 'style': {'name': 'opaque'}}},
+        }]}
+        files['project/scene_document.json'] = canonical(scene)
+        files['project/definition.json'] = canonical({
+            'schema': 'fullmag.project.v1', 'project_id': pin['archive']['project_id'],
+            'revision': pin['archive']['project_revision'], 'scene': scene,
+        })
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+                              scene_sha256=hashlib.sha256(canonical(scene)).hexdigest())
+        for suffix in ('before', 'after'):
+            proof['resources']['scene_' + suffix]['body'] = copy.deepcopy(scene)
+
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        dev._saved_authoring_validate_probe(proof, pin, scene)
+
+        changed = copy.deepcopy(proof)
+        changed['resources']['scene_after']['body']['analysis']['postprocessing_definitions'][0]['settings']['projection']['axis'] = [0, 1, 0]
+        with self.assertRaisesRegex(BuildControlError, 'live authored scene differs from durable archive'):
+            dev._saved_authoring_validate_probe(changed, pin, scene)
+
     def test_accepts_empty_ui_authoring_archive_and_existing_strict_probe(self):
         dev, pin, scene, raw, _, _, _, proof = self.empty_authoring_fixture()
         dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,
@@ -617,6 +650,70 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
                 raw = pack(files)
                 pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
                 self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+
+    def test_accepts_full_checkpoint_with_canonical_generated_source_path(self):
+        import hashlib, json
+        from docker_build_control import canonical
+        dev, pin, scene, _, files, pack, _, _ = self.fixture()
+        source = b'# Canonical source rendered from the committed scene\n'
+        files.pop('project/source/script.py')
+        files.pop('project/source/script.json')
+        files['project/source.py'] = source
+        manifest = json.loads(files['manifest/project.json'])
+        manifest.update(source='project/source.py', opaque_documents=['project/provenance.json'])
+        files['manifest/project.json'] = canonical(manifest)
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+            source_entry='project/source.py', source_sha256=hashlib.sha256(source).hexdigest())
+
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,
+            config_sha256='c' * 64, selected='/selected')
+
+    def test_generated_source_binding_remains_exact_and_content_addressed(self):
+        import copy, hashlib, json
+        from docker_build_control import canonical
+        dev, pin, _, _, files, pack, _, _ = self.fixture()
+        source = b'# Canonical source rendered from the committed scene\n'
+        files.pop('project/source/script.py')
+        files.pop('project/source/script.json')
+        files['project/source.py'] = source
+        manifest = json.loads(files['manifest/project.json'])
+        manifest.update(source='project/source.py', opaque_documents=['project/provenance.json'])
+        files['manifest/project.json'] = canonical(manifest)
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+            source_entry='project/source.py', source_sha256=hashlib.sha256(source).hexdigest())
+
+        for source_entry in ('project/foreign.py', '../project/source.py'):
+            with self.subTest(source_entry=source_entry):
+                candidate = copy.deepcopy(pin)
+                candidate['archive']['source_entry'] = source_entry
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+        for entry, digest in ((None, pin['archive']['source_sha256']),
+                              ('project/source.py', None)):
+            with self.subTest(entry=entry, digest=digest):
+                candidate = copy.deepcopy(pin)
+                candidate['archive'].update(source_entry=entry, source_sha256=digest)
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+        wrong_hash = copy.deepcopy(pin)
+        wrong_hash['archive']['source_sha256'] = 'f' * 64
+        with self.assertRaises(BuildControlError):
+            dev._saved_authoring_validate_archive(raw, wrong_hash['archive'])
+
+        missing_source = dict(files)
+        del missing_source['project/source.py']
+        missing_raw = pack(missing_source)
+        missing_pin = copy.deepcopy(pin['archive'])
+        missing_pin.update(bytes=len(missing_raw), sha256=hashlib.sha256(missing_raw).hexdigest())
+        with self.assertRaises(BuildControlError):
+            dev._saved_authoring_validate_archive(missing_raw, missing_pin)
 
     def test_refuses_missing_or_foreign_manifest_authoring_source(self):
         import hashlib, json
@@ -1061,9 +1158,19 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         import docker_dev_codegen as codegen
         import docker_development_inputs as frontend_inputs
         import windows_folder_host,linux_native_host,fullmag_storage,docker_volume_reconcile,docker_build_control
+        import docker_volume_cold_budget_restore,docker_volume_stop_unadmitted
         host = linux_native_host if linux else windows_folder_host
         certificate_name = Path(host.HOST_CERT_PATH).name
         control=mock.Mock(spec=BuildControl);control.project='own';control.volume='control';control.namespace=''
+        cold_journal, cold_intent = docker_volume_cold_budget_restore._paths('b'*64)
+        native_stop_journal = 'verification/stop-failed-' + 'b'*64 + '.json'
+        recovery_reads=[]
+        def read_absent_recovery_record(control_arg, relative, *, optional=False):
+            self.assertIs(control_arg, control)
+            self.assertTrue(optional)
+            self.assertIn(relative, (cold_journal, cold_intent, native_stop_journal))
+            recovery_reads.append((relative, optional))
+            return None
         control._active_operation=None
         control.operation=types.MethodType(BuildControl.operation,control)
         control._pin_operation_helper=types.MethodType(BuildControl._pin_operation_helper,control)
@@ -1114,6 +1221,10 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                     or (fault=='owner-drift' and name==host.OWNER_NAME)):
                 raw+=b' '
             return raw
+        cold_control_patch = mock.patch.object(
+            docker_volume_stop_unadmitted, '_control_bytes', side_effect=read_absent_recovery_record)
+        cold_control_patch.start()
+        self.addCleanup(cold_control_patch.stop)
         with mock.patch.object(docker_build_control.subprocess,'Popen',return_value=logger), \
              mock.patch.object(fullmag_storage,'validate_path',return_value=Path('/state')), \
              mock.patch.object(dev,'_session_host',return_value=host), \
@@ -1144,6 +1255,10 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                 if fault is None:raise
         if fault in ('source-mismatch','unknown-source','carry-preflight'):stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
+        self.assertEqual({relative for relative, _ in recovery_reads},
+                         {cold_journal, cold_intent, native_stop_journal})
+        self.assertTrue(all(optional for _, optional in recovery_reads))
+        cold_control_patch.stop()
         return writes,seeded,composed,logger
 
     def test_successful_handoff_recreates_only_frontend_and_retains_backend(self):

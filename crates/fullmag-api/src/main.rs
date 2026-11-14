@@ -5458,6 +5458,16 @@ fn ensure_current_live_request_scope(
     else {
         return Ok(());
     };
+    ensure_current_live_request_scope_for_expected(snapshot, request_scope_epoch, &expected)
+}
+
+/// Revalidate an explicitly captured transport scope after moving a finalizer
+/// outside its originating Tokio request task.
+pub(crate) fn ensure_current_live_request_scope_for_expected(
+    snapshot: &SessionStateResponse,
+    request_scope_epoch: &str,
+    expected: &crate::router_v2::middleware::session_scope::ExpectedSessionScope,
+) -> Result<(), ApiError> {
     let actual_epoch = crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot);
     if expected.session_id != snapshot.session.session_id
         || expected.session_epoch != actual_epoch

@@ -559,7 +559,44 @@ class DiagnosticBuildOnlyTests(unittest.TestCase):
             process, owner = self.fixture(); process['api_failure_fence'] = str(fence)
             with patch.dict(os.environ, FULLMAG_HOST_LEDGER_ROOT=str(ledger)), patch.object(urllib.request, 'urlopen', return_value=response):
                 yield SimpleNamespace(check=lambda pin=None:namespace['diagnostic_api_evidence'](process,owner,None,pin),
-                    namespace=namespace, process=process, proc=proc, health=health, fence=fence, ledger=ledger, api=api)
+                    namespace=namespace, process=process, owner=owner, proc=proc, health=health,
+                    fence=fence, ledger=ledger, api=api)
+
+    def mark_terminal_failed_owner(self, fixture):
+        fixture.owner['state'] = 'failed'
+        fixture.owner['children'][0]['status'] = 'exited_success'
+        fixture.owner['children'][1]['status'] = 'exited_failure'
+        repair.validate_diagnostic_build(fixture.process, fixture.owner)
+
+    def test_failed_owner_build_without_pin_is_read_only_when_all_reservations_released(self):
+        with self.observations() as f:
+            self.mark_terminal_failed_owner(f)
+            ledger_file = f.ledger/'HOST_RESOURCE_LEDGER.json'
+            executable = (f.api/'exe').resolve(strict=True)
+            before = (json.dumps(f.process, sort_keys=True), json.dumps(f.owner, sort_keys=True),
+                      f.fence.read_bytes(), ledger_file.read_bytes(), (f.api/'environ').read_bytes(),
+                      executable.read_bytes())
+            evidence = f.check()
+            after = (json.dumps(f.process, sort_keys=True), json.dumps(f.owner, sort_keys=True),
+                     f.fence.read_bytes(), ledger_file.read_bytes(), (f.api/'environ').read_bytes(),
+                     executable.read_bytes())
+            self.assertEqual(len(evidence), 2)
+            self.assertEqual(after, before)
+
+    def test_failed_owner_without_pin_rejects_occupied_or_malformed_ledger(self):
+        for raw in (b'{"reservations":[{"state":"active"}]}',
+                    b'{"reservations":[null]}'):
+            with self.subTest(raw=raw), self.observations() as f:
+                self.mark_terminal_failed_owner(f)
+                (f.ledger/'HOST_RESOURCE_LEDGER.json').write_bytes(raw)
+                with self.assertRaisesRegex(ValueError, 'reservation'):
+                    f.check()
+
+    def test_failed_owner_rejects_non_pending_claimed_pin_schema(self):
+        with self.observations() as f:
+            self.mark_terminal_failed_owner(f)
+            with self.assertRaisesRegex(ValueError, 'exact unused admission pin'):
+                f.check({'schema_version': 'fullmag.claimed-interruption-build-pin.v1'})
 
     def test_exact_running_rollback_survives_pending_and_finalized_rotation(self):
         backend = package_tests.backend

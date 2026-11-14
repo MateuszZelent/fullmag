@@ -1175,8 +1175,13 @@ def _activate_if_requested(group: RetainedGroup, args: argparse.Namespace) -> No
 
 
 def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, drain: bool) -> None:
-    from docker_volume_dev import recreate
+    from docker_volume_dev import preflight_retained_recovery_handoff, recreate
 
+    preflight_retained_recovery_handoff(
+        group.control, group.terminal, group.document,
+        {"backend": group.backend, "frontend": group.frontend},
+        backend_id=group.backend_id,
+    )
     if drain:
         from docker_volume_dev import stop_idle
 

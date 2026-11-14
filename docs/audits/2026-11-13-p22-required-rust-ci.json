@@ -1,0 +1,59 @@
+{
+  "commit": "5096d852ad0e448bc3f92a0f5637bc3ca1b395fb",
+  "run_id": 43447016933,
+  "job_id": 131959015348,
+  "job_conclusion": "success",
+  "raw_log_sha256": "8d2876da64275fa04c8dcec7cc0e9a6e69b6795d29a4474b5df3e721349a84cf",
+  "raw_log_bytes": 33220167,
+  "required_tests": {
+    "selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b": [
+      "2026-11-13T15:07:47.4358671Z test live_accepted_execution::tests::selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b ... ok"
+    ],
+    "selected_b_rejects_unqualified_disabled_and_cyclic_predecessors": [
+      "2026-11-13T15:07:47.4668094Z test live_accepted_execution::tests::selected_b_rejects_unqualified_disabled_and_cyclic_predecessors ... ok"
+    ],
+    "selected_b_null_object_reset_uses_authored_port_before_explicit_stage_resolution": [
+      "2026-11-13T15:07:47.3524705Z test live_accepted_execution::tests::selected_b_null_object_reset_uses_authored_port_before_explicit_stage_resolution ... ok"
+    ],
+    "selected_b_without_reset_still_rejects_explicit_authored_stage_source": [
+      "2026-11-13T15:07:47.4777828Z test live_accepted_execution::tests::selected_b_without_reset_still_rejects_explicit_authored_stage_source ... ok"
+    ],
+    "required_authored_initial_state_reaches_prepare_without_a_cas_input": [
+      "2026-11-13T15:05:50.9400829Z test scheduler::accepted_start_tests::required_authored_initial_state_reaches_prepare_without_a_cas_input ... ok",
+      "2026-11-13T15:08:32.4670275Z test scheduler::accepted_start_tests::required_authored_initial_state_reaches_prepare_without_a_cas_input ... ok"
+    ],
+    "malformed_foreign_or_missing_authored_reference_fails_before_claim_or_admission": [
+      "2026-11-13T15:05:50.7909173Z test scheduler::accepted_start_tests::malformed_foreign_or_missing_authored_reference_fails_before_claim_or_admission ... ok",
+      "2026-11-13T15:08:32.3267355Z test scheduler::accepted_start_tests::malformed_foreign_or_missing_authored_reference_fails_before_claim_or_admission ... ok"
+    ],
+    "exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease": [
+      "2026-11-13T15:09:14.1939468Z test accepted_study_supervisor::tests::exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease ... ok",
+      "2026-11-13T15:19:32.9300502Z test accepted_study_supervisor::tests::exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease ... ok"
+    ],
+    "read_transaction_maps_native_writer_contention_to_typed_busy": [
+      "2026-11-13T15:00:37.1457839Z test writer::tests::read_transaction_maps_native_writer_contention_to_typed_busy ... ok",
+      "2026-11-13T15:13:07.8637593Z test writer::tests::read_transaction_maps_native_writer_contention_to_typed_busy ... ok",
+      "2026-11-13T15:19:20.2371380Z test writer::tests::read_transaction_maps_native_writer_contention_to_typed_busy ... ok"
+    ],
+    "nonbusy_reader_lock_error_retains_original_trylock_chain": [
+      "2026-11-13T15:13:07.8604777Z test writer::tests::nonbusy_reader_lock_error_retains_original_trylock_chain ... ok",
+      "2026-11-13T15:19:20.2295135Z test writer::tests::nonbusy_reader_lock_error_retains_original_trylock_chain ... ok"
+    ],
+    "worker_start_gate_retries_real_writer_contention_without_execution_failure": [
+      "2026-11-13T15:19:29.3783765Z test accepted_study_worker::accepted_worker_claim_retry_tests::worker_start_gate_retries_real_writer_contention_without_execution_failure ... ok"
+    ],
+    "worker_start_gate_retry_does_not_retry_plain_or_text_only_busy_errors": [
+      "2026-11-13T15:19:27.3191292Z test accepted_study_worker::accepted_worker_claim_retry_tests::worker_start_gate_retry_does_not_retry_plain_or_text_only_busy_errors ... ok"
+    ],
+    "typed_reader_busy_keeps_public_busy_code": [
+      "2026-11-13T15:05:46.0521467Z test session_persistence::historical_export_busy_tests::typed_reader_busy_keeps_public_busy_code ... ok"
+    ],
+    "queue_snapshot_defers_real_store_contention_but_keeps_other_errors_fatal": [
+      "2026-11-13T15:19:33.2030000Z test scheduler_writer_busy_tests::queue_snapshot_defers_real_store_contention_but_keeps_other_errors_fatal ... ok"
+    ]
+  },
+  "all_required_named_tests_observed": true,
+  "schema": "fullmag.p22-required-rust-ci-proof.v1",
+  "job_url": "https://github.com/MateuszZelent/fullmag/actions/runs/43447016933/job/131959015348",
+  "scope": "Named source regressions; not a managed runtime or browser qualification."
+}

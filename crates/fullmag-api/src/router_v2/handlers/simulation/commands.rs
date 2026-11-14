@@ -7,8 +7,8 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
 
-use crate::error::ApiError;
-use crate::live_compute_request::LiveComputeRequest;
+use crate::error::{ApiError, TerminalComputeRejection};
+use crate::live_compute_request::{ComputeReplayOutcome, LiveComputeRequest};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_backend_kind;
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
@@ -53,11 +53,22 @@ pub async fn submit_command(
     Json(req): Json<StructuredCommandRequest>,
 ) -> Result<Json<CommandResponse>, ApiError> {
     let context = crate::capture_current_live_request_context(&state).await?;
+    // Tokio task-local state is not inherited by the detached submission task.
+    // Preserve the middleware-validated scope only for terminal negative proof.
+    let explicit_scope =
+        crate::router_v2::middleware::session_scope::current_expected_session_scope();
     // A proxy timeout must not cancel publication after a durable Compute
     // release. This task keeps the existing session fence and admission checks
     // and finishes exactly this command even if its HTTP caller disconnects.
     let response = tokio::spawn(async move {
-        submit_structured_command_impl_with_context(state, &headers, req, Some(&context)).await
+        submit_structured_command_impl_with_context(
+            state,
+            &headers,
+            req,
+            Some(&context),
+            explicit_scope,
+        )
+        .await
     })
     .await
     .map_err(|error| {
@@ -72,17 +83,23 @@ async fn submit_structured_command_impl_with_context(
     headers: &HeaderMap,
     req: StructuredCommandRequest,
     context: Option<&crate::types::CurrentLiveRequestContext>,
+    explicit_scope: Option<crate::router_v2::middleware::session_scope::ExpectedSessionScope>,
 ) -> Result<CommandResponse, ApiError> {
     reject_imported_read_only_command(&state).await?;
     let request_key = command_request_key(headers);
     let durable_request = if let Some(context) = context.filter(|_| crate::live_accepted_execution::docker_api_only_runtime()) {
-        let request = LiveComputeRequest::capture(
-            context, &req, request_key.as_deref(), command_request_id(headers),
+        let request = LiveComputeRequest::capture_with_request_scope(
+            context,
+            &req,
+            request_key.as_deref(),
+            command_request_id(headers),
+            explicit_scope.clone(),
         )?;
         if let Some(request) = &request {
             let _transition = state.current_live_session_transition.lock().await;
-            if let Some(response) = request.replay_under_transition(&state, context).await? {
-                return Ok(response);
+            match request.replay_under_transition(&state, context).await? {
+                ComputeReplayOutcome::Accepted(response) => return Ok(response),
+                ComputeReplayOutcome::NotApplicable | ComputeReplayOutcome::CompletedMiss => {}
             }
         }
         request
@@ -103,25 +120,32 @@ async fn submit_structured_command_impl_with_context(
     let result = submit_new_structured_command(
         Arc::clone(&state), command_headers, req, context, request_key, durable_request.as_ref(),
     ).await;
-    if let (Err(error), Some(request), Some(context)) = (&result, &durable_request, context) {
-        // The durable commit or release can succeed before the journal or
-        // realtime publication fails. Read the exact receipt under the same
-        // owner fence before reporting a submission failure to the caller.
-        if error.status == axum::http::StatusCode::CONFLICT || error.status.is_server_error() {
-            let _transition = state.current_live_session_transition.lock().await;
-            if let Some(response) = request.replay_under_transition(&state, context).await? {
-                if error.status.is_server_error() {
-                    tracing::warn!(
-                        command_id = %response.command_id,
-                        error = %error.message,
-                        "returning durable Compute acceptance after a publication error"
-                    );
+    match result {
+        Err(mut error) => {
+            if let (Some(request), Some(context)) = (&durable_request, context) {
+                // Exact replay handles accepted publication races; the same
+                // completed scan may attach a typed negative only when its
+                // terminal evidence still matches under this owner fence.
+                let _transition = state.current_live_session_transition.lock().await;
+                let server_error = error.status.is_server_error();
+                if let Some(response) = request
+                    .reconcile_error_under_transition(&state, context, &mut error)
+                    .await?
+                {
+                    if server_error {
+                        tracing::warn!(
+                            command_id = %response.command_id,
+                            error = %error.message,
+                            "returning durable Compute acceptance after a publication error"
+                        );
+                    }
+                    return Ok(response);
                 }
-                return Ok(response);
             }
+            Err(error)
         }
+        Ok(response) => Ok(response),
     }
-    result
 }
 
 async fn submit_new_structured_command(
@@ -219,10 +243,11 @@ async fn submit_new_structured_command(
         if !matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
             crate::get_or_load_current_live_scene_document_for_context(&state, context).await?;
         }
-        let transition_guard = state.current_live_session_transition.lock().await;
+        let mut transition_guard = Some(Arc::clone(&state.current_live_session_transition).lock_owned().await);
         if let Some(request) = durable_request {
-            if let Some(response) = request.replay_under_transition(&state, context).await? {
-                return Ok(response);
+            match request.replay_under_transition(&state, context).await? {
+                ComputeReplayOutcome::Accepted(response) => return Ok(response),
+                ComputeReplayOutcome::NotApplicable | ComputeReplayOutcome::CompletedMiss => {}
             }
         }
         // ADR 0074: a FEM mesh build meshes the authored geometry without
@@ -249,6 +274,7 @@ async fn submit_new_structured_command(
                     &state,
                     context,
                     &command.command_id,
+                    &mut transition_guard,
                 )
                 .await?;
             command.target = Some(RuntimeCommandTarget::Run {
@@ -379,6 +405,7 @@ async fn submit_new_structured_command(
                     context,
                     request_key,
                     receipt,
+                    &mut transition_guard,
                 )
                 .await?
             {
@@ -1229,13 +1256,16 @@ fn validate_runtime_command_preconditions(
         if let Some(expected) = precondition.current_run.as_ref() {
             let expected = match expected {
                 RuntimeCommandRunPrecondition::None => None,
-                RuntimeCommandRunPrecondition::Run { run_id } => Some(run_id.as_str()),
+                RuntimeCommandRunPrecondition::Run { run_id } => Some(run_id.clone()),
             };
-            let actual = snapshot.run.as_ref().map(|run| run.run_id.as_str());
-            if actual != expected {
+            let observed = snapshot.run.as_ref().map(|run| run.run_id.clone());
+            if observed != expected {
                 return Err(ApiError::conflict_with_code(
                     "command_current_run_changed",
                     "The current run changed after the command was requested. Review the current source and run again.",
+                )
+                .with_terminal_compute_rejection(
+                    TerminalComputeRejection::CurrentRunMismatch { expected, observed },
                 ));
             }
         }
@@ -1313,13 +1343,21 @@ fn validate_runtime_command_preconditions(
         if let Some(expected) = precondition.scene_revision {
             let actual = snapshot.scene_document.as_ref().map(|scene| scene.revision);
             if actual != Some(expected) {
-                return Err(ApiError::conflict(format!(
+                let error = ApiError::conflict(format!(
                     "scene_revision precondition failed: expected {}, got {}",
                     expected,
                     actual
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "missing".to_string())
-                )));
+                ));
+                if matches!(command.kind.as_str(), "run" | "relax" | "solve") {
+                    if let Some(observed) = actual.filter(|observed| expected < *observed) {
+                        return Err(error.with_terminal_compute_rejection(
+                            TerminalComputeRejection::StaleSceneRevision { expected, observed },
+                        ));
+                    }
+                }
+                return Err(error);
             }
         }
 
@@ -1644,7 +1682,7 @@ fn stage_id_for_command_validation(index: usize) -> String {
     format!("stage-{index:03}")
 }
 
-async fn validate_authoring_gate_for_command_with_context(
+pub(crate) async fn validate_authoring_gate_for_command_with_context(
     state: &Arc<AppState>,
     req: &StructuredCommandRequest,
     context: Option<&crate::types::CurrentLiveRequestContext>,
@@ -1693,13 +1731,46 @@ async fn validate_authoring_gate_for_command_with_context(
         return Ok(Some((scene, realization)));
     }
     for object in fullmag_authoring::scene_solve_objects(&scene) {
-        fullmag_authoring::resolve_scene_object_solve_material(&scene, object)
-            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        if let Err(error) = fullmag_authoring::resolve_scene_object_solve_material(&scene, object) {
+            let mut rejection = ApiError::bad_request(error.to_string());
+            // Every supported material repair commits a new SceneDocument
+            // revision. Saturation at u64::MAX prevents this proof because the
+            // same pin could then continue to name a repaired basis.
+            if scene.revision < u64::MAX
+                && compute_scene_revision_pin(req) == Some(scene.revision)
+            {
+                if let Some(scene_sha256) =
+                    crate::live_compute_request::scene_document_sha256(&scene)
+                {
+                    rejection = rejection.with_terminal_compute_rejection(
+                        TerminalComputeRejection::MissingSolveMaterial {
+                            cause: error,
+                            scene_revision: scene.revision,
+                            scene_sha256,
+                        },
+                    );
+                }
+            }
+            return Err(rejection);
+        }
     }
     if let Some(reason) = geometry_blocks_solver_run(&scene, backend_target) {
         return Err(ApiError::conflict(reason));
     }
     Ok(None)
+}
+
+fn compute_scene_revision_pin(req: &StructuredCommandRequest) -> Option<u64> {
+    let intent = match req {
+        StructuredCommandRequest::Run { intent, .. }
+        | StructuredCommandRequest::Relax { intent, .. }
+        | StructuredCommandRequest::Solve { intent } => intent,
+        _ => return None,
+    };
+    intent
+        .precondition
+        .as_ref()
+        .and_then(|precondition| precondition.scene_revision)
 }
 
 async fn current_authoring_gate_scene_with_context(
@@ -3951,6 +4022,23 @@ mod tests {
         let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
             .expect_err("a previously absent current run cannot be replaced silently");
         assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
+        assert!(matches!(
+            error.terminal_compute_rejection,
+            Some(TerminalComputeRejection::CurrentRunMismatch {
+                expected: None,
+                observed: Some(observed),
+            }) if observed == "relax-a"
+        ));
+
+        // Ordinary snapshot publication only assigns `run` when the request
+        // includes Some(run); omitting it cannot clear or later reuse this run id.
+        let update: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "current-run-precondition",
+        }))
+        .unwrap();
+        crate::session::apply_current_live_snapshot(&mut snapshot, update)
+            .expect("run-omitting snapshot update should apply");
+        assert_eq!(snapshot.run.as_ref().unwrap().run_id, "relax-a");
 
         command.precondition = Some(serde_json::from_value(serde_json::json!({
             "current_run": { "kind": "run", "run_id": "relax-a" },
@@ -3960,6 +4048,139 @@ mod tests {
         let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
             .expect_err("a different continuation run cannot be adopted silently");
         assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
+        assert!(matches!(
+            error.terminal_compute_rejection,
+            Some(TerminalComputeRejection::CurrentRunMismatch {
+                expected: Some(expected),
+                observed: Some(observed),
+            }) if expected == "relax-a" && observed == "another-run"
+        ));
+    }
+
+    #[tokio::test]
+    async fn exact_durable_ack_wins_after_material_bad_request_before_retry_reconciliation() {
+        use crate::schemas::sessions::CreateSessionRequest;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store_root = directory.path().join("submit-store");
+        fullmag_session::SessionStore::open(&store_root).unwrap();
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let state_mut = Arc::get_mut(&mut state).expect("test AppState is uniquely owned");
+        state_mut.submit_store_root = Some(store_root.clone());
+        state_mut
+            .current_live_session_epoch
+            .store(8, std::sync::atomic::Ordering::Release);
+
+        let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &CreateSessionRequest {
+                name: "material-ack-race".into(),
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                replace_current: false,
+                output_storage: None,
+            },
+        )
+        .unwrap();
+        scene.revision = 12;
+        scene.objects.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "body",
+                "name": "Body",
+                "geometry": {
+                    "geometry_kind": "Box",
+                    "geometry_params": {"size": [1.0, 1.0, 1.0]}
+                },
+                "material_ref": "missing-material"
+            }))
+            .unwrap(),
+        );
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live session fixture");
+            snapshot.session.session_id = "session-a".into();
+            snapshot.scene_document = Some(scene);
+            snapshot.run = None;
+            snapshot.mesh_revision = 0;
+        }
+
+        let context = crate::capture_current_live_request_context(&state)
+            .await
+            .unwrap();
+        let request: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
+            "kind": "solve",
+            "target": {"kind": "study"},
+            "client_intent_id": "compute-intent",
+            "precondition": {
+                "scene_revision": 12,
+                "mesh_revision": 0,
+                "current_run": {"kind": "none"}
+            }
+        }))
+        .unwrap();
+        let live_request = LiveComputeRequest::capture(
+            &context,
+            &request,
+            Some("compute-intent"),
+            Some("request-first".into()),
+        )
+        .unwrap()
+        .unwrap();
+        let mut rejection = validate_authoring_gate_for_command_with_context(
+            &state,
+            &request,
+            Some(&context),
+        )
+        .await
+        .expect_err("the captured scene is missing a solve material");
+        assert_eq!(rejection.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(matches!(
+            rejection.terminal_compute_rejection.as_ref(),
+            Some(TerminalComputeRejection::MissingSolveMaterial {
+                cause: fullmag_authoring::SceneSolveMaterialError::MissingMaterial { .. },
+                scene_revision: 12,
+                ..
+            })
+        ));
+
+        let receipt = live_request.receipt("command-first".into());
+        let intent = fullmag_session::FmsRunIntent::new(
+            "run-first",
+            format!("live-http-v2-{}", receipt.key_sha256),
+            serde_json::json!({
+                "run_id": "run-first",
+                "parameters": {
+                    "live_workspace": {
+                        "session_id": context.session_id.clone(),
+                        "session_epoch": context.session_epoch,
+                        "command_id": "command-first",
+                        "request_receipt": receipt,
+                        "command": {
+                            "seq": 0,
+                            "command_id": "command-first",
+                            "kind": "solve",
+                            "created_at_unix_ms": 123,
+                            "client_intent_id": "compute-intent",
+                            "target": {"kind": "study"}
+                        }
+                    }
+                }
+            }),
+        );
+        fullmag_session::SessionStore::open_existing(&store_root)
+            .unwrap()
+            .commit_run_intent(&intent)
+            .unwrap();
+
+        let _transition = state.current_live_session_transition.lock().await;
+        let response = live_request
+            .reconcile_error_under_transition(&state, &context, &mut rejection)
+            .await
+            .unwrap()
+            .expect("the exact durable acceptance must override the material rejection");
+        assert!(response.accepted);
+        assert_eq!(response.command_id, "command-first");
+        assert!(rejection.intent_disposition.is_none());
     }
 
     #[test]

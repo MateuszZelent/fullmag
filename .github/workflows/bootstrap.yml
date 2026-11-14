@@ -78,6 +78,27 @@ jobs:
           cache: pip
           cache-dependency-path: packages/fullmag-py/pyproject.toml
 
+      - name: Capture Rust contract source identity
+        run: |
+          python -B scripts/capture_source_snapshot_identity.py \
+            --repo-root . --ignore-non-runtime-dirty \
+            --output "$RUNNER_TEMP/fullmag-rust-source-identity.json"
+          python -B - <<'PYENV'
+          import json
+          import os
+          from pathlib import Path
+
+          identity = json.loads((Path(os.environ["RUNNER_TEMP"]) / "fullmag-rust-source-identity.json").read_text())
+          values = {
+              "FULLMAG_SOURCE_GIT_COMMIT": identity["head_commit_full"],
+              "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if identity["source_snapshot_dirty"] else "clean",
+              "FULLMAG_SOURCE_SNAPSHOT_SHA256": identity["source_snapshot_sha256"],
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name, value in values.items():
+                  environment.write(f"{name}={value}\n")
+          PYENV
+
       - name: Install Rust
         id: install-rust
         uses: dtolnay/rust-toolchain@stable
@@ -144,6 +165,8 @@ jobs:
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test --locked -p fullmag-runtime-control --lib claim::scoped_store_io_classification_tests::raw_enodata_is_not_a_global_transient_store_error -- --exact
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::accepted_antenna_inspection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::historical_export_busy_tests
 
       - name: Run terminal Docker recovery contracts
         run: cargo test -p fullmag-session --lib runtime_service::retained_terminal_runs::tests --no-fail-fast
@@ -179,11 +202,17 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation::tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::held_ui_materialization::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::pending_user_magnetization_apply_still_supersedes_its_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::publication::tests:: -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fdm_region_membership::tests:: -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api run_intent_persistence::tests::staged_ -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler run_intent_persistence::tests::staged_ -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api live_compute_request::tests:: -- --nocapture
           FULLMAG_FDM_EXECUTION=cpu cargo test --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
@@ -244,6 +273,63 @@ jobs:
           cargo test -p fullmag-session --lib session_schema_guard_distinguishes_v1_and_readonly_v2_provenance
           cargo test -p fullmag-api --bin fullmag-api accepted_fms_persistence_tests
           cargo test -p fullmag-api --bin fullmag-api context_bound_export_rejects_session_identity_before_script_read
+
+      - name: Verify canonical Python project activation scene
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::persistence::script_project::tests::activation_scene_ -- --nocapture | tee "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_uses_canonical_typed_scene_document ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_preserves_pipeline_resets_and_explicit_clears ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_matches_commit_normalization_without_mutating_source ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+
+      - name: Verify complete authoring scene resource
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api schemas::authoring::scene_resource_analysis_tests:: -- --nocapture | tee "$RUNNER_TEMP/complete-authoring-scene.log"
+          grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_preserves_analysis_definitions_and_opaque_settings ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
+          grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
+
+      - name: Verify responsive CurrentRun snapshot reads
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::current_run_snapshot_read_ -- --nocapture | tee "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_ignores_mutation_transition ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_reports_absence_during_mutation_transition ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_rejects_owner_replaced_during_publication ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+
+      - name: Verify effective project output policy
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-ir --lib project_output_policy::tests:: -- --nocapture | tee "$RUNNER_TEMP/project-output-policy.log"
+          grep -F "test project_output_policy::tests::explicit_policy_keeps_custom_schema_and_cadence_and_inherits_table ... ok" "$RUNNER_TEMP/project-output-policy.log"
+          cargo test --locked -p fullmag-authoring --lib script_output_projection::tests:: -- --nocapture | tee "$RUNNER_TEMP/script-output-projection.log"
+          grep -F "test script_output_projection::tests::default_relax_policy_matches_flat_and_nested_disabled_pipeline_without_mutating_source ... ok" "$RUNNER_TEMP/script-output-projection.log"
+          grep -F "test script_output_projection::tests::custom_cadence_is_retained_and_stays_distinguishable ... ok" "$RUNNER_TEMP/script-output-projection.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::generated_source_projection_resolves_defaults_without_hiding_custom_cadence -- --exact --nocapture | tee "$RUNNER_TEMP/effective-output-round-trip.log"
+          grep -F "test live_accepted_execution::tests::generated_source_projection_resolves_defaults_without_hiding_custom_cadence ... ok" "$RUNNER_TEMP/effective-output-round-trip.log"
+
+      - name: Verify first FDM preparation source capture
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture -- --exact --nocapture | tee "$RUNNER_TEMP/first-fdm-source-capture.log"
+          grep -F "test live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture ... ok" "$RUNNER_TEMP/first-fdm-source-capture.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::imported_run_scene_with_implicit_table_quantities_survives_generated_source_capture -- --exact --nocapture | tee "$RUNNER_TEMP/local-table-source-capture.log"
+          grep -F "test live_accepted_execution::tests::imported_run_scene_with_implicit_table_quantities_survives_generated_source_capture ... ok" "$RUNNER_TEMP/local-table-source-capture.log"
 
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
@@ -519,6 +605,9 @@ jobs:
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
 
+      - name: Run fenced accepted catalog snapshot contracts
+        run: cargo test -p fullmag-session --lib fenced_run_catalog_read --no-fail-fast
+
       - name: Run Docker accepted FEM GPU and host admission contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_
@@ -666,6 +755,8 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+            packages/fullmag-py/src/fullmag/client/_generated
           if-no-files-found: error
 
   api-hygiene-rg13:
@@ -742,7 +833,12 @@ jobs:
         run: pnpm --dir apps/control-room audit:idle-performance
 
       - name: Verify scoped Study texture browser contracts
-        run: node --test apps/control-room/scripts/lib/study-texture-browser-qa.node-test.mjs
+        run: >-
+          node --test
+          apps/control-room/scripts/lib/study-texture-browser-qa.node-test.mjs
+          apps/control-room/scripts/lib/study-region-reset-browser-qa.node-test.mjs
+          apps/control-room/scripts/lib/study-region-reset-runner.node-test.mjs
+          apps/control-room/scripts/lib/browser-qa-loopback-proxy.node-test.mjs
 
       - name: Typecheck, lint and test Control Room
         run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test
@@ -1111,6 +1207,15 @@ jobs:
           python -B scripts/test_docker_volume_prestart_recovery.py -v
           python -B scripts/test_docker_terminal_prestart_recovery.py -v
           python -B scripts/test_docker_frontend_frozen_recovery.py -v
+          python -B scripts/test_docker_volume_frontend_recovery.py -v
+          python -B scripts/test_docker_volume_frontend_seed_recovery.py -v
+          python -B scripts/test_docker_volume_recovery_handoff.py -v
+          python -B scripts/test_docker_frontend_start_handoff.py -v
+          python -B scripts/test_docker_frontend_start_resume.py -v
+          python -B scripts/test_docker_frontend_seed_generated.py -v
+          python -B scripts/test_docker_volume_frontend_seed_completion.py -v
+          python -B scripts/test_docker_frontend_seed_completion_observer.py -v
+          python -B scripts/test_docker_volume_frontend_refresh_reconcile.py -v
           python -B scripts/test_docker_helper_source_transition.py -v
           python -B scripts/test_just_development_recovery_shell.py -v
           python -B scripts/test_docker_volume_reconcile.py -v
@@ -1129,11 +1234,29 @@ jobs:
           python -B scripts/test_linux_native_host.py -v
           python -B scripts/test_docker_dev_codegen.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
+          python -B scripts/test_docker_dev_region_reset_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
           python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
+          python -B scripts/test_docker_held_ui_materialization_cli.py -v
+          python -B scripts/test_docker_held_ui_start_retry_cli.py -v
+          python -B scripts/test_docker_volume_held_ui_start_retry.py -v
+          python -B scripts/test_docker_volume_held_ui_retry_source.py -v
+          python -B scripts/test_docker_volume_held_ui_start_retry_lifecycle.py -v
+          python -B scripts/test_docker_volume_held_ui_retry_probe.py -v
+          python -B scripts/test_docker_group_local_filesystem_alias.py -v
+          python -B scripts/test_runtime_service_held_ui_materialization.py -v
+          python -B scripts/test_docker_volume_held_ui_materialization.py -v
+          python -B scripts/test_docker_volume_held_ui_lifecycle.py -v
+          python -B scripts/test_docker_volume_held_ui_driver.py -v
+          python -B scripts/test_docker_volume_held_ui_stop_adapter.py -v
+          python -B scripts/test_docker_volume_held_ui_production_stop.py -v
+          python -B scripts/test_docker_volume_failed_run_resume.py -v
+          python -B scripts/test_docker_volume_failed_run_resume_lifecycle.py -v
+          python -B scripts/test_docker_volume_failed_run_resume_control.py -v
+          python -B scripts/test_docker_volume_failed_run_resume_observer.py -v
           python -B scripts/test_docker_volume_native_init_successor.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v

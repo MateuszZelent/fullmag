@@ -683,8 +683,8 @@ pub fn scene_document_to_script_builder_overrides(
                     .filter(Value::is_object)
                     .unwrap_or(Value::Null),
             );
-            // Stage autosave mirrors the Python adapter: always present, and
-            // null explicitly clears a loaded stage policy.
+            // Null clears a loaded custom policy. Configured project storage
+            // can subsequently supply its effective default writer.
             stage_fields.insert(
                 "autosave".to_string(),
                 stage.extra.get("autosave").cloned().unwrap_or(Value::Null),
@@ -803,6 +803,7 @@ pub fn scene_document_to_script_builder_overrides(
         overrides["execution_layers"] = serde_json::to_value(&builder.execution_layers)
             .expect("execution layers are serializable");
     }
+    crate::script_output_projection::normalize_project_output_projection(scene, &mut overrides)?;
     Ok(overrides)
 }
 

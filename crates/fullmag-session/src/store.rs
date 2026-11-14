@@ -19,7 +19,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -43,6 +46,14 @@ const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_JOB_SUBMISSION_BYTES: usize = 64 * 1024;
 const WINDOWS_FOLDER_OBSERVATION_RETRY_WINDOW: Duration = Duration::from_secs(2);
 const WINDOWS_FOLDER_OBSERVATION_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+fn serialize_run_intent(intent: &FmsRunIntent) -> Result<Vec<u8>> {
+    let json = serde_json::to_vec_pretty(intent)?;
+    if json.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
+        anyhow::bail!("run intent exceeds metadata budget");
+    }
+    Ok(json)
+}
 
 fn has_raw_os_error(error: &anyhow::Error, code: i32) -> bool {
     error.chain().any(|cause| {
@@ -255,6 +266,73 @@ pub struct SessionStore {
     solution_sets: SolutionSetCatalog,
     writer: Arc<Writer>,
     explicit_lease: Mutex<Option<WriteTransaction>>,
+    staged_cas_publication_depth: AtomicUsize,
+}
+
+/// Scoped capability for publishing a run intent backed by staged CAS objects.
+///
+/// Instances are created only by SessionStore::with_staged_cas_objects and
+/// cannot outlive its callback or move to another thread.
+pub struct StagedCasPublication<'stage> {
+    store: &'stage SessionStore,
+    object_refs: Vec<String>,
+    _lease: &'stage WriteTransaction,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl StagedCasPublication<'_> {
+    /// Return the staged object refs in the same order as the input byte slices.
+    pub fn object_refs(&self) -> &[String] {
+        &self.object_refs
+    }
+
+    /// Atomically publish a run intent whose complete CAS reference set is
+    /// exactly the set verified by this staged publication.
+    pub fn commit_run_intent(
+        self,
+        intent: &FmsRunIntent,
+        backlog_limit: Option<std::num::NonZeroUsize>,
+    ) -> Result<StagedRunIntentCommitDisposition> {
+        self.store
+            .commit_staged_run_intent(intent, backlog_limit, &self.object_refs)
+    }
+}
+
+/// Result of committing a run intent through a staged CAS publication.
+/// `VisibleUnconfirmed` means the exact intent bytes are visible, but the
+/// available publication barriers could not be confirmed; callers must not
+/// acknowledge this as accepted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StagedRunIntentCommitDisposition {
+    Accepted,
+    Replayed { run_id: String },
+    VisibleUnconfirmed { run_id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunIntentCommitPolicy {
+    Ordinary,
+    Staged,
+}
+
+enum RunIntentCommitOutcome {
+    Accepted,
+    Replayed { run_id: String },
+    VisibleUnconfirmed { run_id: String },
+}
+
+struct StagedCasPhase<'store> {
+    active: &'store AtomicUsize,
+}
+
+impl Drop for StagedCasPhase<'_> {
+    fn drop(&mut self) {
+        let previous = self.active.fetch_sub(1, Ordering::Release);
+        if previous == 0 {
+            self.active.store(0, Ordering::Release);
+            tracing::error!("staged CAS publication phase depth underflow");
+        }
+    }
 }
 
 fn atomic_write_confirmed(path: &Path, data: &[u8]) -> Result<()> {
@@ -349,6 +427,7 @@ impl SessionStore {
             solution_sets,
             writer,
             explicit_lease: Mutex::new(None),
+            staged_cas_publication_depth: AtomicUsize::new(0),
         };
         store.release_solution_set_pins()?;
         Ok(store)
@@ -369,6 +448,7 @@ impl SessionStore {
             solution_sets,
             writer,
             explicit_lease: Mutex::new(None),
+            staged_cas_publication_depth: AtomicUsize::new(0),
         })
     }
 
@@ -452,6 +532,49 @@ impl SessionStore {
     /// Bind a multi-file operation to one native writer lease.
     pub fn write_transaction(&self) -> Result<WriteTransaction> {
         self.writer.acquire()
+    }
+
+    /// Stage verified CAS objects under one writer lease, then call the
+    /// publish callback while the objects remain unpinned and the store
+    /// forbids reentrant GC.
+    ///
+    /// The returned capability is scoped to this callback, cannot cross threads,
+    /// and can publish a run intent only when its exact CAS reference set matches
+    /// the objects staged here. Aborting leaves unpinned objects for ordinary GC.
+    pub fn with_staged_cas_objects<T, F>(&self, items: &[&[u8]], publish: F) -> Result<T>
+    where
+        F: for<'stage> FnOnce(StagedCasPublication<'stage>) -> Result<T>,
+    {
+        let lease = self.write_transaction()?;
+        let phase = self.begin_staged_cas_publication()?;
+        let object_refs = self.cas.stage_unpinned_batch(items)?;
+        let publication = StagedCasPublication {
+            store: self,
+            object_refs,
+            _lease: &lease,
+            _not_send: PhantomData,
+        };
+        let result = publish(publication);
+        drop(phase);
+        result
+    }
+
+    fn begin_staged_cas_publication(&self) -> Result<StagedCasPhase<'_>> {
+        self.staged_cas_publication_depth
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |depth| {
+                depth.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("staged CAS publication depth overflow"))?;
+        Ok(StagedCasPhase {
+            active: &self.staged_cas_publication_depth,
+        })
+    }
+
+    fn ensure_gc_allowed(&self) -> Result<()> {
+        if self.staged_cas_publication_depth.load(Ordering::Acquire) != 0 {
+            anyhow::bail!("GC is blocked during staged CAS publication");
+        }
+        Ok(())
     }
 
     /// Fence a consistent read without creating files or changing writer ownership.
@@ -953,17 +1076,40 @@ impl SessionStore {
         self.commit_run_intent_with_optional_backlog_limit(intent, Some(limit))
     }
 
+    /// Re-establish publication barriers for an already accepted run intent.
+    /// The exact canonical record must still be visible under the writer lease;
+    /// this never rewrites the intent or verifies/pins its CAS objects.
+    pub fn confirm_run_intent_publication(&self, expected: &FmsRunIntent) -> Result<()> {
+        expected.validate()?;
+        let _lease = self.write_transaction()?;
+        let path = checked_path(
+            &self.root,
+            &format!("runs/{}/run_intent.json", expected.run_id),
+        )?;
+        let expected_bytes = serialize_run_intent(expected)?;
+        let visible = self.read_run_intent_bytes_unlocked(&expected.run_id)?;
+        if visible != expected_bytes {
+            anyhow::bail!(
+                "run intent `{}` does not match the exact expected canonical record",
+                expected.run_id
+            );
+        }
+        confirm_publication(&path)
+    }
+
     fn commit_run_intent_with_optional_backlog_limit(
         &self,
         intent: &FmsRunIntent,
         limit: Option<std::num::NonZeroUsize>,
     ) -> Result<RunIntentCommitDisposition> {
         intent.validate()?;
-        let json = serde_json::to_vec_pretty(intent)?;
-        if json.len() as u64 > crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES {
-            anyhow::bail!("run intent exceeds metadata budget");
-        }
+        let json = serialize_run_intent(intent)?;
         let _lease = self.write_transaction()?;
+        self.verify_run_intent_objects(intent)?;
+        self.commit_run_intent_unlocked(intent, &json, limit)
+    }
+
+    fn verify_run_intent_objects(&self, intent: &FmsRunIntent) -> Result<()> {
         if let Some(object_ref) = intent.definition_object_ref.as_deref() {
             self.cas
                 .get(object_ref)?
@@ -984,6 +1130,73 @@ impl SessionStore {
                 .get(object_ref)?
                 .with_context(|| format!("run asset object `{object_ref}` is missing"))?;
         }
+        Ok(())
+    }
+
+    fn commit_staged_run_intent(
+        &self,
+        intent: &FmsRunIntent,
+        limit: Option<std::num::NonZeroUsize>,
+        staged_refs: &[String],
+    ) -> Result<StagedRunIntentCommitDisposition> {
+        intent.validate()?;
+        let mut intent_refs = HashSet::new();
+        intent_refs.extend(intent.definition_object_ref.as_deref());
+        intent_refs.extend(intent.study_object_ref.as_deref());
+        intent_refs.extend(intent.study_catalog_object_ref.as_deref());
+        intent_refs.extend(intent.asset_object_refs.values().map(String::as_str));
+        let staged_refs: HashSet<_> = staged_refs.iter().map(String::as_str).collect();
+        if intent_refs != staged_refs {
+            anyhow::bail!("staged CAS references do not exactly match the run intent references");
+        }
+        match self.commit_run_intent_with_policy_unlocked(
+            intent,
+            &serialize_run_intent(intent)?,
+            limit,
+            RunIntentCommitPolicy::Staged,
+        )? {
+            RunIntentCommitOutcome::Accepted => Ok(StagedRunIntentCommitDisposition::Accepted),
+            RunIntentCommitOutcome::Replayed { run_id } => {
+                Ok(StagedRunIntentCommitDisposition::Replayed { run_id })
+            }
+            RunIntentCommitOutcome::VisibleUnconfirmed { run_id } => {
+                Ok(StagedRunIntentCommitDisposition::VisibleUnconfirmed { run_id })
+            }
+        }
+    }
+
+    /// Publish the already validated intent while the caller holds the writer
+    /// lease. Ordinary callers retain the original acknowledgement contract;
+    /// staged callers opt into durable confirmation and explicit uncertainty.
+    fn commit_run_intent_unlocked(
+        &self,
+        intent: &FmsRunIntent,
+        json: &[u8],
+        limit: Option<std::num::NonZeroUsize>,
+    ) -> Result<RunIntentCommitDisposition> {
+        match self.commit_run_intent_with_policy_unlocked(
+            intent,
+            json,
+            limit,
+            RunIntentCommitPolicy::Ordinary,
+        )? {
+            RunIntentCommitOutcome::Accepted => Ok(RunIntentCommitDisposition::Accepted),
+            RunIntentCommitOutcome::Replayed { run_id } => {
+                Ok(RunIntentCommitDisposition::Replayed { run_id })
+            }
+            RunIntentCommitOutcome::VisibleUnconfirmed { .. } => {
+                anyhow::bail!("ordinary run intent publication produced a staged-only outcome")
+            }
+        }
+    }
+
+    fn commit_run_intent_with_policy_unlocked(
+        &self,
+        intent: &FmsRunIntent,
+        json: &[u8],
+        limit: Option<std::num::NonZeroUsize>,
+        policy: RunIntentCommitPolicy,
+    ) -> Result<RunIntentCommitOutcome> {
         if let Some(existing) = self.find_run_intent_unlocked(&intent.idempotency_key)? {
             if existing.payload_sha256 == intent.payload_sha256
                 && existing.specification == intent.specification
@@ -992,7 +1205,10 @@ impl SessionStore {
                 && existing.study_catalog_object_ref == intent.study_catalog_object_ref
                 && existing.asset_object_refs == intent.asset_object_refs
             {
-                return Ok(RunIntentCommitDisposition::Replayed {
+                if policy == RunIntentCommitPolicy::Staged {
+                    return self.confirm_staged_run_intent_replay_unlocked(&existing);
+                }
+                return Ok(RunIntentCommitOutcome::Replayed {
                     run_id: existing.run_id,
                 });
             }
@@ -1019,8 +1235,85 @@ impl SessionStore {
             }
         }
         let path = create_parent(&self.root, &relative_path)?;
-        atomic_write(&path, &json)?;
-        Ok(RunIntentCommitDisposition::Accepted)
+        match policy {
+            RunIntentCommitPolicy::Ordinary => atomic_write(&path, json)?,
+            RunIntentCommitPolicy::Staged => match atomic_write_confirmed(&path, json) {
+                Ok(()) => {}
+                Err(error) => {
+                    let uncertainty_matches_path = error
+                        .downcast_ref::<crate::durability::PublicationUncertain>()
+                        .is_some_and(|uncertain| uncertain.destination() == path.as_path());
+                    if !uncertainty_matches_path {
+                        return Err(error);
+                    }
+                    let visible = match self.read_run_intent_bytes_unlocked(&intent.run_id) {
+                        Ok(visible) => visible,
+                        Err(read_error) => return Err(error.context(format!(
+                            "exact run-intent readback after uncertain publication failed: {read_error:#}"
+                        ))),
+                    };
+                    if visible != json {
+                        return Err(error.context(
+                            "visible run-intent bytes do not match the exact canonical publication",
+                        ));
+                    }
+                    return Ok(RunIntentCommitOutcome::VisibleUnconfirmed {
+                        run_id: intent.run_id.clone(),
+                    });
+                }
+            },
+        }
+        Ok(RunIntentCommitOutcome::Accepted)
+    }
+
+    fn confirm_staged_run_intent_replay_unlocked(
+        &self,
+        existing: &FmsRunIntent,
+    ) -> Result<RunIntentCommitOutcome> {
+        let expected = serialize_run_intent(existing)?;
+        let path = checked_path(
+            &self.root,
+            &format!("runs/{}/run_intent.json", existing.run_id),
+        )?;
+        let visible = self.read_run_intent_bytes_unlocked(&existing.run_id)?;
+        if visible != expected {
+            anyhow::bail!(
+                "existing run intent `{}` does not match its exact canonical serialization",
+                existing.run_id
+            );
+        }
+
+        match confirm_publication(&path) {
+            Ok(()) => Ok(RunIntentCommitOutcome::Replayed {
+                run_id: existing.run_id.clone(),
+            }),
+            Err(error) => {
+                let visible = match self.read_run_intent_bytes_unlocked(&existing.run_id) {
+                    Ok(visible) => visible,
+                    Err(read_error) => return Err(error.context(format!(
+                        "exact existing run-intent readback after uncertain confirmation failed: {read_error:#}"
+                    ))),
+                };
+                if visible != expected {
+                    return Err(error.context(
+                        "existing run-intent bytes changed during publication confirmation",
+                    ));
+                }
+                Ok(RunIntentCommitOutcome::VisibleUnconfirmed {
+                    run_id: existing.run_id.clone(),
+                })
+            }
+        }
+    }
+
+    fn read_run_intent_bytes_unlocked(&self, run_id: &str) -> Result<Vec<u8>> {
+        validate_store_id(run_id)?;
+        let relative = format!("runs/{run_id}/run_intent.json");
+        read_bounded_regular_file(
+            &self.root,
+            &relative,
+            crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
+        )
     }
 
     fn active_run_intent_count_unlocked(&self) -> Result<usize> {
@@ -1600,6 +1893,22 @@ impl SessionStore {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    /// Read a catalog once inside an already-held shared snapshot.
+    ///
+    /// Unlike `read_run_catalog`, this must not wait for a missing catalog:
+    /// the shared fence prevents the writer that could publish it from
+    /// proceeding. A missing catalog is the result for this snapshot; callers
+    /// may retry after releasing the transaction.
+    pub fn read_run_catalog_in_transaction(
+        &self,
+        run_id: &str,
+        transaction: &ReadTransaction,
+    ) -> Result<Option<FmsRunCatalog>> {
+        validate_store_id(run_id)?;
+        transaction.require_root(&self.root)?;
+        self.read_run_catalog_once(run_id)
     }
 
     fn run_intent_file_exists(&self, run_id: &str) -> Result<bool> {
@@ -7345,6 +7654,7 @@ impl SessionStore {
 
     /// Collect object hashes referenced by all known checkpoints.
     pub fn collect_live_refs(&self) -> Result<HashSet<String>> {
+        self.ensure_gc_allowed()?;
         let _lease = self.write_transaction()?;
         let report = crate::reachability::walk_store_root(
             &self.root,
@@ -7365,6 +7675,7 @@ impl SessionStore {
 
     /// Produce a reviewable preview without deleting objects.
     pub fn gc_preview(&self) -> Result<GcPlan> {
+        self.ensure_gc_allowed()?;
         let _lease = self.write_transaction()?;
         let live = self.collect_live_refs()?;
         let mut candidates = Vec::new();
@@ -7385,6 +7696,7 @@ impl SessionStore {
 
     /// Re-mark under the same exclusive lease immediately before any sweep.
     pub fn gc_apply(&self, scope: &Path, plan: &GcPlan) -> Result<usize> {
+        self.ensure_gc_allowed()?;
         let _lease = self.write_transaction()?;
         if fs::canonicalize(scope)? != self.root
             || plan.root != self.root
@@ -8044,6 +8356,428 @@ mod tests {
             .insert("asset-1".into(), "d".repeat(64));
         assert!(store.commit_run_intent(&missing_asset).is_err());
         assert!(store.read_run_intent("run-7").unwrap().is_none());
+    }
+
+    fn staged_definition_intent(
+        run_id: &str,
+        idempotency_key: &str,
+        object_ref: &str,
+    ) -> FmsRunIntent {
+        let mut intent = FmsRunIntent::new(
+            run_id,
+            idempotency_key,
+            serde_json::json!({
+                "run_id": run_id,
+                "snapshot": { "definition_sha256": object_ref },
+                "immutable_assets": []
+            }),
+        );
+        intent.definition_object_ref = Some(object_ref.to_owned());
+        intent
+    }
+
+    #[test]
+    fn staged_run_intent_confirms_transient_post_rename_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let no_objects: [&[u8]; 0] = [];
+        let intent = FmsRunIntent::new(
+            "staged-transient-run",
+            "staged-transient-submit",
+            serde_json::json!({"run_id": "staged-transient-run"}),
+        );
+        let path = store
+            .root()
+            .join("runs/staged-transient-run/run_intent.json");
+        crate::durability::fail_directory_barrier_for(&path);
+
+        let disposition = store
+            .with_staged_cas_objects(&no_objects, |publication| {
+                publication.commit_run_intent(&intent, None)
+            })
+            .unwrap();
+
+        assert_eq!(disposition, StagedRunIntentCommitDisposition::Accepted);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            super::serialize_run_intent(&intent).unwrap()
+        );
+    }
+
+    #[test]
+    fn staged_run_intent_reports_visible_unconfirmed_after_persistent_barrier_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let no_objects: [&[u8]; 0] = [];
+        let intent = FmsRunIntent::new(
+            "staged-visible-run",
+            "staged-visible-submit",
+            serde_json::json!({"run_id": "staged-visible-run"}),
+        );
+        let path = store.root().join("runs/staged-visible-run/run_intent.json");
+        crate::durability::fail_directory_barriers_for(&path, 2);
+
+        let disposition = store
+            .with_staged_cas_objects(&no_objects, |publication| {
+                publication.commit_run_intent(&intent, None)
+            })
+            .unwrap();
+
+        assert_eq!(
+            disposition,
+            StagedRunIntentCommitDisposition::VisibleUnconfirmed {
+                run_id: "staged-visible-run".into()
+            }
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            super::serialize_run_intent(&intent).unwrap()
+        );
+        assert_eq!(store.read_run_intent("staged-visible-run").unwrap(), Some(intent));
+    }
+
+    #[test]
+    fn staged_run_intent_replay_confirms_original_record_before_acknowledging() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let no_objects: [&[u8]; 0] = [];
+        let original = FmsRunIntent::new(
+            "staged-replay-original",
+            "staged-replay-submit",
+            serde_json::json!({"same_payload": true}),
+        );
+        assert_eq!(
+            store
+                .with_staged_cas_objects(&no_objects, |publication| {
+                    publication.commit_run_intent(&original, None)
+                })
+                .unwrap(),
+            StagedRunIntentCommitDisposition::Accepted
+        );
+        let mut retry = FmsRunIntent::new(
+            "staged-replay-retry-run",
+            "staged-replay-submit",
+            serde_json::json!({"same_payload": true}),
+        );
+        retry.accepted_at = original.accepted_at + chrono::Duration::seconds(1);
+        assert_ne!(retry.accepted_at, original.accepted_at);
+        assert_eq!(retry.payload_sha256, original.payload_sha256);
+        let path = store
+            .root()
+            .join("runs/staged-replay-original/run_intent.json");
+        crate::durability::fail_directory_barrier_for(&path);
+
+        assert_eq!(
+            store
+                .with_staged_cas_objects(&no_objects, |publication| {
+                    publication.commit_run_intent(&retry, None)
+                })
+                .unwrap(),
+            StagedRunIntentCommitDisposition::VisibleUnconfirmed {
+                run_id: "staged-replay-original".into()
+            }
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            super::serialize_run_intent(&original).unwrap()
+        );
+        assert_eq!(
+            store
+                .with_staged_cas_objects(&no_objects, |publication| {
+                    publication.commit_run_intent(&retry, None)
+                })
+                .unwrap(),
+            StagedRunIntentCommitDisposition::Replayed {
+                run_id: "staged-replay-original".into()
+            }
+        );
+    }
+
+    #[test]
+    fn staged_run_intent_failure_before_rename_leaves_no_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let no_objects: [&[u8]; 0] = [];
+        let intent = FmsRunIntent::new(
+            "staged-before-rename-run",
+            "staged-before-rename-submit",
+            serde_json::json!({"run_id": "staged-before-rename-run"}),
+        );
+        crate::durability::fail_publication_after(0);
+
+        let error = store
+            .with_staged_cas_objects(&no_objects, |publication| {
+                publication.commit_run_intent(&intent, None)
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("injected interruption before publication"));
+        assert!(store
+            .read_run_intent("staged-before-rename-run")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn confirm_run_intent_publication_requires_exact_canonical_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let accepted = FmsRunIntent::new(
+            "confirm-run-intent",
+            "confirm-submit",
+            serde_json::json!({"run_id": "confirm-run-intent", "value": 1}),
+        );
+        store.commit_run_intent(&accepted).unwrap();
+        store.confirm_run_intent_publication(&accepted).unwrap();
+
+        let mut changed = accepted.clone();
+        changed.accepted_at += chrono::Duration::seconds(1);
+        assert!(store.confirm_run_intent_publication(&changed).is_err());
+        let mut wrong_run = accepted.clone();
+        wrong_run.run_id = "other-run".into();
+        assert!(store.confirm_run_intent_publication(&wrong_run).is_err());
+        assert_eq!(
+            std::fs::read(
+                store
+                    .root()
+                    .join("runs/confirm-run-intent/run_intent.json")
+            )
+            .unwrap(),
+            super::serialize_run_intent(&accepted).unwrap()
+        );
+    }
+
+    #[test]
+    fn confirm_run_intent_publication_reports_barrier_failure_and_can_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let accepted = FmsRunIntent::new(
+            "confirm-barrier-run",
+            "confirm-barrier-submit",
+            serde_json::json!({"run_id": "confirm-barrier-run"}),
+        );
+        store.commit_run_intent(&accepted).unwrap();
+        let path = store.root().join("runs/confirm-barrier-run/run_intent.json");
+        crate::durability::fail_directory_barrier_for(&path);
+
+        let error = store
+            .confirm_run_intent_publication(&accepted)
+            .unwrap_err();
+        assert!(error.is::<crate::PublicationUncertain>());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            super::serialize_run_intent(&accepted).unwrap()
+        );
+        store.confirm_run_intent_publication(&accepted).unwrap();
+    }
+
+    #[test]
+    fn staged_cas_abort_guards_gc_and_leaves_unpinned_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let items: [&[u8]; 2] = [b"staged definition", b"staged study"];
+        let reviewed = store.gc_preview().unwrap();
+
+        let aborted = store.with_staged_cas_objects(&items, |publication| -> Result<()> {
+            assert_eq!(publication.object_refs().len(), items.len());
+            for error in [
+                store.collect_live_refs().unwrap_err(),
+                store.gc_preview().unwrap_err(),
+                store.gc_apply(store.root(), &reviewed).unwrap_err(),
+            ] {
+                assert!(error.to_string().contains("staged CAS"));
+            }
+            assert!(store.cas().pinned_refs()?.is_empty());
+            Err(anyhow::anyhow!("abort before final publication"))
+        });
+
+        assert!(aborted.is_err());
+        assert!(store.list_run_intents().unwrap().is_empty());
+        assert!(store.cas().pinned_refs().unwrap().is_empty());
+        let candidates = store.gc_preview().unwrap().candidates;
+        assert!(candidates.contains(&crate::hex_sha256(items[0])));
+        assert!(candidates.contains(&crate::hex_sha256(items[1])));
+    }
+
+    #[test]
+    fn staged_run_intent_requires_exact_refs_and_holds_writer_through_callback() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        let store = SessionStore::open(&root).unwrap();
+        let competing_store = SessionStore::open_existing(&root).unwrap();
+        let items: [&[u8]; 2] = [b"accepted definition", b"unreferenced staged object"];
+        let definition_ref = crate::hex_sha256(items[0]);
+        let intent = staged_definition_intent(
+            "staged-run-mismatch",
+            "staged-submit-mismatch",
+            &definition_ref,
+        );
+
+        store
+            .with_staged_cas_objects(&items, |publication| -> Result<()> {
+                assert!(competing_store.write_transaction().is_err());
+                let error = publication.commit_run_intent(&intent, None).unwrap_err();
+                assert!(error.to_string().contains("staged CAS"));
+                assert!(store
+                    .gc_preview()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("staged CAS"));
+                assert!(competing_store.write_transaction().is_err());
+                Ok(())
+            })
+            .unwrap();
+
+        let no_objects: [&[u8]; 0] = [];
+        store
+            .with_staged_cas_objects(&no_objects, |publication| -> Result<()> {
+                assert!(publication.object_refs().is_empty());
+                let error = publication.commit_run_intent(&intent, None).unwrap_err();
+                assert!(error.to_string().contains("staged CAS"));
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(store
+            .read_run_intent("staged-run-mismatch")
+            .unwrap()
+            .is_none());
+        let candidates = store.gc_preview().unwrap().candidates;
+        assert!(candidates.contains(&crate::hex_sha256(items[0])));
+        assert!(candidates.contains(&crate::hex_sha256(items[1])));
+        assert!(competing_store.write_transaction().is_ok());
+    }
+
+    #[test]
+    fn staged_run_intent_roots_unpinned_objects_and_preserves_idempotency() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let items: [&[u8]; 1] = [b"accepted definition"];
+        let definition_ref = crate::hex_sha256(items[0]);
+        let intent = staged_definition_intent(
+            "staged-run-accepted",
+            "staged-submit-accepted",
+            &definition_ref,
+        );
+
+        assert_eq!(
+            store
+                .with_staged_cas_objects(&items, |publication| {
+                    publication.commit_run_intent(&intent, None)
+                })
+                .unwrap(),
+            StagedRunIntentCommitDisposition::Accepted
+        );
+        let live = store.collect_live_refs().unwrap();
+        assert!(live.contains(&definition_ref));
+        assert!(!store.cas().pinned_refs().unwrap().contains(&definition_ref));
+        assert!(!store
+            .gc_preview()
+            .unwrap()
+            .candidates
+            .contains(&definition_ref));
+
+        assert_eq!(
+            store
+                .with_staged_cas_objects(&items, |publication| {
+                    publication.commit_run_intent(&intent, None)
+                })
+                .unwrap(),
+            StagedRunIntentCommitDisposition::Replayed {
+                run_id: "staged-run-accepted".into()
+            }
+        );
+
+        let conflicting_items: [&[u8]; 1] = [b"different accepted definition"];
+        let conflicting_ref = crate::hex_sha256(conflicting_items[0]);
+        let conflict = staged_definition_intent(
+            "staged-run-conflict",
+            "staged-submit-accepted",
+            &conflicting_ref,
+        );
+        assert!(store
+            .with_staged_cas_objects(&conflicting_items, |publication| {
+                publication.commit_run_intent(&conflict, None)
+            })
+            .is_err());
+        assert!(store
+            .read_run_intent("staged-run-conflict")
+            .unwrap()
+            .is_none());
+        assert!(store
+            .gc_preview()
+            .unwrap()
+            .candidates
+            .contains(&conflicting_ref));
+    }
+
+    #[test]
+    fn staged_run_intent_preserves_backlog_and_admission_gates() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("backlog-store")).unwrap();
+        store
+            .commit_run_intent(&FmsRunIntent::new(
+                "staged-run-active",
+                "staged-submit-active",
+                serde_json::json!({"run_id": "staged-run-active"}),
+            ))
+            .unwrap();
+        let items: [&[u8]; 1] = [b"backlogged definition"];
+        let object_ref = crate::hex_sha256(items[0]);
+        let intent = staged_definition_intent(
+            "staged-run-backlogged",
+            "staged-submit-backlogged",
+            &object_ref,
+        );
+        let error = store
+            .with_staged_cas_objects(&items, |publication| {
+                publication.commit_run_intent(&intent, std::num::NonZeroUsize::new(1))
+            })
+            .unwrap_err();
+        assert!(error.downcast_ref::<RunBacklogFull>().is_some());
+        assert!(store
+            .read_run_intent("staged-run-backlogged")
+            .unwrap()
+            .is_none());
+
+        let admission_store = SessionStore::open(directory.path().join("admission-store")).unwrap();
+        admission_store
+            .acquire_development_idle_fence("staged-owner", "staged-request")
+            .unwrap();
+        let fenced_items: [&[u8]; 1] = [b"fenced definition"];
+        let fenced_ref = crate::hex_sha256(fenced_items[0]);
+        let fenced_intent =
+            staged_definition_intent("staged-run-fenced", "staged-submit-fenced", &fenced_ref);
+        let error = admission_store
+            .with_staged_cas_objects(&fenced_items, |publication| {
+                publication.commit_run_intent(&fenced_intent, None)
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("development admission is closed"));
+        assert!(admission_store
+            .read_run_intent("staged-run-fenced")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn staged_cas_rejects_corrupted_existing_object_with_matching_length() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let bytes: &[u8] = b"original";
+        let object_ref = store.cas().put(bytes).unwrap();
+        std::fs::write(
+            store.root().join(format!("objects/sha256/{object_ref}")),
+            b"tampered",
+        )
+        .unwrap();
+
+        let error = store
+            .with_staged_cas_objects(&[bytes], |_publication| Ok(()))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("CAS integrity error"));
     }
 
     #[test]
@@ -12099,8 +12833,11 @@ mod read_transaction_tests {
         let rival = SessionStore::open_existing(store.root()).unwrap();
         let _writer = rival.write_transaction().unwrap();
         let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
-        assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
-            Some(std::fs::TryLockError::WouldBlock))));
+        assert!(error.chain().any(|cause| cause.is::<crate::StoreWriterBusy>()), "{error:#}");
+        assert!(!error.chain().any(|cause| matches!(
+            cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        )), "read contention should be normalized once at the native lock boundary");
     }
 
     #[test]
@@ -12208,6 +12945,74 @@ mod read_transaction_tests {
         let transaction = first.read_transaction().unwrap();
         let error = second.read_coordinator_journal_readonly("run-read", &transaction).unwrap_err();
         assert!(error.to_string().contains("another store"));
+    }
+
+    #[test]
+    fn fenced_run_catalog_read_returns_absent_then_allows_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-fenced-catalog";
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id,
+            "submit-fenced-catalog",
+            serde_json::json!({"run_id": run_id}),
+        )).unwrap();
+
+        let reader = store.read_transaction().unwrap();
+        assert!(store.read_run_catalog_in_transaction(run_id, &reader).unwrap().is_none());
+        drop(reader);
+
+        let publisher = SessionStore::open_existing(store.root()).unwrap();
+        let catalog = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: Vec::new(),
+        };
+        publisher.commit_run_catalog(&catalog).unwrap();
+        let reader = store.read_transaction().unwrap();
+        assert_eq!(
+            store.read_run_catalog_in_transaction(run_id, &reader).unwrap(),
+            Some(catalog),
+        );
+    }
+
+    #[test]
+    fn fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-fenced-catalog";
+        store.commit_run_intent(&FmsRunIntent::new(
+            run_id,
+            "submit-fenced-catalog",
+            serde_json::json!({"run_id": run_id}),
+        )).unwrap();
+
+        let foreign_store = SessionStore::open(directory.path().join("foreign-store")).unwrap();
+        let foreign_transaction = foreign_store.read_transaction().unwrap();
+        let error = store.read_run_catalog_in_transaction(run_id, &foreign_transaction).unwrap_err();
+        assert!(error.to_string().contains("another store"));
+        drop(foreign_transaction);
+
+        let catalog_path = store.root().join(format!("runs/{run_id}/run_catalog.json"));
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        let foreign_catalog = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "another-run".into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: Vec::new(),
+        };
+        fs::write(&catalog_path, serde_json::to_vec(&foreign_catalog).unwrap()).unwrap();
+        let transaction = store.read_transaction().unwrap();
+        let error = store.read_run_catalog_in_transaction(run_id, &transaction).unwrap_err();
+        assert!(error.to_string().contains("identity does not match"));
+        drop(transaction);
+
+        fs::write(&catalog_path, b"not a run catalog").unwrap();
+        let transaction = store.read_transaction().unwrap();
+        assert!(store.read_run_catalog_in_transaction(run_id, &transaction).is_err());
     }
 }
 

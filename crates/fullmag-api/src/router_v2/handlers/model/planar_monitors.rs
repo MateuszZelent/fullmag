@@ -23,7 +23,7 @@ use crate::{
 pub async fn list_planar_monitors(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<PlanarMonitorCollectionResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;

@@ -1,0 +1,24 @@
+{
+  "commit": "7a48aca1f0ebcdd11bc20c21f258a6d019e10070",
+  "workflow_run_id": 43462284478,
+  "job_id": 132012181960,
+  "job_conclusion": "success",
+  "raw_log_bytes": 33270214,
+  "raw_log_sha256": "cd56b26009e3e8a385ee3bb8b4af802695d0e5185124f7b9210dfed52f76c18e",
+  "test_hits": {
+    "fenced_run_catalog_read_returns_absent_then_allows_publication": [
+      "2026-11-13T16:29:52.1523846Z test store::read_transaction_tests::fenced_run_catalog_read_returns_absent_then_allows_publication ... ok",
+      "2026-11-13T16:40:08.3116753Z test store::read_transaction_tests::fenced_run_catalog_read_returns_absent_then_allows_publication ... ok",
+      "2026-11-13T16:45:03.1040988Z test store::read_transaction_tests::fenced_run_catalog_read_returns_absent_then_allows_publication ... ok"
+    ],
+    "fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs": [
+      "2026-11-13T16:29:52.1502136Z test store::read_transaction_tests::fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs ... ok",
+      "2026-11-13T16:40:08.3003264Z test store::read_transaction_tests::fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs ... ok",
+      "2026-11-13T16:45:03.1081602Z test store::read_transaction_tests::fenced_run_catalog_read_rejects_foreign_store_and_invalid_catalogs ... ok"
+    ],
+    "missing_run_catalog_defers_projection_and_releases_its_shared_fence": [
+      "2026-11-13T16:36:31.3276698Z test live_accepted_projection::tests::missing_run_catalog_defers_projection_and_releases_its_shared_fence ... ok"
+    ]
+  },
+  "all_expected_present": true
+}

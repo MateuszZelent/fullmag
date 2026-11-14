@@ -1,7 +1,21 @@
 import { createServer, request } from "node:http";
 
+const DEFAULT_HTTP_REQUEST_TIMEOUT_MS = 30_000;
+const MAX_HTTP_REQUEST_TIMEOUT_MS = 600_000;
+
 /** Give the isolated browser its normal loopback origin through one fixed service. */
-export async function startBrowserQaLoopbackProxy(publicUrl, upstreamUrl) {
+export async function startBrowserQaLoopbackProxy(publicUrl, upstreamUrl, options = {}) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("Browser QA proxy options must be an object");
+  }
+  const requestTimeoutMs = options.requestTimeoutMs === undefined
+    ? DEFAULT_HTTP_REQUEST_TIMEOUT_MS
+    : options.requestTimeoutMs;
+  if (typeof requestTimeoutMs !== "number" || !Number.isFinite(requestTimeoutMs) ||
+      !Number.isInteger(requestTimeoutMs) || requestTimeoutMs <= 0 ||
+      requestTimeoutMs > MAX_HTTP_REQUEST_TIMEOUT_MS) {
+    throw new Error("Browser QA proxy requestTimeoutMs must be a finite positive integer no greater than 600000");
+  }
   const origin = new URL(publicUrl);
   const upstream = new URL(upstreamUrl);
   if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || !origin.port ||
@@ -30,7 +44,8 @@ export async function startBrowserQaLoopbackProxy(publicUrl, upstreamUrl) {
     const forwarded = targetRequest(req);
     let clientCancelled = false;
     const cancelForward = () => { clientCancelled = true; forwarded.destroy(); };
-    forwarded.setTimeout(30_000, () => forwarded.destroy(new Error("QA frontend proxy timed out")));
+    // ClientRequest.setTimeout is an inactivity timeout, not a total request deadline.
+    forwarded.setTimeout(requestTimeoutMs, () => forwarded.destroy(new Error("QA frontend proxy timed out")));
     forwarded.on("response", (response) => {
       res.writeHead(response.statusCode ?? 502, response.headers);
       response.on("error", (error) => {

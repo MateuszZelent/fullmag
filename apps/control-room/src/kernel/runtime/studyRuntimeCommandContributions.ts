@@ -68,6 +68,7 @@ import {
 } from "../commands/commandSessionScope";
 import { runAuthoringMutationWithHistory } from "../authoring/authoringHistoryMutation";
 import { studyComputeDraftBlockedReason } from "../authoring/studyComputeDraftGuard";
+import { studyComputeConfirmationBlockedReason } from "./studyComputeConfirmation";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -96,7 +97,10 @@ import {
 } from "../resources/useActiveLaneCapabilities";
 
 import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
-import { isStudyComputeKind as isStudyCompute } from "../commands/studyComputeObservations";
+import {
+  isStudyComputeKind as isStudyCompute,
+  parseStudyComputeRequestJson,
+} from "../commands/studyComputeObservations";
 
 import {
   buildAuthoredStudyStageCommand,
@@ -298,6 +302,10 @@ const ACTIVE_RUNTIME_COMMAND_STATUSES = new Set([
   "running",
 ]);
 
+const TERMINAL_RUNTIME_COMMAND_STATUSES: ReadonlySet<string> = new Set([
+  "cancelled", "completed", "failed", "rejected",
+]);
+
 // Runtime states in which no durable run can be stopped any more.
 const TERMINAL_RUNTIME_STATES: ReadonlySet<string> = new Set([
   "cancelled",
@@ -348,8 +356,34 @@ function runtimeCommandDisabledReason(
   if (apiReason) return apiReason;
 
   if (isStudyCompute(kind)) {
+    const confirmationReason = studyComputeConfirmationBlockedReason(context);
+    if (confirmationReason) return confirmationReason;
+    const status = resourceData<LiveStatusResource>(
+      context,
+      SESSION_STATUS_RESOURCE_KEY,
+    );
+    if (!status) return "Session status is unavailable.";
+    const captured = runtimeCommandPrecondition(context, kind);
+    if (
+      !Number.isSafeInteger(status.resources.commands_revision) ||
+      status.resources.commands_revision < 0 ||
+      numericRevision(status.resources.scene_revision) === null ||
+      numericRevision(status.resources.mesh_revision) === null ||
+      !captured?.current_run
+    ) {
+      return "The current Study model and run status are unavailable. Refresh them before Compute.";
+    }
     const draftReason = studyComputeDraftBlockedReason(context);
     if (draftReason) return draftReason;
+  }
+
+  if (
+    isStudyCompute(kind) &&
+    context.sourceDetail !== "build-and-study" &&
+    context.commandQueueResourceStatus !== undefined &&
+    context.commandQueueResourceStatus !== "ready"
+  ) {
+    return "The current Study command status is not ready. Wait for it to refresh before Compute.";
   }
 
   const queue = resourceData<CommandQueueStatusResource>(
@@ -970,11 +1004,14 @@ function runtimeState(context: CommandContext): string | null {
 function commandRevisionPrecondition(
   context: CommandContext,
 ): number | undefined {
-  const queue = resourceData<CommandQueueStatusResource>(
+  const status = resourceData<LiveStatusResource>(
     context,
-    SIMULATION_COMMANDS_PATH,
+    SESSION_STATUS_RESOURCE_KEY,
   );
-  return queue ? queue.commands.length : undefined;
+  const revision = status?.resources?.commands_revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : undefined;
 }
 
 function activeStageId(stage: StageExecutionResource | null | undefined): string | null {
@@ -1615,14 +1652,35 @@ async function submitRuntimeCommand(
   if ("result" in refresh) return refresh.result;
   const refreshedCommand = refresh.command;
   if (isStudyCompute(refreshedCommand.kind)) {
+    const confirmationReason = studyComputeConfirmationBlockedReason(context);
+    if (confirmationReason) return { message: confirmationReason, status: "failed" };
     const draftReason = studyComputeDraftBlockedReason(context);
     if (draftReason) return { message: draftReason, status: "failed" };
   }
+  return postRuntimeCommand(context, refreshedCommand, successMessage);
+}
+
+/** An explicit retry passes the immutable original DTO without a new preflight. */
+async function postRuntimeCommand(
+  context: CommandContext,
+  command: StructuredCommandRequest,
+  successMessage: string,
+  retry = false,
+): Promise<CommandResult> {
+  if (!context.api) return { message: "Control-room API is unavailable.", status: "failed" };
+  assertCurrentSessionScope(context);
+  const requestJson = isStudyCompute(command.kind) ? JSON.stringify(command) : undefined;
+  // Snapshot before emitting or awaiting so draft/resource changes cannot alter
+  // the body retained for a later, user-requested idempotent retry.
+  const refreshedCommand: StructuredCommandRequest = requestJson
+    ? JSON.parse(requestJson) as StructuredCommandRequest
+    : command;
   const requestOptions = sessionRequestOptions(context);
   const clientIntentId = nonEmptyString(refreshedCommand.client_intent_id);
   const submission = clientIntentId && requestOptions?.sessionScopeKey && isStudyCompute(refreshedCommand.kind)
-    ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey }
+    ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey, requestJson }
     : null;
+  const studyComputeObservationStarted = submission && context.bus ? true as const : undefined;
   if (submission) context.bus?.emit("study:compute-observation", { ...submission, state: "started" });
 
   let response: CommandResponse;
@@ -1663,20 +1721,33 @@ async function submitRuntimeCommand(
     );
     return {
       commandId: reconciledCommandId,
+      studyComputeObservationStarted,
       clientIntentId: clientIntentId ?? undefined,
       clientIntentKind: clientIntentId ? refreshedCommand.kind : undefined,
       message: reconciledCommandId
         ? "Command accepted; waiting for the backend result."
-        : "Submission confirmation is pending. The command was not sent again.",
+        : retry
+          ? "The original request was retried once; confirmation is still pending."
+          : "Submission confirmation is pending. The command was not sent again.",
       observation,
       status: "pending",
     };
   }
-  if (submission && !response.accepted) {
+  if (submission && !response.accepted && !retry) {
     context.bus?.emit("study:compute-observation", { ...submission, state: "rejected" });
   }
   const obsoleteAfterSubmit = obsoleteSessionResult(context);
   if (obsoleteAfterSubmit) return obsoleteAfterSubmit;
+  if (!response.accepted && retry) {
+    return {
+      status: "pending",
+      studyComputeObservationStarted,
+      clientIntentId: clientIntentId ?? undefined,
+      clientIntentKind: refreshedCommand.kind,
+      observation: "publication-unconfirmed",
+      message: "Original submission confirmation is pending. Its acceptance has not been disproved.",
+    };
+  }
   if (!response.accepted) {
     return {
       message: response.error ?? `${successMessage} rejected.`,
@@ -1693,6 +1764,7 @@ async function submitRuntimeCommand(
   // terminal result, including failures after native worker startup.
   return {
     commandId: response.command_id,
+    studyComputeObservationStarted,
     clientIntentId: clientIntentId ?? undefined,
     clientIntentKind: clientIntentId ? refreshedCommand.kind : undefined,
     message: successMessage,
@@ -1764,15 +1836,15 @@ async function reconcileRuntimeCommandSubmission(
 }
 
 function isAmbiguousRuntimeCommandSubmitError(error: unknown, kind: string): boolean {
-  if (error instanceof Error && error.name === "AbortError") return isStudyCompute(kind);
-  if (!(error instanceof ControlRoomApiError)) return false;
-  if (error.code === "API_UNAVAILABLE" || error.status === 0) return true;
-  // Compute can be durable even when the API fails to publish its response.
-  // Preserve explicit pre-admission errors so the user can resolve them.
-  return isStudyCompute(kind) && error.status >= 500 && error.status < 600 &&
-    error.code !== "accepted_preparation_pending" &&
-    error.code !== "accepted_execution_store_unavailable" &&
-    error.code !== "accepted_held_supersession_pending";
+  if (isStudyCompute(kind)) {
+    // Status codes and an empty live ledger cannot disprove durable acceptance.
+    // Only the server's owner-scoped, serialized no-acceptance proof releases
+    // the intent. An API-instance change keeps its existing reconnect flow.
+    return !(error instanceof ControlRoomApiError &&
+      (error.intentDisposition === "not_accepted" || error.code === "API_INSTANCE_MISMATCH"));
+  }
+  return error instanceof ControlRoomApiError &&
+    (error.code === "API_UNAVAILABLE" || error.status === 0);
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -1790,6 +1862,7 @@ async function refreshRuntimeCommandPrecondition(
   const requestOptions = sessionRequestOptions(context);
   const pinsComputeInput = isStudyCompute(command.kind);
   const readsStatus = pinsComputeInput ||
+    original.command_revision !== undefined ||
     original.region_topology_revision !== undefined ||
     original.region_membership_revision !== undefined ||
     original.region_coefficients_revision !== undefined ||
@@ -1802,6 +1875,66 @@ async function refreshRuntimeCommandPrecondition(
       readsStatus ? api.sessions?.current?.status?.(requestOptions) : undefined,
     ]);
   const status = sessionStatusResult.status === "fulfilled" ? sessionStatusResult.value : undefined;
+  const commandRevision = status?.resources?.commands_revision;
+  const validCommandRevision = typeof commandRevision === "number" &&
+    Number.isSafeInteger(commandRevision) && commandRevision >= 0;
+  const queue = queueResult.status === "fulfilled" ? queueResult.value : undefined;
+  const validCommandQueue = Boolean(
+    queue &&
+    Array.isArray(queue.commands) &&
+    typeof queue.revision === "number" &&
+    Number.isSafeInteger(queue.revision) &&
+    queue.revision >= 0,
+  );
+  const solver = solverResult.status === "fulfilled" ? solverResult.value : undefined;
+  const validSolverState = typeof solver?.runtime_state === "string" &&
+    solver.runtime_state.length > 0;
+  if (pinsComputeInput && (!status || !validCommandRevision)) {
+    return { result: {
+      message:
+        "The current command revision could not be confirmed. Refresh Study status before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && !validCommandQueue) {
+    return { result: {
+      message:
+        "The current Study command queue could not be confirmed. Refresh it before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && !validSolverState) {
+    return { result: {
+      message:
+        "The current solver state could not be confirmed. Refresh it before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && queue) {
+    // Queue availability is checked on its own terms, never by comparing its
+    // aggregate revision with the admission revision published by status.
+    const activeCounts = [queue.pending_count, queue.accepted_count, queue.dispatched_count, queue.running_count];
+    if (activeCounts.some((count) => count !== 0) ||
+        queue.commands.some((entry) => !TERMINAL_RUNTIME_COMMAND_STATUSES.has(entry?.status))) {
+      return { result: {
+        message: "A runtime command is active or its outcome is not yet terminal. Wait for it to finish before Compute.",
+        status: "failed",
+      } };
+    }
+    const control = queue.runtime_controls?.find((entry) => entry.kind === command.kind);
+    if (control?.enabled === false) {
+      return { result: {
+        message: control.reason ?? "Study Compute is currently unavailable.",
+        status: "failed",
+      } };
+    }
+    if (solver?.runtime_state === "running" || solver?.runtime_state === "paused") {
+      return { result: {
+        message: "Runtime is already active.",
+        status: "failed",
+      } };
+    }
+  }
   if (pinsComputeInput && context.sourceDetail === "build-and-study") {
     const builtDomain = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY)
       ?.resources.domain_generation_id;
@@ -1840,14 +1973,8 @@ async function refreshRuntimeCommandPrecondition(
       precondition.stage_execution_revision = revision;
     }
   }
-  if (queueResult.status === "fulfilled") {
-    const queue = queueResult.value;
-    const commandRevision = Array.isArray(queue?.commands)
-      ? queue.commands.length
-      : null;
-    if (commandRevision !== null && Number.isFinite(commandRevision)) {
-      precondition.command_revision = commandRevision;
-    }
+  if (validCommandRevision) {
+    precondition.command_revision = commandRevision;
   }
   if (!pinsComputeInput && status) {
     const resources = status.resources;
@@ -2522,7 +2649,49 @@ function studyNavigationCommand(
   };
 }
 
+function retryableComputeForContext(context: CommandContext) {
+  const input = asRecord(context.input);
+  const targeted = input && Object.prototype.hasOwnProperty.call(input, "clientIntentId");
+  const clientIntentId = targeted ? nonEmptyString(input?.clientIntentId) : undefined;
+  // An old rendered recovery action must never select a newer pending intent.
+  if (targeted && !clientIntentId) return null;
+  return context.commandFeedback?.getRetryableStudyCompute(
+    context.sessionScopeKey, clientIntentId ?? undefined,
+  ) ?? null;
+}
+
+function retryComputeDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control-room API is unavailable.";
+  return retryableComputeForContext(context)
+    ? null
+    : "No single unresolved Compute with its original request is available to retry.";
+}
+
+const retryComputeCommand: CommandContribution = {
+  id: "study.retry-compute",
+  title: "Retry original Compute",
+  category: "Study",
+  group: "study-runtime",
+  scope: "runtime",
+  isEnabled: (context) => retryComputeDisabledReason(context) === null,
+  disabledReason: retryComputeDisabledReason,
+  run: (context) => {
+    const original = retryableComputeForContext(context);
+    const request = original && parseStudyComputeRequestJson(original.requestJson, original);
+    if (!request) {
+      return { status: "failed", message: "The original Compute request is unavailable; no command was sent." };
+    }
+    return postRuntimeCommand(
+      context,
+      request as StructuredCommandRequest,
+      "Original Compute confirmed; waiting for the backend result.",
+      true,
+    );
+  },
+};
+
 export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
+  retryComputeCommand,
   addAntennaFieldSolveStudyCommand,
   studyNavigationCommand(
     "study.open-overview",

@@ -428,6 +428,21 @@ def _manifest_digest(value: Mapping[str, Any]) -> str:
     return _hash_bytes(_canonical_json(value))
 
 
+def _dependency_install_key(inputs: DevelopmentInputs) -> str | None:
+    """Bind a reusable install receipt to dependency manifests and tool pins."""
+
+    dependency_seed = inputs.manifest.get("dependency_seed_sha256")
+    toolpins = inputs.manifest.get("toolpins_sha256")
+    if (not isinstance(dependency_seed, str) or not HEX64.fullmatch(dependency_seed)
+            or not isinstance(toolpins, str) or not HEX64.fullmatch(toolpins)):
+        return None
+    return _hash_bytes(_canonical_json({
+        "schema": "fullmag.frontend-dependency-install-key.v1",
+        "dependency_seed_sha256": dependency_seed,
+        "toolpins_sha256": toolpins,
+    }))
+
+
 def _relative_path(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value or len(value.encode()) > MAX_RELATIVE_BYTES:
         _fail(f"{name} must be a bounded relative path")
@@ -1481,6 +1496,9 @@ def _receipt_base(
             "bind_port": INSPECTOR_BIND_PORT,
         },
     }
+    install_key = _dependency_install_key(inputs)
+    if install_key is not None:
+        receipt["dependency_install_key"] = install_key
     failure = _receipt_failure(previous)
     if failure is not None:
         receipt["previous_failure_evidence"] = failure
@@ -2687,7 +2705,17 @@ def start(stopping_event: Any) -> FrontendHandle:
         # diagnostic copy still records whether this cache was prepared. Use
         # that history only to avoid reinstalling dependencies; ownership
         # authorization remains exclusively on the ephemeral receipt above.
+        install_key = _dependency_install_key(inputs)
         needs_install = history is None or history.get("dependency_install") != "ready"
+        if (not needs_install
+                and (install_key is None or history.get("dependency_install_key") != install_key)):
+            needs_install = True
+            _write_lifecycle_log(
+                "dependency_install_reconcile",
+                status="stale",
+                reason="dependency install identity differs",
+                log_path=LOG_PATH,
+            )
         if not needs_install and not _dependency_tree_ready(inputs):
             needs_install = True
             _write_lifecycle_log(

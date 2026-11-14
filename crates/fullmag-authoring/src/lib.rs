@@ -11,6 +11,7 @@ mod physics_graph;
 mod region_revisions;
 mod scene;
 mod scene_study_plan;
+mod script_output_projection;
 mod spin_transport;
 mod study_contract;
 mod universe_state;

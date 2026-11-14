@@ -2618,7 +2618,12 @@ def _parser() -> argparse.ArgumentParser:
     frontend_refresh.add_argument("--config-sha256", required=True)
     frontend_refresh.add_argument("--source-root", type=Path, required=True)
     frontend_refresh.add_argument("--port", type=int, required=True)
-    frontend_refresh.add_argument("--frontend-frozen-resume")
+    frontend_refresh_modes = frontend_refresh.add_mutually_exclusive_group()
+    frontend_refresh_modes.add_argument("--frontend-frozen-resume")
+    frontend_refresh_modes.add_argument(
+        "--failed-seed-new-generation", action="store_true",
+        help="create a fresh private frontend generation after an exactly verified failed seed",
+    )
     frontend_refresh.add_argument("--frontend-frozen-resume-sha256")
     run_script_parser = subparsers.add_parser(
         "run-script",
@@ -2896,6 +2901,8 @@ def _parser() -> argparse.ArgumentParser:
             "and is never resolved as a host path"
         ),
     )
+    recreate_volume.add_argument("--failed-frontend-start", help="Exact legacy lost-generation metadata refusal, only with recreation resume")
+    recreate_volume.add_argument("--failed-frontend-start-sha256", help="SHA-256 of that exact failed terminal receipt")
     recreate_volume.add_argument("--completed-recreation-attempt", help="Continue this exact succeeded removal without repeating rm")
     recreate_volume.add_argument("--completed-recreation-sha256", help="SHA-256 of the completed removal terminal receipt")
     recreate_volume.add_argument("--drained-successor-proof", help="Exact control-volume proof of a later successful managed drain")
@@ -3017,6 +3024,75 @@ def _parser() -> argparse.ArgumentParser:
     recover_cancelled.add_argument(
         "--include-untracked", action="append", default=None,
         help="include one exact untracked source file in the managed backend build; repeat as needed",
+    )
+
+    held_ui = subparsers.add_parser(
+        "continue-held-ui-volume",
+        help="finish one already accepted UI intent after a pinned preserving rebuild",
+    )
+    for flag, description in (
+        ("attempt", "exact retained development attempt UUID"),
+        ("config-sha256", "retained Compose configuration SHA-256"),
+        ("run-id", "existing accepted UI run; no new intent is created"),
+        ("request-id", "maintenance UUID shared by preview and apply"),
+    ):
+        held_ui.add_argument("--" + flag, required=True, help=description)
+    held_ui.add_argument("--source-root", type=Path, required=True)
+    held_ui.add_argument("--port", type=int, required=True)
+    held_mode = held_ui.add_mutually_exclusive_group(required=True)
+    held_mode.add_argument("--preview", action="store_true")
+    held_mode.add_argument("--apply", action="store_true")
+    held_ui.add_argument("--expected-plan-sha256", help="unchanged reviewed preview SHA; required for apply")
+    held_ui.add_argument("--pre-signal-stop-attempt", help="exact failed stop before API exec; apply only")
+    held_ui.add_argument("--pre-signal-stop-terminal-sha256", help="raw digest of that failed stop terminal")
+    held_ui.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
+    )
+
+    held_retry = subparsers.add_parser(
+        "retry-held-ui-start-volume",
+        help="retry one pinned pre-materialization diagnostic held start without replaying Compute",
+    )
+    for flag in ("attempt", "config-sha256", "run-id", "request-id",
+                 "expected-plan-sha256", "failed-held-start-attempt", "failed-held-start-sha256"):
+        held_retry.add_argument("--" + flag, required=True)
+    held_retry.add_argument("--source-root", type=Path, required=True)
+    held_retry.add_argument("--port", type=int, required=True)
+    held_retry_mode = held_retry.add_mutually_exclusive_group(required=True)
+    held_retry_mode.add_argument("--preview", action="store_true")
+    held_retry_mode.add_argument("--apply", action="store_true")
+    held_retry.add_argument("--retry-plan-sha256", help="exact retry preview SHA; required for apply")
+    held_retry.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
+    )
+
+    failed_resume = subparsers.add_parser(
+        "resume-failed-run-volume",
+        help="resume the pinned existing accepted run after a diagnostic stop; never cancel or replay a script",
+    )
+    for flag, help_text in (
+        ("attempt", "exact retained development attempt UUID"),
+        ("config-sha256", "Compose configuration SHA-256 of that retained development"),
+        ("stop-attempt", "successful managed diagnostic-stop operation UUID"),
+        ("stop-terminal-sha256", "raw SHA-256 of that stop operation's outer terminal.json"),
+        ("run-id", "existing accepted run to preserve and continue"),
+        ("request-id", "new canonical recovery UUID; reuse it for preview and apply"),
+    ):
+        failed_resume.add_argument("--" + flag, required=True, help=help_text)
+    failed_resume.add_argument("--source-root", type=Path, required=True,
+                               help="exact registered checkout mounted by the retained group")
+    failed_resume.add_argument("--port", type=int, required=True,
+                               help="explicit retained frontend loopback port")
+    failed_resume_mode = failed_resume.add_mutually_exclusive_group(required=True)
+    failed_resume_mode.add_argument("--preview", action="store_true")
+    failed_resume_mode.add_argument("--apply", action="store_true")
+    failed_resume.add_argument("--expected-plan-sha256",
+                               help="unchanged plan SHA-256 returned by preview; required for apply")
+    failed_resume.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
     )
 
     for name in ("build", "up"):
@@ -3163,6 +3239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "build":
             build(args)
         elif args.action == "refresh-frontend-volume":
+            if args.failed_seed_new_generation and args.frontend_frozen_resume_sha256 is not None:
+                raise _fail("Failed-seed generation cannot use a frozen-resume digest")
             from docker_volume_dev import refresh_frontend
             refresh_frontend(args)
         elif args.action == "maintain-cache":
@@ -3298,6 +3376,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "cancel-unclaimed-volume":
             from docker_volume_unclaimed_cancellation import cancel_unclaimed
             cancel_unclaimed(args)
+        elif args.action == "continue-held-ui-volume":
+            from docker_volume_held_ui_materialization import run as continue_held_ui
+            print(json.dumps(continue_held_ui(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "retry-held-ui-start-volume":
+            if args.apply:
+                if (not isinstance(args.retry_plan_sha256, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", args.retry_plan_sha256) is None):
+                    raise _fail("Held start retry apply requires the exact reviewed retry plan SHA-256")
+            elif args.retry_plan_sha256 is not None:
+                raise _fail("Held start retry preview cannot carry an apply plan SHA-256")
+            from docker_volume_held_ui_start_retry import run as retry_held_ui_start
+            print(json.dumps(retry_held_ui_start(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "resume-failed-run-volume":
+            from docker_volume_failed_run_resume import run as resume_failed_run
+            print(json.dumps(resume_failed_run(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "recover-cancelled-volume":
             from docker_volume_cancelled_recovery import recover_cancelled
             recover_cancelled(args)

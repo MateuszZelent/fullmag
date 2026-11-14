@@ -4981,6 +4981,7 @@ describe("ribbon structure", () => {
               discretization: "fdm",
             },
             resources: {
+              commands_revision: 0,
               mesh_revision: 0,
               scene_revision: 1,
             },
@@ -5063,6 +5064,7 @@ describe("ribbon structure", () => {
               discretization: "fdm",
             },
             resources: {
+              commands_revision: 0,
               mesh_revision: 0,
               scene_revision: 1,
             },
@@ -5204,6 +5206,7 @@ describe("ribbon structure", () => {
             discretization: "fem",
           },
           resources: {
+            commands_revision: 0,
             mesh_revision: 0,
             scene_revision: 1,
           },
@@ -5269,6 +5272,7 @@ describe("ribbon structure", () => {
               discretization: "fdm",
             },
             resources: {
+              commands_revision: 1,
               mesh_revision: 0,
               scene_revision: 1,
             },

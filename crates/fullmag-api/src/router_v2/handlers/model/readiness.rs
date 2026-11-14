@@ -70,7 +70,7 @@ pub struct ModelReadinessResource {
 pub async fn get_model_readiness(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ModelReadinessResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let snapshot = state.current_live_state.read().await;
     let snapshot = snapshot
         .as_ref()

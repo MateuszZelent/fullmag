@@ -26106,6 +26106,109 @@ async fn adaptive_command_rejects_single_precision_before_enqueue() {
 }
 
 #[tokio::test]
+async fn current_run_snapshot_read_ignores_mutation_transition() {
+    use std::future::Future;
+    use std::task::Poll;
+
+    let state = test_app_state_with_live_session().await;
+    state.current_live_state.write().await.as_mut().unwrap().run = Some(
+        serde_json::from_value(serde_json::json!({
+            "run_id":"test-run", "session_id":"test-session",
+            "status":"waiting_for_solve", "total_steps":3, "artifact_dir":""
+        }))
+        .unwrap(),
+    );
+    let _transition = state.current_live_session_transition.lock().await;
+    // Control: mutation callers must retain their transition fence.
+    let mut mutation = Box::pin(crate::capture_current_live_request_context(&state));
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(mutation.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    drop(mutation);
+
+    let mut read = Box::pin(super::handlers::simulation::get_current_run(
+        axum::extract::State(state.clone()),
+    ));
+    let Poll::Ready(result) = std::future::poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx))).await
+    else {
+        panic!("committed CurrentRun read waited for an unrelated mutation transition")
+    };
+    let resource = result.unwrap().0;
+    assert_eq!(resource.run_id, "test-run");
+    assert_eq!(resource.session_id, "test-session");
+    assert_eq!(resource.status, "waiting_for_solve");
+}
+
+#[tokio::test]
+async fn current_run_snapshot_read_reports_absence_during_mutation_transition() {
+    use std::future::Future;
+    use std::task::Poll;
+
+    let state = test_app_state_with_live_session().await;
+    let _transition = state.current_live_session_transition.lock().await;
+    let mut read = Box::pin(super::handlers::simulation::get_current_run(
+        axum::extract::State(state.clone()),
+    ));
+    let Poll::Ready(result) = std::future::poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx))).await
+    else {
+        panic!("CurrentRun absence must remain observable during preparation")
+    };
+    assert_eq!(result.unwrap_err().status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn current_run_snapshot_read_rejects_owner_replaced_during_publication() {
+    use std::future::Future;
+    use std::task::Poll;
+
+    let state = test_app_state_with_live_session().await;
+    let scope = {
+        let current = state.current_live_state.read().await;
+        crate::current_live_publisher_scope_header(&state, current.as_ref().unwrap())
+    };
+    let app = build_v2_router().with_state(state.clone());
+    let _transition = state.current_live_session_transition.lock().await;
+    let mut publishing = state.current_live_state.write().await;
+    let mut read = Box::pin(
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/runs/current")
+                .header("x-fullmag-session-scope", scope)
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    );
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx)))
+            .await
+            .is_pending(),
+        "the actual snapshot publication must still fence a read"
+    );
+    publishing.as_mut().unwrap().session.session_id = "replacement-session".into();
+    publishing.as_mut().unwrap().session.run_id = "replacement-run".into();
+    state
+        .current_live_session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::Release);
+    drop(publishing);
+
+    let Poll::Ready(result) = std::future::poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx))).await
+    else {
+        panic!("stale CurrentRun read waited for the mutation transition after publication")
+    };
+    let response = result.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = body_json(response).await;
+    assert!(error.to_string().contains("request_context_stale"));
+    assert!(
+        error.get("run_id").is_none(),
+        "a stale reader must not receive the replacement run"
+    );
+}
+
+#[tokio::test]
 async fn current_run_endpoint_returns_runtime_summary() {
     let app = test_router_with_runtime_read_models().await;
     let response = app

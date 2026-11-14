@@ -11,6 +11,7 @@ import type { CommandQueueStatusResource, LiveStatusResource, SceneResource } fr
 import { awaitMeshCommandTerminal } from "../authoring/geometryLifecycleCommands";
 import { resumeMeshBuildObservation } from "../authoring/geometryLifecycleCommandContributions";
 import { studyComputeDraftBlockedReason } from "../authoring/studyComputeDraftGuard";
+import { studyComputeConfirmationBlockedReason } from "./studyComputeConfirmation";
 import type { CommandRegistry } from "../commands/CommandRegistry";
 import { obsoleteSessionResult } from "../commands/commandSessionScope";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
@@ -176,12 +177,25 @@ async function verifyBuiltDomain(context: CommandContext, operation: BuildStudyO
 
 export function createBuildStudyCommands(registry: CommandRegistry): CommandContribution[] {
   const operations = new Map<string, BuildStudyOperation>();
-  const operationFor = (context: CommandContext) => operations.get(context.sessionScopeKey ?? "");
+  const operationFor = (context: CommandContext) => {
+    const operation = operations.get(context.sessionScopeKey ?? "");
+    const solve = operation?.solve;
+    // The observation owner resolves the original intent. An empty queue alone
+    // cannot retire this continuation or authorize another Compute submission.
+    if (operation && !operation.busy && solve?.studyComputeObservationStarted &&
+        solve.clientIntentId && context.sessionScopeKey && context.commandFeedback &&
+        !context.commandFeedback.hasUnresolvedStudyCompute(context.sessionScopeKey, solve.clientIntentId)) {
+      return undefined;
+    }
+    return operation;
+  };
   const reason = (context: CommandContext): string | null => {
     if (!context.api || !context.sessionScopeKey) return "Open a current workspace before building and running Study.";
     const operation = operationFor(context);
     if (operation?.busy) return PHASE_LABELS[operation.phase];
     if (operation) return null;
+    const confirmation = studyComputeConfirmationBlockedReason(context);
+    if (confirmation) return confirmation;
     const draft = studyComputeDraftBlockedReason(context);
     if (draft) return draft;
     const build = buildFor(statusFrom(context));

@@ -2309,9 +2309,10 @@ class DockerRuntimeContract(unittest.TestCase):
             recover_idle_failure=lambda _paths: None,
             ensure_configuration=lambda _paths: {},
             process_environment=lambda _paths: {},
+            held_ui_materialization_preflight=Mock(return_value=None),
             terminal_observation_preflight=Mock(return_value=None),
             accepted_reattach_preflight=lambda _paths: None,
-            terminal_observation_api_input=Mock(
+            held_ui_materialization_api_input=Mock(
                 side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
             ),
             process_receipt_path=service_module.process_receipt_path,
@@ -2337,9 +2338,11 @@ class DockerRuntimeContract(unittest.TestCase):
                 patch.object(entrypoint, "activate_startup_script", side_effect=fail_activation):
             self.assertEqual(entrypoint.serve(), 1)
 
+        service.held_ui_materialization_preflight.assert_called_once_with(paths)
         service.terminal_observation_preflight.assert_called_once_with(paths)
-        service.terminal_observation_api_input.assert_called_once_with(
-            paths, terminal_preflight=None, accepted_preflight=None
+        service.held_ui_materialization_api_input.assert_called_once_with(
+            paths, preflight=None, terminal_preflight=None, accepted_preflight=None,
+            store_binding="test"
         )
         self.assertGreaterEqual(len(receipts), 4)
         self.assertEqual(receipts[1]["service_owner"], owner)
@@ -2392,9 +2395,10 @@ class DockerRuntimeContract(unittest.TestCase):
             recover_idle_failure=mock.Mock(return_value=None),
             ensure_configuration=mock.Mock(return_value={}),
             process_environment=mock.Mock(return_value={}),
+            held_ui_materialization_preflight=Mock(return_value=None),
             terminal_observation_preflight=Mock(return_value=None),
             accepted_reattach_preflight=lambda _paths: None,
-            terminal_observation_api_input=Mock(
+            held_ui_materialization_api_input=Mock(
                 side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
             ),
             process_receipt_path=service_module.process_receipt_path,
@@ -2419,9 +2423,11 @@ class DockerRuntimeContract(unittest.TestCase):
                 patch.object(entrypoint, "activate_startup_script", activation):
             self.assertEqual(entrypoint.serve(), 0)
 
+        service.held_ui_materialization_preflight.assert_called_once_with(paths)
         service.terminal_observation_preflight.assert_called_once_with(paths)
-        service.terminal_observation_api_input.assert_called_once_with(
-            paths, terminal_preflight=None, accepted_preflight=None
+        service.held_ui_materialization_api_input.assert_called_once_with(
+            paths, preflight=None, terminal_preflight=None, accepted_preflight=None,
+            store_binding="test"
         )
         activation.assert_called_once_with()
         service.check.assert_called_once_with(handle, full_api_probe=False)

@@ -1047,5 +1047,51 @@ class RetainedSemanticBuildReceiptTests(unittest.TestCase):
                         docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase)
                     group.control.write.assert_not_called()
 
+class FrontendSeedRecoveryCliTests(unittest.TestCase):
+    @staticmethod
+    def command():
+        return ["refresh-frontend-volume", "--attempt", "a" * 32,
+                "--config-sha256", "b" * 64, "--source-root", "/repo", "--port", "3243"]
+
+    def test_new_generation_requires_explicit_flag_and_keeps_frozen_resume(self):
+        default = docker_dev._parser().parse_args(self.command())
+        self.assertFalse(default.failed_seed_new_generation)
+        explicit = docker_dev._parser().parse_args(self.command() + ["--failed-seed-new-generation"])
+        self.assertTrue(explicit.failed_seed_new_generation)
+        legacy = docker_dev._parser().parse_args(self.command() + [
+            "--frontend-frozen-resume", "old-proof", "--frontend-frozen-resume-sha256", "c" * 64,
+        ])
+        self.assertFalse(legacy.failed_seed_new_generation)
+        self.assertEqual(legacy.frontend_frozen_resume, "old-proof")
+
+    def test_seed_mode_cannot_mix_with_frozen_proof_or_restart_backend(self):
+        import contextlib
+        import io
+        for extra in (["--frontend-frozen-resume", "old-proof"], ["--restart-backend"]):
+            with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    docker_dev._parser().parse_args(
+                        self.command() + ["--failed-seed-new-generation"] + extra)
+                self.assertEqual(raised.exception.code, 2)
+
+    def test_seed_mode_is_not_an_up_option(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            docker_dev._parser().parse_args(["up", "--failed-seed-new-generation"])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_seed_mode_rejects_frozen_digest_before_any_refresh(self):
+        import contextlib
+        import io
+        for digest in ("c" * 64, ""):
+            with self.subTest(digest=digest), patch("docker_volume_dev.refresh_frontend") as refresh, contextlib.redirect_stderr(io.StringIO()):
+                result = docker_dev.main(self.command() + [
+                    "--failed-seed-new-generation", "--frontend-frozen-resume-sha256", digest,
+                ])
+            self.assertEqual(result, 2)
+            refresh.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

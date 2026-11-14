@@ -16,7 +16,8 @@ import sys
 import time
 import uuid
 
-from docker_build_control import BuildControl, canonical, toolchain_configuration
+from docker_build_control import BuildControl, BuildControlError, canonical, toolchain_configuration
+import docker_volume_frontend_seed_completion as seed_completion
 from docker_volume_reconcile import (SHA, TOKEN, digest, fingerprint, read_raw,
     require, validate_incarnation, validate_original_owner, write_immutable)
 
@@ -93,7 +94,11 @@ def require_failed_source_witness(original, document, source, witness):
 
 
 def validate_unknown(original, previous, document, control, source, attempt, base_attempt):
-    failed_source_target(original, document, source)
+    if seed_completion.is_seed_completion(original):
+        require(original.get("error") == "Recreated frontend source bind identity could not be proven",
+                "Failed-seed completion supports only its exact recreated bind failure")
+    else:
+        failed_source_target(original, document, source)
     require(original.get("schema") == "fullmag.docker-build-operation.v1"
         and original.get("phase") == "development"
         and original.get("state") == "outcome-unknown-resources-retained"
@@ -120,6 +125,110 @@ def validate_unknown(original, previous, document, control, source, attempt, bas
         "Original development authority/resources differ")
     require(document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") != "1",
             "Completion never repeats startup Solve")
+
+
+def require_seed_source_witness(document, source, witness):
+    """An aggregate seed failure still proves each changed declared source bind."""
+    targets = {"/opt/fullmag/source": Path(source)}
+    targets.update({"/state/development/workspace/apps/control-room/" + name:
+                    Path(source) / "apps/control-room" / name
+                    for name in ("app", "src", "public", "scripts")})
+    require(isinstance(witness, dict) and "/opt/fullmag/source" in witness,
+            "Failed-seed completion needs the independent root source witness")
+    mounts = document["services"]["frontend"].get("volumes", [])
+    for target in witness:
+        require(target in targets, "Failed-seed witness is outside declared source scope")
+        matches = [m for m in mounts if isinstance(m, dict) and m.get("target") == target]
+        require(len(matches) == 1 and matches[0].get("type") == "bind"
+                and matches[0].get("read_only") is True
+                and isinstance(matches[0].get("source"), str)
+                and Path(matches[0]["source"]).resolve() == targets[target].resolve(),
+                "Failed-seed witness does not describe its readonly selected source")
+
+
+def seed_baseline_document(control, raw, attempt):
+    """Read a prior baseline; never infer a missing baseline from current state."""
+    journal = "development/attempts/" + attempt + "/backend-incarnation-baseline.json"
+    raw[journal] = read_raw(control, journal, optional=True)
+    relative = journal
+    if raw[journal] is None:
+        relative = seed_completion.baseline_relative(attempt)
+        raw[relative] = read_raw(control, relative, optional=True)
+    require(raw[relative] is not None, "Failed-seed completion has no pinned prior backend observation")
+    try:
+        value = json.loads(raw[relative])
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Failed-seed backend baseline is malformed") from error
+    expected_kind = "captured-under-lease" if relative == journal else "operator-pinned-prior-observation"
+    require(isinstance(value, dict) and value.get("kind") == expected_kind,
+            "Failed-seed backend baseline kind differs from its publication path")
+    return relative, value
+
+
+def seed_completion_evidence(control, raw, original, previous, document, rollback,
+                             actual, source, attempt, base_attempt, inputs, desired, health):
+    """Authenticate a failed seed without borrowing an unrelated success receipt."""
+    import docker_development_inputs as frontend_inputs
+    import docker_volume_frontend_seed_recovery as seed_recovery
+    mode = original["inputs"]["failed_seed_new_generation"]
+    pins = seed_completion.validate_seed_authority(
+        original, previous, rollback, document, control, attempt, base_attempt)
+    root = "development/attempts/" + attempt
+    prior_path = root + "/rollback-development-inputs.json"
+    raw[prior_path] = read_raw(control, prior_path)
+    require(digest(raw[prior_path]) == mode["prior_input_manifest_sha256"],
+            "Failed-seed prior input manifest CAS differs")
+    prior_inputs = json.loads(raw[prior_path])
+    for name in ("backend-build-receipt.json", "provenance.json"):
+        relative = "development/attempts/" + base_attempt + "/" + name
+        raw[relative] = read_raw(control, relative)
+        require(raw[relative] == raw[root + "/" + name],
+                "Failed-seed carried backend package/provenance differs from base")
+    backend_pins = seed_recovery.authenticated_source_pins(
+        control, previous, rollback, actual, prior_inputs)
+    selected_bytes = {}
+    captured = frontend_inputs.seed(source, Path(original["state_root"]), desired["host_port"],
+        write_file=lambda relative, data: selected_bytes.__setitem__(relative, data))
+    require(captured["files"] == desired["files"]
+            and captured["source_commit"] == desired["source_commit"],
+            "Selected frontend seed changed during completion capture")
+    # seed() includes the authenticated host-volume and workspace identity;
+    # describe() intentionally describes an unseeded view and cannot replace it.
+    desired = captured
+    published_pins = seed_recovery.validate_seed_manifest(
+        prior_inputs, inputs, backend_app_commit=backend_pins["backend_app_commit"],
+        expected_backend_app_commit=backend_pins["backend_app_commit"],
+        input_manifest_commit=backend_pins["input_manifest_commit"],
+        controller_commit=pins["controller_commit"], selected_seed_bytes=selected_bytes)
+    published_pins.update(backend_pins)
+    require(published_pins == pins, "Failed-seed authenticated source pins changed")
+    # The controller may advance, but every frontend dependency/configuration byte
+    # must still match. This is not native source equality for that newer commit.
+    seed_recovery.validate_seed_manifest(
+        inputs, desired, backend_app_commit=backend_pins["backend_app_commit"],
+        expected_backend_app_commit=backend_pins["backend_app_commit"],
+        input_manifest_commit=inputs["source_commit"], controller_commit=desired["source_commit"],
+        selected_seed_bytes=selected_bytes)
+    generation = original["frontend_generation_subpath"]
+    frontend = actual["frontend"]
+    mounts = [m for m in frontend.get("Mounts", []) if m.get("Destination") == "/state/development"]
+    host_mounts = [m for m in frontend.get("HostConfig", {}).get("Mounts", [])
+                   if m.get("Target") == "/state/development"]
+    require(len(mounts) == len(host_mounts) == 1
+            and mounts[0].get("Type") == "volume" and mounts[0].get("Name") == control.volume
+            and mounts[0].get("RW") is True
+            and host_mounts[0].get("Type") == "volume" and host_mounts[0].get("Source") == control.volume
+            and host_mounts[0].get("ReadOnly", False) is False
+            and host_mounts[0].get("VolumeOptions", {}).get("Subpath") == generation,
+            "Recreated frontend is outside its authenticated private generation")
+    baseline_path, baseline = seed_baseline_document(control, raw, attempt)
+    seed_completion.validate_baseline(baseline, attempt, base_attempt, actual["backend"], health)
+    return {"schema": mode["schema"], "source_pins": pins,
+            "baseline": {"relative": baseline_path, "kind": baseline["kind"],
+                         "sha256": digest(raw[baseline_path])},
+            "frontend_input_commit": inputs["source_commit"],
+            "selected_source_commit": desired["source_commit"],
+            "selected_source_qualification": "NOT VERIFIED"}
 
 
 def file_identity(path):
@@ -162,6 +271,7 @@ def guest_identity(identifier, path):
 def derive_document(document, actual, source, identity=file_identity, guest=guest_identity):
     """Repin only aliases independently anchored in an already trusted backend."""
     result = copy.deepcopy(document)
+    selected_root = Path(source).resolve(strict=True)
     backend = document["services"]["backend"]
     front = result["services"]["frontend"]
     trusted = backend.get("x-fullmag-daemon-binds", {})
@@ -170,7 +280,7 @@ def derive_document(document, actual, source, identity=file_identity, guest=gues
     require(len(backend_mounts) == len(actual["backend"]["Mounts"])
             and len(front_mounts) == len(actual["frontend"]["Mounts"]), "Duplicate mount destination")
     source_mount = next((m for m in backend["volumes"] if m["target"] == "/opt/fullmag/source"), None)
-    require(source_mount is not None and Path(source_mount["source"]).resolve() == source.resolve(),
+    require(source_mount is not None and Path(source_mount["source"]).resolve() == selected_root,
             "Trusted backend is not bound to selected host source")
     witness = {}
     for mount in front["volumes"]:
@@ -195,13 +305,20 @@ def derive_document(document, actual, source, identity=file_identity, guest=gues
         _, bm, base = max(candidates, key=lambda item: item[0])
         anchor = backend_mounts.get(bm["target"], {})
         alias = trusted.get(bm["target"])
-        require(isinstance(alias, str) and alias.startswith("/run/desktop/mnt/host/wsl/")
+        direct_linux_source = (bm.get("target") == "/opt/fullmag/source"
+                               and bm.get("source") == str(selected_root)
+                               and base == selected_root
+                               and alias == str(selected_root))
+        require(isinstance(alias, str)
+                and (alias.startswith("/run/desktop/mnt/host/wsl/") or direct_linux_source)
                 and anchor.get("Source") == alias and anchor.get("Type") == "bind"
                 and anchor.get("RW") is False, "Backend daemon alias is not independently trusted")
         suffix = host.relative_to(base).as_posix()
         suffix = "" if suffix == "." else "/" + suffix
         if not suffix:
-            require(observed.get("Source") == alias,
+            require(observed.get("Source") == alias
+                    or (direct_linux_source and isinstance(observed.get("Source"), str)
+                        and observed["Source"].startswith("/run/desktop/mnt/host/wsl/")),
                     "Frontend root source differs from trusted backend alias")
         else:
             require(isinstance(observed.get("Source"), str)
@@ -288,9 +405,13 @@ def observe(control, source, attempt, base_attempt, port):
         require(values[0]["State"].get("Running") is True, "Retained container not running")
         if name != "lease":
             require(values[0]["State"].get("Health", {}).get("Status") == "healthy", "Service not healthy")
+    seed_mode = seed_completion.is_seed_completion(original)
+    if seed_mode:
+        seed_completion.validate_seed_authority(
+            original, previous, rollback, document, control, attempt, base_attempt)
     old_frontend = previous.get("frontend_container")
     authority = previous if previous.get("state") == "succeeded" else None
-    for phase in ("resume", "iteration"):
+    for phase in (() if seed_mode else ("resume", "iteration")):
         value = raw[phase + "/verified.json"]
         if value is None:
             continue
@@ -310,6 +431,8 @@ def observe(control, source, attempt, base_attempt, port):
                     "Continuation resources differ")
             authority = candidate
             old_frontend = candidate.get("frontend_container", old_frontend)
+    if seed_mode:
+        authority = previous
     require(authority is not None and authority.get("backend_container") == actual["backend"]["Id"]
             and authority.get("backend_started_at") == actual["backend"]["State"]["StartedAt"]
             and isinstance(old_frontend, str) and actual["frontend"]["Id"] != old_frontend,
@@ -319,7 +442,10 @@ def observe(control, source, attempt, base_attempt, port):
     require(lease_log.splitlines() == ["READY", "LOGGED"],
             "Original helper has not durably consumed its build log")
     derived, witness = dev._repin_frontend_daemon_binds(document, actual, source, sys.modules[__name__])
-    require_failed_source_witness(original, document, source, witness)
+    if seed_mode:
+        require_seed_source_witness(document, source, witness)
+    else:
+        require_failed_source_witness(original, document, source, witness)
     for name in ("backend", "frontend"):
         image = json.loads(dev.docker_text("image", "inspect", actual[name]["Image"]))[0]
         dev._validate_retained_service(derived, actual[name], name, image["Config"])
@@ -331,13 +457,15 @@ def observe(control, source, attempt, base_attempt, port):
     require(str(derived["services"]["frontend"]["environment"]["FULLMAG_FRONTEND_HOST_PORT"]) == str(port), "Port differs")
     package, provenance, package_sha, binary = codegen._backend_documents(ids["backend"])
     backend, provenance_sha, binary_sha = codegen._validate_backend(package, provenance, package_sha, binary)
-    probe, _ = codegen._probe_source(ids["backend"], attempt)
-    require(codegen._source_matches(probe, backend),
-            "Native source snapshot differs; use a separate pinned helper checkout")
+    if not seed_mode:
+        probe, _ = codegen._probe_source(ids["backend"], attempt)
+        require(codegen._source_matches(probe, backend),
+                "Native source snapshot differs; use a separate pinned helper checkout")
     require(package == json.loads(raw[root + "/backend-build-receipt.json"])
             and provenance == json.loads(raw[root + "/provenance.json"]), "Retained package publication differs")
     inputs = json.loads(raw["frontend/development-inputs.json"])
-    require(describe(source, port)["files"] == inputs["files"], "Frontend seed changed")
+    desired = describe(source, port)
+    require(desired["files"] == inputs["files"], "Frontend seed changed")
     view = frontend_view(ids["frontend"], source, port, inputs=inputs)
     state = Path(original["state_root"])
     host = dev._session_host()
@@ -348,6 +476,10 @@ def observe(control, source, attempt, base_attempt, port):
             and json.loads(certificate).get("restart_verified") is True, "Storage owner/certificate differs")
     health = dev._frontend_recovery_backend_observation(ids["backend"], allow_empty=True)
     require(health.get("active_session") is False, "Completion requires empty healthy API")
+    seed_evidence = None
+    if seed_mode:
+        seed_evidence = seed_completion_evidence(control, raw, original, previous, document, rollback,
+            actual, source, attempt, base_attempt, inputs, desired, health)
     evidence = {"documents": {p: digest(v) if v is not None else None for p, v in raw.items()},
         "containers": {n: container_pin(a) for n, a in actual.items()},
         "lease_log_sha256": digest(lease_log.encode()), "derived_compose_sha256": digest(canonical(derived)), "namespace_witness": witness,
@@ -355,6 +487,8 @@ def observe(control, source, attempt, base_attempt, port):
                     "source": backend}, "storage": {"owner": digest(owner), "certificate": digest(certificate)},
         "frontend_source_view": view, "frontend_volume": document["volumes"]["frontend-build"]["name"],
         "backend_observation": health}
+    if seed_evidence is not None:
+        evidence["seed_completion"] = seed_evidence
     return evidence, original, derived
 
 
@@ -398,7 +532,8 @@ def transaction_script(control, r, request_sha, result_sha, derived_sha):
     return script + "}; publish || retain_unknown; printf 'COMMITTED\\n'"
 
 
-def completed(control, r, request_sha):
+def completed_publication(control, r, request_sha):
+    """Authenticate immutable completion evidence, including after a later start."""
     root = "development/attempts/" + r["attempt"]
     terminal = read_raw(control, root + "/terminal.json", optional=True)
     if terminal is None:
@@ -406,14 +541,24 @@ def completed(control, r, request_sha):
     result = json.loads(terminal)
     require(result.get("state") == "succeeded" and result.get("frontend_refresh_completion", {}).get("request_sha256") == request_sha,
             "Foreign terminal publication")
-    for p in (root + "/receipt.json", "development/current.json", "development/verified.json",
-              root + "/completion/" + request_sha + "/result.json"):
+    for p in (root + "/receipt.json", root + "/completion/" + request_sha + "/result.json"):
         require(read_raw(control, p) == terminal, "Partial terminal publication; retain lease and journal")
     require(digest(read_raw(control, root + "/completion/" + request_sha + "/original-compose.json"))
             == r["evidence"]["documents"][root + "/compose.json"], "Original Compose archive differs")
     require(digest(read_raw(control, root + "/unknown-receipt.json"))
             == r["evidence"]["documents"][root + "/receipt.json"], "Original receipt archive differs")
     require(digest(read_raw(control, root + "/compose.json")) == r["evidence"]["derived_compose_sha256"], "Derived Compose differs")
+    return True
+
+
+def completed(control, r, request_sha):
+    """Replay still requires the exact current and verified terminal pointers."""
+    if not completed_publication(control, r, request_sha):
+        return False
+    terminal = read_raw(control, "development/attempts/" + r["attempt"] + "/terminal.json")
+    for relative in ("development/current.json", "development/verified.json"):
+        require(read_raw(control, relative) == terminal,
+                "Partial terminal publication; retain lease and journal")
     return True
 
 
@@ -465,6 +610,12 @@ def apply(control, source, relative, request_sha):
         url="http://127.0.0.1:" + str(r["port"]), frontend_refresh_completion={"schema": SCHEMA,
             "request": relative, "request_sha256": request_sha, "services_mutated": False,
             "original_compose": journal + "/original-compose.json"})
+    if "seed_completion" in evidence:
+        seed = evidence["seed_completion"]
+        result.update(selected_source_qualification="NOT VERIFIED",
+            backend_app_commit=evidence["package"]["source"]["commit"],
+            frontend_input_commit=seed["frontend_input_commit"], frontend_generation_changed=True)
+        result["frontend_refresh_completion"]["seed_completion"] = seed
     existing_result = read_raw(control, journal + "/result.json", optional=True)
     if existing_result is not None:
         result["finished_at"] = json.loads(existing_result).get("finished_at")

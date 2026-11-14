@@ -628,6 +628,9 @@ pub struct SceneResource {
     pub outputs: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
+    pub analysis: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
     pub editor: Option<BTreeMap<String, Value>>,
 }
 
@@ -2081,6 +2084,51 @@ pub struct AuthoringTransactionResponse {
     pub committed_scene: SceneResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetization_apply: Option<MagnetizationApplyReceiptResource>,
+}
+
+#[cfg(test)]
+mod scene_resource_analysis_tests {
+    use super::*;
+
+    #[test]
+    fn scene_resource_preserves_analysis_definitions_and_opaque_settings() {
+        let analysis = serde_json::json!({
+            "postprocessing_definitions": [{
+                "definition_id": "mode-view-1",
+                "revision": 4,
+                "module_id": "analysis.dispersion",
+                "module_version": "2",
+                "definition_schema": "analysis.dispersion.mode_visualization.v1",
+                "node_kind": "mode_visualization",
+                "label": "Mode view",
+                "data_ref": {
+                    "run_id": "run-1",
+                    "dataset_id": "spectrum",
+                    "dataset_revision": "r3"
+                },
+                "settings": {"projection": {"axis": [1, 0, 0], "style": {"name": "opaque"}}}
+            }]
+        });
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "analysis": analysis
+        }))
+        .unwrap();
+
+        let resource = SceneResource::from_scene_document(scene).unwrap();
+
+        assert_eq!(serde_json::to_value(resource).unwrap()["analysis"], analysis);
+    }
+
+    #[test]
+    fn scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence() {
+        let explicit: SceneResource = serde_json::from_value(serde_json::json!({"analysis": {}})).unwrap();
+        assert_eq!(serde_json::to_value(explicit).unwrap()["analysis"], serde_json::json!({}));
+
+        let legacy: SceneDocument = serde_json::from_value(serde_json::json!({"version": "scene.v2"})).unwrap();
+        let resource = SceneResource::from_scene_document(legacy).unwrap();
+        assert!(serde_json::to_value(resource).unwrap().get("analysis").is_none());
+    }
 }
 
 #[cfg(test)]

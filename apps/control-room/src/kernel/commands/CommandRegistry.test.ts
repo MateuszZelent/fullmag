@@ -263,6 +263,35 @@ describe("CommandRegistry", () => {
     ]);
   });
 
+  it("forwards the Compute-started marker from a pending command result", async () => {
+    const { bus, registry } = setupWithBus();
+    const outcome = vi.fn();
+    bus.on("command:outcome", outcome);
+    registry.register(command("study.execute-stage", {
+      run: () => ({
+        status: "pending",
+        clientIntentId: "intent-a",
+        clientIntentKind: "relax",
+        studyComputeObservationStarted: true,
+      }),
+    }));
+
+    await registry.execute("study.execute-stage", {
+      source: "ribbon",
+      sessionScopeKey: "session=a&epoch=1",
+    });
+
+    expect(outcome).toHaveBeenCalledOnce();
+    expect(outcome).toHaveBeenCalledWith(expect.objectContaining({
+      clientIntentId: "intent-a",
+      clientIntentKind: "relax",
+      commandId: "study.execute-stage",
+      sessionScopeKey: "session=a&epoch=1",
+      status: "pending",
+      studyComputeObservationStarted: true,
+    }));
+  });
+
   it("passes command input through command context", async () => {
     const { registry } = setupWithBus();
     const runFn = vi.fn(() => ({ status: "completed" as const }));

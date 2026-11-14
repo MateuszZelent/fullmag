@@ -1,0 +1,33 @@
+{
+  "schema": "fullmag.p22-stage-harness-managed-regressions.v1",
+  "command": "just docker-dev-control-checks SOURCE_ROOT frontend-tools",
+  "receipt": {
+    "receipt_sha256": "d44a88e77c0141d8f99d7831e154d6bbd6715c9027ba7c90ab31da142ec2cee7",
+    "keys": [
+      "compose_project",
+      "container_id",
+      "exit_code",
+      "image_id",
+      "schema",
+      "scope",
+      "stderr",
+      "stdout"
+    ],
+    "fields": {
+      "compose_project": "fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b",
+      "container_id": "e5c715464132014b8f83f5f702b9626af22192731818699981da343f24689bec",
+      "exit_code": 0,
+      "image_id": "sha256:cd345b0c6b7fab6e722371cc1c8f92ff35a6df41ad4ec82474cd959b2d834156",
+      "schema": "fullmag.volume-dev-interpreted-checks.v1",
+      "scope": "frontend-tools"
+    },
+    "stderr_tail": "............................................................................................................................................./usr/local/lib/python3.10/zipfile.py:1542: UserWarning: Duplicate name: 'project/scene_document.json'\n  return self._open_to_write(zinfo, force_zip64=force_zip64)\n.........................................................................................s...............\n----------------------------------------------------------------------\nRan 246 tests in 5.160s\n\nOK (skipped=1)\n"
+  },
+  "selected_source_sha256": {
+    "apps/control-room/scripts/check-study-stage-rerun-browser.mjs": "0303a74378161cd12227e207a7b0245be3ac4b19c80e0e8438c701fffedbebb9",
+    "apps/control-room/scripts/check-study-region-reset-browser.mjs": "20151018d10d63f9a5617f06be835f17fd8d5a274c8ee9ceea4743b90ea12807",
+    "scripts/test_docker_dev_browser_qa.py": "ec3b6cb3dd9e70b6ebb8ba8fd8de13dedd5f19621335d8addda38d2da46c4d91"
+  },
+  "result": "246tests,1skipped,OK",
+  "scope": "Node/Python launcher/harness contracts in exact running managed backend; not native or UI acceptance"
+}

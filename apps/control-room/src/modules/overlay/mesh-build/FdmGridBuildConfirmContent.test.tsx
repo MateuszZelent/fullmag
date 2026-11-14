@@ -57,6 +57,26 @@ describe("FdmGridBuildConfirmContent", () => {
     expect(postBuildHtml).toContain("Close");
   });
 
+  it("shows the active operation blocker instead of a loading message for a current snapshot", () => {
+    const html = renderToStaticMarkup(
+      <FdmGridBuildConfirmContent
+        commandId="grid.build-fdm"
+        commandStatus="pending-confirmation"
+        mode="pre-build"
+        objectsCount={1}
+        ready={false}
+        stale={false}
+        unavailableReason="FDM grid build is unsupported by this active lane."
+        onApplyBuild={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("FDM grid build is unsupported by this active lane.");
+    expect(html).not.toContain("Loading current scene geometry baseline…");
+    expect(html).toContain('disabled=""');
+  });
+
   it("renders error banner when build fails", () => {
     const errorHtml = renderToStaticMarkup(
       <FdmGridBuildConfirmContent

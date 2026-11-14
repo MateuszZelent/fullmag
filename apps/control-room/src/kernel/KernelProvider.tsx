@@ -882,6 +882,10 @@ function InstanceTabVisibilityConnector() {
 
 export function KernelProvider({ children }: KernelProviderProps) {
   const [kernel] = useState(() => createKernel());
+  useEffect(
+    () => kernel.commandFeedback?.subscribe(() => kernel.commands.refresh()),
+    [kernel],
+  );
 
   return (
     <KernelContext.Provider value={kernel}>

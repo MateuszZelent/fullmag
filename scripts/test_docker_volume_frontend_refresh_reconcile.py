@@ -49,6 +49,10 @@ class CompletionTests(unittest.TestCase):
         return recovery.derive_document(self.document, self.actual, self.source,
             identity=lambda p: self.identity, guest=lambda c, p: self.identity)
 
+    def use_direct_backend_source(self):
+        self.document['services']['backend']['x-fullmag-daemon-binds']['/opt/fullmag/source'] = str(self.source)
+        self.actual['backend']['Mounts'][0]['Source'] = str(self.source)
+
     def test_repins_only_independently_proven_namespace_preserving_original(self):
         original = copy.deepcopy(self.document)
         result, witness = self.derive()
@@ -95,6 +99,71 @@ class CompletionTests(unittest.TestCase):
         self.actual['frontend']['Mounts'][-1]['Source'] = '/foreign/src'
         with self.assertRaises(BuildControlError):
             self.derive()
+
+    def test_direct_linux_backend_anchor_proves_wsl_frontend_root_and_child(self):
+        self.use_direct_backend_source()
+        child = self.source / 'apps/control-room/scripts'
+        child.mkdir(parents=True)
+        (child / 'serve.py').write_bytes(b'marked source')
+        target = '/state/development/workspace/apps/control-room/scripts'
+        self.document['services']['frontend']['volumes'].append({'type': 'bind',
+            'source': str(child), 'target': target, 'read_only': True})
+        self.document['services']['frontend']['x-fullmag-daemon-binds'][target] = '/run/desktop/mnt/host/wsl/old'
+        self.actual['frontend']['Mounts'].append({'Destination': target,
+            'Source': '/run/desktop/mnt/host/wsl/opaque-scripts', 'Type': 'bind', 'RW': False})
+
+        result, witness = self.derive()
+
+        self.assertEqual(result['services']['backend'], self.document['services']['backend'])
+        self.assertEqual(result['services']['frontend']['x-fullmag-daemon-binds']['/opt/fullmag/source'],
+                         '/run/desktop/mnt/host/wsl/own')
+        self.assertEqual(result['services']['frontend']['x-fullmag-daemon-binds'][target],
+                         '/run/desktop/mnt/host/wsl/opaque-scripts')
+        self.assertEqual(len(witness['/opt/fullmag/source']['files']), 4)
+        self.assertEqual(len(witness[target]['files']), 2)
+
+    def test_direct_linux_anchor_rejects_wrong_selected_root(self):
+        self.use_direct_backend_source()
+        other = Path(self.temp.name).parent / (Path(self.temp.name).name + '-other')
+        other.mkdir()
+        self.addCleanup(other.rmdir)
+        with self.assertRaises(BuildControlError):
+            recovery.derive_document(self.document, self.actual, other,
+                identity=lambda p: self.identity, guest=lambda c, p: self.identity)
+
+    def test_direct_linux_anchor_rejects_noncanonical_compose_source_path(self):
+        self.use_direct_backend_source()
+        self.document['services']['backend']['volumes'][0]['source'] = str(self.source / 'alias')
+        with self.assertRaises(BuildControlError):
+            self.derive()
+
+    def test_direct_linux_anchor_rejects_pin_or_actual_mount_mismatch(self):
+        self.use_direct_backend_source()
+        with self.subTest('pin differs from actual direct source'):
+            self.document['services']['backend']['x-fullmag-daemon-binds']['/opt/fullmag/source'] += '/'
+            with self.assertRaises(BuildControlError):
+                self.derive()
+            self.document['services']['backend']['x-fullmag-daemon-binds']['/opt/fullmag/source'] = str(self.source)
+        with self.subTest('actual mount differs from direct source'):
+            self.actual['backend']['Mounts'][0]['Source'] = str(self.source) + '-foreign'
+            with self.assertRaises(BuildControlError):
+                self.derive()
+
+    def test_direct_linux_anchor_rejects_writable_backend_mount(self):
+        self.use_direct_backend_source()
+        self.actual['backend']['Mounts'][0]['RW'] = True
+        with self.assertRaises(BuildControlError):
+            self.derive()
+
+    def test_direct_linux_anchor_still_rejects_marker_identity_mismatch(self):
+        self.use_direct_backend_source()
+
+        def wrong_marker(container, path):
+            return {'device': 123, 'inode': 456, 'sha256': 'f'*64} if path.endswith('/Cargo.toml') else self.identity
+
+        with self.assertRaises(BuildControlError):
+            recovery.derive_document(self.document, self.actual, self.source,
+                identity=lambda p: self.identity, guest=wrong_marker)
 
     def test_foreign_backend_pin_refused(self):
         self.document['services']['backend']['x-fullmag-daemon-binds']['/opt/fullmag/source'] += '-foreign'

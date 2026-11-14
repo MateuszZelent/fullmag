@@ -1,0 +1,111 @@
+{
+  "schema": "fullmag.failed-run-resume-readonly-qualification.v1",
+  "state": "preview-passed",
+  "request_id": "d3faed88-e54e-4747-a554-2c02072eada7",
+  "plan_sha256": "58d7b00e0c9f64734388a57ab25288344d8967df2df2e5dae843c6966b4371ad",
+  "plan": {
+    "pins": {
+      "backend_pin": {
+        "ExitCode": 1,
+        "Id": "d7886b2d7e6bcc101202fcca5199cd0285358c78916d8bb630484a0a53a49766",
+        "Image": "sha256:6095db5cc1bef478a2558c9b1b147890be1f3d7768ee35d8d8d8aef55231ee2d",
+        "Pid": 0,
+        "Running": false,
+        "StartedAt": "2026-11-13T09:05:20.301552456Z",
+        "config_sha256": "e80c2947f3c0f9f5939adcfb6ffd382b78bd5a2ba0fac83c657a2f6321dd1a45",
+        "host_config_sha256": "0d212cabb6823f6b03c9fee92fed02b851baa089d987758dd682e17b8d2b031e",
+        "mounts_sha256": "b52cf82d64a1aaf4f5bf82d7ee0223f0b019ce7c0381fe7806cbd8566ac1fa24"
+      },
+      "compose_project": "fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b",
+      "config_sha256": "97d9187961866ba76200796a50187c8fd23603aeda69a0845ca477c3ba99afc9",
+      "control_volume": "fullmag-build-control-fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b-f1cc0bb97b509d6a",
+      "frontend_pin": {
+        "ExitCode": 0,
+        "Id": "b64855408203e334d033599e77856ef2a248d9313c90e622ee1360b05aef3349",
+        "Image": "sha256:6095db5cc1bef478a2558c9b1b147890be1f3d7768ee35d8d8d8aef55231ee2d",
+        "Pid": 87833,
+        "Running": true,
+        "StartedAt": "2026-11-13T09:05:21.418594004Z",
+        "config_sha256": "f9aa3beca419ac4083ec0b023fc8c4dade222fde7497dd6912285af36c6e0526",
+        "host_config_sha256": "e3c305b3a9964d982ca9f2d9226d2dacf1b19b2453e5de93b01c4f49928bb308",
+        "mounts_sha256": "ba5af897fb8eb00246c621351eedd7923a0b2cdcd254e992ebca9d6b579dd039"
+      },
+      "previous_terminal_sha256": "b21e358e347ebd44655fae972585039952db29af181ce6d62bca5456f5f2c807",
+      "request_id": "d3faed88-e54e-4747-a554-2c02072eada7",
+      "run_id": "run-live-a041e935283fe2613d2783b4831d6131fb9e50b564011bb80ef97b2a566b9b4a",
+      "run_pin": {
+        "artifact_catalog_sha256": "d960a870aff2b5c659cad3c34a8c035c9c649732275778ab76d3dc55dac175c0",
+        "completed_task_ids": [
+          "task-4e73d267ad3f46adc14775d7396e36d47788e4798fc31e2345e1e7157c988f14"
+        ],
+        "host_ledger_sha256": "034aafce281fc8e8e2c2f225cd184441c0a462fb139d869469140581a4967723",
+        "host_store_id": "sha256:ed59ff5e9260e0fd09a4b7f7f52ae4db7a05e0b7daf7f8f459a1d892982798f1",
+        "resumable_task_ids": [
+          "task-052ee6a114c6a7abb240261e3a777f838fd3d238a51930406f305e338c4183df",
+          "task-c4eb9d1f4d7385387cd8eff443e3f432594706ce5a95a6dbe63b2e258b713947"
+        ],
+        "run_catalog_sha256": "c14eda08f73f427f95ce05477ba6ab9e5d60c0dcf830b38f9fa5bfcd72695cc1",
+        "run_id": "run-live-a041e935283fe2613d2783b4831d6131fb9e50b564011bb80ef97b2a566b9b4a",
+        "run_intent_sha256": "b33b9a64b4f85d8ffb19f3b3d3df9bb4545aa1f2f523135f63d7bc09add1175f",
+        "schema": "fullmag.failed-run-resume-run-pin.v1",
+        "start_release_request_id": "accepted-start-f52a06f4a05ba52ad0a2e9e18013280702f6c6ce2b341afee23f2ee8aa9279b9",
+        "start_release_sha256": "bd0b5c20ef263e98a6a4cf8ed9fe1785763bed20dd642217aa0892f9a73c75a7",
+        "store_inventory_sha256": "645be7848c7b5c04b97460ead47bda9dca105b3b1ca59e27112205c5e42e1ff3"
+      },
+      "schema": "fullmag.failed-run-resume-context.v1",
+      "source_root": "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108",
+      "state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400",
+      "stop_pin": {
+        "api_instance_id": "2780191b-a8d0-46a4-bfc6-052ec8fd80ee",
+        "backend_container_id": "d7886b2d7e6bcc101202fcca5199cd0285358c78916d8bb630484a0a53a49766",
+        "backend_image_id": "sha256:6095db5cc1bef478a2558c9b1b147890be1f3d7768ee35d8d8d8aef55231ee2d",
+        "backend_started_at": "2026-11-13T09:05:20.301552456Z",
+        "compose_project": "fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b",
+        "config_sha256": "97d9187961866ba76200796a50187c8fd23603aeda69a0845ca477c3ba99afc9",
+        "control_volume": "fullmag-build-control-fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b-f1cc0bb97b509d6a",
+        "development_attempt": "a4ac20f260394af4ac1e5e1f575dcd3b",
+        "diagnostic_terminal_body_sha256": "19ea6700a3f542f352b8b990688d61522e2ad92c9374149bae3b13f685df0531",
+        "diagnostic_terminal_path": "stop-diagnostic/attempts/1656bd656a9841938a52bad946e16a69/diagnostic-stop-terminal.json",
+        "diagnostic_terminal_raw_sha256": "133544d71db0bf6533ea4e7f16cfc00deafde182bc67f8d767727e4edd6cbdbd",
+        "frontend_container_id": "b64855408203e334d033599e77856ef2a248d9313c90e622ee1360b05aef3349",
+        "runtime_hashes": {
+          "api_failure_fence_sha256": "095a8eea8c52ad9c6a6b6d22912769a4d4b35c5376ac59dc52f00b4775979857",
+          "failed_owner_sha256": "5a3390d74302a0422f61fc667373b798665d0fd84dccae774bb8e1b0fb89488d",
+          "failure_process_receipt_sha256": "4c492dde8e7b857985c8e05b23b790871349f7bb5ee2ab6e61a84ab417ec6bbf",
+          "runtime_config_sha256": "47ca9fdad0f2ab47460d4e7a1e1923704dd7451d31991fb386f3d7e59b42eca8",
+          "terminal_process_receipt_sha256": "80c381e2f401a1d7924ec57b67837a32c2f47a1998d33376ac9ac1039779a3eb"
+        },
+        "schema": "fullmag.failed-run-resume-stop-pin.v1",
+        "source_root": "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108",
+        "stop_attempt": "1656bd656a9841938a52bad946e16a69",
+        "stop_terminal_body_sha256": "59151ef290e2f2744fadbc57aaff8198e49d42479b9a14e7ce3d3df673618133",
+        "stop_terminal_path": "stop-diagnostic/attempts/1656bd656a9841938a52bad946e16a69/terminal.json",
+        "stop_terminal_raw_sha256": "46986e96ddfcdd7e1d6d14fc3b91d25d06baacc505af883a9f1cb221f59a01cb"
+      }
+    },
+    "plan_sha256": "58d7b00e0c9f64734388a57ab25288344d8967df2df2e5dae843c6966b4371ad",
+    "request_id": "d3faed88-e54e-4747-a554-2c02072eada7",
+    "schema": "fullmag.failed-run-resume-plan.v1"
+  },
+  "source_sha256": {
+    "scripts/docker_volume_dev.py": "429968f5bb9a09d94f6adfe71e7a341bef983a4b0d0a44aaddbc81337524937c",
+    "scripts/docker_volume_failed_run_resume.py": "5f2bdec42c27075804a25f8a5f839c522a6fd4ed922fc4e01d8f486dffb46fbd",
+    "scripts/docker_volume_failed_run_resume_observer.py": "fcb3db9944fb852c9c7924d18a721464ffdb8a67985cdd51c08c004c2a3fc70a"
+  },
+  "services_mutated": false,
+  "accepted_store_written": false,
+  "runtime_started": false,
+  "native_continuation_verified": false,
+  "ui_acceptance_verified": false,
+  "source_tests": {
+    "new_pure_tests_pass": 36,
+    "existing_lifecycle_tests_pass": 149
+  },
+  "rust_ci": {
+    "commit": "90a29331c5be2b8d39ab0733939178a0290886b6",
+    "run": 43424565315,
+    "job": 131882694191,
+    "conclusion": "success",
+    "named_regressions": 6
+  }
+}

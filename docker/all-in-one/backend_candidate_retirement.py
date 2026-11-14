@@ -16,6 +16,7 @@ fresh source and is not a duplicate of the current package.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import islice
 import os
@@ -181,8 +182,167 @@ def _candidate_file_role(b: Any, relative: str) -> str:
     return "payload"
 
 
+@contextmanager
+def _shared_candidate_artifact_proof(
+    b: Any,
+    candidate: Path,
+    receipt: Mapping[str, Any],
+    linked_paths: set[str],
+):
+    """Hold the exact shared key claim while proving candidate hardlinks."""
+
+    if not linked_paths:
+        yield {}
+        return
+    still_linked: set[str] = set()
+    for relative in linked_paths:
+        metadata = candidate.joinpath(*PurePosixPath(relative).parts).lstat()
+        if metadata.st_nlink > 1:
+            still_linked.add(relative)
+    if not still_linked:
+        # A shared-cache eviction or another consumer unlink can turn the
+        # candidate's remaining receipt-checked file into a private one before
+        # the key claim is acquired.  Private inventory/hash checks still bind
+        # it; do not require a now-absent cache entry.
+        yield {}
+        return
+    linked_paths = still_linked
+    try:
+        import backend_shared_store as shared
+    except ImportError as error:
+        _fail(b, f"shared candidate artifacts cannot be verified: {error}")
+
+    binding = receipt.get("shared_package")
+    source = receipt.get("source")
+    native = receipt.get("native_source_identity")
+    build = receipt.get("build")
+    if not isinstance(binding, Mapping) or not isinstance(source, Mapping):
+        _fail(b, "multiply linked candidate artifacts have no shared receipt binding")
+    reuse = binding.get("reuse")
+    required_binding_keys = {"schema", "key", "inputs", "reuse"}
+    if reuse == "verified-hardlinks":
+        required_binding_keys.add("producer_receipt_sha256")
+    if (
+        set(binding) != required_binding_keys
+        or binding.get("schema") != shared.SCHEMA
+        or reuse not in {"publisher", "verified-hardlinks"}
+    ):
+        _fail(b, "multiply linked candidate artifact binding is invalid")
+    key = binding.get("key")
+    inputs = binding.get("inputs")
+    if (
+        not isinstance(key, str)
+        or not shared.HEX.fullmatch(key)
+        or not isinstance(inputs, Mapping)
+        or shared.key_for(inputs) != key
+    ):
+        _fail(b, "multiply linked candidate artifact key or inputs differ")
+    if reuse == "verified-hardlinks":
+        _require_sha256(
+            b,
+            binding.get("producer_receipt_sha256"),
+            "shared candidate producer receipt digest",
+        )
+
+    if (
+        not isinstance(native, Mapping)
+        or inputs.get("native_source_identity") != native
+        or inputs.get("toolchain") != receipt.get("toolchain")
+        or inputs.get("resolved_commit") != source.get("resolved_commit")
+        or inputs.get("runtime_source_digest") != source.get("runtime_source_digest")
+        or not isinstance(inputs.get("build"), Mapping)
+        or not isinstance(build, Mapping)
+        or any(build.get(name) != value for name, value in inputs["build"].items())
+    ):
+        _fail(b, "multiply linked candidate artifact identity differs from its receipt")
+
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, list) or any(not isinstance(item, Mapping) for item in artifacts):
+        _fail(b, "multiply linked candidate has no valid artifact inventory")
+    artifact_by_path: dict[str, dict[str, Any]] = {}
+    for item in artifacts:
+        relative = _safe_relative_or_fail(b, item.get("path"), "shared candidate artifact path")
+        if relative in artifact_by_path:
+            _fail(b, f"shared candidate artifact inventory duplicates {relative}")
+        if (
+            set(item) != {"path", "size", "sha256", "mode"}
+            or isinstance(item.get("size"), bool)
+            or not isinstance(item.get("size"), int)
+            or item["size"] < 0
+            or item.get("mode") not in {"100644", "100755"}
+        ):
+            _fail(b, f"shared candidate artifact record is invalid: {relative}")
+        _require_sha256(b, item.get("sha256"), f"shared candidate artifact digest {relative}")
+        artifact_by_path[relative] = dict(item)
+    if not linked_paths.issubset(artifact_by_path):
+        _fail(b, "multiply linked candidate includes a non-artifact file")
+
+    configured = b.os.environ.get("FULLMAG_SHARED_BACKEND_STORE", "")
+    if configured != str(shared.ROOT):
+        _fail(b, "multiply linked candidate artifacts require the managed shared store")
+    try:
+        store = shared.Store(Path(configured))
+        with store.claim(dict(inputs)) as entry:
+            cached = entry.read()
+            if cached is None:
+                _fail(b, "shared candidate artifact entry is missing")
+            cached_receipt = cached.get("receipt")
+            if not isinstance(cached_receipt, Mapping):
+                _fail(b, "shared candidate artifact entry has no receipt")
+            cached_artifacts = cached_receipt.get("artifacts")
+            if cached_artifacts != artifacts:
+                _fail(b, "shared candidate artifact inventory differs from its entry")
+            if reuse == "publisher":
+                if dict(cached_receipt) != dict(receipt):
+                    _fail(b, "shared publisher candidate receipt differs from its entry")
+            else:
+                cached_binding = cached_receipt.get("shared_package")
+                if (
+                    not isinstance(cached_binding, Mapping)
+                    or cached_binding.get("schema") != shared.SCHEMA
+                    or cached_binding.get("reuse") != "publisher"
+                    or cached_binding.get("key") != key
+                    or cached_binding.get("inputs") != dict(inputs)
+                    or b._sha256_bytes(shared.canonical(dict(cached_receipt)))
+                    != binding.get("producer_receipt_sha256")
+                ):
+                    _fail(b, "shared consumer candidate producer receipt differs")
+
+            linked_identities: dict[str, tuple[int, int]] = {}
+            for relative in sorted(linked_paths):
+                record = artifact_by_path[relative]
+                candidate_path = candidate.joinpath(*PurePosixPath(relative).parts)
+                shared_path = entry.path.joinpath(*PurePosixPath(relative).parts)
+                candidate_metadata = shared.safe_path(candidate_path)
+                shared_metadata = shared.safe_path(shared_path)
+                if (
+                    not stat.S_ISREG(candidate_metadata.st_mode)
+                    or not stat.S_ISREG(shared_metadata.st_mode)
+                    or candidate_metadata.st_nlink < 2
+                    or candidate_metadata.st_mode & 0o222
+                    or (candidate_metadata.st_dev, candidate_metadata.st_ino)
+                    != (shared_metadata.st_dev, shared_metadata.st_ino)
+                ):
+                    _fail(b, f"shared candidate artifact is not its sealed entry link: {relative}")
+                shared._verify(candidate_path, record, sealed=True)
+                after = shared.safe_path(candidate_path)
+                if (
+                    (after.st_dev, after.st_ino)
+                    != (candidate_metadata.st_dev, candidate_metadata.st_ino)
+                    or after.st_size != candidate_metadata.st_size
+                    or after.st_mode != candidate_metadata.st_mode
+                ):
+                    _fail(b, f"shared candidate artifact changed during verification: {relative}")
+                linked_identities[relative] = (after.st_dev, after.st_ino)
+            yield linked_identities
+    except shared.StoreError as error:
+        _fail(b, f"shared candidate artifact proof failed: {error}")
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        _fail(b, f"shared candidate artifact proof is malformed: {error}")
+
+
 def _candidate_file_records(
-    b: Any, candidate: Path
+    b: Any, candidate: Path, receipt: Mapping[str, Any]
 ) -> tuple[dict[str, Any], ...]:
     try:
         files, directories = b._stage_tree_inventory(candidate)
@@ -199,29 +359,73 @@ def _candidate_file_records(
         )
     if not directories.issubset(allowed_directories):
         _fail(b, "candidate retirement contains an unowned directory")
+    artifact_paths: set[str] = set()
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, list) or any(not isinstance(item, Mapping) for item in artifacts):
+        _fail(b, "candidate retirement file inventory has no artifact receipt")
+    for item in artifacts:
+        relative = _safe_relative_or_fail(b, item.get("path"), "candidate artifact path")
+        if relative in artifact_paths:
+            _fail(b, f"candidate retirement artifact inventory duplicates {relative}")
+        artifact_paths.add(relative)
+    linked_paths: set[str] = set()
+    for relative in files:
+        metadata = candidate.joinpath(*PurePosixPath(relative).parts).lstat()
+        if metadata.st_nlink > 1:
+            if relative not in artifact_paths:
+                _fail(b, f"candidate retirement non-artifact file is multiply linked: {relative}")
+            linked_paths.add(relative)
+
     records: list[dict[str, Any]] = []
-    for relative in sorted(files):
-        path = candidate.joinpath(*PurePosixPath(relative).parts)
-        metadata = path.lstat()
-        if (
-            stat.S_ISLNK(metadata.st_mode)
-            or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
-            or not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_nlink != 1
-        ):
-            _fail(b, f"candidate retirement file is unsafe: {relative}")
-        digest, size = _sha256_file(
-            b, path, f"candidate retirement file {relative}", b.MAX_SOURCE_BYTES
-        )
-        records.append(
-            {
-                "path": relative,
-                "size": size,
-                "sha256": digest,
-                "mode": "100755" if metadata.st_mode & 0o111 else "100644",
-                "role": _candidate_file_role(b, relative),
-            }
-        )
+    with _shared_candidate_artifact_proof(b, candidate, receipt, linked_paths) as shared_links:
+        for relative in sorted(files):
+            path = candidate.joinpath(*PurePosixPath(relative).parts)
+            metadata = path.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+                or not stat.S_ISREG(metadata.st_mode)
+                or (metadata.st_nlink != 1 and relative not in shared_links)
+            ):
+                _fail(b, f"candidate retirement file is unsafe: {relative}")
+            if relative in shared_links:
+                digest, hashed_metadata = b._sha256_file(
+                    path,
+                    f"candidate retirement file {relative}",
+                    b.MAX_SOURCE_BYTES,
+                    package_artifact=True,
+                )
+                size = int(hashed_metadata.st_size)
+                if (
+                    (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mode)
+                    != (
+                        hashed_metadata.st_dev,
+                        hashed_metadata.st_ino,
+                        hashed_metadata.st_size,
+                        hashed_metadata.st_mode,
+                    )
+                ):
+                    _fail(b, f"shared candidate artifact changed identity while hashing: {relative}")
+            else:
+                digest, size = _sha256_file(
+                    b, path, f"candidate retirement file {relative}", b.MAX_SOURCE_BYTES
+                )
+            after = path.lstat()
+            if (
+                (metadata.st_dev, metadata.st_ino) != (after.st_dev, after.st_ino)
+                or metadata.st_size != after.st_size
+                or metadata.st_mode != after.st_mode
+            ):
+                _fail(b, f"candidate retirement file changed while hashing: {relative}")
+            records.append(
+                {
+                    "path": relative,
+                    "size": size,
+                    "sha256": digest,
+                    "mode": "100755" if metadata.st_mode & 0o111 else "100644",
+                    "role": _candidate_file_role(b, relative),
+                }
+            )
     return tuple(records)
 
 
@@ -337,7 +541,7 @@ def qualify_ready_candidate(
         list(artifact_list),
         include_receipt=True,
     )
-    candidate_files = _candidate_file_records(b, candidate)
+    candidate_files = _candidate_file_records(b, candidate, receipt)
     by_path = _record_map(b, candidate_files)
     marker_record = by_path.get(b.PACKAGE_CANDIDATE_MARKER)
     if marker_record is None or marker_record["sha256"] != b._sha256_bytes(marker_bytes):
@@ -934,7 +1138,7 @@ def _candidate_matches_spec(b: Any, spec: ReadyCandidateSpec) -> None:
         )
         if marker != spec.marker:
             _fail(b, "ready candidate marker changed before retirement")
-        records = _candidate_file_records(b, spec.candidate)
+        records = _candidate_file_records(b, spec.candidate, spec.receipt)
         if records != spec.candidate_files:
             _fail(b, "ready candidate inventory changed before retirement")
         attempt_record = b._read_failed_make_attempt(spec.build_root, spec.candidate)
@@ -1118,17 +1322,38 @@ def _archive_copy(
     target: Path,
     source_label: str,
     expected_size: int | None = None,
+    *,
+    shared_identity: tuple[int, int] | None = None,
 ) -> tuple[str, int]:
     if expected_size is not None:
         metadata = source.lstat()
         if (
             stat.S_ISLNK(metadata.st_mode)
             or not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_nlink != 1
+            or (
+                metadata.st_nlink != 1
+                if shared_identity is None
+                else (
+                    metadata.st_nlink < 2
+                    or (metadata.st_dev, metadata.st_ino) != shared_identity
+                    or bool(metadata.st_mode & 0o222)
+                )
+            )
             or metadata.st_size != expected_size
         ):
             _fail(b, f"{source_label} changed before archive reservation")
-    return b._copy_regular_file_fsync(source, target, source_label)
+    digest, size = b._copy_regular_file_fsync(source, target, source_label)
+    if shared_identity is not None:
+        after = source.lstat()
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or not stat.S_ISREG(after.st_mode)
+            or after.st_nlink < 2
+            or (after.st_dev, after.st_ino) != shared_identity
+            or bool(after.st_mode & 0o222)
+        ):
+            _fail(b, f"{source_label} changed identity during shared archive copy")
+    return digest, size
 
 
 def _archive_bytes(
@@ -1236,6 +1461,7 @@ def _create_archive(
         archive_relative: str,
         expected_size: int,
         expected_digest: str,
+        shared_identity: tuple[int, int] | None = None,
     ) -> None:
         if archive_relative in copied_archive_paths:
             digest, size = copied_archive_paths[archive_relative]
@@ -1263,6 +1489,7 @@ def _create_archive(
                 target_path,
                 source_name,
                 expected_size,
+                shared_identity=shared_identity,
             )
             if digest != expected_digest or size != expected_size:
                 _fail(b, f"{source_name} differs from its recorded inventory")
@@ -1277,27 +1504,43 @@ def _create_archive(
         )
 
     try:
+        artifact_paths = {str(record["path"]) for record in spec.artifacts}
+        shared_copy_paths: set[str] = set()
         for record in spec.candidate_files:
             relative = str(record["path"])
-            role = record["role"]
-            if role == "payload":
+            if record["role"] == "payload":
                 continue
-            source = spec.candidate.joinpath(*PurePosixPath(relative).parts)
-            if role == "marker":
-                archive_relative = "candidate-owner.json"
-            elif role == "receipt":
-                archive_relative = "candidate-records/backend-build-receipt.json"
-            elif role == "log":
-                archive_relative = f"candidate-logs/{relative}"
-            else:
-                archive_relative = f"candidate-metadata/{relative}"
-            copy_source(
-                source,
-                f"candidate/{relative}",
-                archive_relative,
-                int(record["size"]),
-                str(record["sha256"]),
-            )
+            metadata = spec.candidate.joinpath(*PurePosixPath(relative).parts).lstat()
+            if metadata.st_nlink > 1:
+                if relative not in artifact_paths:
+                    _fail(b, f"candidate retirement metadata is multiply linked: {relative}")
+                shared_copy_paths.add(relative)
+
+        with _shared_candidate_artifact_proof(
+            b, spec.candidate, spec.receipt, shared_copy_paths
+        ) as shared_links:
+            for record in spec.candidate_files:
+                relative = str(record["path"])
+                role = record["role"]
+                if role == "payload":
+                    continue
+                source = spec.candidate.joinpath(*PurePosixPath(relative).parts)
+                if role == "marker":
+                    archive_relative = "candidate-owner.json"
+                elif role == "receipt":
+                    archive_relative = "candidate-records/backend-build-receipt.json"
+                elif role == "log":
+                    archive_relative = f"candidate-logs/{relative}"
+                else:
+                    archive_relative = f"candidate-metadata/{relative}"
+                copy_source(
+                    source,
+                    f"candidate/{relative}",
+                    archive_relative,
+                    int(record["size"]),
+                    str(record["sha256"]),
+                    shared_identity=shared_links.get(relative),
+                )
 
         reserve(len(spec.source_manifest_bytes), "candidate live source manifest")
         source_digest, source_size = _archive_bytes(
@@ -1473,54 +1716,110 @@ def _delete_pending_candidate(
             )
         if not directories.issubset(allowed_dirs):
             _fail(b, "pending candidate retirement found an unknown candidate directory")
-        for relative in sorted(files):
-            record = expected[relative]
-            path = candidate.joinpath(*PurePosixPath(relative).parts)
-            metadata = path.lstat()
-            if metadata.st_nlink != 1:
-                _fail(b, f"pending candidate file is multiply linked: {relative}")
-            observed_mode = "100755" if metadata.st_mode & 0o111 else "100644"
-            if observed_mode != record["mode"]:
-                _fail(b, f"pending candidate file mode changed: {relative}")
-            digest, size = _sha256_file(
-                b,
-                path,
-                f"pending candidate retirement file {relative}",
-                b.MAX_SOURCE_BYTES,
-            )
-            if digest != record["sha256"] or size != record["size"]:
-                _fail(b, f"pending candidate file changed: {relative}")
-        marker = b.PACKAGE_CANDIDATE_MARKER
-        if marker not in files and (files - {marker}):
-            _fail(b, "pending candidate marker was removed before payload")
-        for relative in sorted(
-            (files - {marker}), key=lambda value: (value.count("/"), value), reverse=True
+        archived_receipt, archived_receipt_bytes = _read_archived_candidate_receipt(
+            b, archive, normalized
+        )
+        if (
+            b._sha256_bytes(archived_receipt_bytes)
+            != normalized["candidate_receipt_sha256"]
+            or archived_receipt.get("artifacts") != normalized["candidate_artifacts"]
         ):
-            b._remove_owned_tree(candidate.joinpath(*PurePosixPath(relative).parts))
-        for relative in sorted(
-            directories, key=lambda value: (value.count("/"), value), reverse=True
-        ):
-            directory = candidate.joinpath(*PurePosixPath(relative).parts)
-            try:
-                directory.rmdir()
-            except OSError as error:
-                _fail(b, f"pending candidate payload directory is not empty: {error}")
-        b._fsync_directory(candidate, "pending candidate directory")
-        if marker in files:
-            marker_path = candidate / marker
-            marker_record = expected[marker]
-            digest, size = _sha256_file(
-                b, marker_path, "pending candidate owner marker", 16 * 1024
-            )
-            if digest != marker_record["sha256"] or size != marker_record["size"]:
-                _fail(b, "pending candidate owner marker changed")
-            b._remove_owned_tree(marker_path)
+            _fail(b, "pending candidate archive receipt differs from its artifact inventory")
+        artifact_paths = {
+            str(record["path"]) for record in normalized["candidate_artifacts"]
+        }
+        linked_paths: set[str] = set()
+        for relative in files:
+            metadata = candidate.joinpath(*PurePosixPath(relative).parts).lstat()
+            if metadata.st_nlink > 1:
+                if relative not in artifact_paths:
+                    _fail(b, f"pending candidate non-artifact file is multiply linked: {relative}")
+                linked_paths.add(relative)
+
+        with _shared_candidate_artifact_proof(
+            b, candidate, archived_receipt, linked_paths
+        ) as shared_links:
+            for relative in sorted(files):
+                record = expected[relative]
+                path = candidate.joinpath(*PurePosixPath(relative).parts)
+                metadata = path.lstat()
+                if relative in shared_links:
+                    if (
+                        metadata.st_nlink < 2
+                        or (metadata.st_dev, metadata.st_ino) != shared_links[relative]
+                        or metadata.st_mode & 0o222
+                    ):
+                        _fail(b, f"pending shared candidate artifact changed: {relative}")
+                elif metadata.st_nlink != 1:
+                    _fail(b, f"pending candidate file is multiply linked: {relative}")
+                observed_mode = "100755" if metadata.st_mode & 0o111 else "100644"
+                if observed_mode != record["mode"]:
+                    _fail(b, f"pending candidate file mode changed: {relative}")
+                if relative in shared_links:
+                    digest, hashed_metadata = b._sha256_file(
+                        path,
+                        f"pending candidate retirement file {relative}",
+                        b.MAX_SOURCE_BYTES,
+                        package_artifact=True,
+                    )
+                    size = int(hashed_metadata.st_size)
+                    if (
+                        (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mode)
+                        != (
+                            hashed_metadata.st_dev,
+                            hashed_metadata.st_ino,
+                            hashed_metadata.st_size,
+                            hashed_metadata.st_mode,
+                        )
+                    ):
+                        _fail(b, f"pending shared artifact changed identity while hashing: {relative}")
+                else:
+                    digest, size = _sha256_file(
+                        b,
+                        path,
+                        f"pending candidate retirement file {relative}",
+                        b.MAX_SOURCE_BYTES,
+                    )
+                after = path.lstat()
+                if (
+                    (metadata.st_dev, metadata.st_ino) != (after.st_dev, after.st_ino)
+                    or metadata.st_size != after.st_size
+                    or metadata.st_mode != after.st_mode
+                    or digest != record["sha256"]
+                    or size != record["size"]
+                ):
+                    _fail(b, f"pending candidate file changed: {relative}")
+            marker = b.PACKAGE_CANDIDATE_MARKER
+            if marker not in files and (files - {marker}):
+                _fail(b, "pending candidate marker was removed before payload")
+            for relative in sorted(
+                (files - {marker}), key=lambda value: (value.count("/"), value), reverse=True
+            ):
+                b._remove_owned_tree(candidate.joinpath(*PurePosixPath(relative).parts))
+            for relative in sorted(
+                directories, key=lambda value: (value.count("/"), value), reverse=True
+            ):
+                directory = candidate.joinpath(*PurePosixPath(relative).parts)
+                try:
+                    directory.rmdir()
+                except OSError as error:
+                    _fail(b, f"pending candidate payload directory is not empty: {error}")
             b._fsync_directory(candidate, "pending candidate directory")
-        try:
-            candidate.rmdir()
-        except OSError as error:
-            _fail(b, f"pending candidate directory cannot be removed: {error}")
-        b._fsync_directory(candidate.parent, "candidate package candidate directory")
+            if marker in files:
+                marker_path = candidate / marker
+                marker_record = expected[marker]
+                digest, size = _sha256_file(
+                    b, marker_path, "pending candidate owner marker", 16 * 1024
+                )
+                if digest != marker_record["sha256"] or size != marker_record["size"]:
+                    _fail(b, "pending candidate owner marker changed")
+                b._remove_owned_tree(marker_path)
+                b._fsync_directory(candidate, "pending candidate directory")
+            try:
+                candidate.rmdir()
+            except OSError as error:
+                _fail(b, f"pending candidate directory cannot be removed: {error}")
+            b._fsync_directory(candidate.parent, "candidate package candidate directory")
 
     updated = dict(manifest_from_normalized(normalized))
     updated.update(

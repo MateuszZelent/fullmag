@@ -151,6 +151,8 @@ export interface KernelEventMap {
     backendCommandId: string | null;
     clientIntentId: string | null;
     clientIntentKind: string | null;
+    /** Present only when the returned pending result emitted its Compute started observation. */
+    studyComputeObservationStarted?: true;
     commandId: string;
     feedback: CommandFeedbackOwner;
     invocationId: string;

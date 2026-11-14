@@ -79,7 +79,9 @@ pub use object_binding::*;
 pub use physics_object::*;
 pub use plan::*;
 pub use planar_monitor::*;
-pub use project_output_policy::configure_project_autosave_policy;
+pub use project_output_policy::{
+    configure_project_autosave_policy, resolve_project_stage_autosave_policy,
+};
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };

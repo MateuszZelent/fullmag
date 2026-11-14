@@ -87,6 +87,147 @@ class AbruptStopTests(unittest.TestCase):
             'abrupt_stop_proof': 'verification/abrupt-proof.json', 'abrupt_stop_proof_sha256': r._sha256(r._canonical(proof))})
         return proof, auth, compose
 
+    def failed_outcome_fixture(self):
+        proof, _, compose = self.fixture()
+        process_path = proof['raw_records']['process_receipt']['path']
+        fence_path = '/opt/fullmag/runtime-control/runtime-service/api-failure-' + '1' * 32 + '.json'
+        process = json.loads(proof['raw_records']['process_receipt']['raw_utf8'])
+        process.update(state='failed_outcome_retained', api_pid=18984,
+                       api_diagnostic_only=True, api_liveness={'state': 'observation_unknown'},
+                       api_failure_fence=fence_path, error='process.error')
+        process_raw = (json.dumps(process, indent=3) + '\n').encode()
+        fence = {'schema': 'fullmag.api-runtime-failure-fence.v1',
+                 'stage': 'runtime_supervision', 'reason': 'process.error',
+                 'api_pid': 18984, 'api_instance_id': '22222222-3333-4333-8333-444444444444'}
+        fence_raw = (json.dumps(fence, indent=2) + '\n').encode()
+        proof['schema'] = r.ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA
+        proof['storage_proof']['run_directories'] = []
+        proof['raw_records']['process_receipt'] = {
+            'path': process_path, 'raw_utf8': process_raw.decode(), 'sha256': r._sha256(process_raw)}
+        proof['raw_records']['api_failure_fence'] = {
+            'path': 'runtime-control/runtime-service/' + Path(fence_path).name,
+            'raw_utf8': fence_raw.decode(), 'sha256': r._sha256(fence_raw)}
+        pins = proof['authorization_pins']
+        pins['process_receipt_sha256'] = r._sha256(process_raw)
+        auth = r.validate_operator_authorization({
+            **pins, 'schema_version': r.ABRUPT_OPERATOR_SCHEMA,
+            'abrupt_stop_proof': 'verification/failed-outcome-proof.json',
+            'abrupt_stop_proof_sha256': r._sha256(r._canonical(proof)),
+        })
+        return proof, auth, compose
+
+    def rebind_failed_outcome_process(self, proof, auth, process):
+        raw = (json.dumps(process, indent=3) + '\n').encode()
+        record = proof['raw_records']['process_receipt']
+        record.update(raw_utf8=raw.decode(), sha256=r._sha256(raw))
+        proof['authorization_pins']['process_receipt_sha256'] = r._sha256(raw)
+        auth['process_receipt_sha256'] = r._sha256(raw)
+
+    def test_failed_outcome_proof_is_explicit_and_archives_failure_fence_bytes(self):
+        proof, auth, compose = self.failed_outcome_fixture()
+        records = {item['path']: item['raw_utf8'].encode()
+                   for item in proof['raw_records'].values()}
+        control = SimpleNamespace(project=compose['name'])
+        with patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(records[path]), records[path])), \
+             patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_assert_no_foreign_storage_consumers') as consumers, \
+             patch.object(r, '_ledger_and_store_snapshot', return_value=proof['storage_proof']), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64), \
+             patch.object(r, '_abrupt_network', return_value=proof['network']):
+            observed = r.prepare_abrupt_stop_proof(
+                control, proof['authorization_pins'], compose, failed_outcome_retained=True)
+        self.assertEqual(observed, proof)
+        self.assertEqual(observed['schema'], r.ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA)
+        r._assert_request_matches_abrupt_retained_pins(
+            {'schema_version': r.REQUEST_SCHEMA}, observed)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'native empty v1'):
+            r._assert_request_matches_abrupt_retained_pins(
+                {'schema_version': r.RETAINED_REQUEST_SCHEMA, 'retained_cancelled_runs': []}, observed)
+        extra = {**observed, 'unfrozen': True}
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'frozen schema'):
+            r.validate_abrupt_stop_proof(extra, auth)
+        missing = dict(observed)
+        missing.pop('network')
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'frozen schema'):
+            r.validate_abrupt_stop_proof(missing, auth)
+        self.assertIn('api_failure_fence', observed['raw_records'])
+        self.assertIn(observed['raw_records']['api_failure_fence']['raw_utf8'],
+                      [record['raw_utf8'] for record in observed['raw_records'].values()])
+        consumers.assert_called_once()
+        r.validate_abrupt_stop_proof(observed, auth)
+
+    def test_failed_outcome_receipt_requires_explicit_preparer_opt_in(self):
+        proof, _, compose = self.failed_outcome_fixture()
+        paths = {item['path']: item['raw_utf8'].encode()
+                 for item in proof['raw_records'].values()}
+        with patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(paths[path]), paths[path])), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'shutdown_unknown'):
+                r.prepare_abrupt_stop_proof(
+                    SimpleNamespace(project=compose['name']), proof['authorization_pins'], compose)
+
+    def test_failed_outcome_proof_rejects_diagnostic_and_liveness_drift(self):
+        for field, value in (('api_diagnostic_only', False),
+                             ('api_liveness', {'state': 'ready'}),
+                             ('api_pid', True), ('state', 'shutdown_unknown'),
+                             ('api_failure_fence', '/opt/fullmag/runtime-control/runtime-service/../outside.json'),
+                             ('api_failure_fence', '/opt/fullmag/runtime-control/runtime-service/subdir/api-failure-' + '1'*32 + '.json')):
+            proof, auth, _ = self.failed_outcome_fixture()
+            process = json.loads(proof['raw_records']['process_receipt']['raw_utf8'])
+            process[field] = value
+            self.rebind_failed_outcome_process(proof, auth, process)
+            with self.subTest(field=field), self.assertRaises(r.ContainerRecoveryError):
+                r.validate_abrupt_stop_proof(proof, auth)
+
+    def test_failed_outcome_proof_requires_ready_owner_and_matching_fence(self):
+        proof, auth, _ = self.failed_outcome_fixture()
+        owner = json.loads(proof['raw_records']['owner']['raw_utf8'])
+        owner['state'] = 'unknown'
+        owner_raw = (json.dumps(owner, indent=3) + '\n').encode()
+        owner_record = proof['raw_records']['owner']
+        owner_record.update(raw_utf8=owner_raw.decode(), sha256=r._sha256(owner_raw))
+        proof['authorization_pins']['owner_sha256'] = r._sha256(owner_raw)
+        auth['owner_sha256'] = r._sha256(owner_raw)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'Ready'):
+            r.validate_abrupt_stop_proof(proof, auth)
+
+        proof, auth, _ = self.failed_outcome_fixture()
+        fence_record = proof['raw_records']['api_failure_fence']
+        fence = json.loads(fence_record['raw_utf8'])
+        fence['reason'] = 'another failure'
+        fence_raw = (json.dumps(fence, indent=2) + '\n').encode()
+        fence_record.update(raw_utf8=fence_raw.decode(), sha256=r._sha256(fence_raw))
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'failure fence'):
+            r.validate_abrupt_stop_proof(proof, auth)
+
+    def test_failed_outcome_proof_keeps_foreign_consumer_fence(self):
+        proof, _, compose = self.failed_outcome_fixture()
+        paths = {item['path']: item['raw_utf8'].encode()
+                 for item in proof['raw_records'].values()}
+        with patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(paths[path]), paths[path])), \
+             patch.object(r, '_assert_no_foreign_storage_consumers',
+                          side_effect=r.ContainerRecoveryError('foreign storage consumer')), \
+             patch.object(r, '_ledger_and_store_snapshot') as snapshot:
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'foreign storage consumer'):
+                r.prepare_abrupt_stop_proof(
+                    SimpleNamespace(project=compose['name']), proof['authorization_pins'], compose,
+                    failed_outcome_retained=True)
+        snapshot.assert_not_called()
+
+    def test_failed_outcome_proof_rechecks_raw_failure_fence_cas(self):
+        proof, auth, compose = self.failed_outcome_fixture()
+        records = {item['path']: item['raw_utf8'].encode()
+                   for item in proof['raw_records'].values()}
+        fence_path = proof['raw_records']['api_failure_fence']['path']
+        def read(control, path):
+            return records[path] + (b' ' if path == fence_path else b'')
+        with patch.object(r, '_control_bytes', side_effect=read):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'stale: api_failure_fence'):
+                r.validate_abrupt_stop_proof(
+                    proof, auth, control=SimpleNamespace(project=compose['name']), compose=compose)
+
     def test_v2_frozen_fields_and_original_ready_bytes(self):
         proof, auth, _ = self.fixture()
         r.validate_abrupt_stop_proof(proof, auth)
@@ -245,6 +386,380 @@ class AbruptStopTests(unittest.TestCase):
                     control, backend, foreign, source, Path('/retained/state'))
                 absent_proof.assert_called_once_with(
                     control, backend, foreign, source, Path('/retained/state'))
+
+    def linux_native_scope_fixture(self, proof=None):
+        if proof is None:
+            proof, _, _ = self.fixture()
+        backend, frontend = proof["containers"].values()
+        project = "fullmag-worktree-selected-0123456789abcdef"
+        state_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            + "a" * 64
+        )
+        state_source = "/home/selected/state"
+        volume_names = {
+            "control": project + "_build-control",
+            "ledger": project + "_host-ledger",
+            "backend": project + "_backend-build",
+            "frontend": project + "_frontend-build",
+            "package": "shared-package",
+            "cargo": "shared-cargo",
+            "pnpm": "shared-pnpm",
+        }
+
+        def volume_mount(alias, destination, *, rw=True):
+            name = volume_names[alias]
+            return {
+                "Type": "volume", "Name": name,
+                "Source": "/var/lib/docker/volumes/" + name + "/_data",
+                "Destination": destination, "RW": rw,
+            }
+
+        for item, service in ((backend, "backend"), (frontend, "frontend")):
+            item["Config"]["Labels"].update({
+                "com.docker.compose.project": project,
+                "com.docker.compose.service": service,
+                "org.fullmag.compose.project": project,
+            })
+        backend["Config"]["Env"] = ["FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1"]
+        backend["Mounts"] = [
+            {"Type": "bind", "Source": state_alias, "Destination": "/state", "RW": True},
+            {"Type": "bind", "Source": "/home/selected/user-data",
+             "Destination": "/user-data", "RW": True},
+            {"Type": "bind", "Source": "/home/selected/output",
+             "Destination": "/opt/fullmag/script-output", "RW": True},
+            {"Type": "bind", "Source": r"C:\git\selected",
+             "Destination": "/opt/fullmag/source", "RW": False},
+            {"Type": "bind", "Source": "/home/shared/git-common",
+             "Destination": "/opt/fullmag/source-git", "RW": False},
+            volume_mount("ledger", "/host-ledger"),
+            volume_mount("control", "/opt/fullmag/control"),
+            volume_mount("backend", "/build"),
+            volume_mount("package", "/opt/fullmag/package"),
+            volume_mount("cargo", "/root/.cargo"),
+        ]
+        frontend["Mounts"] = [
+            {"Type": "bind", "Source": r"C:\git\selected",
+             "Destination": "/opt/fullmag/source", "RW": False},
+            {"Type": "bind", "Source": "/home/shared/git-common",
+             "Destination": "/opt/fullmag/source-git", "RW": False},
+            volume_mount("control", "/opt/fullmag/control", rw=False),
+            volume_mount("frontend", "/state/development"),
+            volume_mount("pnpm", "/opt/fullmag/shared-pnpm"),
+        ]
+        compose_volumes = {
+            "build-control": {"name": volume_names["control"], "external": True},
+            "host-ledger": {"name": volume_names["ledger"], "external": True},
+            "backend-build": {"name": volume_names["backend"], "external": True},
+            "frontend-build": {"name": volume_names["frontend"], "external": True},
+            "shared-package": {"name": volume_names["package"], "external": True},
+            "shared-cargo": {"name": volume_names["cargo"], "external": True},
+            "shared-pnpm": {"name": volume_names["pnpm"], "external": True},
+        }
+        compose = {
+            "name": project,
+            "volumes": compose_volumes,
+            "services": {
+                "backend": {
+                    "environment": {"FULLMAG_SESSION_STORAGE_PROFILE": "linux-native-v1"},
+                    "volumes": [
+                        {"type": "bind", "source": state_source, "target": "/state"},
+                        {"type": "bind", "source": "/home/selected/user-data", "target": "/user-data"},
+                        {"type": "bind", "source": "/home/selected/output",
+                         "target": "/opt/fullmag/script-output"},
+                        {"type": "bind", "source": r"C:\git\selected",
+                         "target": "/opt/fullmag/source", "read_only": True},
+                        {"type": "bind", "source": "/home/shared/git-common",
+                         "target": "/opt/fullmag/source-git", "read_only": True},
+                        {"type": "volume", "source": "host-ledger", "target": "/host-ledger"},
+                        {"type": "volume", "source": "build-control", "target": "/opt/fullmag/control"},
+                        {"type": "volume", "source": "backend-build", "target": "/build"},
+                        {"type": "volume", "source": "shared-package", "target": "/opt/fullmag/package"},
+                        {"type": "volume", "source": "shared-cargo", "target": "/root/.cargo"},
+                    ],
+                    "x-fullmag-daemon-binds": {"/state": state_alias},
+                },
+                "frontend": {"volumes": [
+                    {"type": "bind", "source": r"C:\git\selected",
+                     "target": "/opt/fullmag/source", "read_only": True},
+                    {"type": "bind", "source": "/home/shared/git-common",
+                     "target": "/opt/fullmag/source-git", "read_only": True},
+                    {"type": "volume", "source": "build-control",
+                     "target": "/opt/fullmag/control", "read_only": True},
+                    {"type": "volume", "source": "frontend-build",
+                     "target": "/state/development"},
+                    {"type": "volume", "source": "shared-pnpm",
+                     "target": "/opt/fullmag/shared-pnpm"},
+                ]},
+            },
+        }
+        proof["containers"] = {"backend": backend, "frontend": frontend}
+        if "authorization_pins" in proof:
+            proof["authorization_pins"]["compose_project"] = project
+            proof["authorization_pins"]["compose_config_sha256"] = r._sha256(r._canonical(compose))
+        return SimpleNamespace(project=project), backend, frontend, compose, state_alias, state_source
+
+    def group_local_failed_outcome_fixture(self):
+        proof, _, _ = self.failed_outcome_fixture()
+        control, backend, frontend, compose, state_alias, state_source = (
+            self.linux_native_scope_fixture(proof)
+        )
+        proof["schema"] = "fullmag.docker-abrupt-stop-proof.v6"
+        proof["consumer_scope"] = "group-local-direct-binds-v1"
+        auth = r.validate_operator_authorization({
+            **proof["authorization_pins"],
+            "schema_version": r.ABRUPT_OPERATOR_SCHEMA,
+            "abrupt_stop_proof": "verification/group-local-failed-outcome-proof.json",
+            "abrupt_stop_proof_sha256": r._sha256(r._canonical(proof)),
+        })
+        return proof, auth, control, backend, frontend, compose, state_alias, state_source
+
+    def test_group_local_scope_skips_physical_windows_proofs_and_keeps_shared_mounts_shareable(self):
+        control, backend, frontend, compose, state_alias, _ = self.linux_native_scope_fixture()
+        foreign = {"Id": "b" * 64, "Mounts": [
+            {"Type": "bind", "Source": r"C:\git\fullmag\other",
+             "Destination": "/state", "RW": True},
+            {"Type": "bind", "Source": "/run/desktop/mnt/host/e/storage/runs",
+             "Destination": "/user-data", "RW": True},
+            {"Type": "bind", "Source": "/host_mnt/c/git/fullmag/other",
+             "Destination": "/opt/fullmag/source", "RW": False},
+            {"Type": "bind", "Source": "/mnt/host/e/storage/output",
+             "Destination": "/opt/fullmag/script-output", "RW": True},
+            {"Type": "bind", "Source": "/home/shared/git-common",
+             "Destination": "/foreign/git-common", "RW": False},
+            {"Type": "volume", "Name": "foreign-cache",
+             "Source": "/var/lib/docker/volumes/foreign-cache/_data",
+             "Destination": "/opt/fullmag/cache", "RW": True},
+            {"Type": "volume", "Name": "shared-cargo",
+             "Source": "/var/lib/docker/volumes/shared-cargo/_data",
+             "Destination": "/foreign/cargo", "RW": True},
+            {"Type": "volume", "Name": "shared-pnpm",
+             "Source": "/var/lib/docker/volumes/shared-pnpm/_data",
+             "Destination": "/foreign/pnpm", "RW": True},
+            {"Type": "volume", "Name": "shared-package",
+             "Source": "/var/lib/docker/volumes/shared-package/_data",
+             "Destination": "/foreign/package", "RW": True},
+        ]}
+        mapping = lambda source, _state: Path("/home/selected/state") if source == state_alias else Path(source)
+        with patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+             patch("docker_volume_host_device.bind_host_path", side_effect=mapping), \
+             patch.object(r, "_prove_foreign_windows_bind",
+                          side_effect=AssertionError("Windows physical proof is out of v6 scope")) as windows, \
+             patch.object(r, "_prove_foreign_alias_for_abrupt",
+                          side_effect=AssertionError("foreign alias physical proof is out of v6 scope")) as aliases, \
+             patch("docker_foreign_bind_identity.canonical_bind_sources",
+                   side_effect=AssertionError("foreign tree resolver is out of v6 scope")):
+            r._assert_no_foreign_storage_consumers(
+                control, backend, frontend, compose,
+                consumer_scope="group-local-direct-binds-v1")
+        windows.assert_not_called()
+        aliases.assert_not_called()
+
+    def test_group_local_scope_rejects_direct_overlap_volume_collisions_and_unknown_aliases(self):
+        control, backend, frontend, compose, state_alias, state_source = self.linux_native_scope_fixture()
+        mapping = lambda source, _state: Path(state_source) if source == state_alias else Path(source)
+        foreign = {"Id": "b" * 64, "Mounts": []}
+        for source in ("/home/selected", state_source, state_source + "/nested"):
+            foreign["Mounts"] = [{
+                "Type": "bind", "Source": source,
+                "Destination": "/foreign", "RW": False,
+            }]
+            with self.subTest(source=source), \
+                 patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+                 patch("docker_volume_host_device.bind_host_path", side_effect=mapping):
+                with self.assertRaisesRegex(r.ContainerRecoveryError, "direct bind"):
+                    r._assert_no_foreign_storage_consumers(
+                        control, backend, frontend, compose,
+                        consumer_scope="group-local-direct-binds-v1")
+
+        foreign_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            + "b" * 64
+        )
+        foreign["Mounts"][0]["Source"] = foreign_alias
+        def resolve_alias(source, _state):
+            if source == state_alias:
+                return Path(state_source)
+            if source == foreign_alias:
+                return Path(state_source) / "nested"
+            return Path(source)
+        with patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+             patch("docker_volume_host_device.bind_host_path", side_effect=resolve_alias):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, "direct bind"):
+                r._assert_no_foreign_storage_consumers(
+                    control, backend, frontend, compose,
+                    consumer_scope="group-local-direct-binds-v1")
+
+        for collision in (
+            {"Type": "volume", "Name": "fullmag-worktree-selected-0123456789abcdef_build-control",
+             "Source": "/var/lib/docker/volumes/other/_data"},
+            {"Type": "volume", "Name": "foreign-volume",
+             "Source": "/var/lib/docker/volumes/fullmag-worktree-selected-0123456789abcdef_build-control/_data/nested"},
+        ):
+            foreign["Mounts"] = [collision]
+            with self.subTest(collision=collision), \
+                 patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+                 patch("docker_volume_host_device.bind_host_path", side_effect=mapping):
+                with self.assertRaisesRegex(r.ContainerRecoveryError, "volume"):
+                    r._assert_no_foreign_storage_consumers(
+                        control, backend, frontend, compose,
+                        consumer_scope="group-local-direct-binds-v1")
+
+        for source in (
+            "relative/path", "//server/share/project",
+            "/run/desktop/mnt/host/unc/server/share/project",
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/not-a-hash",
+        ):
+            foreign["Mounts"] = [{"Type": "bind", "Source": source,
+                                  "Destination": "/foreign", "RW": False}]
+            with self.subTest(source=source), \
+                 patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+                 patch("docker_volume_host_device.bind_host_path", side_effect=r.BuildControlError("unmapped alias")):
+                with self.assertRaises(r.ContainerRecoveryError):
+                    r._assert_no_foreign_storage_consumers(
+                        control, backend, frontend, compose,
+                        consumer_scope="group-local-direct-binds-v1")
+
+    def test_group_local_scope_refuses_selected_windows_or_mixed_protected_binds(self):
+        control, backend, frontend, compose, state_alias, _ = self.linux_native_scope_fixture()
+        script_spec = next(
+            item for item in compose["services"]["backend"]["volumes"]
+            if item.get("target") == "/opt/fullmag/script-output")
+        script_spec["source"] = r"C:\git\fullmag\output"
+        script_mount = next(
+            item for item in backend["Mounts"]
+            if item.get("Destination") == "/opt/fullmag/script-output")
+        script_mount["Source"] = r"C:\git\fullmag\output"
+        mapping = lambda source, _state: Path("/home/selected/state") if source == state_alias else Path(source)
+        with patch.object(r, "_read_foreign_docker_consumers", return_value=[]), \
+             patch("docker_volume_host_device.bind_host_path", side_effect=mapping):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, "Windows protected"):
+                r._assert_no_foreign_storage_consumers(
+                    control, backend, frontend, compose,
+                    consumer_scope="group-local-direct-binds-v1")
+
+        control, backend, frontend, compose, state_alias, _ = self.linux_native_scope_fixture()
+        compose["services"]["backend"]["environment"]["FULLMAG_SESSION_STORAGE_PROFILE"] = "windows-folder-v1"
+        backend["Config"]["Env"] = ["FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1"]
+        mapping = lambda source, _state: Path("/home/selected/state") if source == state_alias else Path(source)
+        with patch.object(r, "_read_foreign_docker_consumers", return_value=[]), \
+             patch("docker_volume_host_device.bind_host_path", side_effect=mapping):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, "linux-native"):
+                r._assert_no_foreign_storage_consumers(
+                    control, backend, frontend, compose,
+                    consumer_scope="group-local-direct-binds-v1")
+
+    def test_group_local_archived_validation_maps_exact_user_data_and_script_output_aliases(self):
+        control, backend, frontend, compose, _, _ = self.linux_native_scope_fixture()
+        user_data_source = (
+            "/home/kkingstoun/git/fullmag/storage/user-data/"
+            "fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b"
+        )
+        script_output_source = (
+            "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108/examples"
+        )
+        user_data_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            "5677c10f5e74f352badbecb5f3de65acc8286ae6d48f89e440c954db9a64415d"
+        )
+        script_output_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            "fba7f54aeaabc3ae724e0262c54a3cde69fd2758c6757d81ba1e9edeedfda1c4"
+        )
+
+        def set_mount(target, source):
+            spec = next(item for item in compose["services"]["backend"]["volumes"]
+                        if item.get("target") == target)
+            spec["source"] = source
+            mount = next(item for item in backend["Mounts"]
+                         if item.get("Destination") == target)
+            mount["Source"] = source
+
+        set_mount("/user-data", user_data_source)
+        set_mount("/opt/fullmag/script-output", script_output_source)
+        next(item for item in backend["Mounts"]
+             if item.get("Destination") == "/user-data")["Source"] = user_data_alias
+        next(item for item in backend["Mounts"]
+             if item.get("Destination") == "/opt/fullmag/script-output")["Source"] = script_output_alias
+
+        aliases = {
+            user_data_alias: Path(user_data_source),
+            script_output_alias: Path(script_output_source),
+        }
+
+        def resolve(source, _state):
+            return aliases.get(source, Path(source))
+
+        with patch("docker_volume_host_device.bind_host_path", side_effect=resolve):
+            owned = r._group_local_owned_identities(
+                backend, frontend, compose, control.project, resolve_aliases=False)
+        canonical_binds = owned["canonical_binds"]
+        self.assertIn(("posix", Path(user_data_source)), canonical_binds)
+        self.assertIn(("posix", Path(script_output_source)), canonical_binds)
+
+        wrong_aliases = {
+            **aliases,
+            user_data_alias: Path(user_data_source) / "other",
+        }
+        with patch("docker_volume_host_device.bind_host_path",
+                   side_effect=lambda source, _state: wrong_aliases.get(source, Path(source))):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, "does not map to its retained Linux source"):
+                r._group_local_owned_identities(
+                    backend, frontend, compose, control.project, resolve_aliases=False)
+
+    def test_group_local_v6_proof_freezes_scope_and_requires_failed_outcome_opt_in(self):
+        proof, auth, control, _, _, compose, _, _ = self.group_local_failed_outcome_fixture()
+        r.validate_abrupt_stop_proof(proof, auth, compose=compose)
+        for invalid in (
+            {key: value for key, value in proof.items() if key != "consumer_scope"},
+            {**proof, "consumer_scope": "all-host-filesystems-v1"},
+            {**proof, "unfrozen": True},
+        ):
+            changed_auth = dict(auth)
+            changed_auth["abrupt_stop_proof_sha256"] = r._sha256(r._canonical(invalid))
+            with self.subTest(proof=invalid), self.assertRaises(r.ContainerRecoveryError):
+                r.validate_abrupt_stop_proof(invalid, changed_auth, compose=compose)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, "failed_outcome_retained"):
+            r.prepare_abrupt_stop_proof(
+                control, proof["authorization_pins"], compose,
+                group_local_direct_binds=True,
+            )
+
+    def test_group_local_v6_is_created_only_by_explicit_failed_outcome_preparation(self):
+        proof, _, control, backend, frontend, compose, state_alias, state_source = (
+            self.group_local_failed_outcome_fixture()
+        )
+        records = {item["path"]: item["raw_utf8"].encode()
+                   for item in proof["raw_records"].values()}
+        def read(_control, path):
+            raw = records[path]
+            return json.loads(raw), raw
+        mapping = lambda source, _state: Path(state_source) if source == state_alias else Path(source)
+        with patch.object(r, "_control_json", side_effect=read),              patch.object(r, "_inspect_pair", return_value=(backend, frontend)),              patch.object(r, "_read_foreign_docker_consumers", return_value=[]),              patch("docker_volume_host_device.bind_host_path", side_effect=mapping),              patch.object(r, "_ledger_and_store_snapshot", return_value=proof["storage_proof"]),              patch.object(r, "_docker_engine_sha", return_value="f" * 64),              patch.object(r, "_abrupt_network", return_value=proof["network"]):
+            observed = r.prepare_abrupt_stop_proof(
+                control, proof["authorization_pins"], compose,
+                failed_outcome_retained=True, group_local_direct_binds=True)
+        self.assertEqual(observed["schema"], r.ABRUPT_PROOF_GROUP_LOCAL_SCHEMA)
+        self.assertEqual(observed["consumer_scope"], r.GROUP_LOCAL_DIRECT_BINDS_SCOPE)
+        r._assert_request_matches_abrupt_retained_pins(
+            {"schema_version": r.REQUEST_SCHEMA}, observed)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, "native empty v1"):
+            r._assert_request_matches_abrupt_retained_pins(
+                {"schema_version": r.RETAINED_REQUEST_SCHEMA,
+                 "retained_cancelled_runs": []}, observed)
+
+    def test_v5_default_still_uses_physical_windows_consumer_proof(self):
+        proof, _, compose = self.failed_outcome_fixture()
+        backend, frontend = proof["containers"].values()
+        foreign = {"Id": "b" * 64, "Mounts": [{
+            "Type": "bind", "Source": r"C:\git\fullmag\other",
+            "Destination": "/state", "RW": True,
+        }]}
+        with patch.object(r, "_read_foreign_docker_consumers", return_value=[foreign]), \
+             patch.object(r, "_prove_foreign_windows_bind") as physical:
+            r._assert_no_foreign_storage_consumers(
+                SimpleNamespace(project=compose["name"]), backend, frontend, compose)
+        physical.assert_called_once()
 
     def test_unknown_foreign_alias_uses_only_exact_disjoint_proof_and_keeps_other_guards(self):
         proof, _, compose = self.fixture()

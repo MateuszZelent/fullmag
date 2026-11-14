@@ -40,4 +40,42 @@ class FrontendSeedTests(unittest.TestCase):
    (root/'workspace').symlink_to(outside,target_is_directory=True)
    self.assertNotEqual(self.run_guest(root,b'new').returncode,0)
    self.assertEqual((outside/'package.json').read_bytes(),b'original')
+ def test_legacy_frontend_seed_runs_without_private_group_storage(self):
+  from types import SimpleNamespace
+  from unittest import mock
+  sys.path.insert(0,str(SCRIPT.parent))
+  sys.path.insert(0,str(SCRIPT.parents[1]/'docker/all-in-one'))
+  import docker_development_inputs
+  import docker_volume_dev
+
+  inputs={'source_root':'/registered/source','worktree_id':'worktree-alpha',
+   'source_commit':'a'*40,'files':[],'live_directories':[]}
+  writes=[]
+  control=SimpleNamespace(project='legacy-project',image='helper-image',
+   read=lambda path,optional=False:None,
+   write=lambda path,value:writes.append((path,value)),
+   helper_args=lambda command:['docker','run','--entrypoint','python','helper-image'])
+  operation={'root':'development/attempts/'+'a'*32,'receipt':{'attempt':'a'*32}}
+  def capture(args,*,data,timeout):
+   request=json.loads(data)
+   self.assertFalse(request['group_storage'])
+   self.assertIsNone(request['frontend_generation'])
+   result={'state':'seeded','files':0,'inputs':inputs,
+    'frontend_generation_probe':None,'frontend_generation':None}
+   return SimpleNamespace(returncode=0,stdout=json.dumps(result).encode(),stderr=b'')
+
+  with mock.patch.object(docker_development_inputs,'seed',return_value=inputs), \
+       mock.patch.object(docker_development_inputs,'metadata_cache_key',return_value='metadata-key'), \
+       mock.patch.object(docker_volume_dev,'_uses_private_group_storage',return_value=False), \
+       mock.patch.object(docker_volume_dev,'_owned_volume',return_value='legacy-frontend-volume'), \
+       mock.patch.object(docker_volume_dev,'bounded_capture',side_effect=capture) as docker:
+   observed,volume=docker_volume_dev._frontend(control,operation,Path('/selected'),Path('/state'),3200,
+    'frontend-image')
+
+  self.assertEqual(observed,inputs)
+  self.assertEqual(volume,'legacy-frontend-volume')
+  self.assertEqual(operation['receipt']['frontend_volume'],volume)
+  self.assertEqual([path for path,_ in writes],[
+   operation['root']+'/frontend-seed.json','frontend/development-inputs.json'])
+  docker.assert_called_once()
 if __name__=='__main__':unittest.main()

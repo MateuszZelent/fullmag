@@ -110,7 +110,9 @@ fn load_verified(root: &Path, run_id: &str, stage_ids: &[String]) -> Result<RunP
         let _elapsed = crate::live_accepted_projection::ProjectionPhaseTimer::new("performance_fence");
         store.read_transaction().context("read accepted performance fence")?
     };
-    let catalog = store.read_run_catalog(run_id)?.context("performance run catalog missing")?;
+    let catalog = store
+        .read_run_catalog_in_transaction(run_id, &_read)?
+        .context("performance run catalog missing")?;
     let mut candidates = Vec::new();
     for (order, step_id) in stage_ids.iter().enumerate() {
         let task_id = fullmag_session::task_id_for_study_step(run_id, step_id)?;

@@ -57,11 +57,15 @@ pub struct ApiErrorDiagnosticResponse {
     pub message: String,
 }
 
+pub use crate::error::IntentDisposition;
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorResponse {
     pub code: String,
     pub error: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_disposition: Option<IntentDisposition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

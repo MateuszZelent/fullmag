@@ -244,6 +244,7 @@ describe("flattenVisibleExplorerRows", () => {
             discretization: "fdm",
           },
           resources: {
+            commands_revision: 0,
             mesh_revision: 0,
             scene_revision: 1,
           },
@@ -287,7 +288,7 @@ describe("flattenVisibleExplorerRows", () => {
     const status = {
       capabilities: { binary_fields: true, explicit_topology: false },
       domain: { discretization: "fdm" },
-      resources: { mesh_revision: 0, scene_revision: 1 },
+      resources: { commands_revision: 0, mesh_revision: 0, scene_revision: 1 },
       run: { run_id: "held-study" },
     };
     const resources = {
@@ -458,6 +459,7 @@ describe("flattenVisibleExplorerRows", () => {
             discretization: "fdm",
           },
           resources: {
+            commands_revision: 1,
             mesh_revision: 0,
             scene_revision: 1,
           },

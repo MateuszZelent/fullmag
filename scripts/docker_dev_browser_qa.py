@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import Request, urlopen
 
 import fullmag_storage as storage
+import docker_dev_region_reset_qa as region_reset_qa
 from docker_build_control import (
     BuildControl,
     BuildControlError,
@@ -288,6 +289,104 @@ def _private_group_storage_mode(receipt: Mapping[str, object]) -> bool:
     return True
 
 
+_FRONTEND_GENERATION_FIELDS = (
+    "frontend_generation_id",
+    "frontend_generation_subpath",
+)
+
+
+def _resolve_frontend_generation(
+    control: BuildControl,
+    receipt: Mapping[str, object],
+    compose: Mapping[str, object],
+) -> dict[str, str]:
+    """Return the private frontend leaf authenticated by one DEV receipt + Compose."""
+    has_generation_fields = any(key in receipt for key in _FRONTEND_GENERATION_FIELDS)
+    if not _private_group_storage_mode(receipt):
+        if has_generation_fields:
+            raise BuildControlError("Frontend generation pins require private group storage")
+        return {}
+    import docker_volume_frontend_seed_recovery as seed_recovery
+
+    try:
+        active = seed_recovery.resolve_active_generation(control, receipt, compose)
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Retained frontend generation could not be authenticated") from error
+    if active.get("generation_id") is None:
+        return {}
+    return {
+        "frontend_generation_id": active["generation_id"],
+        "frontend_generation_subpath": active["subpath"],
+    }
+
+
+def _require_frontend_generation_inputs(
+    inputs: Mapping[str, object],
+    expected: Mapping[str, str],
+    *,
+    error: str,
+) -> None:
+    for key in _FRONTEND_GENERATION_FIELDS:
+        if ((key in inputs) != (key in expected)
+                or (key in expected and inputs.get(key) != expected[key])):
+            raise BuildControlError(error)
+
+
+def _reconcile_frontend_generation(
+    control: BuildControl,
+    inputs: Mapping[str, object],
+    *,
+    private_group_storage: bool,
+    selected: Path | None = None,
+    identity: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Bind a QA operation to the same retained development receipt and generation."""
+    attempt = inputs.get("development_attempt")
+    config_sha256 = inputs.get("development_config_sha256")
+    if (not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None
+            or not isinstance(config_sha256, str) or SHA256_RE.fullmatch(config_sha256) is None):
+        raise BuildControlError("QA reconciliation has no exact development attempt/configuration pin")
+    try:
+        current = control.read("development/current.json")
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("QA reconciliation development receipt is unavailable") from error
+    if isinstance(current, Mapping) and current.get("state") == "failed-confirmed":
+        if selected is None or identity is None:
+            raise BuildControlError("QA reconciliation cannot recover the failed development receipt without source identity")
+        current = _read_recovered_development(control, current, selected, identity)
+    if (not isinstance(current, Mapping)
+            or current.get("attempt") != attempt
+            or current.get("config_sha256") != config_sha256
+            or current.get("compose_project") != control.project
+            or inputs.get("compose_project") != control.project
+            or not isinstance(inputs.get("frontend_volume"), str)
+            or current.get("frontend_volume") != inputs.get("frontend_volume")
+            or _private_group_storage_mode(current) is not private_group_storage):
+        raise BuildControlError("QA reconciliation development runtime receipt differs")
+    if private_group_storage and inputs.get("frontend_volume") != control.volume:
+        raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
+    try:
+        compose = control.read(f"development/attempts/{attempt}/compose.json")
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("QA reconciliation development Compose is unavailable") from error
+    if (not isinstance(compose, Mapping)
+            or hashlib.sha256(canonical(compose)).hexdigest() != config_sha256):
+        raise BuildControlError("QA reconciliation development Compose pin differs")
+    pins = _resolve_frontend_generation(control, current, compose)
+    _require_frontend_generation_inputs(
+        inputs,
+        pins,
+        error="QA reconciliation frontend generation differs from its development runtime",
+    )
+    return pins
+
+
 def _control_subpath(control: BuildControl, relative: str) -> str:
     """Resolve a control subpath while keeping namespace and relative path exact."""
     namespace = getattr(control, "namespace", None)
@@ -462,6 +561,8 @@ def _validate_inspector_ack_hashes(value) -> None:
 
 
 def _study_stage_rerun_source_paths(mode: str) -> dict[str, str]:
+    if mode in region_reset_qa.MODES:
+        return region_reset_qa.source_paths(mode)
     if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "fdm-cell-study-resume",
                     "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun requires a fixed mode")
@@ -491,6 +592,9 @@ def _study_stage_rerun_source_sha256(selected: Path, mode: str = "stage-b") -> d
 
 
 def _validate_study_stage_rerun_hashes(value, mode: str = "stage-b") -> None:
+    if mode in region_reset_qa.MODES:
+        region_reset_qa._check_hash_map(value, mode)
+        return
     try:
         expected_sources = _study_stage_rerun_source_paths(mode)
     except BuildControlError:
@@ -828,7 +932,7 @@ def _validate_private_group_compose(
     compose: Mapping[str, object],
     control: BuildControl,
     current: Mapping[str, object],
-) -> None:
+) -> dict[str, str]:
     """Validate retained frontend/backend/ledger leaves for group-volume-v1."""
     import docker_backend_volume_cache as backend_cache
     import docker_group_ledger as group_ledger
@@ -849,13 +953,17 @@ def _validate_private_group_compose(
 
     try:
         group_storage.volume_declaration(control)
-        frontend_subpath = group_storage.role_subpath(control, "frontend")
         backend_subpath = group_storage.role_subpath(control, "backend")
         ledger_subpath = group_storage.role_subpath(control, "ledger")
         control_subpath = _control_subpath(control, "frontend")
+        frontend_generation = _resolve_frontend_generation(control, current, compose)
         expected_frontend_mount = group_storage.compose_mount_descriptor(
             control, "frontend", "/state/development", compose_name="frontend-build",
         )
+        if frontend_generation:
+            expected_frontend_mount["volume"]["subpath"] = frontend_generation[
+                "frontend_generation_subpath"
+            ]
         expected_backend_mount = group_storage.compose_mount_descriptor(
             control, "backend", backend_cache.BUILD_TARGET,
             compose_name=backend_cache.COMPOSE_BUILD_VOLUME,
@@ -943,6 +1051,7 @@ def _validate_private_group_compose(
         raise BuildControlError("Retained group ledger is not the private/ledger subpath")
     if backend_subpath != expected_backend_mount["volume"].get("subpath"):
         raise BuildControlError("Retained backend subpath is not canonical")
+    return frontend_generation
 
 
 def _validate_frontend(
@@ -953,7 +1062,7 @@ def _validate_frontend(
     current: Mapping[str, object],
     port: int,
     *, cache_project_id: str | None = None,
-) -> None:
+) -> dict[str, str]:
     grouped = _private_group_storage_mode(current)
     if grouped and frontend_volume != control.volume:
         raise BuildControlError("Frontend state volume differs from the pinned private group volume")
@@ -986,8 +1095,11 @@ def _validate_frontend(
             or not isinstance(services.get("backend"), Mapping)
             or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
         raise BuildControlError("Pinned development service image declarations differ")
+    frontend_generation: dict[str, str] = {}
     if grouped:
-        _validate_private_group_compose(compose, control, current)
+        frontend_generation = _validate_private_group_compose(compose, control, current)
+    else:
+        frontend_generation = _resolve_frontend_generation(control, current, compose)
     expected_image = services["frontend"].get("image")
     if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
             or document.get("Image") != expected_image):
@@ -1009,7 +1121,11 @@ def _validate_frontend(
 
         volume = _validate_existing_control_volume(control)
         _validate_group_volume_mounts(document, control, volume, {
-            "/state/development": (group_storage.role_subpath(control, "frontend"), False),
+            "/state/development": (
+                frontend_generation.get("frontend_generation_subpath")
+                or group_storage.role_subpath(control, "frontend"),
+                False,
+            ),
             "/opt/fullmag/control": (_control_subpath(control, "frontend"), True),
         })
     else:
@@ -1027,6 +1143,7 @@ def _validate_frontend(
             raise BuildControlError("Frontend has a writable host bind")
         if mount.get("Type") == "volume" and mount.get("Name") not in {frontend_volume, control.volume, *shared_volumes}:
             raise BuildControlError("Frontend has an unexpected named volume")
+    return dict(frontend_generation)
 
 
 def _validate_browser_image_reference(image: str) -> None:
@@ -1307,7 +1424,9 @@ def _compose_document(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
+    frontend_generation_id: str | None = None,
 ) -> dict[str, object]:
     if type(inspector_ack) is not bool:
         raise BuildControlError("Inspector ACK scenario marker must be boolean")
@@ -1323,7 +1442,8 @@ def _compose_document(
         raise BuildControlError("Inspector ACK source pins require their scenario")
     if study_stage_rerun is not None:
         if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                     "fdm-cell-study-resume", "texture-stage-b", "texture-study"}:
+                                     "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                     *region_reset_qa.MODES}:
             raise BuildControlError("Study stage rerun requires one of the fixed profiles")
         _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         if study_stage_rerun == "fdm-cell-study-resume":
@@ -1332,13 +1452,23 @@ def _compose_document(
             )
         elif study_stage_rerun_resume_evidence is not None:
             raise BuildControlError("FDM grid resume evidence requires its fixed resume profile")
+        if study_stage_rerun in region_reset_qa.MODES:
+            if study_stage_rerun.endswith("-import"):
+                region_reset_parent_evidence = region_reset_qa.validate_parent_evidence(
+                    region_reset_parent_evidence, study_stage_rerun,
+                )
+            elif region_reset_parent_evidence is not None:
+                raise BuildControlError("Region reset parent evidence requires a fixed import profile")
+        elif region_reset_parent_evidence is not None:
+            raise BuildControlError("Region reset parent evidence cannot be mixed with another profile")
         if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
                 or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
                 or airbox_inspector or saved_playback_item_id is not None
                 or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
                 or expect_run_performance is True or expect_planar_airbox or inspector_ack):
             raise BuildControlError("Study stage rerun is a separate task-owned runtime command scenario")
-    elif study_stage_rerun_source_sha256 is not None or study_stage_rerun_resume_evidence is not None:
+    elif (study_stage_rerun_source_sha256 is not None or study_stage_rerun_resume_evidence is not None
+          or region_reset_parent_evidence is not None):
         raise BuildControlError("Study stage rerun source pins require their scenario")
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
@@ -1368,13 +1498,20 @@ def _compose_document(
             raise BuildControlError("Browser QA private group volume differs from the selected BuildControl")
         try:
             group_storage.volume_declaration(control)
-            frontend_state_volume["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+            frontend_state_volume["volume"]["subpath"] = (
+                group_storage.frontend_generation_subpath(control, frontend_generation_id)
+                if frontend_generation_id is not None
+                else group_storage.role_subpath(control, "frontend")
+            )
         except BuildControlError:
             raise
         except Exception as error:
             raise BuildControlError("Browser QA private frontend subpath is invalid") from error
-    elif control is not None and control.project != identity.get("project_name"):
-        raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
+    else:
+        if frontend_generation_id is not None:
+            raise BuildControlError("Browser QA frontend generation requires private group storage")
+        if control is not None and control.project != identity.get("project_name"):
+            raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
             raise BuildControlError("Saved Playback QA requires a decimal item id of at most 20 digits")
@@ -1502,6 +1639,14 @@ def _compose_document(
             if len(resume_raw.encode("utf-8")) > 128 * 1024:
                 raise BuildControlError("FDM grid resume evidence exceeds its environment bound")
             environment["CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE"] = resume_raw
+        if study_stage_rerun in region_reset_qa.MODES:
+            paths_raw = canonical(region_reset_qa.source_paths(study_stage_rerun)).decode("utf-8")
+            environment["CONTROL_ROOM_REGION_RESET_SOURCE_PATHS"] = paths_raw
+            if study_stage_rerun.endswith("-import"):
+                parent_raw = canonical(dict(region_reset_parent_evidence)).decode("utf-8")
+                if len(parent_raw.encode("utf-8")) > 96 * 1024:
+                    raise BuildControlError("Region reset parent evidence exceeds its environment bound")
+                environment["CONTROL_ROOM_REGION_RESET_PARENT"] = parent_raw
     elif airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
@@ -1542,6 +1687,7 @@ def _compose_document(
         },
     ]
     if study_stage_rerun is not None:
+        fixture_source = _study_stage_rerun_source_paths(study_stage_rerun)["fixture"]
         browser_volumes.extend([
             {
                 "type": "bind",
@@ -1552,7 +1698,7 @@ def _compose_document(
             },
             {
                 "type": "bind",
-                "source": str(selected / STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                "source": str(selected / fixture_source),
                 "target": STUDY_STAGE_RERUN_FIXTURE_TARGET,
                 "read_only": True,
                 "bind": {"create_host_path": False},
@@ -1589,7 +1735,9 @@ def _compose_document(
                     if saved_playback_item_id is not None
                     else [
                         "node",
-                        "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                        "/state/development/workspace/apps/control-room/scripts/"
+                        + ("check-study-region-reset-browser.mjs" if study_stage_rerun in region_reset_qa.MODES
+                           else "check-study-stage-rerun-browser.mjs"),
                         study_stage_rerun,
                     ]
                     if study_stage_rerun is not None
@@ -1653,7 +1801,10 @@ def _validate_browser_helper(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
+    frontend_generation_id: str | None = None,
+    frontend_generation_subpath: str | None = None,
 ) -> None:
     if type(expect_fdm_cell_physics) is not bool:
         raise ControlOutcomeUnknown("FDM cell physics helper expectation must be boolean")
@@ -1713,6 +1864,10 @@ def _validate_browser_helper(
                                 if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE=")]
     rerun_scenario = [entry for entry in raw_environment
                       if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun")]
+    region_paths_environment = [entry for entry in raw_environment
+                                if entry.startswith("CONTROL_ROOM_REGION_RESET_SOURCE_PATHS=")]
+    region_parent_environment = [entry for entry in raw_environment
+                                 if entry.startswith("CONTROL_ROOM_REGION_RESET_PARENT=")]
     if inspector_ack:
         try:
             _validate_inspector_ack_hashes(inspector_ack_source_sha256)
@@ -1747,13 +1902,43 @@ def _validate_browser_helper(
                 raise ControlOutcomeUnknown("Browser helper FDM grid resume evidence differs")
         elif rerun_resume_environment or study_stage_rerun_resume_evidence is not None:
             raise ControlOutcomeUnknown("Browser helper reported unrequested FDM grid resume evidence")
+        is_region_reset = study_stage_rerun in region_reset_qa.MODES
+        if is_region_reset:
+            try:
+                expected_paths = region_reset_qa.source_paths(study_stage_rerun)
+                if study_stage_rerun.endswith("-import"):
+                    expected_parent = region_reset_qa.validate_parent_evidence(
+                        region_reset_parent_evidence, study_stage_rerun,
+                    )
+                else:
+                    expected_parent = None
+            except BuildControlError as error:
+                raise ControlOutcomeUnknown(str(error)) from error
+            expected_paths_entry = "CONTROL_ROOM_REGION_RESET_SOURCE_PATHS=" + canonical(expected_paths).decode("utf-8")
+            expected_parent_entries = ([] if expected_parent is None else [
+                "CONTROL_ROOM_REGION_RESET_PARENT=" + canonical(expected_parent).decode("utf-8")
+            ])
+            region_prefix_entries = [entry for entry in raw_environment
+                                     if entry.startswith("CONTROL_ROOM_REGION_RESET_")]
+            if (region_paths_environment != [expected_paths_entry]
+                    or region_parent_environment != expected_parent_entries
+                    or set(region_prefix_entries) != {expected_paths_entry, *expected_parent_entries}):
+                raise ControlOutcomeUnknown("Browser helper S46 source map/parent environment differs")
+        elif region_paths_environment or region_parent_environment or any(
+                entry.startswith("CONTROL_ROOM_REGION_RESET_") for entry in raw_environment):
+            raise ControlOutcomeUnknown("Browser helper reported unsolicited S46 environment pins")
+        expected_runner = (
+            "check-study-region-reset-browser.mjs" if is_region_reset
+            else "check-study-stage-rerun-browser.mjs"
+        )
         if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                      "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
+                                      "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                      *region_reset_qa.MODES}
                 or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
                 or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
                 or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
                 or config.get("Cmd") != [
-                    "node", "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                    "node", "/state/development/workspace/apps/control-room/scripts/" + expected_runner,
                     study_stage_rerun,
                 ]):
             raise ControlOutcomeUnknown("Browser helper Study stage rerun command or source pins differ")
@@ -1924,7 +2109,16 @@ def _validate_browser_helper(
 
         volume = _validate_existing_control_volume(control)
         try:
-            frontend_subpath = group_storage.role_subpath(control, "frontend")
+            if frontend_generation_id is None and frontend_generation_subpath is None:
+                frontend_subpath = group_storage.role_subpath(control, "frontend")
+            elif frontend_generation_id is None or frontend_generation_subpath is None:
+                raise BuildControlError("Browser helper frontend generation pins are incomplete")
+            else:
+                frontend_subpath = group_storage.frontend_generation_subpath(
+                    control, frontend_generation_id,
+                )
+                if frontend_generation_subpath != frontend_subpath:
+                    raise BuildControlError("Browser helper frontend generation path differs from its ID")
         except BuildControlError as error:
             raise ControlOutcomeUnknown("Browser helper private frontend subpath is invalid") from error
         try:
@@ -1954,6 +2148,8 @@ def _validate_browser_helper(
                     resolved_binds[0].get("Source"), selected / "apps/control-room/scripts"
                 )):
             raise ControlOutcomeUnknown("Browser helper resolved script mount is not the selected readonly bind")
+    elif frontend_generation_id is not None or frontend_generation_subpath is not None:
+        raise ControlOutcomeUnknown("Browser helper generation pins require private group storage")
     for mount in mounts:
         if mount.get("RW") is not False:
             raise ControlOutcomeUnknown("Browser helper has a writable volume or bind")
@@ -1992,7 +2188,8 @@ def _validate_browser_helper(
             document, selected, "apps/control-room/src", STUDY_STAGE_RERUN_SRC_TARGET,
         )
         _validate_browser_helper_source_mount(
-            document, selected, STUDY_STAGE_RERUN_SOURCES["fixture"], STUDY_STAGE_RERUN_FIXTURE_TARGET,
+            document, selected, _study_stage_rerun_source_paths(study_stage_rerun)["fixture"],
+            STUDY_STAGE_RERUN_FIXTURE_TARGET,
         )
 
 
@@ -3366,6 +3563,14 @@ def _validate_study_fdm_request_inventory(payload, expected_grid_posts, expected
         raise BuildControlError("FDM-cell-study request inventory exceeded its fixed budget")
 
 
+def _validate_study_stage_precondition_revision(precondition, resources, label):
+    if (not isinstance(precondition, Mapping) or not isinstance(resources, Mapping)
+            or type(resources.get("commands_revision")) is not int
+            or resources["commands_revision"] < 0
+            or precondition.get("command_revision") != resources["commands_revision"]):
+        raise BuildControlError(f"{label} command revision differs from its canonical status revision")
+
+
 def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser_url, expected_sources):
     if (payload.get("state") != "outcome-unknown" or payload.get("outcome") != "unknown"
             or not isinstance(payload.get("failure"), str) or not 1 <= len(payload["failure"]) <= 512
@@ -3426,6 +3631,8 @@ def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser
                 "region_coefficients_revision", "region_initial_state_revision",
             )) or "stage_execution_revision" in precondition):
         raise BuildControlError("FDM-cell-study unknown outcome omitted its exact current precondition")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "FDM-cell-study baseline")
     results = before.get("result_identities")
     if (not isinstance(results, list) or len(results) != 1
             or not isinstance(results[0], Mapping)
@@ -3843,7 +4050,7 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     if (not isinstance(value, Mapping)
             or set(value) != {"run_id", "run_status", "solver_state", "execution_state", "stage_ids",
                 "authored_stage_ids", "stage_statuses", "completed_stage_indexes", "scene_profile", "profile",
-                "scene_revision", "precondition", "commands", "preparation"}):
+                "scene_revision", "precondition", "resources", "commands", "preparation"}):
         raise BuildControlError("FDM-cell-study held-run proof has an unexpected shape")
     run_id = value.get("run_id")
     profile = value.get("profile")
@@ -3870,6 +4077,7 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
             or profile.get("script_path") != "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py"):
         raise BuildControlError("FDM-cell-study did not retain the pending 16-cell accepted frontier")
     precondition = value.get("precondition")
+    resources = value.get("resources")
     commands = value.get("commands")
     preparation = value.get("preparation")
     if (not isinstance(precondition, Mapping)
@@ -3891,13 +4099,16 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
                    or precondition.get(key) != previous_precondition[key] + 1
                    for key in region_revision_keys)):
         raise BuildControlError("FDM-cell-study grid refresh did not advance exactly the cell-policy region revisions")
+    if (not isinstance(resources, Mapping) or set(resources) != {"commands_revision"}
+            or type(resources.get("commands_revision")) is not int or resources["commands_revision"] < 0):
+        raise BuildControlError("FDM-cell-study held-run proof omitted its canonical command revision")
+    _validate_study_stage_precondition_revision(precondition, resources, "FDM-cell-study held run")
     terminal_command_states = {"completed", "failed", "cancelled", "rejected"}
     if (not isinstance(commands, Mapping)
             or set(commands) != {"resource_revision", "count", "pending_count", "running_count",
                                  "terminal_statuses", "last_command_id"}
             or type(commands.get("resource_revision")) is not int or commands["resource_revision"] < 0
             or type(commands.get("count")) is not int or commands["count"] < 0
-            or commands.get("count") != precondition.get("command_revision")
             or type(commands.get("pending_count")) is not int or commands["pending_count"] != 0
             or type(commands.get("running_count")) is not int or commands["running_count"] != 0
             or not isinstance(commands.get("terminal_statuses"), list)
@@ -3981,6 +4192,8 @@ def _validate_material_stage_a_unknown_payload(payload, public_url, browser_url,
             or precondition.get("current_run") != {"kind": "run", "run_id": previous_run}
             or type(precondition.get("scene_revision")) is not int or precondition["scene_revision"] < 0):
         raise BuildControlError("Material-stage-A unknown outcome omitted its completed ABC baseline")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "Material-stage-A baseline")
     receipt = _validate_study_material_receipt(payload, session)
     if (receipt.get("acknowledged") is True
             and precondition.get("scene_revision") not in (receipt["before_scene_revision"], receipt["scene_revision"])):
@@ -4113,6 +4326,9 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
                 "region_coefficients_revision", "region_initial_state_revision",
             ))):
         raise BuildControlError("Study stage rerun unknown outcome omitted its exact command precondition")
+    revision_snapshot = prepared_grid_run if isinstance(prepared_grid_run, Mapping) else before
+    _validate_study_stage_precondition_revision(precondition, revision_snapshot.get("resources"),
+                                                "Study stage rerun")
     if expected_mode == "material-stage-a":
         receipt = _validate_study_material_receipt(
             payload, session, precondition.get("scene_revision"),
@@ -4567,6 +4783,8 @@ def _validate_study_texture_unknown_payload(payload, public_url, browser_url, ex
             or not isinstance(precondition.get("domain_generation_id"), str)
             or not precondition["domain_generation_id"]):
         raise BuildControlError("Texture unknown outcome did not retain the exact sixteen-cell prior run")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "Texture baseline")
     baseline = payload.get("texture_baseline_state")
     if (not isinstance(baseline, Mapping) or before.get("texture_baseline_state") != baseline
             or baseline.get("default_cell") != [1e-9, 2e-9, 2e-9]
@@ -4864,7 +5082,13 @@ def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sour
 
 
 def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode,
-                                    *, expected_resume_evidence=None):
+                                    *, expected_resume_evidence=None,
+                                    region_reset_parent_evidence=None):
+    if expected_mode in region_reset_qa.MODES:
+        return region_reset_qa.parse_result(
+            output, public_url, browser_url, expected_sources, expected_mode,
+            parent_evidence=region_reset_parent_evidence,
+        )
     if expected_mode == "fdm-cell-study-resume":
         _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
         return _parse_fdm_grid_resume_result(
@@ -5002,6 +5226,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or type(precondition.get("command_revision")) is not int
             or precondition["command_revision"] < 0):
         raise BuildControlError("Study stage rerun precondition is stale or incomplete")
+    revision_snapshot = prepared_grid_run if isinstance(prepared_grid_run, Mapping) else before
+    _validate_study_stage_precondition_revision(precondition, revision_snapshot.get("resources"),
+                                                "Study stage rerun result")
     region_revision_keys = (
         "region_topology_revision", "region_membership_revision",
         "region_coefficients_revision", "region_initial_state_revision",
@@ -6128,6 +6355,7 @@ def _run(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
 ) -> None:
     receipt_inputs = (operation.get("receipt") or {}).get("inputs", {})
     if not isinstance(receipt_inputs, Mapping):
@@ -6217,10 +6445,13 @@ def _run(
         study_stage_rerun=study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_source_sha256,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        frontend_generation_id=receipt_inputs.get("frontend_generation_id"),
+        frontend_generation_subpath=receipt_inputs.get("frontend_generation_subpath"))
     if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
@@ -6239,6 +6470,7 @@ def _run(
             payload = _parse_study_stage_rerun_result(
                 raw, public_url, browser_url, study_stage_rerun_source_sha256, study_stage_rerun,
                 expected_resume_evidence=study_stage_rerun_resume_evidence,
+                region_reset_parent_evidence=region_reset_parent_evidence,
             )
             if payload.get("outcome") == "unknown" and result.returncode == 0:
                 raise BuildControlError("Study stage rerun helper returned success with an unknown command outcome")
@@ -6265,6 +6497,7 @@ def _run(
     except BuildControlError as error:
         study_no_dispatch_proven = (
             study_stage_rerun is not None
+            and study_stage_rerun not in region_reset_qa.MODES
             and _study_stage_no_dispatch_proven(
                 raw, study_stage_rerun_source_sha256, study_stage_rerun,
             )
@@ -6350,8 +6583,16 @@ def _probe_prestart_browser_qa(control, selected, identity, args, receipt, helpe
             or hashlib.sha256(canonical(frontend_inputs)).hexdigest() != inputs.get("frontend_inputs_sha256")):
         raise BuildControlError("Prestart QA session services changed since admission")
     frontend = _inspect(frontend_id)
-    _validate_frontend(frontend, control, identity, volume, current, args.port,
+    generation_pins = _validate_frontend(frontend, control, identity, volume, current, args.port,
         cache_project_id=cache_project_id)
+    if not isinstance(generation_pins, Mapping):
+        if _private_group_storage_mode(current):
+            raise BuildControlError("Prestart QA frontend generation was not authenticated")
+        generation_pins = {}
+    _require_frontend_generation_inputs(
+        inputs, generation_pins,
+        error="Prestart QA frontend generation changed since admission",
+    )
     backend = _inspect(backend_id)
     from docker_volume_dev import _validate_retained_service
     development_compose = control.read("development/attempts/" + current["attempt"] + "/compose.json")
@@ -6468,6 +6709,10 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     private_group_storage = private_group_marker == "group-volume-v1"
     if private_group_storage and inputs.get("frontend_volume") != control.volume:
         raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
+    frontend_generation = _reconcile_frontend_generation(
+        control, inputs, private_group_storage=private_group_storage,
+        selected=selected, identity=identity,
+    )
     scenario = inputs.get("scenario", "standard")
     if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox", "inspector-ack", "study-stage-rerun"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
@@ -6489,9 +6734,11 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
             raise BuildControlError("QA reconciliation Inspector ACK receipt includes another scenario")
     elif inspector_ack_sources is not None:
         raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
+    region_reset_parent_evidence = None
     if study_stage_rerun:
         if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                           "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
+                                           "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                           *region_reset_qa.MODES}
                 or _study_stage_rerun_source_sha256(selected, study_stage_rerun_mode)
                 != study_stage_rerun_sources):
             raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
@@ -6517,6 +6764,27 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
                 raise BuildControlError("QA reconciliation FDM grid parent record pins differ")
         elif "fdm_grid_resume_parent_attempt" in inputs or "fdm_grid_resume_parent_record_sha256" in inputs:
             raise BuildControlError("QA reconciliation has unrequested FDM grid resume parent pins")
+        if study_stage_rerun_mode in region_reset_qa.MODES:
+            if study_stage_rerun_mode.endswith("-import"):
+                parent_attempt = inputs.get("region_reset_export_attempt")
+                parent_hashes = inputs.get("region_reset_parent_record_sha256")
+                region_reset_parent_evidence = region_reset_qa.load_parent_evidence(
+                    control, parent_attempt, source_root=selected,
+                    mode=study_stage_rerun_mode, expected_sources=study_stage_rerun_sources,
+                )
+                if (parent_attempt != region_reset_parent_evidence["prior_attempt"]
+                        or parent_hashes != region_reset_parent_evidence["record_sha256"]
+                        or inputs.get("region_reset_parent_fresh_state")
+                        != region_reset_parent_evidence["fresh_state"]):
+                    raise BuildControlError("QA reconciliation S46 parent attempt/record pins differ")
+            elif ("region_reset_export_attempt" in inputs
+                  or "region_reset_parent_record_sha256" in inputs
+                  or "region_reset_parent_fresh_state" in inputs):
+                raise BuildControlError("QA reconciliation export carries unrequested S46 parent pins")
+        elif ("region_reset_export_attempt" in inputs
+              or "region_reset_parent_record_sha256" in inputs
+              or "region_reset_parent_fresh_state" in inputs):
+            raise BuildControlError("QA reconciliation has S46 parent pins on another Study profile")
         if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
                 or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
                 or inputs.get("expect_fem_airbox_vectors", False) is not False
@@ -6743,10 +7011,12 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        frontend_generation_id=frontend_generation.get("frontend_generation_id"))
     if canonical(document) != canonical(expected_document):
         raise BuildControlError("QA reconciliation Compose recipe differs")
     helper_name = "fullmag-control-" + attempt
@@ -6819,10 +7089,12 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        **frontend_generation)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
             or observed["Config"].get("Entrypoint") != image["Config"].get("Entrypoint")):
@@ -6945,8 +7217,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
     parser.add_argument(
         "--study-stage-rerun",
-        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"),
+        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study",
+                 *region_reset_qa.MODES),
         help="Run one fixed P22 UI-only Study stage profile and verify public results",
+    )
+    parser.add_argument(
+        "--region-reset-export-attempt",
+        help="Bind an S46 import to one succeeded same-group browser export attempt",
     )
     parser.add_argument(
         "--resume-fdm-grid-attempt",
@@ -6972,6 +7249,15 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("FULLMAG_BROWSER_QA_IMAGE", DEFAULT_BROWSER_IMAGE),
     )
     args = parser.parse_args(argv)
+    is_region_reset_import = args.study_stage_rerun in region_reset_qa.MODES and args.study_stage_rerun.endswith("-import")
+    if args.region_reset_export_attempt is not None:
+        if (not isinstance(args.region_reset_export_attempt, str)
+                or re.fullmatch(r"[0-9a-f]{32}", args.region_reset_export_attempt) is None):
+            raise BuildControlError("--region-reset-export-attempt requires one 32-character lowercase attempt id")
+        if not is_region_reset_import or args.reconcile_attempt:
+            raise BuildControlError("--region-reset-export-attempt is allowed only for an S46 import run")
+    elif is_region_reset_import:
+        raise BuildControlError("S46 import mode requires --region-reset-export-attempt")
     if args.reconcile_prestart and not args.reconcile_attempt:
         raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
     if args.resume_fdm_grid_attempt is not None:
@@ -7125,7 +7411,10 @@ def main(argv: list[str] | None = None) -> int:
     private_group_storage = _private_group_storage_mode(current)
     _validate_frontend_volume(control, frontend_volume, frontend_inputs, current)
     frontend = _inspect(frontend_id)
-    _validate_frontend(frontend, control, identity, frontend_volume, current, args.port, cache_project_id=cache_project_id_for_layout(layout))
+    frontend_generation = _validate_frontend(
+        frontend, control, identity, frontend_volume, current, args.port,
+        cache_project_id=cache_project_id_for_layout(layout),
+    )
     try:
         _validate_live_network(backend_id, frontend_id, control.project, args.port)
     except BuildControlError as error:
@@ -7137,6 +7426,12 @@ def main(argv: list[str] | None = None) -> int:
         _study_stage_rerun_source_sha256(selected, args.study_stage_rerun)
         if args.study_stage_rerun is not None else None
     )
+    region_reset_parent_evidence = None
+    if is_region_reset_import:
+        region_reset_parent_evidence = region_reset_qa.load_parent_evidence(
+            control, args.region_reset_export_attempt, source_root=selected,
+            mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+        )
     study_stage_rerun_resume_evidence = None
     if args.resume_fdm_grid_attempt is not None:
         study_stage_rerun_resume_evidence = _load_fdm_grid_resume_evidence(
@@ -7198,10 +7493,12 @@ def main(argv: list[str] | None = None) -> int:
         study_stage_rerun=args.study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_sources,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
         private_group_storage=private_group_storage,
+        frontend_generation_id=frontend_generation.get("frontend_generation_id"),
     )
     source_commit = (current.get("source_commit") or (current.get("inputs") or {}).get("source_commit"))
     inputs = {
@@ -7253,8 +7550,13 @@ def main(argv: list[str] | None = None) -> int:
         if study_stage_rerun_resume_evidence is not None:
             inputs["fdm_grid_resume_parent_attempt"] = study_stage_rerun_resume_evidence["prior_attempt"]
             inputs["fdm_grid_resume_parent_record_sha256"] = study_stage_rerun_resume_evidence["record_sha256"]
+        if region_reset_parent_evidence is not None:
+            inputs["region_reset_export_attempt"] = region_reset_parent_evidence["prior_attempt"]
+            inputs["region_reset_parent_record_sha256"] = region_reset_parent_evidence["record_sha256"]
+            inputs["region_reset_parent_fresh_state"] = region_reset_parent_evidence["fresh_state"]
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
+    inputs.update(frontend_generation)
     if args.expect_fem_airbox_vectors:
         inputs["expect_fem_airbox_vectors"] = True
     if args.saved_playback_item_id is not None:
@@ -7273,9 +7575,23 @@ def main(argv: list[str] | None = None) -> int:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
             raise BuildControlError("Development attempt changed before browser QA admission")
+        if region_reset_parent_evidence is not None:
+            locked_parent = region_reset_qa.load_parent_evidence(
+                control, args.region_reset_export_attempt, source_root=selected,
+                mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+            )
+            if locked_parent != region_reset_parent_evidence:
+                raise BuildControlError("S46 parent export records changed before browser QA launch")
         browser_image_id, _ = _ensure_browser_image(
             operation, control, document, args.browser_image, args.pull_timeout
         )
+        if region_reset_parent_evidence is not None:
+            launch_parent = region_reset_qa.load_parent_evidence(
+                control, args.region_reset_export_attempt, source_root=selected,
+                mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+            )
+            if launch_parent != region_reset_parent_evidence:
+                raise BuildControlError("S46 parent export records changed before the browser helper launch")
         if study_stage_rerun_resume_evidence is not None:
             _consume_fdm_grid_resume_evidence(
                 control, study_stage_rerun_resume_evidence,
@@ -7315,6 +7631,7 @@ def main(argv: list[str] | None = None) -> int:
             study_stage_rerun=args.study_stage_rerun,
             study_stage_rerun_source_sha256=study_stage_rerun_sources,
             study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+            region_reset_parent_evidence=region_reset_parent_evidence,
         )
     return 0
 

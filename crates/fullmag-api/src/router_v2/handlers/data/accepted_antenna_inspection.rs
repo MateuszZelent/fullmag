@@ -55,10 +55,13 @@ fn invalid(message: impl Into<String>) -> ApiError {
 }
 
 fn closed_inspection_error(error: anyhow::Error) -> ApiError {
-    if error.chain().any(|cause| matches!(
-        cause.downcast_ref::<std::fs::TryLockError>(),
-        Some(std::fs::TryLockError::WouldBlock)
-    )) {
+    if error.chain().any(|cause| {
+        cause.is::<fullmag_session::StoreWriterBusy>()
+            || matches!(
+                cause.downcast_ref::<std::fs::TryLockError>(),
+                Some(std::fs::TryLockError::WouldBlock)
+            )
+    }) {
         return ApiError::conflict_with_code(
             "antenna_store_busy",
             "accepted antenna store has an active writer; retry this read after publication",
@@ -474,6 +477,12 @@ mod tests {
         let busy = anyhow::Error::new(std::fs::TryLockError::WouldBlock)
             .context("inspection cold-load requires a valid shared store snapshot");
         assert_eq!(closed_inspection_error(busy).code.as_deref(), Some("antenna_store_busy"));
+        let typed_busy = anyhow::Error::new(fullmag_session::StoreWriterBusy)
+            .context("inspection cold-load requires a valid shared store snapshot");
+        assert_eq!(
+            closed_inspection_error(typed_busy).code.as_deref(),
+            Some("antenna_store_busy")
+        );
         let corrupt = anyhow::anyhow!("legacy or corrupt session read lock descriptor");
         assert_ne!(closed_inspection_error(corrupt).code.as_deref(), Some("antenna_store_busy"));
     }

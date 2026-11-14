@@ -22,6 +22,7 @@ export interface FdmGridBuildConfirmContentProps {
   sceneRevision?: number | null;
   stale?: boolean;
   totalCells?: number | null;
+  unavailableReason?: string | null;
 }
 
 function formatBounds(
@@ -74,6 +75,7 @@ export function FdmGridBuildConfirmContent({
   sceneRevision,
   stale = false,
   totalCells,
+  unavailableReason,
 }: FdmGridBuildConfirmContentProps) {
   const phase = mode ?? "pre-build";
   const buildButtonLabel =
@@ -126,7 +128,7 @@ export function FdmGridBuildConfirmContent({
         <p className="fm-mesh-build-confirm__empty">
           {stale
             ? "The model changed after this confirmation was prepared. Review an updated preflight."
-            : "Loading current scene geometry baseline…"}
+            : unavailableReason ?? "Loading current scene geometry baseline…"}
         </p>
       ) : null}
 

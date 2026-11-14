@@ -1212,3 +1212,25 @@ inkarnacji nie sygnalizuje ponownie. Stop nie jest drain ani zgodą na teardown:
 obowiązują późniejsze pełne bramki recovery. Timeout zachowuje unknown i helper
 operacji; zwykłe ponowienie apply nie rozlicza takiej blokady. Wymaga ona osobnej
 kwalifikowanej finalizacji, bez ponownego wysyłania niepewnego sygnału.
+
+
+### Build naprawczy przy terminalnym Failed ownerze bez zajętych rezerwacji (13.11.2026)
+
+Tryb `scripts/docker_dev_recovery_build.py --diagnostic-api-only` może
+kompilować prywatnego kandydata także przy terminalnym `Failed` ownerze, jeżeli nie ma żadnej zajętej
+rezerwacji host ledger. Taki przypadek nie wymaga wymyślonego pinu pending
+admission: brak zajętej rezerwacji jest innym stanem niż niewykorzystany permit.
+Oba schedulery muszą być terminalne, a owner i wszystkie procesy natywne
+nieobecne. Dotychczasowe blokady runtime/build, niezmienne piny kontenera,
+obrazu, procesu i ownera, pierwotna tożsamość Ready oraz żywe API z właściwą
+instancją, statusem degraded i aktywnym failure fence nadal są obowiązkowe.
+Każda pozycja ledger musi być released; zajęty lub niepoprawny rekord blokuje
+bezpinową ścieżkę. Podany pin przy Failed ownerze nadal wymaga dokładnego
+kontraktu pending-admission i jego pełnej walidacji.
+
+Ta zgoda dotyczy wyłącznie buildu kandydata, z porównaniem dowodów przed i po.
+Nie zmienia ownera, katalogów/lease, start_release, wyników ani zajętości
+zasobów. Nie daje prawa do publikacji pakietu, startu runtime lub ponowienia
+skryptu/Compute. Obecność zakończonego A i oczekujących B/C wymaga osobnego,
+obsługiwanego kontraktu odzyskania; build nie uznaje całego runu za terminalny.
+Kwalifikacja źródeł i testów nie jest dowodem wykonanego buildu ani recovery.

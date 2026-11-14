@@ -5,6 +5,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -22,12 +23,81 @@ ROOT = Path(__file__).resolve().parents[1]
 def _load_qa_module():
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    scripts_root = str(ROOT / "scripts")
+    if scripts_root not in sys.path:
+        sys.path.insert(0, scripts_root)
     spec = importlib.util.spec_from_file_location("docker_dev_browser_qa_draft", ROOT / "scripts" / "docker_dev_browser_qa.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load browser QA wrapper")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _browser_helper_inspect_from_compose(qa, identity, document, image_id="sha256:" + "c" * 64):
+    service = document["services"]["browser-qa"]
+    volume_name = document["volumes"]["frontend-state"]["name"]
+    resolved_mounts = [
+        {"Type": "volume", "Name": volume_name, "Destination": "/state/development", "RW": False},
+    ]
+    for mount in service["volumes"][1:]:
+        resolved_mounts.append({"Type": "bind", "Source": mount["source"],
+                                "Destination": mount["target"], "RW": False})
+    configured_mounts = [
+        {"Type": "volume", "Source": volume_name, "Target": "/state/development", "ReadOnly": True},
+    ]
+    for mount in service["volumes"][1:]:
+        configured_mounts.append({"Type": "bind", "Source": mount["source"],
+                                  "Target": mount["target"], "ReadOnly": True})
+    return {
+        "Image": image_id,
+        "Config": {"User": service["user"], "Cmd": service["command"],
+                   "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                   "Labels": {**service["labels"], "com.docker.compose.project": identity["project_name"],
+                              "com.docker.compose.service": "browser-qa"}},
+        "HostConfig": {"GroupAdd": service["group_add"], "ReadonlyRootfs": True,
+                       "NetworkMode": identity["network_name"], "PortBindings": None,
+                       "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                       "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+                       "Mounts": configured_mounts},
+        "State": {"Running": False, "ExitCode": 0},
+        "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+        "Mounts": resolved_mounts,
+    }
+
+
+def _s46_parent_evidence(mode, source_text):
+    previous_attempt = "d" * 32
+    current_attempt = "e" * 32
+    recreation_attempt = "f" * 32
+    return {
+        "prior_attempt": "a" * 32,
+        "record_sha256": {"terminal": "b" * 64, "result": "c" * 64},
+        "mode": mode.replace("-import", "-export"),
+        "script_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
+        "source_text": source_text,
+        "source_name": "p22-s46-" + ("local" if "local" in mode else "independent") + ".py",
+        "parent_development_attempt": previous_attempt,
+        "source_commit": "1" * 40,
+        "fresh_state": {
+            "previous_development_attempt": previous_attempt,
+            "previous_development_terminal_sha256": "2" * 64,
+            "previous_state_root": "/tmp/fullmag-state/" + previous_attempt,
+            "previous_group_ledger_sha256": "3" * 64,
+            "recreation_attempt": recreation_attempt,
+            "generation_sha256": "4" * 64,
+            "recreation_terminal_sha256": "5" * 64,
+            "archive_terminal_sha256": "6" * 64,
+            "archive_intent_sha256": "7" * 64,
+            "retained_containers_sha256": "8" * 64,
+            "helper_source_binding_sha256": "9" * 64,
+            "current_development_attempt": current_attempt,
+            "current_development_terminal_sha256": "a" * 64,
+            "current_state_root": "/tmp/fullmag-state/" + current_attempt,
+            "current_compose_sha256": "b" * 64,
+            "current_group_ledger_sha256": "c" * 64,
+        },
+    }
 
 
 def _planar_airbox_observation_fixture(qa):
@@ -389,6 +459,9 @@ def _browser_qa_reconciliation_fixture(
     browser_name = "fullmag-browser-qa-" + attempt[:12]
     browser_image = qa.DEFAULT_BROWSER_IMAGE
     frontend_volume = "fullmag-frontend-state"
+    development_attempt = "f" * 32
+    development_compose = {"name": project, "services": {}}
+    development_config_sha256 = hashlib.sha256(qa.canonical(development_compose)).hexdigest()
     receipt = {
         "schema": "fullmag.docker-build-operation.v1",
         "phase": "browser-qa",
@@ -399,6 +472,9 @@ def _browser_qa_reconciliation_fixture(
         "inputs": {
             "source_root": str(selected),
             "worktree_id": identity["worktree_id"],
+            "compose_project": project,
+            "development_attempt": development_attempt,
+            "development_config_sha256": development_config_sha256,
             "browser_image": browser_image,
             "frontend_volume": frontend_volume,
             "browser_runtime_timeout": 180,
@@ -487,6 +563,13 @@ def _browser_qa_reconciliation_fixture(
             self.documents = {
                 "browser-qa/attempts/" + attempt + "/receipt.json": receipt_raw,
                 "browser-qa/attempts/" + attempt + "/compose.json": compose_raw,
+                "development/current.json": {
+                    "attempt": development_attempt,
+                    "config_sha256": development_config_sha256,
+                    "compose_project": project,
+                    "frontend_volume": frontend_volume,
+                },
+                "development/attempts/" + development_attempt + "/compose.json": development_compose,
             }
             root = "browser-qa/attempts/" + attempt
             if retained is not None:
@@ -622,6 +705,11 @@ def _mock_browser_qa_reconciliation(qa, case):
 
     def validate_browser_helper(*args, **kwargs):
         control.events.append(("validate-browser-helper", args))
+        calls.setdefault("browser_helper_validation", []).append((args, kwargs))
+
+    def compose_document(*args, **kwargs):
+        calls.setdefault("compose_document", []).append((args, kwargs))
+        return case["document"]
 
     with ExitStack() as stack:
         stack.enter_context(patch.object(activation_reconcile, "_control_bytes",
@@ -637,8 +725,7 @@ def _mock_browser_qa_reconciliation(qa, case):
             activation_reconcile, "_wait_for_helper_exit",
             side_effect=lambda helper_id: calls["wait"].append(helper_id),
         ))
-        stack.enter_context(patch.object(qa, "_compose_document",
-                                         return_value=case["document"]))
+        stack.enter_context(patch.object(qa, "_compose_document", side_effect=compose_document))
         stack.enter_context(patch.object(qa, "_inspect", side_effect=inspect_browser))
         stack.enter_context(patch.object(qa, "_inspect_image",
                                          return_value=case["image_document"]))
@@ -1128,6 +1215,115 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         self.assertIn('--pull-timeout', shell)
         self.assertIn('--saved-playback-item-id', shell)
         self.assertIn('exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py"', shell)
+        for mode in ("s46-local-export", "s46-independent-export", "s46-local-import", "s46-independent-import"):
+            self.assertIn(mode, recipe)
+            self.assertIn(mode, shell)
+        self.assertIn('region_reset_export_attempt=""', recipe)
+        self.assertIn('--region-reset-export-attempt', recipe)
+        self.assertIn('--region-reset-export-attempt', shell)
+
+    def test_s46_compose_uses_fixed_runner_source_map_and_parent_only_on_import(self):
+        qa = self.qa
+        region = qa.region_reset_qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree",
+                    "source_root": str(ROOT)}
+        for mode in region.MODES:
+            hashes = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            parent = None
+            if mode.endswith("-import"):
+                source_text = "# prior canonical export\n"
+                parent = _s46_parent_evidence(mode, source_text)
+            with self.subTest(mode=mode):
+                if mode.endswith("-import"):
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+                            3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+                document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+                    3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes,
+                    region_reset_parent_evidence=parent)
+                service = document["services"]["browser-qa"]
+                self.assertEqual(service["command"], [
+                    "node", "/state/development/workspace/apps/control-room/scripts/check-study-region-reset-browser.mjs",
+                    mode,
+                ])
+                self.assertEqual(service["environment"]["CONTROL_ROOM_REGION_RESET_SOURCE_PATHS"],
+                                 qa.canonical(region.source_paths(mode)).decode())
+                self.assertEqual(service["environment"].get("CONTROL_ROOM_REGION_RESET_PARENT"),
+                                 None if parent is None else qa.canonical(parent).decode())
+                fixture = next(mount for mount in service["volumes"]
+                               if mount["target"] == qa.STUDY_STAGE_RERUN_FIXTURE_TARGET)
+                self.assertEqual(fixture["source"], str(ROOT / region.source_paths(mode)["fixture"]))
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun="s46-local-export",
+                study_stage_rerun_source_sha256=qa._study_stage_rerun_source_sha256(ROOT, "s46-local-export"),
+                region_reset_parent_evidence={"unrequested": True})
+
+    def test_s46_cli_requires_exact_parent_attempt_only_for_import_profiles(self):
+        qa = self.qa
+        base = ["--repo-root", str(ROOT), "--study-stage-rerun"]
+        for args, message in (
+            (base + ["s46-local-import"], "requires --region-reset-export-attempt"),
+            (base + ["s46-local-import", "--region-reset-export-attempt", "A" * 32],
+             "32-character lowercase"),
+            (base + ["s46-independent-export", "--region-reset-export-attempt", "a" * 32],
+             "allowed only for an S46 import"),
+            (base + ["stage-b", "--region-reset-export-attempt", "a" * 32],
+             "allowed only for an S46 import"),
+        ):
+            with self.subTest(args=args), self.assertRaisesRegex(qa.BuildControlError, message):
+                qa.main(args)
+
+    def test_s46_helper_inspection_rejects_command_environment_and_mount_drift(self):
+        qa = self.qa
+        mode = "s46-independent-export"
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree",
+                    "source_root": str(ROOT)}
+        hashes = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+            3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+        helper = _browser_helper_inspect_from_compose(qa, identity, document)
+        control = SimpleNamespace(project=identity["project_name"], volume="fullmag-frontend-state")
+        qa._validate_browser_helper(helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+            study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+        for changed in ("command", "source-map", "fixture-mount", "unsolicited-env"):
+            altered = deepcopy(helper)
+            if changed == "command":
+                altered["Config"]["Cmd"][1] = "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+            elif changed == "source-map":
+                altered["Config"]["Env"].append("CONTROL_ROOM_REGION_RESET_SOURCE_PATHS={}")
+            elif changed == "fixture-mount":
+                altered["HostConfig"]["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+                altered["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+            else:
+                altered["Config"]["Env"].append("CONTROL_ROOM_REGION_RESET_PARENT={}")
+            with self.subTest(changed=changed), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(altered, control, identity, "fullmag-frontend-state",
+                    helper["Image"], 0, ROOT, study_stage_rerun=mode,
+                    study_stage_rerun_source_sha256=hashes)
+
+        import_mode = "s46-local-import"
+        import_hashes = qa._study_stage_rerun_source_sha256(ROOT, import_mode)
+        source_text = "# prior export\n"
+        parent = _s46_parent_evidence(import_mode, source_text)
+        import_document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+            3242, 180, study_stage_rerun=import_mode, study_stage_rerun_source_sha256=import_hashes,
+            region_reset_parent_evidence=parent)
+        import_helper = _browser_helper_inspect_from_compose(qa, identity, import_document)
+        qa._validate_browser_helper(import_helper, control, identity, "fullmag-frontend-state",
+            import_helper["Image"], 0, ROOT, study_stage_rerun=import_mode,
+            study_stage_rerun_source_sha256=import_hashes, region_reset_parent_evidence=parent)
+        altered_parent = deepcopy(import_helper)
+        for index, value in enumerate(altered_parent["Config"]["Env"]):
+            if value.startswith("CONTROL_ROOM_REGION_RESET_PARENT="):
+                altered_parent["Config"]["Env"][index] = "CONTROL_ROOM_REGION_RESET_PARENT={}"
+                break
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(altered_parent, control, identity, "fullmag-frontend-state",
+                import_helper["Image"], 0, ROOT, study_stage_rerun=import_mode,
+                study_stage_rerun_source_sha256=import_hashes, region_reset_parent_evidence=parent)
 
     def test_browser_service_has_no_host_writes_or_published_ports(self):
         identity = {
@@ -2409,6 +2605,8 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         attempt = "c" * 32
         current = {
             "attempt": attempt,
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
             "private_group_storage": "group-volume-v1",
             "config_sha256": hashlib.sha256(qa.canonical(compose)).hexdigest(),
             "inputs": {"image_id": backend_image},
@@ -2675,6 +2873,428 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         )
         self.assertEqual(legacy["volumes"]["frontend-state"]["name"], "fullmag-dev-frontend-v1-legacy")
         self.assertEqual(legacy["services"]["browser-qa"]["volumes"][0]["volume"], {"nocopy": True})
+
+    def test_private_group_generation_is_pinned_through_frontend_and_browser_helper(self):
+        case = self._private_group_fixture()
+        qa, control, identity = case["qa"], case["control"], case["identity"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        current = case["current"]
+        current.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+
+        def read(path, *, optional=False):
+            if path == "private/.owner.json":
+                return deepcopy(case["marker"])
+            if path == f"development/attempts/{current['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        frontend = {
+            "Image": case["frontend_image"],
+            "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": control.project,
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {
+                "NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]},
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "VolumeOptions": {"NoCopy": True, "Subpath": generation_subpath}},
+                    {"Type": "volume", "Source": control.volume, "Target": "/opt/fullmag/control",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": control.subpath("frontend")}},
+                ],
+            },
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": True, "Driver": "local", "Source": case["mountpoint"]},
+                {"Type": "volume", "Name": control.volume, "Destination": "/opt/fullmag/control",
+                 "RW": False, "Driver": "local", "Source": case["mountpoint"]},
+            ],
+        }
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            pins = qa._validate_frontend(
+                frontend, control, identity, control.volume, current, 3202,
+            )
+
+        self.assertEqual(pins, {
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        })
+        browser_compose = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, control.volume, 3202, 180,
+            control=control, private_group_storage=True,
+            frontend_generation_id=generation_id,
+        )
+        service = browser_compose["services"]["browser-qa"]
+        self.assertEqual(service["volumes"][0]["volume"], {
+            "nocopy": True, "subpath": generation_subpath,
+        })
+        self.assertEqual(
+            {mount["target"] for mount in service["volumes"]},
+            {"/state/development", "/state/development/workspace/apps/control-room/scripts"},
+        )
+        browser_id = "sha256:" + "c" * 64
+        observed = {
+            "Id": browser_id,
+            "Image": browser_id,
+            "Config": {
+                "User": service["user"],
+                "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {
+                    **qa.source_labels(identity),
+                    "com.docker.compose.project": control.project,
+                    "com.docker.compose.service": "browser-qa",
+                },
+            },
+            "HostConfig": {
+                "GroupAdd": service["group_add"],
+                "ReadonlyRootfs": service["read_only"],
+                "NetworkMode": identity["network_name"],
+                "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
+                "CapDrop": service["cap_drop"],
+                "SecurityOpt": service["security_opt"],
+                "ExtraHosts": None,
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": generation_subpath}},
+                    {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                     "Target": "/state/development/workspace/apps/control-room/scripts", "ReadOnly": True},
+                ],
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": False, "Driver": "local", "Source": case["mountpoint"]},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+            ],
+        }
+        with patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            qa._validate_browser_helper(
+                observed, control, identity, control.volume, browser_id, 0, ROOT,
+                private_group_storage=True,
+                frontend_generation_id=generation_id,
+                frontend_generation_subpath=generation_subpath,
+            )
+
+            wrong_mount = deepcopy(observed)
+            wrong_mount["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = (
+                group_storage.frontend_generation_subpath(control, "e" * 32)
+            )
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    wrong_mount, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                    frontend_generation_id=generation_id,
+                    frontend_generation_subpath=generation_subpath,
+                )
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    observed, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                    frontend_generation_id=generation_id,
+                )
+
+        bad_current = deepcopy(current)
+        bad_current.pop("frontend_generation_subpath")
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_current = deepcopy(current)
+        bad_current["frontend_generation_subpath"] = group_storage.frontend_generation_subpath(
+            control, "e" * 32,
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_current = deepcopy(current)
+        bad_current["frontend_generation_subpath"] = (
+            "namespaces/" + "e" * 32 + "/private/frontend/generations/" + generation_id
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_compose = deepcopy(compose)
+        bad_mount = next(
+            mount for mount in bad_compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        bad_mount["volume"]["subpath"] = group_storage.frontend_generation_subpath(
+            control, "e" * 32,
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(bad_compose, control, current)
+
+    def test_private_group_generation_reconciliation_matches_runtime_and_legacy_receipts(self):
+        qa = self.qa
+        case = self._private_group_fixture()
+        control = case["control"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        current = case["current"]
+        current.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+        inputs = {
+            "development_attempt": current["attempt"],
+            "development_config_sha256": current["config_sha256"],
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            **{
+                "frontend_generation_id": generation_id,
+                "frontend_generation_subpath": generation_subpath,
+            },
+        }
+
+        def read(path, *, optional=False):
+            if path == "development/current.json":
+                return deepcopy(current)
+            if path == f"development/attempts/{current['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        with patch.object(control, "read", side_effect=read):
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                ),
+                {
+                    "frontend_generation_id": generation_id,
+                    "frontend_generation_subpath": generation_subpath,
+                },
+            )
+            for bad_inputs in (
+                {key: value for key, value in inputs.items() if key != "frontend_generation_subpath"},
+                {**inputs, "frontend_generation_id": "e" * 32},
+                {**inputs, "development_attempt": "e" * 32},
+                {**inputs, "development_config_sha256": "f" * 64},
+            ):
+                with self.subTest(bad_inputs=bad_inputs), self.assertRaises(qa.BuildControlError):
+                    qa._reconcile_frontend_generation(
+                        control, bad_inputs, private_group_storage=True,
+                    )
+            changed_compose = deepcopy(compose)
+            changed_mount = next(
+                mount for mount in changed_compose["services"]["frontend"]["volumes"]
+                if mount.get("target") == "/state/development"
+            )
+            changed_mount["volume"]["subpath"] = group_storage.frontend_generation_subpath(
+                control, "e" * 32,
+            )
+            original_compose = deepcopy(compose)
+            compose.clear()
+            compose.update(changed_compose)
+            with self.assertRaisesRegex(qa.BuildControlError, "Compose pin differs"):
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                )
+            compose.clear()
+            compose.update(original_compose)
+
+            legacy = deepcopy(current)
+            legacy.pop("frontend_generation_id")
+            legacy.pop("frontend_generation_subpath")
+            legacy_compose = deepcopy(compose)
+            legacy_mount = next(
+                mount for mount in legacy_compose["services"]["frontend"]["volumes"]
+                if mount.get("target") == "/state/development"
+            )
+            legacy_mount["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+            legacy["config_sha256"] = hashlib.sha256(qa.canonical(legacy_compose)).hexdigest()
+            legacy_inputs = {
+                "development_attempt": legacy["attempt"],
+                "development_config_sha256": legacy["config_sha256"],
+                "compose_project": control.project,
+                "frontend_volume": control.volume,
+            }
+            current_before, compose_before = current.copy(), compose.copy()
+            current.clear()
+            current.update(legacy)
+            compose.clear()
+            compose.update(legacy_compose)
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, legacy_inputs, private_group_storage=True,
+                ),
+                {},
+            )
+            with self.assertRaises(qa.BuildControlError):
+                qa._reconcile_frontend_generation(
+                    control, {**legacy_inputs, "frontend_generation_id": generation_id},
+                    private_group_storage=True,
+                )
+            current.clear()
+            current.update(current_before)
+            compose.clear()
+            compose.update(compose_before)
+
+    def test_reconciliation_uses_authenticated_effective_receipt_for_failed_current(self):
+        qa = self.qa
+        case = self._private_group_fixture()
+        control, identity = case["control"], case["identity"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        effective = deepcopy(case["current"])
+        effective.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        effective["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+        raw_current = {
+            **effective,
+            "attempt": "a" * 32,
+            "state": "failed-confirmed",
+            "config_sha256": None,
+            "inputs": {"frontend_refresh_from_attempt": effective["attempt"]},
+        }
+        inputs = {
+            "development_attempt": effective["attempt"],
+            "development_config_sha256": effective["config_sha256"],
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        }
+
+        def read(path, *, optional=False):
+            if path == "development/current.json":
+                return deepcopy(raw_current)
+            if path == f"development/attempts/{effective['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_read_recovered_development", return_value=effective) as recover:
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                    selected=ROOT.resolve(), identity=identity,
+                ),
+                {
+                    "frontend_generation_id": generation_id,
+                    "frontend_generation_subpath": generation_subpath,
+                },
+            )
+            recover.assert_called_once_with(control, raw_current, ROOT.resolve(), identity)
+
+            with self.assertRaises(qa.BuildControlError):
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                )
+
+            for changed in (
+                {**effective, "config_sha256": "f" * 64},
+                {**effective, "frontend_generation_subpath": group_storage.frontend_generation_subpath(
+                    control, "e" * 32,
+                )},
+            ):
+                recover.return_value = changed
+                with self.subTest(changed=changed), self.assertRaises(qa.BuildControlError):
+                    qa._reconcile_frontend_generation(
+                        control, inputs, private_group_storage=True,
+                        selected=ROOT.resolve(), identity=identity,
+                    )
+
+    def test_browser_qa_reconciliation_rebuilds_compose_from_the_retained_generation(self):
+        qa = self.qa
+        case = _browser_qa_reconciliation_fixture(qa)
+        control = case["control"]
+        import docker_group_storage as group_storage
+
+        control.namespace = ""
+        control.subpath = lambda relative: relative
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        development_attempt = "e" * 32
+        development_compose = {
+            "name": control.project,
+            "services": {"frontend": {"volumes": [{
+                "type": "volume",
+                "source": "frontend-build",
+                "target": "/state/development",
+                "volume": {"nocopy": True, "subpath": generation_subpath},
+            }]}},
+            "volumes": {"frontend-build": {"name": control.volume, "external": True}},
+        }
+        development_config_sha256 = hashlib.sha256(qa.canonical(development_compose)).hexdigest()
+        development_current = {
+            "attempt": development_attempt,
+            "config_sha256": development_config_sha256,
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            "private_group_storage": "group-volume-v1",
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        }
+        control.documents["development/current.json"] = development_current
+        control.documents[f"development/attempts/{development_attempt}/compose.json"] = development_compose
+        case["receipt"]["inputs"].update({
+            "compose_project": control.project,
+            "development_attempt": development_attempt,
+            "development_config_sha256": development_config_sha256,
+            "frontend_volume": control.volume,
+            "private_group_storage": "group-volume-v1",
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        })
+        receipt_raw = qa.canonical(case["receipt"])
+        browser_root = "browser-qa/attempts/" + case["attempt"]
+        control.documents[browser_root + "/receipt.json"] = receipt_raw
+        case["args"].expected_receipt_sha256 = hashlib.sha256(receipt_raw).hexdigest()
+
+        with _mock_browser_qa_reconciliation(qa, case):
+            qa.reconcile_browser_qa(
+                control, case["selected"], case["identity"], case["args"],
+            )
+
+        self.assertEqual(
+            case["calls"]["compose_document"][0][1]["frontend_generation_id"],
+            generation_id,
+        )
+        helper_kwargs = case["calls"]["browser_helper_validation"][0][1]
+        self.assertEqual(helper_kwargs["frontend_generation_id"], generation_id)
+        self.assertEqual(helper_kwargs["frontend_generation_subpath"], generation_subpath)
 
     def test_browser_image_reuses_compatible_local_digest_without_pull(self):
         qa = self.qa
@@ -3675,7 +4295,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "mesh_revision": 2,
                 "domain_generation_id": "fdm-domain-16",
                 "current_run": {"kind": "run", "run_id": new_run},
-                "command_revision": 4,
+                "command_revision": 8,
                 "region_topology_revision": 1,
                 "region_membership_revision": 1,
                 "region_coefficients_revision": 2,
@@ -3739,6 +4359,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                             "script_sha256": sources["fixture"]},
                 "result_identities": before_results,
                 "precondition": precondition,
+                "resources": {"commands_revision": 3 if mode == "fdm-cell-study" else 0},
             },
             "command_receipt": {
                 "method": "POST",
@@ -3928,6 +4549,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                     "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
                     "script_sha256": sources["fixture"]},
                 "scene_revision": 3, "precondition": deepcopy(command_precondition),
+                "resources": {"commands_revision": 8},
                 "commands": {"resource_revision": 8, "count": 4, "pending_count": 0, "running_count": 0,
                     "terminal_statuses": ["completed", "completed", "completed", "completed"],
                     "last_command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"},
@@ -4087,17 +4709,101 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
         javascript = """
 import assert from 'node:assert/strict';
 import {pathToFileURL} from 'node:url';
-const {studyStageTerminalScope: scope} = await import(process.argv[1]);
+const {studyStageTerminalScope: scope, executionStageIds, studyStageCompletedExecutionForAuthored: selectCompleted} = await import(process.argv[1]);
 const ids=['relax-a','relax-b','relax-c'];
-const e={total_stages:3,stage_statuses:['pending','completed','pending'],completed_stage_indexes:[1],
-  stages:ids.map((stage_id,index)=>({stage_id,index,status:index===1?'completed':'pending'}))};
-assert.deepEqual(scope(e,ids,['relax-b']),['relax-b']);
-const extra=structuredClone(e); extra.stage_statuses[0]='completed';
-assert.throws(()=>scope(extra,ids,['relax-b']));
-const metadata=structuredClone(e); metadata.stages[0].started_at_unix_ms=42;
-assert.throws(()=>scope(metadata,ids,['relax-b']));
-const wrong=structuredClone(e); wrong.completed_stage_indexes=[0];
-assert.throws(()=>scope(wrong,ids,['relax-b']));
+const compiled=['script-execution-'+'e'.repeat(64),'script-execution-'+'f'.repeat(64),
+  'script-execution-'+'1'.repeat(64)];
+const session={session_id:'session-1',session_epoch:7,request_scope_epoch:11};
+const result=(authored_stage_id,step_id,run_id='run-current')=>({authored_stage_id,
+  source:{authored_stage_id,step_id,run_id}});
+const current=ids.map((id,index)=>result(id,compiled[index]));
+const baseline={run_id:'run-current',session_id:session.session_id,session_epoch:session.session_epoch,
+  request_scope_epoch:session.request_scope_epoch,total_stages:3,runtime_state:'completed',
+  stage_statuses:['completed','completed','completed'],completed_stage_indexes:[0,1,2],
+  stages:compiled.map((stage_id,index)=>({stage_id,index,status:'completed'}))};
+assert.deepEqual(executionStageIds(baseline,'run-current',session),compiled,
+  'raw durable execution IDs remain available for the proof');
+assert.deepEqual(scope(baseline,ids,ids,current),ids,
+  'completed compiled rows map only through same-run public result source identities');
+assert.equal(selectCompleted(baseline,current,'relax-b'),baseline.stages[1],
+  'the authored Stage B menu target resolves to its exact unchanged durable execution row');
+assert.throws(()=>selectCompleted(baseline,current,'relax-unknown'), /authored|stage/i);
+assert.throws(()=>selectCompleted(baseline,[],'relax-b'), /mapping|source/i);
+assert.throws(()=>selectCompleted(baseline,current.map(item=>({...item,source:{...item.source,run_id:'foreign'}})),
+  'relax-b'), /run/i);
+assert.throws(()=>selectCompleted({...baseline,stages:[...baseline.stages,baseline.stages[1]]},current,'relax-b'),
+  /duplicate|row/i);
+
+const legacyResults=ids.map(id=>result(id,id));
+const legacy={...baseline,stages:ids.map((stage_id,index)=>({stage_id,index,status:'completed'}))};
+assert.deepEqual(scope(legacy,ids,ids,legacyResults),ids,
+  'legacy authored IDs remain valid when the public result source proves the same IDs');
+
+const child={...baseline,run_id:'run-child',runtime_state:'completed',
+  stage_statuses:['completed','pending','pending'],completed_stage_indexes:[0],
+  stages:compiled.map((stage_id,index)=>({stage_id,index,status:index===0?'completed':'pending'}))};
+const childResults=[result('relax-a',compiled[0],'run-child')];
+assert.deepEqual(scope(child,ids,['relax-a'],childResults,current,'run-current'),['relax-a'],
+  'child pending compiled rows may use the exact prior-run source map while only A is current');
+const recompiledId='script-execution-'+'2'.repeat(64);
+const recompiledChild={...child,stages:child.stages.map((row,index)=>index===0
+  ? {...row,stage_id:recompiledId} : row)};
+assert.deepEqual(scope(recompiledChild,ids,['relax-a'],[result('relax-a',recompiledId,'run-child')],
+  current,'run-current'),['relax-a'],
+  'completed current rows use current-run evidence even when recompilation changes their durable ID');
+const scopedChild={...child,total_stages:1,stage_statuses:['completed'],completed_stage_indexes:[0],
+  stages:[child.stages[0]]};
+assert.deepEqual(scope(scopedChild,ids,['relax-a'],childResults),['relax-a'],
+  'a selected A run may publish only its single admitted stage, while the scene retains ABC');
+const scopedB={...scopedChild,stages:[{stage_id:compiled[1],index:0,status:'completed'}]};
+assert.deepEqual(scope(scopedB,ids,['relax-b'],[result('relax-b',compiled[1],'run-child')]),['relax-b'],
+  'selected B is resource index zero in a one-stage run, without using positional identity fallback');
+assert.throws(()=>scope(scopedB,ids,['relax-a'],childResults), /mapping|source|stage/i,
+  'a one-stage execution of B cannot satisfy an authored A target');
+const disabledB={...child,total_stages:2,stage_statuses:['completed','completed'],completed_stage_indexes:[0,1],
+  stages:[{stage_id:compiled[0],index:0,status:'completed'},{stage_id:compiled[2],index:1,status:'completed'}]};
+assert.deepEqual(scope(disabledB,ids,['relax-a','relax-c'],[
+  result('relax-a',compiled[0],'run-child'),result('relax-c',compiled[2],'run-child')]),['relax-a','relax-c'],
+  'disabled B remains in the authoring scene but cannot appear in the admitted execution');
+assert.throws(()=>scope(child,ids,['relax-a'],childResults,current,'foreign-prior-run'), /run/i,
+  'a prior mapping is pinned to the exact preceding run');
+const ambiguousPrior=[result('relax-b',compiled[0],'run-current')];
+assert.throws(()=>scope(child,ids,['relax-a'],childResults,ambiguousPrior,'run-current'), /different authored|assign/i,
+  'one durable execution ID cannot be reassigned to a different authored stage');
+const pendingAuthored={...child,stages:[
+  {stage_id:compiled[0],index:0,status:'completed'},
+  {stage_id:'relax-b',index:1,status:'pending'},
+  {stage_id:'relax-c',index:2,status:'pending'},
+]};
+assert.deepEqual(scope(pendingAuthored,ids,['relax-a'],childResults),['relax-a'],
+  'an unmapped pending row may retain its exact authored ID');
+
+assert.throws(()=>scope(baseline,ids,ids,current.map((item,index)=>index===0
+  ? result(item.authored_stage_id,item.source.step_id,'foreign-run') : item)), /run/i,
+  'a result source from another run cannot authenticate a completed row');
+assert.throws(()=>scope(baseline,ids,ids,[...current,current[0]]), /duplicate/i,
+  'duplicate authored result mapping is rejected');
+assert.throws(()=>scope(baseline,ids,ids,current.slice(1)), /mapping|source|completed/i,
+  'a completed row without its source mapping is rejected');
+assert.throws(()=>scope(baseline,ids,ids,[...current,result('relax-extra','script-execution-'+'2'.repeat(64))]),
+  /authored|mapping|extra/i, 'extra authored mapping is rejected');
+const swapped=[result('relax-a',compiled[1]),result('relax-b',compiled[0]),current[2]];
+assert.throws(()=>scope(baseline,ids,ids,swapped), /order|mapping|stage/i,
+  'swapped source bindings are rejected');
+const wrongStep=[result('relax-a','script-execution-'+'2'.repeat(64)),current[1],current[2]];
+assert.throws(()=>scope(baseline,ids,ids,wrongStep), /execution|source|mapping/i,
+  'a result source that does not match an execution row is rejected');
+const extraExecution={...baseline,stages:[...baseline.stages,
+  {stage_id:'script-execution-'+'2'.repeat(64),index:3,status:'pending'}],total_stages:4};
+assert.throws(()=>scope(extraExecution,ids,ids,current), /count|stage|mapping/i,
+  'extra execution rows are rejected');
+const nonselectedCompleted={...child,stage_statuses:['completed','completed','pending'],completed_stage_indexes:[0,1],
+  stages:child.stages.map((row,index)=>index===1?{...row,status:'completed'}:row)};
+assert.throws(()=>scope(nonselectedCompleted,ids,['relax-a'],
+  [...childResults,result('relax-b',compiled[1],'run-child')],current,'run-current'), /status|selected|execution/i,
+  'a nonselected completed execution cannot be accepted');
+assert.throws(()=>executionStageIds({...baseline,run_id:'foreign-run'},'run-current',session), /run|session/i);
+assert.throws(()=>executionStageIds(baseline,'run-current',{...session,session_id:'foreign-session'}), /run|session/i);
 """
         result = subprocess.run([node, "--input-type=module", "-e", javascript, source.as_uri()],
                                 capture_output=True, text=True, timeout=15)
@@ -4198,6 +4904,11 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     requested_device="cuda")),
                 ("wrong scope", lambda item: item["command_receipt"].update(scope_header="session=foreign")),
                 ("stale precondition", lambda item: item["command_receipt"]["payload"]["precondition"].update(mesh_revision=17)),
+                ("precondition command revision differs from captured status", lambda item: (
+                    item["before"]["precondition"].update(
+                        command_revision=item["before"]["precondition"]["command_revision"] + 1),
+                    item["command_receipt"]["payload"]["precondition"].update(
+                        command_revision=item["command_receipt"]["payload"]["precondition"]["command_revision"] + 1))),
                 ("changed old history", lambda item: item["after"]["preserved_prior_result_identities"][0].update(
                     artifact_sha256="f" * 64)),
                 ("incomplete terminal", lambda item: item["after"].update(run_status="running")),
@@ -4242,6 +4953,10 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     ("held run aliases old A", lambda item: item["prepared_grid_run"].update(run_id="run-before")),
                     ("held precondition has stale scene revision", lambda item: item["prepared_grid_run"]
                      ["precondition"].update(scene_revision=31)),
+                    ("held precondition command revision differs from status", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(command_revision=7)),
+                    ("held status command revision differs from precondition", lambda item: item["prepared_grid_run"]
+                     ["resources"].update(commands_revision=7)),
                     ("held run receipt belongs to another run", lambda item: item["prepared_grid_run"]
                      ["preparation"]["receipt"].update(run_id="foreign-run")),
                     ("held preparation revision is stale", lambda item: item["prepared_grid_run"]
@@ -4469,7 +5184,8 @@ assert.equal(disposed, 1);
             "stageIds": prepared["stage_ids"], "sceneStageIds": prepared["authored_stage_ids"],
             "sceneProfile": prepared["scene_profile"], "profile": prepared["profile"],
             "scene": {"revision": prepared["scene_revision"]}, "precondition": prepared["precondition"],
-            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"]}},
+            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"],
+                                       "commands_revision": prepared["resources"]["commands_revision"]}},
             "commands": {"revision": commands["resource_revision"], "pending_count": 0, "running_count": 0,
                          "commands": [{"status": state, "command_id": commands["last_command_id"]}
                                       for state in commands["terminal_statuses"]]},
@@ -5041,22 +5757,40 @@ assert.throws(() => runner.validateStudyStageScene(extraNode));
 const session = {name:'P22 three Relax stages', session_id:'s', session_epoch:'s@1', request_scope_epoch:'api:1'};
 const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
 const precondition = {scene_revision:31, mesh_revision:18, domain_generation_id:'fdm-domain-8',
-  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:0,
+  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:8,
   region_topology_revision:3, region_membership_revision:4,
   region_coefficients_revision:5, region_initial_state_revision:6};
-const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,
-  domain_generation_id:'fdm-domain-8',region_topology_revision:3,region_membership_revision:4,
-  region_coefficients_revision:5,region_initial_state_revision:6}};
+const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,commands_revision:8,
+  command_completion_revision:8,domain_generation_id:'fdm-domain-8',region_topology_revision:3,
+  region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6}};
 assert.deepEqual(runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
-  {runtime_state:'awaiting_command'},{commands:[]}),precondition);
+  {runtime_state:'awaiting_command'},{revision:8,commands:[{status:'completed'},{status:'completed'},
+    {status:'completed'},{status:'completed'}]}),precondition);
+assert.throws(() => runner.studyStageComputePrecondition({run:{run_id:'old'},resources:{
+  ...computeStatus.resources,commands_revision:undefined}},{run_id:'old'},
+  {runtime_state:'awaiting_command'},{commands:[]}));
 assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'foreign'},
   {runtime_state:'awaiting_command'},{commands:[]}));
 assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
   {runtime_state:'paused'},{commands:[]}));
+const beforeSummary = runner.studyStageRunSummary({
+  currentRun:{run_id:'old',status:'completed'}, solverStatus:{runtime_state:'awaiting_command'},
+  execution:{runtime_state:'completed',stage_statuses:['completed'],completed_stage_indexes:[0]},
+  stageIds:['relax-a'], sceneStageIds:['relax-a','relax-b','relax-c'],
+  sceneProfile:{pipeline_version:'study_pipeline.v1'}, profile:{domain_generation_id:'fdm-domain-8'},
+  resultIdentities:[], precondition, status:computeStatus,
+});
+assert.deepEqual(beforeSummary, {
+  run_id:'old',run_status:'completed',solver_state:'awaiting_command',execution_state:'completed',
+  stage_ids:['relax-a'],authored_stage_ids:['relax-a','relax-b','relax-c'],
+  stage_statuses:['completed'],completed_stage_indexes:[0],scene_profile:{pipeline_version:'study_pipeline.v1'},
+  profile:{domain_generation_id:'fdm-domain-8'},result_identities:[],precondition,
+  resources:{commands_revision:8},
+});
 const heldStatus = {run:{run_id:'held'},solver:{state:'awaiting_command'},
   domain:{discretization:'fdm',cell_count:16,generation_id:'fdm-domain-16'},
   resources:{scene_revision:32,mesh_revision:19,domain_generation_id:'fdm-domain-16',
-    commands_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
+    commands_revision:8,command_completion_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
     region_membership_revision:5,region_coefficients_revision:6,region_initial_state_revision:7}};
 const heldRun = {run_id:'held',status:'waiting_for_solve',session_id:'s'};
 const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1',
@@ -5083,7 +5817,17 @@ const heldPrecondition = runner.studyStagePreparedGridPrecondition({status:heldS
 assert.equal(heldPrecondition.current_run.run_id,'held');
 assert.equal(heldPrecondition.scene_revision,32);
 assert.equal(heldPrecondition.domain_generation_id,'fdm-domain-16');
-assert.equal(heldPrecondition.command_revision,4);
+assert.equal(heldPrecondition.command_revision,8);
+const fallbackStatus={...heldStatus,resources:{...heldStatus.resources,commands_revision:4,
+  command_completion_revision:1000}};
+const fallbackCommands={...heldCommands,revision:1004};
+const fallbackPrecondition=runner.studyStagePreparedGridPrecondition({status:fallbackStatus,currentRun:heldRun,
+  execution:heldExecution,solverStatus:{runtime_state:'awaiting_command'},commands:fallbackCommands,
+  preparation:heldPreparation,session:heldSession,previousRunId:'old',
+  previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+  expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'});
+assert.equal(fallbackPrecondition.command_revision,4);
 const resumeSession={name:'P22 three Relax stages',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
 const resumeBefore={run_id:'old',run_status:'completed',stage_ids:['relax-a'],completed_stage_indexes:[0],
   profile:{domain_cell_count:8},precondition:{scene_revision:2,current_run:{kind:'run',run_id:'old'}},
@@ -5115,7 +5859,6 @@ for (const altered of [
   {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:3}}},
   {currentRun:{...heldRun,status:'waiting_for_compute'}},
   {preparation:{...heldPreparation,stages:heldPreparation.stages.map(({id,status})=>({stage_id:id,status}))}},
-  {commands:{...heldCommands,revision:7}},
   {commands:{...heldCommands,commands:[...heldCommands.commands.slice(0,-1),
     {...heldCommands.commands.at(-1),command_id:'foreign-grid'}]}},
 ]) {
@@ -5213,6 +5956,69 @@ assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.
             capture_output=True, text=True, timeout=10,
         )
         self.assertNotEqual(malformed.returncode, 0)
+
+        import_mode = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-local-import", "", "a" * 32],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(import_mode.returncode, 0, import_mode.stderr)
+        import_rendered = import_mode.stdout + import_mode.stderr
+        self.assertIn("--study-stage-rerun s46-local-import", import_rendered)
+        self.assertIn("--region-reset-export-attempt '" + "a" * 32 + "'", import_rendered)
+
+        import_without_parent = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-independent-import"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(import_without_parent.returncode, 0)
+
+        export_with_parent = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-local-export", "", "a" * 32],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(export_with_parent.returncode, 0)
+
+    def test_just_shell_forwards_only_paired_s46_import_parent_pin(self):
+        wrapper = ROOT / "scripts/just_storage_shell.sh"
+        token = "a" * 32
+        with tempfile.TemporaryDirectory(prefix="fullmag-s46-shell-test-") as directory:
+            fake_python = Path(directory) / "python-stub"
+            log_path = Path(directory) / "argv.txt"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"-c\" ]]; then exit 0; fi\n"
+                "printf '%s\\n' \"$@\" > \"${S46_TEST_ARGV_LOG}\"\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            environment = {**os.environ, "FULLMAG_STORAGE_PYTHON": str(fake_python),
+                           "S46_TEST_ARGV_LOG": str(log_path)}
+            prefix = (f'python3 "{ROOT}/scripts/docker_dev_browser_qa.py" --repo-root "{ROOT}" '
+                      "--timeout '180' --pull-timeout '1800' ")
+            valid = prefix + "--study-stage-rerun s46-local-import --region-reset-export-attempt '" + token + "'"
+            result = subprocess.run(["bash", str(wrapper), valid], capture_output=True, text=True,
+                                    timeout=10, env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv = log_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(argv, ["-B", str(ROOT / "scripts/docker_dev_browser_qa.py"),
+                                    "--repo-root", str(ROOT), "--timeout", "180", "--pull-timeout", "1800",
+                                    "--study-stage-rerun", "s46-local-import",
+                                    "--region-reset-export-attempt", token])
+
+            log_path.unlink()
+            invalid_cases = (
+                prefix + "--study-stage-rerun s46-independent-import",
+                prefix + "--study-stage-rerun s46-independent-export --region-reset-export-attempt '" + token + "'",
+            )
+            for recipe in invalid_cases:
+                with self.subTest(recipe=recipe):
+                    rejected = subprocess.run(["bash", str(wrapper), recipe], capture_output=True,
+                                              text=True, timeout=10, env=environment)
+                    self.assertEqual(rejected.returncode, 2)
+                    self.assertFalse(log_path.exists())
 
 
 if __name__ == "__main__":

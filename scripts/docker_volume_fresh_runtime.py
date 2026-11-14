@@ -559,14 +559,14 @@ def _container_ids(*filters: str) -> set[str]:
     return set(values)
 
 
-def _operation_helper(control: BuildControl, operation: Mapping[str, object], token: str) -> tuple[str, dict[str, object]]:
+def _operation_helper(control: BuildControl, operation: Mapping[str, object], token: str, *, retained_state_retry=False) -> tuple[str, dict[str, object]]:
     receipt = operation.get("receipt")
     logger = operation.get("logger")
     if (
         not isinstance(receipt, Mapping)
         or receipt.get("schema") != "fullmag.docker-build-operation.v1"
         or receipt.get("phase") != "recreate-services"
-        or receipt.get("fresh_state") is not True
+        or receipt.get("fresh_state") is not (False if retained_state_retry else True)
         or receipt.get("attempt") != token
         or receipt.get("helper_container") != "fullmag-control-" + token
         or operation.get("root") != "recreate-services/attempts/" + token
@@ -1106,15 +1106,25 @@ def archive_runtime_control(
     previous_state_root: str,
     source_root: str,
     removed_containers: object,
+    held_ui_start_retry=None,
 ) -> dict[str, object]:
-    """Retain old native state and create the empty runtime root for fresh DEV."""
+    """Archive technical state; a typed held retry may retain accepted sessions."""
     if not isinstance(control, BuildControl) or not isinstance(operation, Mapping):
         _fail("Fresh-runtime archive requires the managed BuildControl operation")
     receipt = operation.get("receipt")
     token = receipt.get("attempt") if isinstance(receipt, Mapping) else None
     if not isinstance(token, str) or _OPERATION_ID.fullmatch(token) is None:
         _fail("Fresh-runtime archive operation token is malformed")
-    helper_id, _ = _operation_helper(control, operation, token)
+    retained_retry = False
+    if held_ui_start_retry is not None:
+        from docker_volume_held_ui_start_retry_lifecycle import validate_archive_handoff
+        retained_retry = validate_archive_handoff(control, operation, held_ui_start_retry)
+        if retained_retry is not True:
+            _fail("Retained held-start archive authority was not validated")
+    if retained_retry:
+        helper_id, _ = _operation_helper(control, operation, token, retained_state_retry=True)
+    else:
+        helper_id, _ = _operation_helper(control, operation, token)
 
     source = Path(source_root)
     prior_state = Path(previous_state_root)

@@ -1,0 +1,421 @@
+{
+  "schema": "fullmag.p22.recovered-frontend-rebuild-handoff.v1",
+  "source_commit": "3542403e42d626ee55d56c59d8feff6e5c096829",
+  "state": "backend-native-ready-frontend-dependency-mismatch",
+  "canonical_up_exit_code": 2,
+  "controlled_stop": {
+    "attempt": "d159da3080d54bc9a6139464ad9eecac",
+    "state": "succeeded",
+    "config_sha256": "e870d4a948f0f9c347ce01054ad175057da04b8a9f26b8c5eba10fb720ffc526"
+  },
+  "development_attempt": "33052febe7e54031a42865a76c067a68",
+  "base_attempt": "08a6cbffbe874153a6e7547eb5898650",
+  "missing_current_fields": [
+    "container_recovery",
+    "container_recovery_environment"
+  ],
+  "base_fields_present": true,
+  "backend_env_authorization_sha256": "070fee0fa02dbf92f35d67067376a6a598f13f77ddca256ae459ce2a826e340f",
+  "active_operation_marker": null,
+  "containers": [
+    {
+      "id": "1d3311194d380f36fc8875ec3195ee8fcddb9e385bcd906c4d0c4ef4c4365ad7",
+      "service": "backend",
+      "state": "exited",
+      "exit_code": 0,
+      "finished_at": "2026-11-13T05:32:13.933503153Z"
+    },
+    {
+      "id": "fc57c9ca6c41be8e21367eaa3052794e3b8a4440ce964f0c86506ce62d1d1340",
+      "service": "frontend",
+      "state": "exited",
+      "exit_code": 0,
+      "finished_at": "2026-11-13T05:32:10.222228925Z"
+    }
+  ],
+  "native_rebuild_executed": false,
+  "actual_UI_acceptance": "FAILED opening workspace: missing postprocessing from stale installation; real Cell/interactive acceptance not yet performed",
+  "fix_state": "legacy d7 continuation succeeded; current a5 native backend Ready; frontend dependency freshness correction pending",
+  "merged_source_CI": {
+    "run": 43371559095,
+    "conclusion": "success"
+  },
+  "historical_receipts_preserved": true,
+  "readonly_validation": {
+    "state": "validated-readonly",
+    "current_attempt": "33052febe7e54031a42865a76c067a68",
+    "base_attempt": "08a6cbffbe874153a6e7547eb5898650",
+    "stop_attempt": "d159da3080d54bc9a6139464ad9eecac",
+    "authorization_sha256": "070fee0fa02dbf92f35d67067376a6a598f13f77ddca256ae459ce2a826e340f",
+    "environment_names": [
+      "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION",
+      "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION_SHA256"
+    ],
+    "context_keys": [
+      "recovery_environment",
+      "recovery_metadata"
+    ],
+    "documents_unchanged": true,
+    "containers_still_stopped": true,
+    "services_mutated": false,
+    "source_helper_sha256": "c40afe806a776da5db9dd48456bccbe9ceb4b351b1de12daad4d58598ae59101"
+  },
+  "candidate_metadata_tests_passed": 213,
+  "candidate_review": "namespace binding and partial-pair early-return defects closed; no remaining blocker in bounded review",
+  "latest_start": {
+    "source_commit": "eb079b7b102f701f3fb8e5b8950b5d5171a8b224",
+    "exec_exit_code": 2,
+    "recreation": {
+      "attempt": "6d12568afc4342768d405fcc49a5ce18",
+      "state": "succeeded",
+      "old_application_containers_removed": true,
+      "retained_state_root_unchanged": true
+    },
+    "backend_wrapper_image": {
+      "attempt": "900f82d517eb4f6ea3977b49ff2223b5",
+      "state": "succeeded",
+      "image_id": "sha256:e2431fa28b3b39a6e602735dd692f73d191cb1861274cd35b0b0c276e268716e"
+    },
+    "development": {
+      "attempt": "d7c399ef69fe494ca484696bd2b98858",
+      "state": "failed-confirmed",
+      "error": "Frontend metadata has unknown changes; all state retained",
+      "compose_absent": true,
+      "frontend_seed_receipt_absent": true,
+      "generation_fields_absent": true,
+      "full_recovery_capability_preserved": true
+    },
+    "active_marker": null,
+    "application_containers": [],
+    "ui_port_3243": "connection refused",
+    "native_application_rebuild_executed": false,
+    "readonly_evidence": {
+      "current_terminal_sha256": "08e8f68685eb368e982b6131d2b11b8b08db04fbf74f809e6eb84ffb41fd5dbb",
+      "verified_attempt": "33052febe7e54031a42865a76c067a68",
+      "verified_terminal_sha256": "e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4",
+      "verified_generation_subpath": "private/frontend/generations/33052febe7e54031a42865a76c067a68",
+      "legacy_next_env_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "retained_generation_next_env_sha256": "6b76621316e155a2fdf317182ab572a790388b9da0d960b2f92226c60dca82d4",
+      "retained_generation_inputs_freeze_sha256": "d6c077bd8a37509a104cf501d373c01397987a431ec321062d54c1e2f447e63f"
+    },
+    "root_cause": "start() did not carry the authenticated previous generation into the new operation; _frontend selected legacy root; unknown-byte guard refused correctly",
+    "next": "Authenticate exact recreation lineage and carry generation through startup; do not rewrite receipts, clear legacy bytes, or retry blindly",
+    "selected_metadata_compatibility": {
+      "apps/control-room/next-env.d.ts": {
+        "current_generation_sha256": "6b76621316e155a2fdf317182ab572a790388b9da0d960b2f92226c60dca82d4",
+        "current_generation_in_selected_allowlist": true,
+        "legacy_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "legacy_in_selected_allowlist": false,
+        "selected_allowlist": [
+          "6b76621316e155a2fdf317182ab572a790388b9da0d960b2f92226c60dca82d4",
+          "7b550dda9686c16f36a17bf9051d5dbf31e98555b30d114ac49fc49a1e712651"
+        ]
+      },
+      "apps/control-room/tsconfig.json": {
+        "current_generation_sha256": "7a51320905a30adb01b5a9aed6a917975297c9f71b6e6feeeed0b20a08ffc046",
+        "current_generation_in_selected_allowlist": true,
+        "legacy_sha256": "7a51320905a30adb01b5a9aed6a917975297c9f71b6e6feeeed0b20a08ffc046",
+        "legacy_in_selected_allowlist": true,
+        "selected_allowlist": [
+          "6320df69cf837ca96877e9022e91105d6354130c4a07f944e49fdbd57449369b",
+          "7a51320905a30adb01b5a9aed6a917975297c9f71b6e6feeeed0b20a08ffc046"
+        ]
+      }
+    },
+    "retained_owner_certificate_proof": {
+      "state": "retained-owner-certificate-validated-readonly",
+      "state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400",
+      "certificate_sha256": "9f25330b06c3a0286f55185e9d3f9b6d924195146f4dbaef856a5f8b483ec3c5",
+      "owner_sha256": "9f25330b06c3a0286f55185e9d3f9b6d924195146f4dbaef856a5f8b483ec3c5",
+      "image_id": "sha256:b6dc2b6acf106c9d0e07d157dd3e9cbbf58078d3141e55a841b3e4ac5ecf547b",
+      "restart_verified": true,
+      "owner_certificate_equal": true,
+      "rotation_during_failed_precompose_start": false
+    }
+  },
+  "latest_ci": {
+    "source_commit": "eb079b7b102f701f3fb8e5b8950b5d5171a8b224",
+    "run": 43384392761,
+    "state": "in_progress with python-contracts failure",
+    "python_job": 131749354507,
+    "failure": "ordinary fixture removed metadata but retained environment-name list; strict partial-pair guard refused correctly",
+    "fixture_correction": "ordinary removes both fields; explicit partial-pair/empty-environment refusal regression",
+    "fixture_tests": "baseline12tests1ERROR ->13PASS locally; updated CI pending",
+    "frontend_job": 131749354268,
+    "frontend_result": "success",
+    "generator_job": 131749354340,
+    "generator_result": "success",
+    "browser_fixture_job": 131749354332,
+    "browser_fixture_result": "success",
+    "inspector_fixture_job": 131749354449,
+    "inspector_fixture_result": "success",
+    "actual_runtime_acceptance": "NOT VERIFIED"
+  },
+  "generation_start_fix": {
+    "state": "implemented-local; normal recreate/start only",
+    "scope": "pre-stop validation, pre-removal capture, lease recheck, reuse_state carry, development input pin, storage generation pin before backend cache or frontend seed",
+    "source_helper_sha256": "9726bf476b0e3875126f098293203acb33c28ac328dfd60c49c43bcc4d9a5c19",
+    "focused_regressions_passed": 9,
+    "related_tests_passed": 277,
+    "suite_results": [
+      {
+        "suite": "test_docker_frontend_start_handoff.py",
+        "exit_code": 0,
+        "summary": "Ran 9 tests in 0.009s"
+      },
+      {
+        "suite": "test_docker_retained_recovery_context.py",
+        "exit_code": 0,
+        "summary": "Ran 13 tests in 0.024s"
+      },
+      {
+        "suite": "test_docker_native_failed_recreate.py",
+        "exit_code": 0,
+        "summary": "Ran 64 tests in 0.335s"
+      },
+      {
+        "suite": "test_docker_volume_recovery_handoff.py",
+        "exit_code": 0,
+        "summary": "Ran 20 tests in 0.048s"
+      },
+      {
+        "suite": "test_docker_dev_up.py",
+        "exit_code": 0,
+        "summary": "Ran 49 tests in 0.324s"
+      },
+      {
+        "suite": "test_docker_dev_recreate.py",
+        "exit_code": 0,
+        "summary": "Ran 34 tests in 0.332s"
+      },
+      {
+        "suite": "test_docker_volume_frontend_recovery.py",
+        "exit_code": 0,
+        "summary": "Ran 17 tests in 0.118s"
+      },
+      {
+        "suite": "test_docker_volume_frontend_seed_recovery.py",
+        "exit_code": 0,
+        "summary": "Ran 20 tests in 1.035s"
+      },
+      {
+        "suite": "test_docker_volume_pending_resume.py",
+        "exit_code": 0,
+        "summary": "Ran 16 tests in 0.085s"
+      },
+      {
+        "suite": "test_docker_volume_cold_budget_restore.py",
+        "exit_code": 0,
+        "summary": "Ran 35 tests in 2.353s"
+      }
+    ],
+    "review": "normal wiring reviewed; missing storage-mode with generation evidence defect closed with RED2failures ->GREEN; read-only reviewer ran no tests",
+    "fixture_fix_commit": "ce4642e7a4a7c912152cd8f4a33deb6870502c18",
+    "actual_failed_d7_continuation": "NOT IMPLEMENTED; requires explicit terminal pins and existing full removal/native proof; no restart attempted",
+    "specialized_completed_resume_generation_carry": "pending next slice",
+    "actual_UI_acceptance": "NOT VERIFIED"
+  },
+  "failed_precompose_resume_fix": {
+    "base_source_commit": "2052d97c34d09e1ba34a9e2e531bb6bed7af1b89",
+    "state": "qualified-readonly; actual start pending",
+    "scope": "historical lost-generation receipts only; exact failed attempt/SHA and resume-recreation; generation-aware failures explicitly refused",
+    "full_readonly_validation": {
+      "state": "validated-readonly",
+      "base_attempt": "33052febe7e54031a42865a76c067a68",
+      "recreation_attempt": "6d12568afc4342768d405fcc49a5ce18",
+      "failed_attempt": "d7c399ef69fe494ca484696bd2b98858",
+      "current_sha256": "08e8f68685eb368e982b6131d2b11b8b08db04fbf74f809e6eb84ffb41fd5dbb",
+      "native_context_keys": [
+        "recovery_environment",
+        "recovery_metadata"
+      ],
+      "frontend_handoff": {
+        "schema": "fullmag.frontend-start-handoff.v1",
+        "attempt": "33052febe7e54031a42865a76c067a68",
+        "terminal_sha256": "e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4",
+        "current_sha256": "08e8f68685eb368e982b6131d2b11b8b08db04fbf74f809e6eb84ffb41fd5dbb",
+        "compose_sha256": "e870d4a948f0f9c347ce01054ad175057da04b8a9f26b8c5eba10fb720ffc526",
+        "verified_sha256": "e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4",
+        "source_root": "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108",
+        "state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400",
+        "frontend_generation_id": "33052febe7e54031a42865a76c067a68",
+        "frontend_generation_subpath": "private/frontend/generations/33052febe7e54031a42865a76c067a68"
+      },
+      "documents_unchanged": true,
+      "services_mutated": false,
+      "source_helper_sha256": "0a8782c81a806cd0a7cc5fa93d725d444451e0a992401861080abb7396c0762f",
+      "source_modules_sha256": {
+        "scripts/docker_volume_dev.py": "0a8782c81a806cd0a7cc5fa93d725d444451e0a992401861080abb7396c0762f",
+        "scripts/docker_dev.py": "6223deb072d7f9ecdc87c59310f448a869ff32772222d6f8f64cb63a02c05cc5",
+        "scripts/docker_volume_frontend_start_resume.py": "e784200303b378ef6eaf168e5a6c873b913403fb9b95f1c6de82f28e89fc93f3",
+        "scripts/docker_volume_frontend_refresh_reconcile.py": "430d3ae3965e79b17cc789dd12dc62714d1ee59b372a218298c8c92e2ad7dc1f"
+      }
+    },
+    "tests_passed": 412,
+    "test_suites": [
+      {
+        "suite": "test_docker_frontend_start_resume.py",
+        "exit_code": 0,
+        "tests": 7
+      },
+      {
+        "suite": "test_docker_frontend_start_handoff.py",
+        "exit_code": 0,
+        "tests": 9
+      },
+      {
+        "suite": "test_docker_volume_recovery_handoff.py",
+        "exit_code": 0,
+        "tests": 21
+      },
+      {
+        "suite": "test_docker_volume_frontend_refresh_reconcile.py",
+        "exit_code": 0,
+        "tests": 22
+      },
+      {
+        "suite": "test_docker_native_failed_recreate.py",
+        "exit_code": 0,
+        "tests": 64
+      },
+      {
+        "suite": "test_docker_volume_pending_resume.py",
+        "exit_code": 0,
+        "tests": 16
+      },
+      {
+        "suite": "test_docker_prestart_resume.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_volume_pre_admission_integration.py",
+        "exit_code": 0,
+        "tests": 13
+      },
+      {
+        "suite": "test_docker_volume_post_build_integration.py",
+        "exit_code": 0,
+        "tests": 3
+      },
+      {
+        "suite": "test_docker_volume_startup_diagnostic_restart.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_dev_up.py",
+        "exit_code": 0,
+        "tests": 49
+      },
+      {
+        "suite": "test_docker_retained_recovery_context.py",
+        "exit_code": 0,
+        "tests": 13
+      },
+      {
+        "suite": "test_docker_volume_retained_device_lifecycle.py",
+        "exit_code": 0,
+        "tests": 7
+      },
+      {
+        "suite": "test_docker_volume_unclaimed_layout.py",
+        "exit_code": 0,
+        "tests": 18
+      },
+      {
+        "suite": "test_docker_volume_frontend_recovery.py",
+        "exit_code": 0,
+        "tests": 17
+      },
+      {
+        "suite": "test_docker_frontend_seed_generated.py",
+        "exit_code": 0,
+        "tests": 6
+      },
+      {
+        "suite": "test_docker_volume_frontend_seed_recovery.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_frontend_seed_completion_observer.py",
+        "exit_code": 0,
+        "tests": 8
+      },
+      {
+        "suite": "test_docker_volume_frontend_seed_completion.py",
+        "exit_code": 0,
+        "tests": 8
+      },
+      {
+        "suite": "test_docker_volume_cold_budget_restore.py",
+        "exit_code": 0,
+        "tests": 35
+      },
+      {
+        "suite": "test_docker_volume_native_terminal_stop.py",
+        "exit_code": 0,
+        "tests": 29
+      },
+      {
+        "suite": "test_docker_volume_native_init_successor.py",
+        "exit_code": 0,
+        "tests": 7
+      }
+    ],
+    "review": "validation order/native authority reviewed; input-shape concern resolved by explicit historical-only contract and rejection tests",
+    "historical_completion": "immutable publication proof separated from replay; completed() keeps exact current/verified CAS",
+    "fresh_state_ordering_fix": "capture moved after initialization; full pre-admission integration13PASS; prior2052 normal slice had this uncovered error",
+    "lease_receipt_ordering_fix": "full validation now first statement under start lease; issued-receipt identity regression RED->GREEN",
+    "runtime_native_application": "NOT VERIFIED; app containers absent, UI3243 down, no Solve replay"
+  },
+  "latest_native_start": {
+    "source_commit": "a5a202de04fc1c623f11534d150ee7e0a6b3b598",
+    "source_digest": "62189e791519b2113e3e8efa1d02ca15032d28f5e379edf7216a5a28aaca5084",
+    "source_snapshot_sha256": "f1053aa71a6fae8bf3ad0222317be95dcd5b186a9a5ca3655c5b563ad00cb729",
+    "attempt": "2f2192a269f84a94b1703031bb9618b2",
+    "state": "succeeded",
+    "backend_package_cache_hit": false,
+    "backend_build_receipt_sha256": "ce5701a1da4c46e9c326cee511d874e0be9ff436333eeb1200df6b76bb1b89ac",
+    "backend_container": "cdd43759d3d573f06bca351dccad0a212346fb05d3854dcdd3eab097f80df3ea",
+    "frontend_container": "909a555c5a4ae053b2aff8b1c2623b09bf357da67d3c970607265f3a7c02a65a",
+    "config_sha256": "7d6842e5c1bf35d2a8e66265cd5ccaeb9364f961f4e733321f7b31c90d3d739d",
+    "canonical_resume_exit_code": 0,
+    "active_marker": null,
+    "api_health_http_status": 200,
+    "api_health_status": "ok",
+    "api_active_session": false,
+    "native_ready_observed": true,
+    "solver_execution": "NOT VERIFIED in this new runtime; no Solve/Compute performed",
+    "retained_state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400"
+  },
+  "frontend_current_blocker": {
+    "process_health": "healthy",
+    "workspace_http_status": 500,
+    "error": "Module not found: Can't resolve 'postprocessing'",
+    "selected_manifest_dependency": "6.39.6",
+    "private_app_manifest_dependency": "6.39.6",
+    "app_node_modules_direct_link_exists": false,
+    "private_pnpm_store_entries": [
+      "postprocessing@6.39.1_three@0.186.1"
+    ],
+    "root_cause": "ready history plus Next existence skips frozen install without comparing dependency_seed/toolpins identity",
+    "next": "review candidate two-file install-key correction, managed rebuild after commit; no manual running-container patch or dependency version change"
+  },
+  "frontend_dependency_fix": {
+    "state": "implemented; managed rebuild pending",
+    "files": [
+      "docker/all-in-one/frontend_dev.py",
+      "scripts/test_docker_frontend_dev.py"
+    ],
+    "source_sha256": "b034586aac7976ca6bffe37673bfc2f999725cea13f2f4020b4f5170b3b32f98",
+    "tests_passed": 62,
+    "scope": "dependency install key derives from dependency_seed_sha256 and toolpins_sha256; ready history reuses only on exact key and structural readiness",
+    "regressions": "stale/missing key with valid Next installs; matching key reuses; matching key with missing tree installs; source-commit-only change does not invalidate; dependency/toolpin changes invalidate",
+    "candidate_red_green": "worker reproduced stale/missing keys skipping install; coordinator reviewed patch and ran complete62 tests in real worktree, including strengthened empty-cache fixture",
+    "dependency_versions_changed": false,
+    "private_install_state_mutated_manually": false,
+    "runtime_acceptance": "pending managed image rebuild and actual workspace/browser/Cell acceptance"
+  }
+}

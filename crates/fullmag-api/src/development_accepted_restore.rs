@@ -30,6 +30,7 @@ use crate::types::{
 };
 
 mod terminal_observation;
+mod held_ui_materialization;
 
 const INPUT_ENV: &str = "FULLMAG_DEVELOPMENT_ACCEPTED_REATTACH_STDIN";
 const LEGACY_INPUT_ENV: &str = "FULLMAG_DEVELOPMENT_RESTORE_STDIN";
@@ -290,6 +291,9 @@ impl Drop for RestoreCheckpoint {
 /// listening.  An absent environment switch is a no-op so ordinary startup
 /// and the legacy authoring restore retain their existing behavior.
 pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), String> {
+    if std::env::var_os(held_ui_materialization::ENV).is_some() {
+        return held_ui_materialization::restore_before_listen(state).await;
+    }
     if std::env::var_os(terminal_observation::ENV).is_some() {
         return terminal_observation::restore_before_listen(state).await;
     }

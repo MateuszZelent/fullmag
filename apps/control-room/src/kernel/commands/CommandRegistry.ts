@@ -22,6 +22,7 @@ interface CommandOutcomeDetails {
   backendCommandId?: string;
   clientIntentId?: string;
   clientIntentKind?: string;
+  studyComputeObservationStarted?: true;
   message?: string | null;
   observation?: CommandResult["observation"];
   title?: string;
@@ -146,6 +147,9 @@ export class CommandRegistry {
         backendCommandId: details.backendCommandId ?? null,
         clientIntentId: details.clientIntentId ?? null,
         clientIntentKind: details.clientIntentKind ?? null,
+        ...(details.studyComputeObservationStarted === true
+          ? { studyComputeObservationStarted: true as const }
+          : {}),
         commandId: id,
         feedback: context.feedback ?? defaultCommandFeedbackOwner(context.source),
         invocationId,
@@ -236,6 +240,9 @@ export class CommandRegistry {
         backendCommandId: result.commandId,
         clientIntentId: result.clientIntentId,
         clientIntentKind: result.clientIntentKind,
+        ...(result.studyComputeObservationStarted === true
+          ? { studyComputeObservationStarted: true as const }
+          : {}),
         message: result.message ?? null,
         observation: result.observation,
         title: cmd.title,

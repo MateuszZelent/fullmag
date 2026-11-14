@@ -21,7 +21,8 @@ const report = {
   browser_channel: browserChannel || "playwright_chromium",
   qualification: "fixture_callback_only_not_api_end_to_end_or_backend_runtime_or_science",
   backend_api_end_to_end: false,
-  fixture_callback_coverage: "production Inspector controls call controlled synthetic fixture callbacks",
+  fixture_callback_coverage: "production Object/Airbox Inspector controls and StudyRuntimeSection retry call controlled synthetic fixture callbacks",
+  study_compute_retry_coverage: "synthetic callback only; not a backend API, runtime, or science submission",
   backend_mutation_requests: {
     count: 0,
     path_scope: "/api/v2 mutation requests (POST, PUT, PATCH, DELETE)",
@@ -35,6 +36,7 @@ const report = {
 };
 let browser;
 let page;
+let initialTheme = "dark";
 let failure = null;
 const backendMutationRequests = [];
 const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -100,6 +102,24 @@ async function setTarget(target) {
   }, target);
 }
 
+async function setRetryState(state) {
+  await page.evaluate((next) => {
+    const driver = window.__fullmagInspectorActionsFixture;
+    if (!driver) throw new Error("Inspector fixture driver is unavailable.");
+    driver.setRetryState(next);
+  }, state);
+}
+
+async function setDocumentTheme(theme) {
+  await page.evaluate((next) => {
+    if (document.documentElement.dataset.theme !== next) {
+      window.dispatchEvent(new Event("fullmag:theme-toggle"));
+    }
+  }, theme);
+  await page.waitForFunction((expected) => document.documentElement.dataset.theme === expected, theme);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
 async function assertNoIsolate(inspector) {
   assert.equal(await inspector.getByRole("button", { name: "Isolate", exact: true }).count(), 0);
   assert.equal(await inspector.getByText("Isolate", { exact: true }).count(), 0);
@@ -156,6 +176,140 @@ async function pinIdentity() {
   });
 }
 
+async function pinStudyRetryIdentity() {
+  await page.evaluate(() => {
+    const root = document.querySelector('[aria-label="Inspector"]');
+    const viewport = root?.querySelector(".fm-inspector__content [data-radix-scroll-area-viewport]");
+    const runtimeGroup = Array.from(root?.querySelectorAll('[data-slot="inspector-group"]') ?? [])
+      .find((group) => group.querySelector("h3")?.textContent?.trim() === "Runtime");
+    const toolbars = Array.from(runtimeGroup?.querySelectorAll(".fm-inspector-toolbar") ?? []);
+    const toolbar = toolbars.find((candidate) =>
+      Array.from(candidate.querySelectorAll("button")).some((button) => button.textContent?.trim() === "Compute"),
+    );
+    const buttons = Array.from(toolbar?.querySelectorAll("button") ?? []);
+    const compute = buttons.find((button) => button.textContent?.trim() === "Compute");
+    const build = buttons.find((button) => button.textContent?.trim() === "Build + Study");
+    const fit = Array.from(root?.querySelectorAll("button") ?? []).find((button) =>
+      button.getAttribute("aria-label") === "Fit view" || button.textContent?.trim() === "Fit view",
+    );
+    if (!root || !viewport || !runtimeGroup || !toolbar || !compute || !build || !fit) {
+      throw new Error("Study retry Inspector identity targets are unavailable.");
+    }
+    window.__inspectorActionsRetryIdentity = { build, compute, fit, root, runtimeGroup, toolbar, viewport };
+  });
+}
+
+async function assertStudyRetryIdentity(label) {
+  const identity = await page.evaluate(() => {
+    const before = window.__inspectorActionsRetryIdentity;
+    const root = document.querySelector('[aria-label="Inspector"]');
+    const viewport = root?.querySelector(".fm-inspector__content [data-radix-scroll-area-viewport]");
+    const runtimeGroup = Array.from(root?.querySelectorAll('[data-slot="inspector-group"]') ?? [])
+      .find((group) => group.querySelector("h3")?.textContent?.trim() === "Runtime");
+    const toolbars = Array.from(runtimeGroup?.querySelectorAll(".fm-inspector-toolbar") ?? []);
+    const toolbar = toolbars.find((candidate) =>
+      Array.from(candidate.querySelectorAll("button")).some((button) => button.textContent?.trim() === "Compute"),
+    );
+    const buttons = Array.from(toolbar?.querySelectorAll("button") ?? []);
+    const compute = buttons.find((button) => button.textContent?.trim() === "Compute");
+    const build = buttons.find((button) => button.textContent?.trim() === "Build + Study");
+    const fit = Array.from(root?.querySelectorAll("button") ?? []).find((button) =>
+      button.getAttribute("aria-label") === "Fit view" || button.textContent?.trim() === "Fit view",
+    );
+    return {
+      activeFit: Boolean(before && document.activeElement === before.fit),
+      buildSame: Boolean(before && before.build === build),
+      computeSame: Boolean(before && before.compute === compute),
+      fitEnabled: Boolean(before?.fit instanceof HTMLButtonElement && !before.fit.disabled),
+      fitSame: Boolean(before && before.fit === fit),
+      rootSame: Boolean(before && before.root === root),
+      runtimeGroupSame: Boolean(before && before.runtimeGroup === runtimeGroup),
+      toolbarSame: Boolean(before && before.toolbar === toolbar),
+      viewportSame: Boolean(before && before.viewport === viewport),
+    };
+  });
+  for (const key of ["rootSame", "viewportSame", "runtimeGroupSame", "toolbarSame", "computeSame", "buildSame", "fitSame", "activeFit", "fitEnabled"]) {
+    assert.equal(identity[key], true, label + " changed retry or normal-control identity/focus: " + key);
+  }
+}
+
+async function assertNoHorizontalOverflow(label) {
+  const widths = await page.evaluate(() => {
+    const inspector = document.querySelector('[aria-label="Inspector"]');
+    const viewport = inspector?.querySelector(".fm-inspector__content [data-radix-scroll-area-viewport]");
+    const runtimeGroup = Array.from(inspector?.querySelectorAll('[data-slot="inspector-group"]') ?? [])
+      .find((group) => group.querySelector("h3")?.textContent?.trim() === "Runtime");
+    const compute = Array.from(runtimeGroup?.querySelectorAll("button") ?? [])
+      .find((button) => button.textContent?.trim() === "Compute");
+    const toolbar = compute?.closest(".fm-inspector-toolbar");
+    return {
+      body: document.body.scrollWidth,
+      document: document.documentElement.scrollWidth,
+      inspectorViewport: viewport ? { client: viewport.clientWidth, scroll: viewport.scrollWidth } : null,
+      runtimeToolbar: toolbar ? { client: toolbar.clientWidth, scroll: toolbar.scrollWidth } : null,
+      viewport: window.innerWidth,
+    };
+  });
+  assert.ok(widths.inspectorViewport, label + " could not measure the Inspector scroll viewport");
+  assert.ok(widths.runtimeToolbar, label + " could not measure the Runtime toolbar");
+  assert.ok(widths.document <= widths.viewport, label + " caused document horizontal overflow");
+  assert.ok(widths.body <= widths.viewport, label + " caused body horizontal overflow");
+  assert.ok(widths.inspectorViewport.scroll <= widths.inspectorViewport.client, label + " caused Inspector viewport horizontal overflow");
+  assert.ok(widths.runtimeToolbar.scroll <= widths.runtimeToolbar.client, label + " caused Runtime toolbar horizontal overflow");
+}
+
+async function assertControlHitTargets(control, label) {
+  const points = await control.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return [0.25, 0.5, 0.75].map((fraction) => {
+      const x = rect.left + rect.width * fraction;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        fraction,
+        reachable: hit !== null && button.contains(hit),
+        interceptedBy: hit?.tagName ?? null,
+      };
+    });
+  });
+  for (const point of points) {
+    assert.equal(point.reachable, true,
+      `${label} has a blocked pointer target at ${point.fraction}: ${point.interceptedBy}`);
+  }
+}
+
+async function assertStudyRetryVisibleInScrollViewport(retry, label) {
+  await retry.scrollIntoViewIfNeeded();
+  const bounds = await retry.evaluate((control) => {
+    const inspector = control.closest('[aria-label="Inspector"]');
+    const viewport = inspector?.querySelector(".fm-inspector__content [data-radix-scroll-area-viewport]");
+    if (!viewport) return null;
+    const controlRect = control.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    const left = viewportRect.left + viewport.clientLeft;
+    const top = viewportRect.top + viewport.clientTop;
+    return {
+      control: {
+        bottom: controlRect.bottom,
+        left: controlRect.left,
+        right: controlRect.right,
+        top: controlRect.top,
+      },
+      viewport: {
+        bottom: top + viewport.clientHeight,
+        left,
+        right: left + viewport.clientWidth,
+        top,
+      },
+    };
+  });
+  assert.ok(bounds, label + " could not measure the Inspector scroll viewport");
+  assert.ok(bounds.control.left >= bounds.viewport.left, label + " retry control is clipped on the left");
+  assert.ok(bounds.control.right <= bounds.viewport.right, label + " retry control is clipped on the right");
+  assert.ok(bounds.control.top >= bounds.viewport.top, label + " retry control is clipped above the scroll viewport");
+  assert.ok(bounds.control.bottom <= bounds.viewport.bottom, label + " retry control is clipped below the scroll viewport");
+}
+
 async function assertPinnedIdentity(label) {
   const identity = await page.evaluate(() => {
     const before = window.__inspectorActionsIdentity;
@@ -203,6 +357,7 @@ try {
   page.setDefaultTimeout(12_000);
   await page.goto(fixtureUrl, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => Boolean(window.__fullmagInspectorActionsFixture));
+  initialTheme = await page.evaluate(() => document.documentElement.dataset.theme || "dark");
   const inspector = page.getByRole("region", { name: "Inspector" });
   await inspector.locator('footer[data-edit-mode="staged"]').waitFor();
   await inspector.locator(".fm-inspector__action-btn--apply").waitFor();
@@ -225,7 +380,8 @@ try {
   await step("production-group-disclosure-preserves-input", async () => {
     const trigger = inspector.getByRole("button", { name: "Fixture details", exact: true });
     const field = inspector.getByRole("textbox", { name: "Unchanged fixture field", exact: true });
-    const content = inspector.locator('[data-slot="inspector-group-content"]');
+    const detailsGroup = inspector.locator('[data-slot="inspector-group"]').filter({ has: trigger });
+    const content = detailsGroup.locator('[data-slot="inspector-group-content"]');
     assert.equal(await trigger.getAttribute("aria-expanded"), "true");
     assert.equal(await field.inputValue(), "keep-this-value");
     await assertNoOpacityTransitions(inspector, "open InspectorGroup");
@@ -240,6 +396,114 @@ try {
     await field.fill("preserve-through-actions");
     await field.focus();
     await capture("inspector-actions-object-wide-group-open.png");
+  });
+
+  await step("study-compute-retry-preserves-toolbar-and-binds-original-intent", async () => {
+    const fitView = inspector.getByRole("button", { name: "Fit view", exact: true });
+    assert.equal(await fitView.isEnabled(), true);
+    await fitView.focus();
+    await pinStudyRetryIdentity();
+
+    const originalA = {
+      currentSession: "session-a@1",
+      hasOriginalRequest: true,
+      intentId: "study-compute-a",
+      intentSession: "session-a@1",
+      isPending: true,
+    };
+    await setRetryState(originalA);
+    const retry = inspector.getByRole("button", { name: "Retry original Compute", exact: true });
+    await retry.waitFor();
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().retryableIntentId === "study-compute-a");
+    assert.deepEqual((await snapshot()).studyCommandCalls, [], "rendering retry submitted a command");
+    await assertStudyRetryIdentity("original A retry shown");
+
+    await setRetryState({ ...originalA, isPending: false });
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().retryableIntentId === null);
+    assert.equal(await retry.count(), 0);
+    assert.deepEqual((await snapshot()).studyCommandCalls, [], "toggling retry off submitted a command");
+    await assertStudyRetryIdentity("original A retry hidden");
+
+    await setRetryState(originalA);
+    await retry.waitFor();
+    assert.deepEqual((await snapshot()).studyCommandCalls, [], "toggling retry on submitted a command");
+    await assertStudyRetryIdentity("original A retry shown again");
+
+    await retry.click();
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().studyCommandCalls.length === 1);
+    assert.deepEqual((await snapshot()).studyCommandCalls, [{
+      commandId: "study.retry-compute",
+      input: { clientIntentId: "study-compute-a" },
+    }], "click did not submit the exact captured retry intent once");
+    await retry.focus();
+    await retry.press("Enter");
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().studyCommandCalls.length === 2);
+    assert.deepEqual((await snapshot()).studyCommandCalls, [
+      { commandId: "study.retry-compute", input: { clientIntentId: "study-compute-a" } },
+      { commandId: "study.retry-compute", input: { clientIntentId: "study-compute-a" } },
+    ], "keyboard activation did not invoke the same captured retry intent exactly once");
+
+    await fitView.focus();
+    await pinStudyRetryIdentity();
+    await setRetryState({ ...originalA, currentSession: "session-b@1" });
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().retryableIntentId === null);
+    assert.equal(await retry.count(), 0, "new session exposed the previous session retry");
+    assert.equal((await snapshot()).studyCommandCalls.length, 2);
+    await assertStudyRetryIdentity("new session with old intent");
+
+    const newSessionWithoutBody = {
+      currentSession: "session-b@1",
+      hasOriginalRequest: false,
+      intentId: "study-compute-b",
+      intentSession: "session-b@1",
+      isPending: true,
+    };
+    await setRetryState(newSessionWithoutBody);
+    await page.waitForFunction(() => {
+      const state = window.__fullmagInspectorActionsFixture?.read();
+      return state?.retryState.currentSession === "session-b@1" &&
+        state.retryState.intentId === "study-compute-b" &&
+        state.retryState.hasOriginalRequest === false &&
+        state.retryableIntentId === null;
+    });
+    assert.equal(await retry.count(), 0, "retry appeared without the original request body");
+    assert.equal((await snapshot()).studyCommandCalls.length, 2);
+    await assertStudyRetryIdentity("new session without original body");
+
+    await setRetryState({ ...newSessionWithoutBody, hasOriginalRequest: true });
+    await retry.waitFor();
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().retryableIntentId === "study-compute-b");
+    assert.deepEqual((await snapshot()).studyCommandCalls, [
+      { commandId: "study.retry-compute", input: { clientIntentId: "study-compute-a" } },
+      { commandId: "study.retry-compute", input: { clientIntentId: "study-compute-a" } },
+    ], "new intent render caused an implicit command");
+    await assertStudyRetryIdentity("new session with new retry intent");
+
+    for (const theme of ["dark", "light"]) {
+      await setDocumentTheme(theme);
+      for (const width of [300, 380]) {
+        await page.setViewportSize({ width, height: 844 });
+        const label = theme + " retry UI at " + width + "px";
+        await assertStudyRetryVisibleInScrollViewport(retry, label);
+        await assertControlHitTargets(retry, label + " Retry");
+        await assertControlHitTargets(fitView, label + " Fit view");
+        await assertStudyRetryIdentity(label);
+        await assertNoHorizontalOverflow(label);
+        await capture(`inspector-actions-study-retry-${theme}-${width}.png`);
+      }
+    }
+
+    await setRetryState({
+      currentSession: "session-b@1",
+      hasOriginalRequest: false,
+      intentId: null,
+      intentSession: null,
+      isPending: false,
+    });
+    await page.waitForFunction(() => window.__fullmagInspectorActionsFixture?.read().retryableIntentId === null);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await setDocumentTheme(initialTheme);
+    assert.equal((await snapshot()).studyCommandCalls.length, 2);
   });
 
   await step("apply-pending-rejected-ack-and-stable-target", async () => {
@@ -420,6 +684,11 @@ try {
     apply_calls: report.final_snapshot.applyCalls,
     reset_calls: report.final_snapshot.resetCalls,
     focus_calls: report.final_snapshot.focusCalls,
+    study_compute_retry_calls: report.final_snapshot.studyCommandCalls.length,
+  };
+  report.study_compute_retry = {
+    calls: report.final_snapshot.studyCommandCalls,
+    qualification: "synthetic_fixture_callback_only_not_backend_or_api_submission",
   };
   report.backend_mutation_requests.count = backendMutationRequests.length;
   report.backend_mutation_requests.observed = backendMutationRequests;
@@ -451,6 +720,7 @@ console.log(JSON.stringify({
   backend_api_end_to_end: report.backend_api_end_to_end,
   react_commit_limit_per_apply_transaction: report.react_commit_limit_per_apply_transaction,
   react_commit_observations: report.react_commit_observations,
+  study_compute_retry: report.study_compute_retry,
   state: report.state,
 }));
 if (failure) {

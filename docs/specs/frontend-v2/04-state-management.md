@@ -124,6 +124,54 @@ Only user preferences and layout state persist locally:
 
 Canonical simulation state, session state, field state, mesh state, command state, and provenance do not persist through browser local storage.
 
+### Non-authoritative Compute observation hints
+
+`CommandFeedbackController` owns unresolved Compute observation in memory. The
+existing API-scoped browser-tab store may retain up to 16 small hints keyed by
+logical session identity (session ID and session epoch). A hint is never a
+canonical command, acceptance record, simulation snapshot, or result. Only the
+backend command ledger and durable accepted-run store can establish acceptance
+and completion.
+
+A hint may include the first immutable request JSON for an explicit user retry
+with the same client intent and idempotency key. It never causes an automatic
+POST after reload or reconnect and never reconstructs inputs from the current
+model. The body must match the hint's kind and client intent. Per-body storage
+is limited to 16,384 characters and the entire record to 32,768 characters;
+overflow retains identity hints without bodies. Unavailable browser storage
+leaves in-memory observation usable. A legacy, invalid, or absent body disables
+retry; it does not prove rejection or authorize a new Compute. Hints must remain
+isolated by API authority and logical session even when transport scope changes.
+
+A canonical Compute publisher emits its started observation before awaiting
+submission and marks its pending result with the optional local-only
+`studyComputeObservationStarted: true`. The command registry forwards this
+marker without adding it to the backend request. A later unconfirmed result
+cannot recreate an exact scoped intent already resolved by the observation
+owner. Known backend command ACKs and unmarked legacy results retain their
+existing reconciliation behavior. This requires no history of settled IDs.
+
+Build + Study derives its retained Solve continuation from that same owner and
+exact intent ID. Once resolved, it becomes inactive; a subsequent explicit
+Build + Study click rechecks the normal model, draft and Compute guards. An
+empty command queue alone never resolves the original submission.
+
+A rendered recovery action captures its original client intent ID and session
+scope. `study.retry-compute` accepts an optional exact `clientIntentId` target;
+a stale or malformed explicit target never falls back to another pending
+intent. Untargeted palette invocation still requires a single retryable intent.
+The Study Runtime inspector presents the recovery action only when the original
+request and its captured identity are available. Rendering, dismissal, reload,
+and changes to model drafts never submit that request automatically.
+
+An explicit retry reports its outcome through the existing foreground feedback
+presenter. If that retry loses its ACK, its message states that the original
+request was retried once; the unresolved intent and original body remain owned
+by the same observation store. A server `intent_disposition: "not_accepted"`
+only releases the intent for a current request scope. A late response from an
+obsolete scope cannot clear the current scope's pending observation. HTTP
+status alone and an empty queue remain insufficient evidence.
+
 ### Viewport 3D appearance preferences
 
 `viewport3dStore` owns the viewport's client-side appearance preferences. The

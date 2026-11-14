@@ -688,7 +688,8 @@ def _owned_volume(control, role, key):
     return name
 
 
-def _frontend(control, operation, selected, state, port, image):
+def _frontend(control, operation, selected, state, port, image, *, create_generation=False,
+              old_generation_id=None, old_seed_sha256=None, publish_inputs=True):
     from docker_development_inputs import metadata_cache_key, seed, _next_generated_seed_variants
     files = []
     inputs = seed(selected, state, port, write_file=lambda relative, data: files.append({
@@ -697,42 +698,144 @@ def _frontend(control, operation, selected, state, port, image):
         record["generated_sha256"] = [hashlib.sha256(value).hexdigest() for value in
             _next_generated_seed_variants(record["relative"], base64.b64decode(record["data"]))]
     previous_inputs = control.read("frontend/development-inputs.json", optional=True)
-    if (isinstance(previous_inputs, dict)
+    if (not create_generation and isinstance(previous_inputs, dict)
             and all(previous_inputs.get(key) == inputs.get(key) for key in
                 ("source_root", "worktree_id", "dependency_seed_sha256", "toolpins_sha256", "host_port", "files", "live_directories"))):
         inputs = previous_inputs
     key = metadata_cache_key(inputs, control.project)
     grouped = _uses_private_group_storage(control, operation)
+    frontend_generation = None
+    generation_id = None
+    generation_subpath = None
     if grouped:
         import docker_group_storage as group_storage
         volume = control.volume
+        previous_generation_id = operation["receipt"].get("frontend_generation_id")
+        previous_generation_path = operation["receipt"].get("frontend_generation_subpath")
+        if create_generation:
+            if ((previous_generation_id, previous_generation_path) != (old_generation_id,
+                    (group_storage.frontend_generation_subpath(control, old_generation_id)
+                     if old_generation_id is not None else None))
+                    or not isinstance(old_seed_sha256, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", old_seed_sha256)
+                    or hashlib.sha256(b"").hexdigest() != old_seed_sha256):
+                raise BuildControlError("New frontend generation requires the exact empty old-seed proof")
+            generation_id = operation["receipt"].get("attempt")
+            generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+            frontend_generation = {"mode": "create", "generation_id": generation_id,
+                "old_generation_id": old_generation_id, "old_seed_sha256": old_seed_sha256}
+        elif previous_generation_id is None and previous_generation_path is None:
+            generation_id = None
+            generation_subpath = group_storage.role_subpath(control, "frontend")
+            frontend_generation = None
+        elif previous_generation_id is None or previous_generation_path is None:
+            raise BuildControlError("Retained frontend generation ID/path pair is incomplete")
+        else:
+            generation_id = previous_generation_id
+            generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+            if previous_generation_path != generation_subpath:
+                raise BuildControlError("Retained frontend generation path differs from its ID")
+            frontend_generation = {"mode": "active", "generation_id": generation_id}
     else:
+        if create_generation or operation["receipt"].get("frontend_generation_id") is not None:
+            raise BuildControlError("Frontend generations require the selected private group volume")
         volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
-    if grouped and isinstance(previous_inputs, dict):
+    if create_generation and publish_inputs:
+        raise BuildControlError("New frontend generation inputs must be staged until old CAS revalidation")
+    if grouped and isinstance(previous_inputs, dict) and not create_generation:
         previous_hashes = {item["relative"]: item["sha256"] for item in previous_inputs.get("files", [])}
+        frozen_base = ("private/frontend/generations/" + generation_id
+                       if generation_id is not None else "private/frontend")
         for record in files:
             if record["relative"] not in ("apps/control-room/tsconfig.json", "apps/control-room/next-env.d.ts"):
                 continue
-            # A legitimate tsconfig edit can follow a Next rewrite of the old
-            # seed. Authenticate its frozen original before accepting variants.
-            previous_source = control.read_bytes("private/frontend/frozen-inputs/" + record["relative"], optional=True)
+            # Authenticate the old seed inside its own generation before
+            # accepting a Next rewrite across a configuration change.
+            previous_source = control.read_bytes(frozen_base + "/frozen-inputs/" + record["relative"], optional=True)
             if previous_source is not None and hashlib.sha256(previous_source).hexdigest() == previous_hashes.get(record["relative"]):
                 record["generated_sha256"].extend(hashlib.sha256(value).hexdigest() for value in
                     _next_generated_seed_variants(record["relative"], previous_source))
-    request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs, "group_storage": grouped})
+    request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs,
+        "group_storage": grouped, "frontend_generation": frontend_generation})
     if len(request) > 8 * 1024 * 1024:
         raise BuildControlError("Frontend metadata exceeds transfer budget")
     # Metadata only: the four application directories stay live readonly binds.
     script = r'''
 import base64, hashlib, json, os, pathlib, stat, sys, fcntl
-root=pathlib.Path('/data/workspace')
 request=json.load(sys.stdin)
-if root.is_symlink(): raise RuntimeError('Frontend workspace root is a link')
+base=pathlib.Path('/data')
 grouped=request.get('group_storage') is True
+generation=request.get('frontend_generation')
+generation_probe=None
+data_root=base
+if generation is not None:
+ if not grouped or not isinstance(generation,dict): raise RuntimeError('Frontend generation requires group storage')
+ if generation is not None and (base.is_symlink() or not base.is_dir()): raise RuntimeError('Frontend group root is not a real directory')
+ if generation is not None:
+  base_meta=base.stat()
+  def owned_private_dir(path):
+   metadata=path.lstat()
+   if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+       or metadata.st_uid!=base_meta.st_uid or metadata.st_gid!=base_meta.st_gid
+       or stat.S_IMODE(metadata.st_mode)!=0o750): raise RuntimeError('Frontend private generation ownership/mode differs')
+   return metadata
+ mode=generation.get('mode');generation_id=generation.get('generation_id')
+ if not isinstance(generation_id,str) or len(generation_id)!=32 or any(c not in '0123456789abcdef' for c in generation_id): raise RuntimeError('Unsafe frontend generation ID')
+ generations=base/'generations'
+ if generations.is_symlink(): raise RuntimeError('Frontend generations root is a link')
+ if mode=='active':
+  if set(generation)!={'mode','generation_id'} or not generations.is_dir(): raise RuntimeError('Active frontend generation root is missing')
+  owned_private_dir(generations)
+  data_root=generations/generation_id
+  owned_private_dir(data_root)
+ elif mode=='create':
+  if set(generation)!={'mode','generation_id','old_generation_id','old_seed_sha256'}: raise RuntimeError('New frontend generation proof fields differ')
+  old_id=generation.get('old_generation_id');expected_old_sha=generation.get('old_seed_sha256')
+  if old_id is not None and (not isinstance(old_id,str) or len(old_id)!=32 or any(c not in '0123456789abcdef' for c in old_id)): raise RuntimeError('Old frontend generation ID is unsafe')
+  if not isinstance(expected_old_sha,str) or len(expected_old_sha)!=64: raise RuntimeError('Old frontend seed digest is missing')
+  old_root=base if old_id is None else generations/old_id
+  if old_id is None:
+   owned_private_dir(old_root)
+  else:
+   owned_private_dir(generations)
+   owned_private_dir(old_root)
+  for directory in (old_root/'workspace',old_root/'workspace/apps',old_root/'workspace/apps/control-room'):
+   if directory.is_symlink() or not directory.is_dir(): raise RuntimeError('Old frontend seed ancestry is not a real directory')
+  freeze_old=old_root/'inputs-freeze.json';frozen_old=old_root/'frozen-inputs'
+  for forbidden in (freeze_old,frozen_old):
+   try: forbidden.lstat()
+   except FileNotFoundError: pass
+   else: raise RuntimeError('Old frontend generation contains freeze state')
+  old_seed=old_root/'workspace/apps/control-room/next-env.d.ts'
+  if old_seed.is_symlink(): raise RuntimeError('Old frontend seed is a link')
+  seed_meta=old_seed.lstat()
+  if not stat.S_ISREG(seed_meta.st_mode) or seed_meta.st_nlink!=1 or seed_meta.st_size!=0: raise RuntimeError('Old frontend seed is not the exact empty regular file')
+  old_seed_bytes=old_seed.read_bytes()
+  old_observed_sha=hashlib.sha256(old_seed_bytes).hexdigest()
+  if old_observed_sha!=expected_old_sha: raise RuntimeError('Old frontend seed hash changed before generation')
+  if not generations.exists(): generations.mkdir(mode=0o750)
+  if generations.is_symlink() or not generations.is_dir(): raise RuntimeError('Frontend generations root is not a real directory')
+  owned_private_dir(generations)
+  data_root=generations/generation_id
+  try: data_root.lstat()
+  except FileNotFoundError: pass
+  else: raise RuntimeError('Frontend generation already exists; no overwrite or replay')
+  os.mkdir(data_root,0o750)
+  owned_private_dir(data_root)
+  descriptor=os.open(generations,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+  try: os.fsync(descriptor)
+  finally: os.close(descriptor)
+  generation_probe={'mode':'created','generation_id':generation_id,'old_generation_id':old_id,
+   'old_seed_sha256':old_observed_sha,'inputs_freeze_absent':True,'frozen_root_absent':True}
+ else: raise RuntimeError('Unknown frontend generation operation')
+root=data_root/'workspace'
+cache=data_root/'cache'
+freeze=data_root/'inputs-freeze.json'
+frozen_root=data_root/'frozen-inputs'
+if root.is_symlink(): raise RuntimeError('Frontend workspace root is a link')
 previous=request.get('previous_inputs')
 if grouped:
-    cache=pathlib.Path('/data/cache')
     if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
     cache.mkdir(exist_ok=True)
     descriptor=os.open(cache/'.fullmag-frontend-runtime.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
@@ -753,7 +856,6 @@ if grouped:
                 accepted=record.get('generated_sha256',[]) if generated else (requested,allowed.get(record['relative']))
                 if actual not in accepted:
                     raise RuntimeError('Frontend metadata has unknown changes; all state retained')
-freeze=pathlib.Path('/data/inputs-freeze.json')
 if freeze.exists() or freeze.is_symlink():
     descriptor=os.open(freeze, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(descriptor, 'rb') as stream:
@@ -773,7 +875,6 @@ if freeze.exists() or freeze.is_symlink():
     if without_commit(original)!=without_commit(request['inputs']):
         if not grouped or not isinstance(previous,dict) or without_commit(original)!=without_commit(previous):
             raise RuntimeError('Frozen frontend configuration differs from its saved group inputs')
-        frozen_root=pathlib.Path('/data/frozen-inputs')
         if frozen_root.is_symlink() or not frozen_root.is_dir(): raise RuntimeError('Frozen input root is not a real directory')
         allowed={item['relative']:item['sha256'] for item in original['files']}
         observed=[]
@@ -795,7 +896,6 @@ if freeze.exists() or freeze.is_symlink():
     else:
         request['inputs']=original
 root.mkdir(parents=True,exist_ok=True)
-cache=pathlib.Path('/data/cache')
 if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
 cache.mkdir(exist_ok=True)
 lock=cache/'.fullmag-frontend-runtime.lock'
@@ -840,7 +940,9 @@ for name in ('app','src','public','scripts'):
     target=root/'apps/control-room'/name
     if target.is_symlink(): raise RuntimeError('Live directory is a link')
     target.mkdir(exist_ok=True)
-print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':request['inputs']}))
+print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':request['inputs'],
+ 'frontend_generation_probe':generation_probe,
+ 'frontend_generation':({'mode':'active','generation_id':generation['generation_id']} if isinstance(generation,dict) and generation.get('mode')=='active' else None)}))
 '''
     args = control.helper_args("exec /usr/local/bin/python3 -I -c " + __import__('shlex').quote(script))
     extra = (group_storage.cli_mount_args(control, "frontend", "/data") if grouped else
@@ -852,9 +954,112 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
         raise BuildControlError(result.stderr.decode("utf-8", "replace"))
     seeded = json.loads(result.stdout)
     inputs = seeded.pop("inputs")
+    generation_probe = seeded.pop("frontend_generation_probe", None)
+    observed_generation = seeded.pop("frontend_generation", None)
+    if create_generation:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        seed_recovery.validate_generation_probe(generation_probe, generation_id=generation_id,
+            old_generation_id=old_generation_id, old_seed_sha256=old_seed_sha256)
+        operation["receipt"].update(frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+            frontend_generation_probe=generation_probe)
+    elif generation_id is not None:
+        if observed_generation != {"mode": "active", "generation_id": generation_id}:
+            raise BuildControlError("Frontend helper mounted a different active generation")
+    elif observed_generation is not None or generation_probe is not None:
+        raise BuildControlError("Legacy frontend helper returned unexpected generation evidence")
+    if not publish_inputs and not create_generation:
+        raise BuildControlError("Deferred input publication requires a new frontend generation")
     control.write(operation["root"] + "/frontend-seed.json", seeded)
-    control.write("frontend/development-inputs.json", inputs)
+    if publish_inputs:
+        control.write("frontend/development-inputs.json", inputs)
     return inputs, volume
+
+
+
+def _capture_frontend_start_handoff(control, previous, document, *, expected_current_sha256=None):
+    """Pin a retained private generation before removal or a new start."""
+    if not isinstance(previous, Mapping) or not isinstance(document, Mapping):
+        raise BuildControlError("Frontend start predecessor is malformed")
+    mode = previous.get("private_group_storage")
+    if mode is None:
+        if "frontend_generation_id" in previous or "frontend_generation_subpath" in previous:
+            raise BuildControlError("Frontend generation has no private storage binding")
+        services = document.get("services")
+        frontend = services.get("frontend") if isinstance(services, Mapping) else None
+        mounts = frontend.get("volumes") if isinstance(frontend, Mapping) else None
+        for mount in mounts if isinstance(mounts, list) else ():
+            options = mount.get("volume") if isinstance(mount, Mapping) else None
+            subpath = options.get("subpath") if isinstance(options, Mapping) else None
+            if (isinstance(subpath, str)
+                    and re.search(r"(?:^|/)private/frontend/generations/", subpath)):
+                raise BuildControlError("Frontend generation mount has no private storage binding")
+        return None
+    if mode != "group-volume-v1":
+        raise BuildControlError("Frontend start predecessor storage mode is unknown")
+    from docker_volume_frontend_seed_recovery import generation_receipt_fields
+    fields = generation_receipt_fields(control, previous, document)
+    if not fields:
+        return None
+    attempt = previous.get("attempt")
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Frontend start predecessor attempt is malformed")
+    root = "development/attempts/" + attempt
+    raw = control.read_bytes(root + "/terminal.json")
+    current_raw = control.read_bytes("development/current.json")
+    current_sha = hashlib.sha256(current_raw).hexdigest()
+    expected_current = (hashlib.sha256(raw).hexdigest() if expected_current_sha256 is None
+                        else expected_current_sha256)
+    if raw != canonical(previous) + b"\n" or current_sha != expected_current:
+        raise BuildControlError("Frontend start predecessor terminal/current CAS differs")
+    compose_raw = control.read_bytes(root + "/compose.json")
+    if compose_raw != canonical(document) + b"\n":
+        # Metadata completion has a separately authenticated no-newline encoding.
+        compose_raw, saved = _read_frontend_refresh_child_compose(
+            control, root + "/compose.json", "frontend start predecessor Compose", previous,
+            child_attempt=attempt, parent_attempt=previous.get("previous_development_attempt"))
+        if saved != document:
+            raise BuildControlError("Frontend start predecessor Compose differs")
+    if (previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or document.get("name") != control.project
+            or previous.get("config_sha256") != hashlib.sha256(canonical(document)).hexdigest()):
+        raise BuildControlError("Frontend start predecessor project/config differs")
+    _validate_frontend_refresh_recovery_namespace(control, previous, previous)
+    verified = control.read_bytes("development/verified.json", optional=True)
+    return {"schema": "fullmag.frontend-start-handoff.v1", "attempt": attempt,
+        "terminal_sha256": hashlib.sha256(raw).hexdigest(), "current_sha256": current_sha,
+        "compose_sha256": hashlib.sha256(compose_raw).hexdigest(),
+        "verified_sha256": hashlib.sha256(verified).hexdigest() if verified is not None else None,
+        "source_root": previous.get("inputs", {}).get("source_root"),
+        "state_root": previous.get("state_root"), **fields}
+
+
+def _validate_frontend_start_handoff(control, handoff, selected, state):
+    """Re-read immutable authority and mutable CAS before selecting a workspace."""
+    if (not isinstance(handoff, Mapping)
+            or handoff.get("schema") != "fullmag.frontend-start-handoff.v1"
+            or not isinstance(handoff.get("attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", handoff["attempt"]) is None
+            or handoff.get("source_root") != str(selected)
+            or handoff.get("state_root") != str(state)):
+        raise BuildControlError("Frontend start handoff identity differs")
+    root = "development/attempts/" + handoff["attempt"]
+    previous = control.read(root + "/terminal.json")
+    document = control.read(root + "/compose.json")
+    if _capture_frontend_start_handoff(control, previous, document,
+            expected_current_sha256=handoff.get("current_sha256")) != handoff:
+        raise BuildControlError("Frontend start handoff authority changed")
+    return previous, document
+
+
+def _pin_start_frontend_storage(control, operation, selected, state, handoff, *, new_render):
+    if handoff is None:
+        _pin_private_group_storage(control, operation, new_render=new_render)
+        return
+    previous, document = _validate_frontend_start_handoff(control, handoff, selected, state)
+    _pin_private_group_storage(control, operation, new_render=new_render,
+                               previous=previous, document=document)
 
 
 def _uses_private_group_storage(control, operation):
@@ -870,7 +1075,7 @@ def _uses_private_group_storage(control, operation):
     return False
 
 
-def _pin_private_group_storage(control, operation, *, new_render, previous=None):
+def _pin_private_group_storage(control, operation, *, new_render, previous=None, document=None):
     """Persist layout selection before allocation so interrupted resume is stable."""
     recorded = operation["receipt"].get("private_group_storage")
     if recorded not in (None, "group-volume-v1"):
@@ -881,6 +1086,23 @@ def _pin_private_group_storage(control, operation, *, new_render, previous=None)
     if new_render or inherited is not None:
         operation["receipt"]["private_group_storage"] = "group-volume-v1"
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    if previous is not None and inherited == "group-volume-v1":
+        generation_fields_present = (
+            "frontend_generation_id" in previous or "frontend_generation_subpath" in previous)
+        if generation_fields_present and document is not None:
+            import docker_volume_frontend_seed_recovery as seed_recovery
+            operation["receipt"].update(
+                seed_recovery.generation_receipt_fields(control, previous, document))
+        elif generation_fields_present:
+            import docker_group_storage as group_storage
+            generation_id = previous.get("frontend_generation_id")
+            generation_path = previous.get("frontend_generation_subpath")
+            if (not isinstance(generation_id, str)
+                    or group_storage.frontend_generation_subpath(control, generation_id) != generation_path):
+                raise BuildControlError("Retained frontend generation ID/path pair is malformed")
+            operation["receipt"].update(
+                frontend_generation_id=generation_id,
+                frontend_generation_subpath=generation_path)
     return _uses_private_group_storage(control, operation)
 
 
@@ -2099,6 +2321,1657 @@ def _retained_device_access(previous, document):
     return access
 
 
+def _run_failed_held_ui_start_retry(args, *, controller):
+    from docker_volume_held_ui_start_retry_lifecycle import run
+    return run(args, controller=controller)
+
+
+def resume_failed_held_ui_start(args, retry_context):
+    return _retained_operation(
+        args, recreate_services=True, failed_held_ui_start_context=retry_context,
+    )
+
+
+def _run_held_ui_materialization(args, *, controller):
+    """Preview or continue one retained manual HTTP Compute through its typed handoff."""
+    if getattr(args, "apply", False):
+        return _apply_held_ui_materialization(args, controller=controller)
+    _held_ui_pre_signal_stop_pin_args(args, controller=controller, applying=False)
+    if getattr(args, "preview", False) is not True:
+        raise BuildControlError("Held UI materialization requires --preview")
+
+    attempt = getattr(args, "attempt", None)
+    config_sha256 = getattr(args, "config_sha256", None)
+    run_id = getattr(args, "run_id", None)
+    request_id = getattr(args, "request_id", None)
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Held UI preview requires one exact retained DEV attempt")
+    if not isinstance(config_sha256, str) or _SHA256.fullmatch(config_sha256) is None:
+        raise BuildControlError("Held UI preview requires the exact retained Compose digest")
+    if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", run_id) is None:
+        raise BuildControlError("Held UI preview requires one exact accepted run id")
+    import uuid
+    try:
+        request_id = str(uuid.UUID(request_id))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise BuildControlError("Held UI preview requires a canonical maintenance request UUID") from error
+    if request_id != getattr(args, "request_id", None):
+        raise BuildControlError("Held UI preview maintenance request UUID is not canonical")
+
+    require_host()
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+    host = _session_host()
+
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Held UI preview has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+
+    # BuildControl.prepare() creates an absent volume. Preview must never do
+    # that, so require and inspect the exact existing control volume directly.
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Held UI preview requires the existing exact control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())):
+        raise BuildControlError("Held UI preview control volume ownership differs")
+
+    previous_root = "development/attempts/" + attempt
+    previous = control.read(previous_root + "/terminal.json")
+    document = control.read(previous_root + "/compose.json")
+    if (previous.get("schema") != "fullmag.docker-build-operation.v1"
+            or previous.get("phase") != "development"
+            or previous.get("state") != "succeeded"
+            or previous.get("attempt") != attempt
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or previous.get("control_namespace", "") != control.namespace
+            or previous.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or previous.get("config_sha256") != config_sha256
+            or previous.get("inputs", {}).get("source_root") != str(selected)
+            or document.get("name") != control.project
+            or hashlib.sha256(canonical(document)).hexdigest() != config_sha256):
+        raise BuildControlError("Held UI preview retained DEV receipt/source/config pins differ")
+
+    ids = {}
+    actual = {}
+    for service in ("backend", "frontend"):
+        ids[service] = compose_capture(document, "ps", "--all", "--quiet", service).decode().strip()
+        if (not isinstance(ids[service], str)
+                or re.fullmatch(r"[0-9a-f]{64}", ids[service]) is None
+                or previous.get(service + "_container") != ids[service]):
+            raise BuildControlError("Held UI preview retained service container identity differs: " + service)
+        service_image = document.get("services", {}).get(service, {}).get("image")
+        if not isinstance(service_image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", service_image) is None:
+            raise BuildControlError("Held UI preview retained service image is not pinned: " + service)
+        images = json.loads(docker_text("image", "inspect", service_image))
+        containers = json.loads(docker_text("inspect", ids[service]))
+        if len(images) != 1 or images[0].get("Id") != service_image or len(containers) != 1:
+            raise BuildControlError("Held UI preview service/image inspection is ambiguous: " + service)
+        actual[service] = containers[0]
+        labels = actual[service].get("Config", {}).get("Labels", {})
+        if (actual[service].get("Image") != service_image
+                or labels.get("com.docker.compose.project") != control.project
+                or labels.get("com.docker.compose.service") != service
+                or labels.get("org.fullmag.source.worktree-id") != identity["worktree_id"]):
+            raise BuildControlError("Held UI preview service ownership differs: " + service)
+        _validate_retained_service(
+            document, actual[service], service, images[0]["Config"], allow_legacy_frontend=True,
+        )
+        state = actual[service].get("State", {})
+        if state.get("Running") is not True:
+            raise BuildControlError("Held UI preview requires the pinned service to be running: " + service)
+    if actual["backend"].get("State", {}).get("Health", {}).get("Status") != "healthy":
+        raise BuildControlError("Held UI preview backend is not healthy")
+    _assert_private_restart_network(actual, ids, control.project)
+    from docker_volume_stop_diagnostic import _port_matches
+    _port_matches(document, args.port)
+
+    state_root = storage.validate_path(
+        Path(previous["state_root"]), layout["runtime_root"], "held UI retained session state",
+    )
+    certificate_path = _certificate_path(state_root)
+    _retained_certificate(state_root, document)
+    owner_path = state_root / host.OWNER_NAME
+    owner_raw = host.read_owned_regular(owner_path)
+    certificate_raw = host.read_owned_regular(certificate_path)
+    state_root_sha256 = hashlib.sha256(canonical({
+        "schema": "fullmag.held-ui-state-root-binding.v1",
+        "state_root": str(state_root.resolve(strict=True)),
+        "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+    })).hexdigest()
+    source_scope = {
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "namespace": control.namespace,
+        "namespace_registry_sha256": control.namespace_registry_sha256,
+        "source_root": str(selected),
+        "state_root_sha256": state_root_sha256,
+        "backend_container_id": ids["backend"],
+        "backend_started_at": actual["backend"].get("State", {}).get("StartedAt"),
+        "frontend_container_id": ids["frontend"],
+        "frontend_started_at": actual["frontend"].get("State", {}).get("StartedAt"),
+        "runtime_config_sha256": config_sha256,
+    }
+
+    accepted, preflight, inventory = controller.capture_readonly_preflight(
+        ids["backend"], attempt=attempt, maintenance_request_id=request_id,
+        run_id=run_id, source_scope=source_scope,
+    )
+    controller._require(accepted.get("run_id") == run_id,
+                         "current API/RunIntent differs from the selected run")
+    plan, plan_sha256 = controller.build_preview_plan(
+        attempt=attempt,
+        maintenance_request_id=request_id,
+        source_scope=source_scope,
+        accepted=accepted,
+        preflight=preflight,
+        inventory=inventory,
+    )
+    return {
+        "state": "preview-passed",
+        "mode": "read-only",
+        "apply_available": True,
+        "plan": plan,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def _capture_held_ui_fresh_plan(controller, *, backend_container_id, plan,
+                                source_scope, verify_source_and_state):
+    """Adapt the typed capture tuple to lifecycle's closed six-key boundary."""
+    verify_source_and_state()
+    captured = controller.capture_readonly_preflight(
+        backend_container_id,
+        attempt=plan["attempt"],
+        maintenance_request_id=plan["maintenance_request_id"],
+        run_id=plan["accepted"]["run_id"],
+        source_scope=source_scope,
+    )
+    if not isinstance(captured, tuple) or len(captured) != 3:
+        raise BuildControlError("Held UI read-only capture did not return its accepted/preflight/inventory tuple")
+    accepted, preflight, inventory = captured
+    return {
+        "accepted": accepted,
+        "preflight": preflight,
+        "inventory": inventory,
+        "source_scope": dict(source_scope),
+        "attempt": plan["attempt"],
+        "maintenance_request_id": plan["maintenance_request_id"],
+    }
+
+
+def _capture_held_ui_stop_context(args, plan, *, controller, require_running=True,
+                                  frontend_stopped=False):
+    """Bind the stop driver to the exact retained Compose and state roots."""
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+
+    scope = plan.get("source_scope")
+    accepted = plan.get("accepted")
+    if not isinstance(scope, Mapping) or not isinstance(accepted, Mapping):
+        raise BuildControlError("Held UI stop plan has no exact source or accepted-run pins")
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    if str(selected) != scope.get("source_root"):
+        raise BuildControlError("Held UI stop selected source root differs from the approved plan")
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Held UI stop has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Held UI stop requires the exact existing control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())
+            or control.project != scope.get("compose_project")
+            or control.volume != scope.get("control_volume")
+            or control.namespace != scope.get("namespace")
+            or control.namespace_registry_sha256 != scope.get("namespace_registry_sha256")):
+        raise BuildControlError("Held UI stop control-volume or namespace ownership differs")
+
+    previous_root = "development/attempts/" + plan["attempt"]
+    expected_receipt = control.read(previous_root + "/terminal.json")
+    expected_document = control.read(previous_root + "/compose.json")
+    expected_receipt_sha256 = hashlib.sha256(canonical(expected_receipt)).hexdigest()
+    if (expected_receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or expected_receipt.get("phase") != "development"
+            or expected_receipt.get("state") != "succeeded"
+            or expected_receipt.get("attempt") != plan["attempt"]
+            or expected_receipt.get("compose_project") != control.project
+            or expected_receipt.get("control_volume") != control.volume
+            or expected_receipt.get("control_namespace", "") != control.namespace
+            or expected_receipt.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or expected_receipt.get("config_sha256") != scope.get("runtime_config_sha256")
+            or expected_receipt.get("inputs", {}).get("source_root") != str(selected)
+            or expected_receipt.get("backend_container") != scope.get("backend_container_id")
+            or expected_receipt.get("frontend_container") != scope.get("frontend_container_id")
+            or expected_receipt.get("backend_started_at") != scope.get("backend_started_at")
+            or expected_receipt.get("frontend_started_at") != scope.get("frontend_started_at")
+            or expected_receipt.get("inputs", {}).get("image_id")
+                != expected_document.get("services", {}).get("backend", {}).get("image")
+            or expected_document.get("name") != control.project
+            or hashlib.sha256(canonical(expected_document)).hexdigest()
+                != scope.get("runtime_config_sha256")):
+        raise BuildControlError("Held UI stop retained DEV receipt or Compose pins differ")
+    if expected_receipt.get("state_root") is None:
+        raise BuildControlError("Held UI stop retained DEV receipt has no state root")
+
+    from docker_dev_network import retained_requested_subnet
+    retained_requested_subnet(expected_document, getattr(args, "network_subnet", None))
+    retained_device_access = _retained_device_access(expected_receipt, expected_document)
+    resolved_device_access = _probe_retained_device_access(
+        retained_device_access, expected_receipt["inputs"]["image_id"], control.project,
+    )
+    if resolved_device_access != retained_device_access:
+        raise BuildControlError("Held UI stop device access differs from the retained profile")
+
+    host = _session_host()
+
+    def verify_source_and_state():
+        selected_now, layout_now = _select_source(repo, args.source_root)
+        identity_now = _compose_identity(layout_now)
+        if (selected_now != selected or identity_now != identity
+                or str(selected_now) != scope["source_root"]):
+            raise BuildControlError("Held UI stop source selection changed after preview")
+        receipt_now = control.read(previous_root + "/terminal.json")
+        document_now = control.read(previous_root + "/compose.json")
+        if (hashlib.sha256(canonical(receipt_now)).hexdigest() != expected_receipt_sha256
+                or hashlib.sha256(canonical(document_now)).hexdigest()
+                    != scope["runtime_config_sha256"]):
+            raise BuildControlError("Held UI stop DEV receipt or Compose changed after preview")
+        retained_receipt_raw = controller.canonical(receipt_now) + b"\n"
+        if (control.read_bytes("development/current.json", optional=True) != retained_receipt_raw
+                or control.read_bytes("development/verified.json", optional=True) != retained_receipt_raw):
+            raise BuildControlError("Held UI stop DEV current/verified pointers changed")
+        state_root = storage.validate_path(
+            Path(receipt_now["state_root"]), layout_now["runtime_root"],
+            "held UI retained session state",
+        )
+        certificate_path = _certificate_path(state_root)
+        _retained_certificate(state_root, document_now)
+        owner_raw = host.read_owned_regular(state_root / host.OWNER_NAME)
+        certificate_raw = host.read_owned_regular(certificate_path)
+        state_root_sha256 = hashlib.sha256(canonical({
+            "schema": "fullmag.held-ui-state-root-binding.v1",
+            "state_root": str(state_root.resolve(strict=True)),
+            "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+            "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+        })).hexdigest()
+        if state_root_sha256 != scope.get("state_root_sha256"):
+            raise BuildControlError("Held UI stop owner/certificate state-root binding changed")
+        retained_requested_subnet(document_now, getattr(args, "network_subnet", None))
+        if _retained_device_access(receipt_now, document_now) != retained_device_access:
+            raise BuildControlError("Held UI stop retained device profile changed")
+        return document_now
+
+    ids = {
+        "backend": scope["backend_container_id"],
+        "frontend": scope["frontend_container_id"],
+    }
+    image_configs = {}
+    for service in ("backend", "frontend"):
+        service_image = expected_document.get("services", {}).get(service, {}).get("image")
+        if not isinstance(service_image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", service_image):
+            raise BuildControlError("Held UI stop retained service image is not pinned: " + service)
+        images = json.loads(docker_text("image", "inspect", service_image))
+        if len(images) != 1 or images[0].get("Id") != service_image:
+            raise BuildControlError("Held UI stop retained service image inspect differs: " + service)
+        image_configs[service] = images[0]["Config"]
+
+    def inspect_services():
+        document = verify_source_and_state()
+        records = json.loads(docker_capture("inspect", ids["backend"], ids["frontend"]).stdout)
+        by_id = {item.get("Id"): item for item in records if isinstance(item, Mapping)}
+        if len(records) != 2 or set(by_id) != set(ids.values()):
+            raise BuildControlError("Held UI stop service inspection differs from the pinned pair")
+        actual = {name: by_id[identifier] for name, identifier in ids.items()}
+        for name, container in actual.items():
+            labels = container.get("Config", {}).get("Labels", {})
+            expected_image = document["services"][name]["image"]
+            if (container.get("Image") != expected_image
+                    or labels.get("com.docker.compose.project") != control.project
+                    or labels.get("com.docker.compose.service") != name
+                    or labels.get("org.fullmag.source.worktree-id") != identity["worktree_id"]):
+                raise BuildControlError("Held UI stop service ownership differs: " + name)
+            _validate_retained_service(
+                document, container, name, image_configs[name],
+                expected_started_at=scope[name + "_started_at"],
+                allow_legacy_frontend=True,
+            )
+        if actual["backend"].get("State", {}).get("Running") is True:
+            _assert_private_restart_network(actual, ids, control.project)
+        return {
+            name: {
+                "id": ids[name], "image_id": actual[name]["Image"],
+                "started_at": actual[name]["State"].get("StartedAt"),
+                "running": actual[name]["State"].get("Running"),
+                "exit_code": actual[name]["State"].get("ExitCode"),
+                "_actual": actual[name],
+            }
+            for name in ("backend", "frontend")
+        }
+
+    if require_running and frontend_stopped:
+        raise BuildControlError("Held UI stop context cannot require a running and stopped frontend")
+    initial = inspect_services()
+    if require_running:
+        if (initial["backend"]["running"] is not True
+                or initial["frontend"]["running"] is not True
+                or initial["backend"]["_actual"].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+            raise BuildControlError("Held UI stop requires the exact healthy running service pair")
+    elif frontend_stopped:
+        if (initial["backend"]["running"] is not True
+                or initial["frontend"]["running"] is not False
+                or initial["backend"]["_actual"].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+            raise BuildControlError(
+                "Pre-signal held UI resume requires the exact healthy backend and stopped frontend"
+            )
+    elif initial["backend"]["running"] is not False or initial["frontend"]["running"] is not False:
+        raise BuildControlError("Publish-only resume requires both exact pinned services to remain stopped")
+    expected_services = {
+        name: {key: service[key] for key in ("id", "image_id", "started_at")}
+        for name, service in initial.items()
+    }
+
+    def capture_fresh():
+        return _capture_held_ui_fresh_plan(
+            controller, backend_container_id=ids["backend"], plan=plan,
+            source_scope=scope, verify_source_and_state=verify_source_and_state,
+        )
+
+    def stop_service(name, container_id):
+        if name not in ids or container_id != ids[name]:
+            raise BuildControlError("Held UI stop refused an unpinned service stop")
+        docker_capture("stop", "--time", "60", container_id, timeout=90)
+
+    from docker_volume_stop_unadmitted import (
+        _preflight_terminal_process_receipt, _read_terminal_process_receipt,
+    )
+
+    def preflight_drain(service):
+        _preflight_terminal_process_receipt(service["_actual"], control)
+
+    def read_drain(service):
+        return _read_terminal_process_receipt(service["_actual"], control)
+
+    return {
+        "control": control,
+        "controller": controller,
+        "plan": plan,
+        "expected_plan_sha256": hashlib.sha256(canonical(plan)).hexdigest(),
+        "expected_services": expected_services,
+        "capture_fresh": capture_fresh,
+        "inspect_services": inspect_services,
+        "stop_service": stop_service,
+        "preflight_drain": preflight_drain,
+        "read_drain": read_drain,
+    }
+
+
+def _held_ui_pre_signal_stop_pin_args(args, *, controller, applying):
+    stop_attempt = getattr(args, "pre_signal_stop_attempt", None)
+    terminal_sha256 = getattr(args, "pre_signal_stop_terminal_sha256", None)
+    if (stop_attempt is None) != (terminal_sha256 is None):
+        raise BuildControlError("Pre-signal continuation requires both the exact stop attempt and terminal SHA")
+    if stop_attempt is None:
+        return None
+    if not applying or getattr(args, "apply", False) is not True or getattr(args, "preview", False) is not False:
+        raise BuildControlError("Pre-signal stop evidence is accepted only with the explicit private --apply action")
+    if not isinstance(stop_attempt, str) or re.fullmatch(r"[0-9a-f]{32}", stop_attempt) is None:
+        raise BuildControlError("Pre-signal stop attempt is not an exact operation token")
+    if not isinstance(terminal_sha256, str) or _SHA256.fullmatch(terminal_sha256) is None:
+        raise BuildControlError("Pre-signal stop terminal SHA is not lowercase SHA-256")
+    controller._digest(terminal_sha256, "pre-signal stop terminal digest")
+    return {"attempt": stop_attempt, "terminal_sha256": terminal_sha256}
+
+
+def _load_held_ui_pre_signal_stop_context(args, expected_plan_sha256, *, controller):
+    """Read and validate only an explicitly pinned no-API-exec frontend-stop failure."""
+    parent = _held_ui_pre_signal_stop_pin_args(args, controller=controller, applying=True)
+    if parent is None:
+        raise BuildControlError("Pre-signal resume requires explicit parent stop pins")
+    try:
+        expected_plan_sha256 = controller._digest(
+            expected_plan_sha256, "approved pre-signal plan digest",
+        )
+        attempt = args.attempt
+        request_id = args.request_id
+        run_id = args.run_id
+        selected, layout, identity, control = _held_ui_control_for_args(args)
+        if control.read_bytes("active", optional=True) is not None:
+            raise BuildControlError("Pre-signal resume requires no active control operation")
+
+        previous_raw, previous = _read_canonical_control_record(
+            control, "development/attempts/" + str(attempt) + "/terminal.json",
+            "pre-signal retained DEV terminal",
+        )
+        document_raw, document = _read_canonical_control_record(
+            control, "development/attempts/" + str(attempt) + "/compose.json",
+            "pre-signal retained DEV Compose document",
+        )
+        if (control.read_bytes("development/current.json", optional=True) != previous_raw
+                or control.read_bytes("development/verified.json", optional=True) != previous_raw):
+            raise BuildControlError("Pre-signal resume requires the exact retained DEV current/verified pins")
+
+        parent_authority = controller.validate_pre_signal_stop_parent(
+            control,
+            stop_attempt=parent["attempt"],
+            terminal_sha256=parent["terminal_sha256"],
+            expected_attempt=attempt,
+            expected_maintenance_request_id=request_id,
+            expected_run_id=run_id,
+            expected_plan_sha256=expected_plan_sha256,
+        )
+        plan = parent_authority["intent"]["plan"]
+        source_scope = plan["source_scope"]
+        if (plan.get("attempt") != attempt
+                or plan.get("maintenance_request_id") != request_id
+                or plan.get("accepted", {}).get("run_id") != run_id
+                or source_scope.get("source_root") != str(selected)
+                or source_scope.get("compose_project") != control.project
+                or source_scope.get("control_volume") != control.volume
+                or source_scope.get("namespace") != control.namespace
+                or source_scope.get("namespace_registry_sha256") != control.namespace_registry_sha256
+                or source_scope.get("runtime_config_sha256") != args.config_sha256
+                or source_scope.get("backend_container_id") != previous.get("backend_container")
+                or source_scope.get("frontend_container_id") != previous.get("frontend_container")
+                or previous.get("state") != "succeeded"
+                or previous.get("attempt") != attempt
+                or previous.get("compose_project") != control.project
+                or previous.get("control_volume") != control.volume
+                or previous.get("config_sha256") != args.config_sha256
+                or previous.get("inputs", {}).get("source_root") != str(selected)
+                or document.get("name") != control.project
+                or hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256
+                or expected_plan_sha256 != controller.sha(controller.canonical(plan))):
+            raise BuildControlError("Pre-signal parent intent differs from the retained DEV/source/run pins")
+
+        context = _capture_held_ui_stop_context(
+            args, plan, controller=controller,
+            require_running=False, frontend_stopped=True,
+        )
+        if (context["control"].project != control.project
+                or context["control"].volume != control.volume
+                or context["control"].namespace != control.namespace
+                or context["control"].identity != identity
+                or context["expected_plan_sha256"] != expected_plan_sha256):
+            raise BuildControlError("Pre-signal capture context changed the exact source/control pins")
+
+        from docker_volume_held_ui_lifecycle import _assert_plan
+        _assert_plan(controller, plan, expected_plan_sha256, context["capture_fresh"])
+        return {
+            "state": "pre-signal-resume-read-only-passed",
+            "plan": plan,
+            "plan_sha256": expected_plan_sha256,
+            "parent": parent_authority,
+            "pre_signal_parent": parent,
+            "stop_context": context,
+        }
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Pre-signal held UI stop evidence is invalid: " + str(error)) from error
+
+
+def _load_held_ui_publish_context(args, expected_plan_sha256, *, controller):
+    """Resolve only an exact spent-claim stop for request publication recovery."""
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+    import uuid
+
+    attempt = getattr(args, "attempt", None)
+    request_id = getattr(args, "request_id", None)
+    run_id = getattr(args, "run_id", None)
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Publish-only resume requires the exact retained DEV attempt")
+    try:
+        parsed_request_id = uuid.UUID(request_id)
+    except (TypeError, ValueError, AttributeError) as error:
+        raise BuildControlError("Publish-only resume requires a canonical maintenance request UUID") from error
+    if parsed_request_id.int == 0 or str(parsed_request_id) != request_id:
+        raise BuildControlError("Publish-only resume maintenance request UUID is not canonical")
+    if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", run_id) is None:
+        raise BuildControlError("Publish-only resume requires the exact accepted run id")
+
+    require_host()
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Publish-only resume has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Publish-only resume requires the exact existing control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())):
+        raise BuildControlError("Publish-only resume control volume ownership differs")
+
+    request_relative = controller.request_relative(request_id)
+    claim_relative = controller.quiescence_start_claim_relative(request_id)
+    existing_request = control.read_bytes("runtime-control/" + request_relative, optional=True)
+    claim_raw = control.read_bytes("runtime-control/" + claim_relative, optional=True)
+    if claim_raw is None:
+        if existing_request is not None:
+            raise BuildControlError("Published held UI request has no matching spent API claim")
+        return None
+    claim = controller.decode(claim_raw, "API quiescence start claim", maximum=16 * 1024)
+    if claim_raw != canonical(claim) + b"\n":
+        raise BuildControlError("Publish-only resume claim is not canonical JSON plus LF")
+    required_claim_fields = {
+        "schema", "state", "maintenance_request_id", "plan_sha256", "intent_sha256",
+        "run_id", "run_intent_sha256", "backend_container_id", "operation_attempt",
+    }
+    if (not isinstance(claim, Mapping) or set(claim) != required_claim_fields
+            or claim.get("schema") != "fullmag.held-ui-materialization-api-quiescence-start.v1"
+            or claim.get("state") != "started"
+            or claim.get("maintenance_request_id") != request_id
+            or claim.get("run_id") != run_id
+            or not isinstance(claim.get("operation_attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", claim["operation_attempt"]) is None):
+        raise BuildControlError("Publish-only resume claim does not identify this request and run")
+    if claim.get("plan_sha256") != expected_plan_sha256:
+        raise BuildControlError("Publish-only resume claim differs from the approved plan SHA")
+
+    intent_relative = controller.quiescence_intent_relative(request_id)
+    intent_raw = control.read_bytes("runtime-control/" + intent_relative)
+    if controller.sha(intent_raw) != claim.get("intent_sha256"):
+        raise BuildControlError("Publish-only resume quiescence intent differs from the spent claim")
+    intent = controller.decode(intent_raw, "API quiescence intent", maximum=controller.MAX_PROOF_BYTES)
+    intent = controller.validate_api_quiescence_intent(
+        intent, expected_sha256=claim["intent_sha256"],
+        expected_plan_sha256=expected_plan_sha256,
+    )
+    plan = intent["plan"]
+    if (plan.get("attempt") != attempt
+            or plan.get("maintenance_request_id") != request_id
+            or plan.get("accepted", {}).get("run_id") != run_id
+            or plan.get("source_scope", {}).get("source_root") != str(selected)
+            or plan.get("source_scope", {}).get("runtime_config_sha256") != args.config_sha256
+            or plan.get("source_scope", {}).get("compose_project") != control.project
+            or plan.get("source_scope", {}).get("control_volume") != control.volume
+            or plan.get("source_scope", {}).get("namespace") != control.namespace
+            or plan.get("source_scope", {}).get("namespace_registry_sha256")
+                != control.namespace_registry_sha256):
+        raise BuildControlError("Publish-only resume plan differs from the selected DEV/config scope")
+    if (claim.get("backend_container_id") != plan["source_scope"].get("backend_container_id")
+            or claim.get("run_intent_sha256") != plan["accepted"].get("run_intent_sha256")):
+        raise BuildControlError("Publish-only resume claim differs from the accepted native identity")
+
+    from docker_volume_held_ui_lifecycle import resume_publish_only
+    context = _capture_held_ui_stop_context(
+        args, plan, controller=controller, require_running=False,
+    )
+    stop_attempt = claim["operation_attempt"]
+    terminal_relative = "held-ui-materialization-stop/attempts/" + stop_attempt + "/terminal.json"
+    terminal_raw = control.read_bytes(terminal_relative)
+    terminal = controller.decode(terminal_raw, "held UI stop terminal",
+                                 maximum=controller.MAX_PROOF_BYTES)
+    claim_reference = terminal.get("held_ui_api_quiescence_claim")
+    if (not isinstance(claim_reference, Mapping)
+            or claim_reference.get("path") != claim_relative
+            or claim_reference.get("sha256") != controller.sha(claim_raw)
+            or claim_reference.get("operation_attempt") != stop_attempt
+            or claim_reference.get("state") != "consumed"):
+        raise BuildControlError("Publish-only resume claim is not consumed by its exact stop terminal")
+    proof_refs = terminal.get("held_ui_stop_proofs")
+    if not isinstance(proof_refs, Mapping):
+        raise BuildControlError("Publish-only resume terminal has no completed proof references")
+
+    def read_control_record(relative):
+        prefix = "" if relative.startswith("held-ui-materialization-stop/") else "runtime-control/"
+        return control.read_bytes(prefix + relative, maximum=controller.MAX_PROOF_BYTES)
+
+    return {
+        "control": context["control"],
+        "controller": context["controller"],
+        "plan": plan,
+        "claim": claim,
+        "terminal_raw": terminal_raw,
+        "proof_refs": proof_refs,
+        "expected_plan_sha256": expected_plan_sha256,
+        "expected_services": context["expected_services"],
+        "inspect_services": context["inspect_services"],
+        "read_control_record": read_control_record,
+    }
+
+
+def _stop_held_ui_materialization(args, *, controller):
+    """Run only the typed stop boundary; retained recreate/start is a later phase."""
+    if getattr(args, "apply", False) is not True or getattr(args, "preview", False) is not False:
+        raise BuildControlError("Held UI stop requires the exact --apply action")
+    expected_plan_sha256 = controller._digest(
+        getattr(args, "expected_plan_sha256", None), "approved preview plan digest",
+    )
+    pre_signal_parent = _held_ui_pre_signal_stop_pin_args(
+        args, controller=controller, applying=True,
+    )
+    if pre_signal_parent is not None:
+        loaded = _load_held_ui_pre_signal_stop_context(
+            args, expected_plan_sha256, controller=controller,
+        )
+        from docker_volume_held_ui_lifecycle import execute_stop_only
+        result = execute_stop_only(
+            **loaded["stop_context"], pre_signal_parent=pre_signal_parent,
+        )
+        return {**result, "plan_sha256": expected_plan_sha256}
+
+    resume = _load_held_ui_publish_context(
+        args, expected_plan_sha256, controller=controller,
+    )
+    if resume is not None:
+        from docker_volume_held_ui_lifecycle import resume_publish_only
+        return resume_publish_only(**resume)
+    from copy import copy as shallow_copy
+    preview_args = shallow_copy(args)
+    preview_args.apply = False
+    preview_args.preview = True
+    preview = _run_held_ui_materialization(preview_args, controller=controller)
+    if preview.get("plan_sha256") != expected_plan_sha256:
+        raise BuildControlError("Fresh held UI preview differs from the approved plan SHA")
+    plan = preview.get("plan")
+    context = _capture_held_ui_stop_context(args, plan, controller=controller)
+    from docker_volume_held_ui_lifecycle import execute_stop_only
+    result = execute_stop_only(**context)
+    return {**result, "plan_sha256": expected_plan_sha256}
+
+
+def _held_ui_control_for_args(args):
+    """Resolve the existing exact DEV control volume without creating one."""
+    require_host()
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"][
+            "FULLMAG_CUDA_BASE_IMAGE"
+        ]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Held UI continuation has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+    inspected = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if inspected.returncode:
+        raise BuildControlError("Held UI continuation requires its existing exact control volume")
+    volumes = json.loads(inspected.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())):
+        raise BuildControlError("Held UI continuation control-volume ownership differs")
+    return selected, layout, identity, control
+
+
+def _held_ui_state_root_binding(state, host):
+    owner_raw = host.read_owned_regular(state / host.OWNER_NAME)
+    certificate_raw = host.read_owned_regular(_certificate_path(state))
+    return hashlib.sha256(canonical({
+        "schema": "fullmag.held-ui-state-root-binding.v1",
+        "state_root": str(state.resolve(strict=True)),
+        "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+    })).hexdigest()
+
+
+def _load_held_ui_request_context(args, *, controller, expected_plan_sha256,
+                                  expected_request_sha256=None, require_original_state_binding=False):
+    """Read only the exact published request and old retained DEV authority."""
+    selected, layout, identity, control = _held_ui_control_for_args(args)
+    attempt = getattr(args, "attempt", None)
+    request_id = getattr(args, "request_id", None)
+    run_id = getattr(args, "run_id", None)
+    previous_raw, previous = _read_canonical_control_record(
+        control, "development/attempts/" + str(attempt) + "/terminal.json",
+        "held UI source DEV terminal",
+    )
+    document_raw, document = _read_canonical_control_record(
+        control, "development/attempts/" + str(attempt) + "/compose.json",
+        "held UI source DEV Compose document",
+    )
+    if (previous.get("state") != "succeeded" or previous.get("attempt") != attempt
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or previous.get("control_namespace", "") != control.namespace
+            or previous.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or previous.get("config_sha256") != args.config_sha256
+            or previous.get("inputs", {}).get("source_root") != str(selected)
+            or document.get("name") != control.project
+            or hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256):
+        raise BuildControlError("Held UI source DEV receipt or Compose scope changed")
+    try:
+        request, request_raw = controller.load_request(
+            control, request_id, expected_request_sha256,
+        )
+    except Exception as error:
+        raise BuildControlError("Held UI immutable request is unavailable or changed: " + str(error)) from error
+    request_sha256 = controller.sha(request_raw)
+    plan_sha256 = request["plan"].get("plan_sha256")
+    scope = request["source_scope"]
+    accepted = request["accepted"]
+    if (plan_sha256 != expected_plan_sha256
+            or request["plan"].get("attempt") != attempt
+            or request["plan"].get("maintenance_request_id") != request_id
+            or accepted.get("run_id") != run_id
+            or scope.get("source_root") != str(selected)
+            or scope.get("compose_project") != control.project
+            or scope.get("control_volume") != control.volume
+            or scope.get("namespace") != control.namespace
+            or scope.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or scope.get("runtime_config_sha256") != args.config_sha256
+            or scope.get("backend_container_id") != previous.get("backend_container")
+            or scope.get("frontend_container_id") != previous.get("frontend_container")):
+        raise BuildControlError("Held UI request differs from the selected DEV/run/plan pins")
+    state = storage.validate_path(
+        Path(previous["state_root"]), layout["runtime_root"], "held UI retained session state",
+    )
+    if require_original_state_binding:
+        host = _session_host()
+        if _held_ui_state_root_binding(state, host) != scope.get("state_root_sha256"):
+            raise BuildControlError("Held UI retained owner/certificate binding changed")
+    start_environment, start_metadata = controller.start_handoff(
+        controller.request_relative(request_id), request_sha256, request,
+    )
+    try:
+        validated = controller.validate_handoff(
+            control, start_metadata, selected_source=str(selected), state_root=str(state),
+        )
+    except Exception as error:
+        raise BuildControlError("Held UI stop/request proof no longer validates: " + str(error)) from error
+    if validated.get("request") != request or validated.get("request_raw") != request_raw:
+        raise BuildControlError("Held UI handoff request readback differs")
+    recreate_input = controller.recreate_input(start_environment, start_metadata, request)
+    return {
+        "selected": selected,
+        "layout": layout,
+        "identity": identity,
+        "control": control,
+        "previous": previous,
+        "previous_raw": previous_raw,
+        "document": document,
+        "document_raw": document_raw,
+        "state": state,
+        "request": request,
+        "request_raw": request_raw,
+        "request_path": start_environment[controller.REQUEST_ENV],
+        "request_sha256": request_sha256,
+        "plan_sha256": plan_sha256,
+        "start_environment": start_environment,
+        "start_metadata": start_metadata,
+        "recreate_input": recreate_input,
+        "proofs": validated["proofs"],
+    }
+
+
+def _validate_held_ui_materialization_context(args, value, *, expected_control=None,
+                                               require_claim=False,
+                                               require_original_state_binding=False,
+                                               controller=None):
+    if controller is None:
+        import docker_volume_held_ui_materialization as controller
+    validate_start_handoff = controller.validate_start_handoff
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "environment", "metadata", "recreate_input", "claim", "claim_sha256",
+    }:
+        raise BuildControlError("Held UI recreate/start context has an unsupported shape")
+    try:
+        environment, metadata = validate_start_handoff(value["environment"], value["metadata"])
+    except Exception as error:
+        raise BuildControlError("Held UI start handoff is invalid: " + str(error)) from error
+    expected_digest = environment.get("FULLMAG_HELD_UI_MATERIALIZATION_REQUEST_SHA256")
+    plan_sha256 = getattr(args, "expected_plan_sha256", None)
+    if not isinstance(plan_sha256, str) or _SHA256.fullmatch(plan_sha256) is None:
+        raise BuildControlError("Held UI start requires the approved preview plan digest")
+    loaded = _load_held_ui_request_context(
+        args,
+        controller=controller,
+        expected_plan_sha256=plan_sha256,
+        expected_request_sha256=expected_digest,
+        require_original_state_binding=require_original_state_binding,
+    )
+    loaded["controller"] = controller
+    if expected_control is not None and loaded["control"] is not expected_control:
+        # BuildControl instances need not be object-identical across phases;
+        # compare the full namespace identity instead.
+        expected_identity = getattr(expected_control, "identity", None)
+        if (loaded["control"].project != expected_control.project
+                or loaded["control"].volume != expected_control.volume
+                or loaded["control"].namespace != expected_control.namespace
+                or expected_identity != getattr(loaded["control"], "identity", None)):
+            raise BuildControlError("Held UI control namespace changed between lifecycle phases")
+    if (loaded["start_environment"] != environment
+            or loaded["start_metadata"] != metadata
+            or loaded["recreate_input"] != value["recreate_input"]):
+        raise BuildControlError("Held UI request and recreate handoff tuple differ")
+    claim = value["claim"]
+    claim_sha256 = value["claim_sha256"]
+    if require_claim or claim is not None or claim_sha256 is not None:
+        from docker_volume_held_ui_materialization import (
+            recreate_claim_relative, validate_recreate_claim,
+        )
+        if not isinstance(claim_sha256, str) or _SHA256.fullmatch(claim_sha256) is None:
+            raise BuildControlError("Held UI recreate claim digest is missing")
+        try:
+            claim = validate_recreate_claim(
+                claim, request=loaded["request"], request_sha256=loaded["request_sha256"],
+                expected_sha256=claim_sha256,
+            )
+            claim_raw = loaded["control"].read_bytes(
+                "runtime-control/" + recreate_claim_relative(args.request_id),
+            )
+        except Exception as error:
+            raise BuildControlError("Held UI recreate claim is invalid: " + str(error)) from error
+        if (claim_raw != controller.canonical(claim) + b"\n"
+                or controller.sha(claim_raw) != claim_sha256):
+            raise BuildControlError("Held UI recreate claim bytes differ from their immutable pin")
+    elif require_claim:
+        raise BuildControlError("Held UI recreate claim is required")
+    return {**loaded, "claim": claim, "claim_sha256": claim_sha256}
+
+
+def _held_ui_context_value(context):
+    """Project a loaded context back to the exact private handoff envelope."""
+    return {
+        "environment": context["start_environment"],
+        "metadata": context["start_metadata"],
+        "recreate_input": context["recreate_input"],
+        "claim": context.get("claim"),
+        "claim_sha256": context.get("claim_sha256"),
+    }
+
+
+def _held_ui_start_input(context):
+    claim = context.get("claim")
+    claim_sha256 = context.get("claim_sha256")
+    if not isinstance(claim, Mapping) or not isinstance(claim_sha256, str):
+        raise BuildControlError("Held UI start has no completed recreation claim")
+    return {
+        "schema": "fullmag.held-ui-materialization-start-input.v1",
+        **context["recreate_input"],
+        "recreate_attempt": claim["recreate_attempt"],
+        "recreate_claim_sha256": claim_sha256,
+    }
+
+
+def _record_held_ui_rotated_certificate(host, state, certificate_path, certificate,
+                                        control, operation):
+    """Persist the exact normal-start owner/certificate transition before Compose."""
+    state = Path(state)
+    certificate_path = Path(certificate_path)
+    if certificate_path != _certificate_path(state):
+        raise BuildControlError("Held UI certificate transition changed the retained state path")
+    try:
+        state = state.resolve(strict=True)
+        certificate_raw = host.read_owned_regular(certificate_path)
+        owner_raw = host.read_owned_regular(state / host.OWNER_NAME)
+        observed_certificate = json.loads(certificate_raw)
+        observed_owner = json.loads(owner_raw)
+        local = host.local_volume(state)
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
+        raise BuildControlError("Held UI normal start did not publish readable owner evidence: " + str(error)) from error
+    if (observed_certificate != certificate or observed_owner != certificate
+            or certificate_raw != owner_raw
+            or certificate.get("schema") != host.HOST_SCHEMA
+            or certificate.get("storage_profile") not in {"linux-native-v1", "windows-folder-v1"}
+            or certificate.get("role") != "session"
+            or certificate.get("restart_verified") is not False
+            or not isinstance(certificate.get("owner_token"), str)
+            or not isinstance(certificate.get("image_id"), str)
+            or any(certificate.get(key) != value for key, value in local.items())):
+        raise BuildControlError("Held UI normal start owner/certificate transition is not exact")
+    if os.name != "nt" and certificate.get("host_inode") != state.stat().st_ino:
+        raise BuildControlError("Held UI normal start certificate changed the retained state inode")
+    pin = {
+        "schema": "fullmag.held-ui-materialization-successor-certificate-pin.v1",
+        "state_root": str(state),
+        "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+        "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        "storage_profile": certificate["storage_profile"],
+        "owner_token": certificate["owner_token"],
+        "image_id": certificate["image_id"],
+        "host_inode": certificate.get("host_inode"),
+    }
+    operation["receipt"]["held_ui_successor_certificate_pin"] = pin
+    control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    return pin
+
+
+def _validate_held_ui_successor_certificate(context, operation):
+    """Revalidate the explicitly recorded rotation immediately before Compose."""
+    host = _session_host()
+    state = Path(context["state"]).resolve(strict=True)
+    certificate_path = _certificate_path(state)
+    pin = operation.get("receipt", {}).get("held_ui_successor_certificate_pin")
+    fields = {
+        "schema", "state_root", "certificate_sha256", "owner_marker_sha256",
+        "storage_profile", "owner_token", "image_id", "host_inode",
+    }
+    if (not isinstance(pin, Mapping) or set(pin) != fields
+            or pin.get("schema") != "fullmag.held-ui-materialization-successor-certificate-pin.v1"
+            or pin.get("state_root") != str(state)):
+        raise BuildControlError("Held UI Compose start has no exact rotated certificate pin")
+    for key in ("certificate_sha256", "owner_marker_sha256"):
+        if not isinstance(pin.get(key), str) or _SHA256.fullmatch(pin[key]) is None:
+            raise BuildControlError("Held UI rotated certificate digest is malformed")
+    try:
+        certificate_raw = host.read_owned_regular(certificate_path)
+        owner_raw = host.read_owned_regular(state / host.OWNER_NAME)
+        certificate = json.loads(certificate_raw)
+        owner = json.loads(owner_raw)
+        local = host.local_volume(state)
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
+        raise BuildControlError("Held UI rotated owner evidence cannot be revalidated: " + str(error)) from error
+    if (hashlib.sha256(certificate_raw).hexdigest() != pin["certificate_sha256"]
+            or hashlib.sha256(owner_raw).hexdigest() != pin["owner_marker_sha256"]
+            or certificate_raw != owner_raw or certificate != owner
+            or certificate.get("schema") != host.HOST_SCHEMA
+            or certificate.get("storage_profile") != pin["storage_profile"]
+            or certificate.get("role") != "session"
+            or certificate.get("owner_token") != pin["owner_token"]
+            or certificate.get("image_id") != pin["image_id"]
+            or certificate.get("restart_verified") is not False
+            or any(certificate.get(key) != value for key, value in local.items())):
+        raise BuildControlError("Held UI rotated certificate changed before Compose start")
+    if os.name != "nt" and (pin["host_inode"] != state.stat().st_ino
+                             or certificate.get("host_inode") != pin["host_inode"]):
+        raise BuildControlError("Held UI rotated certificate no longer binds the retained inode")
+    return certificate
+
+
+def _record_held_ui_final_certificate(host, state, certificate_path, certificate,
+                                     control, operation):
+    """Pin the guest-verified owner certificate into the successful DEV record."""
+    state = Path(state).resolve(strict=True)
+    prestart = operation.get("receipt", {}).get("held_ui_successor_certificate_pin")
+    if (not isinstance(prestart, Mapping)
+            or prestart.get("schema") != "fullmag.held-ui-materialization-successor-certificate-pin.v1"
+            or prestart.get("state_root") != str(state)):
+        raise BuildControlError("Held UI final certificate has no exact prestart owner pin")
+    try:
+        certificate_raw = host.read_owned_regular(certificate_path)
+        owner_raw = host.read_owned_regular(state / host.OWNER_NAME)
+        observed = json.loads(certificate_raw)
+        owner = json.loads(owner_raw)
+        local = host.local_volume(state)
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
+        raise BuildControlError("Held UI final owner evidence cannot be read: " + str(error)) from error
+    if (observed != certificate or owner != certificate or certificate_raw != owner_raw
+            or certificate.get("schema") != host.HOST_SCHEMA
+            or certificate.get("storage_profile") != prestart.get("storage_profile")
+            or certificate.get("owner_token") != prestart.get("owner_token")
+            or certificate.get("image_id") != prestart.get("image_id")
+            or certificate.get("restart_verified") is not True
+            or any(certificate.get(key) != value for key, value in local.items())):
+        raise BuildControlError("Held UI final certificate is not the verified successor of its pinned owner")
+    if os.name != "nt" and certificate.get("host_inode") != state.stat().st_ino:
+        raise BuildControlError("Held UI final certificate changed the retained state inode")
+    final_pin = {
+        "schema": "fullmag.held-ui-materialization-final-certificate.v1",
+        "state_root": str(state),
+        "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+        "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        "storage_profile": certificate["storage_profile"],
+        "owner_token": certificate["owner_token"],
+        "image_id": certificate["image_id"],
+        "host_inode": certificate.get("host_inode"),
+        "restart_verified": True,
+    }
+    operation["receipt"]["held_ui_successor_certificate_final"] = final_pin
+    control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    return final_pin
+
+
+def _held_ui_recreate_terminal(context, args):
+    """Prove the exact claimed recreation removed only the pinned old pair."""
+    controller = context["controller"]
+    control = context["control"]
+    claim = context["claim"]
+    attempt = claim["recreate_attempt"]
+    root = "recreate-services/attempts/" + attempt
+    raw = control.read_bytes(root + "/terminal.json")
+    terminal = controller.decode(raw, "held UI recreate terminal", maximum=controller.MAX_PROOF_BYTES)
+    if raw != controller.canonical(terminal) + b"\n":
+        raise BuildControlError("Held UI recreate terminal is not canonical JSON plus LF")
+    claim_path = controller.recreate_claim_relative(args.request_id)
+    expected_claim_ref = {"path": claim_path, "sha256": context["claim_sha256"]}
+    previous = context["previous"]
+    scope = context["request"]["source_scope"]
+    expected_removed = [scope["backend_container_id"], scope["frontend_container_id"]]
+    if (terminal.get("schema") != "fullmag.docker-build-operation.v1"
+            or terminal.get("phase") != "recreate-services"
+            or terminal.get("state") != "succeeded"
+            or terminal.get("attempt") != attempt
+            or terminal.get("compose_project") != control.project
+            or terminal.get("control_volume") != control.volume
+            or terminal.get("control_namespace", "") != control.namespace
+            or terminal.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or terminal.get("fresh_state") is not False
+            or terminal.get("inputs", {}).get("held_ui_materialization") != context["recreate_input"]
+            or terminal.get("held_ui_materialization_recreate_claim") != expected_claim_ref
+            or terminal.get("removed_containers") != expected_removed
+            or terminal.get("previous_state_root") != str(context["state"])
+            or terminal.get("retained_volumes") != previous.get("backend_volumes")
+            or terminal.get("retained_frontend_volume") != previous.get("frontend_volume")):
+        raise BuildControlError("Held UI recreate terminal differs from its exact claim or retained storage")
+    if (control.read_bytes("recreate-services/current.json") != raw
+            or control.read_bytes("recreate-services/verified.json") != raw):
+        raise BuildControlError("Held UI recreation was superseded or lacks exact succeeded phase pointers")
+    from docker_volume_container_recovery import _assert_container_absent
+    for identifier in expected_removed:
+        _assert_container_absent(identifier)
+    return {"raw": raw, "terminal": terminal, "root": root}
+
+
+def _held_ui_launch_and_ack(context, process_receipt):
+    """Read back the native acknowledgement bound to the supervised API."""
+    controller = context["controller"]
+    request = context["request"]
+    accepted = request["accepted"]
+    runtime = process_receipt.get("held_ui_materialization") if isinstance(process_receipt, Mapping) else None
+    runtime_fields = {
+        "schema", "launch_id", "request_sha256", "input_sha256", "ack_relative",
+        "ack_sha256", "api_instance_id", "run_id", "command_id", "gate_action",
+    }
+    if (not isinstance(runtime, Mapping) or set(runtime) != runtime_fields
+            or runtime.get("schema") != "fullmag.docker-held-ui-materialization-runtime.v1"
+            or runtime.get("request_sha256") != context["request_sha256"]
+            or runtime.get("run_id") != accepted["run_id"]
+            or runtime.get("command_id") != accepted["command_id"]
+            or runtime.get("gate_action") not in {"released", "already_released_exact"}
+            or not isinstance(runtime.get("api_instance_id"), str)
+            or not isinstance(runtime.get("launch_id"), str)
+            or not isinstance(runtime.get("ack_sha256"), str)
+            or _SHA256.fullmatch(runtime["ack_sha256"]) is None
+            or not isinstance(runtime.get("input_sha256"), str)
+            or _SHA256.fullmatch(runtime["input_sha256"]) is None):
+        raise BuildControlError("Ready process receipt has no exact held UI runtime acknowledgement")
+    try:
+        import uuid
+        parsed_api_id = uuid.UUID(runtime["api_instance_id"])
+        parsed_launch_id = uuid.UUID(runtime["launch_id"])
+    except (ValueError, TypeError, AttributeError) as error:
+        raise BuildControlError("Held UI restored API or launch identity is invalid") from error
+    if (str(parsed_api_id) != runtime["api_instance_id"]
+            or str(parsed_launch_id) != runtime["launch_id"]
+            or runtime["api_instance_id"] == accepted["old_api_instance_id"]):
+        raise BuildControlError("Held UI restored API or launch identity is not a new canonical scope")
+
+    request_parent = PurePosixPath(context["request_path"]).parent
+    launch_relative = str(request_parent / "launch.json")
+    launch_raw = context["control"].read_bytes("runtime-control/" + launch_relative)
+    launch = controller.decode(launch_raw, "held UI API launch", maximum=controller.MAX_PROOF_BYTES)
+    if launch_raw != controller.canonical(launch) + b"\n":
+        raise BuildControlError("Held UI immutable API launch is not canonical JSON plus LF")
+    launch_input = launch.get("input")
+    target = launch_input.get("target_runtime") if isinstance(launch_input, Mapping) else None
+    if (launch.get("schema") != "fullmag.held-ui-materialization-launch.v1"
+            or launch.get("launch_id") != runtime["launch_id"]
+            or launch.get("request_path") != context["request_path"]
+            or launch.get("request_sha256") != context["request_sha256"]
+            or launch.get("input_sha256") != runtime["input_sha256"]
+            or not isinstance(launch_input, Mapping)
+            or launch_input.get("schema") != "fullmag.development-held-ui-materialization-restore.v1"
+            or launch_input.get("launch_id") != runtime["launch_id"]
+            or launch_input.get("plan") != request["plan"]
+            or launch_input.get("source_scope") != request["source_scope"]
+            or launch_input.get("stop_authority") != request["stop_authority"]
+            or launch_input.get("accepted") != request["accepted"]
+            or not isinstance(target, Mapping)
+            or not all(isinstance(target.get(key), str) and _SHA256.fullmatch(target[key]) is not None
+                       for key in ("config_sha256", "accepted_store_binding", "source_sha256"))
+            or not isinstance(target.get("build_id"), str)
+            or not isinstance(target.get("image_id"), str)
+            or hashlib.sha256(controller.canonical(launch_input) + b"\n").hexdigest()
+                != launch["input_sha256"]):
+        raise BuildControlError("Held UI API launch differs from the exact immutable request")
+    ack_relative = str(request_parent / ("restore-ack-" + runtime["launch_id"] + ".json"))
+    if runtime["ack_relative"] != ack_relative:
+        raise BuildControlError("Held UI API acknowledgement path differs from its launch id")
+    ack_raw = context["control"].read_bytes("runtime-control/" + ack_relative)
+    if hashlib.sha256(ack_raw).hexdigest() != runtime["ack_sha256"]:
+        raise BuildControlError("Held UI native acknowledgement bytes differ from the ready process receipt")
+    ack = controller.decode(ack_raw, "held UI native acknowledgement", maximum=64 * 1024)
+    expected = {
+        "schema": "fullmag.development-held-ui-materialization-restore-ack.v1",
+        "state": "restored",
+        "launch_id": runtime["launch_id"],
+        "input_sha256": runtime["input_sha256"],
+        "api_instance_id": runtime["api_instance_id"],
+        "config_sha256": target["config_sha256"],
+        "accepted_store_binding": target["accepted_store_binding"],
+        **{key: accepted[key] for key in (
+            "project_id", "run_id", "session_id", "session_epoch",
+            "session_created_at_unix_ms", "scene_revision", "run_intent_sha256",
+            "request_receipt_sha256", "command_id",
+        )},
+    }
+    if (set(ack) != {*expected, "catalog_sha256", "start_release_sha256", "gate_action"}
+            or any(type(ack.get(key)) is not type(value) or ack.get(key) != value
+                   for key, value in expected.items())
+            or ack.get("gate_action") != runtime["gate_action"]
+            or any(not isinstance(ack.get(key), str) or _SHA256.fullmatch(ack[key]) is None
+                   for key in ("catalog_sha256", "start_release_sha256"))):
+        raise BuildControlError("Held UI native acknowledgement differs from the original accepted command")
+    if ack["accepted_store_binding"] != context["proofs"]["preflight"]["accepted_store_binding"]:
+        raise BuildControlError("Held UI restored API selected a different accepted store binding")
+    return dict(runtime), dict(ack), launch
+
+
+def _held_ui_readback_or_resume_start(args, context):
+    """Return exact completed output, resume only an unstarted successor, else stop."""
+    control = context["control"]
+    controller = context["controller"]
+    claim = context["claim"]
+    _held_ui_recreate_terminal(context, args)
+    if control.read_bytes("active", optional=True) is not None:
+        raise BuildControlError("Held UI recreate/start outcome is unknown under an active managed lease; no replay")
+    current_raw = control.read_bytes("development/current.json", optional=True)
+    verified_raw = control.read_bytes("development/verified.json", optional=True)
+    if current_raw == context["previous_raw"] and verified_raw == context["previous_raw"]:
+        launch_path = "runtime-control/" + str(PurePosixPath(context["request_path"]).parent / "launch.json")
+        if control.read_bytes(launch_path, optional=True) is not None:
+            raise BuildControlError("Held UI API launch exists without a completed DEV receipt; no replay")
+        return None
+    if current_raw is None or verified_raw != current_raw:
+        raise BuildControlError("Held UI successor DEV receipt is missing or not the exact verified terminal")
+    expected_start = _held_ui_start_input(context)
+    current = controller.decode(current_raw, "held UI successor DEV terminal", maximum=controller.MAX_PROOF_BYTES)
+    if (current_raw != controller.canonical(current) + b"\n"
+            or current.get("schema") != "fullmag.docker-build-operation.v1"
+            or current.get("phase") != "development"
+            or current.get("inputs", {}).get("held_ui_materialization") != expected_start):
+        raise BuildControlError("A different DEV attempt superseded held UI restoration")
+    if current.get("state") != "succeeded":
+        raise BuildControlError("Held UI successor start failed or is outcome-unknown; resources retained, no replay")
+    process_raw = control.read_bytes("runtime-control/runtime-service/process-tree.json")
+    process = controller.decode(process_raw, "held UI ready process receipt", maximum=controller.MAX_PROOF_BYTES)
+    if (process.get("schema") != "fullmag.docker-process-tree.v1"
+            or process.get("state") != "ready"
+            or process.get("api_diagnostic_only", False) is not False
+            or type(process.get("api_pid")) is not int or process["api_pid"] <= 1
+            or not isinstance(process.get("service_owner"), Mapping)
+            or process["service_owner"].get("state") != "ready"):
+        raise BuildControlError("Held UI successor API/native process is not ready")
+    runtime_receipt, ack, launch = _held_ui_launch_and_ack(context, process)
+    _held_ui_validate_successor_state(
+        args, context, current_raw, current, process, runtime_receipt, ack,
+    )
+    return {
+        "state": "restored", "attempt": current["attempt"],
+        "config_sha256": current.get("config_sha256"),
+        "backend_container": current["backend_container"],
+        "frontend_container": current["frontend_container"],
+        "request_path": context["request_path"], "request_sha256": context["request_sha256"],
+        "plan_sha256": context["plan_sha256"],
+        "run_id": context["request"]["accepted"]["run_id"],
+        "command_id": context["request"]["accepted"]["command_id"],
+        "recreate_attempt": claim["recreate_attempt"], "launch_id": launch["launch_id"],
+        "api_instance_id": runtime_receipt["api_instance_id"],
+        "gate_action": runtime_receipt["gate_action"],
+        "start_release_sha256": ack["start_release_sha256"],
+    }
+
+
+def _held_ui_validate_successor_state(args, context, current_raw, current,
+                                      process_receipt, runtime_receipt, ack):
+    """Validate the completed DEV successor, retained resources and final certificate."""
+    control = context["control"]
+    controller = context["controller"]
+    source = context["request"]["source_scope"]
+    accepted = context["request"]["accepted"]
+    previous = context["previous"]
+    prior_document = context["document"]
+    inputs = current.get("inputs")
+    attempt = current.get("attempt")
+    backend_id = current.get("backend_container")
+    frontend_id = current.get("frontend_container")
+    if (not isinstance(inputs, Mapping) or not isinstance(attempt, str)
+            or _RECOVERY_ATTEMPT.fullmatch(attempt) is None
+            or attempt == previous.get("attempt")
+            or current.get("state_root") != str(context["state"])
+            or current.get("compose_project") != control.project
+            or current.get("control_volume") != control.volume
+            or current.get("control_namespace", "") != control.namespace
+            or current.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or inputs.get("source_root") != source["source_root"]
+            or inputs.get("source_project_id") != context["identity"].get("project_id")
+            or inputs.get("source_worktree_id") != context["identity"].get("worktree_id")
+            or inputs.get("source_checkout_kind") != context["identity"].get("checkout_kind")
+            or not isinstance(backend_id, str) or not isinstance(frontend_id, str)
+            or backend_id in {source["backend_container_id"], source["frontend_container_id"]}
+            or frontend_id in {source["backend_container_id"], source["frontend_container_id"]}
+            or _SHA256.fullmatch(backend_id) is None
+            or _SHA256.fullmatch(frontend_id) is None
+            or backend_id == frontend_id):
+        raise BuildControlError("Held UI succeeded DEV receipt changed source, state, or service identity")
+    expected_start = _held_ui_start_input(context)
+    recreate_terminal = _held_ui_recreate_terminal(context, args)["raw"]
+    expected_completed = {
+        "attempt": context["claim"]["recreate_attempt"],
+        "terminal_sha256": hashlib.sha256(recreate_terminal).hexdigest(),
+    }
+    if (inputs.get("held_ui_materialization") != expected_start
+            or inputs.get("completed_recreation") != expected_completed):
+        raise BuildControlError("Held UI succeeded DEV receipt lost its exact stop/recreate authority")
+
+    config_sha256 = current.get("config_sha256")
+    if not isinstance(config_sha256, str) or _SHA256.fullmatch(config_sha256) is None:
+        raise BuildControlError("Held UI successor DEV config digest is malformed")
+    compose_raw = control.read_bytes("development/attempts/" + attempt + "/compose.json")
+    document = controller.decode(compose_raw, "held UI successor DEV Compose", maximum=controller.MAX_PROOF_BYTES)
+    if (compose_raw != controller.canonical(document) + b"\n"
+            or hashlib.sha256(controller.canonical(document)).hexdigest() != config_sha256
+            or document.get("name") != control.project
+            or current.get("backend_volumes") != previous.get("backend_volumes")
+            or current.get("frontend_volume") != previous.get("frontend_volume")):
+        raise BuildControlError("Held UI successor DEV config or retained volume pins changed")
+    services = document.get("services")
+    if not isinstance(services, Mapping):
+        raise BuildControlError("Held UI successor Compose has no services")
+    backend = services.get("backend")
+    frontend = services.get("frontend")
+    if not isinstance(backend, Mapping) or not isinstance(frontend, Mapping):
+        raise BuildControlError("Held UI successor Compose backend/frontend is malformed")
+    environment = backend.get("environment")
+    if (not isinstance(environment, Mapping)
+            or environment.get("FULLMAG_STATE_ROOT") != str(context["state"])
+            or environment.get(controller.REQUEST_ENV) != context["request_path"]
+            or environment.get(controller.REQUEST_DIGEST_ENV) != context["request_sha256"]
+            or environment.get(controller.STDIN_ENV) is not None
+            or any(name in environment for name in controller.STARTUP_ENV_NAMES)
+            or environment.get("FULLMAG_DOCKER_DEVICE_ACCESS")
+                != previous.get("inputs", {}).get("device_access")):
+        raise BuildControlError("Held UI successor Compose start environment or device access differs")
+    if (document.get("networks") != prior_document.get("networks")
+            or backend.get("networks") != prior_document.get("services", {}).get("backend", {}).get("networks")
+            or frontend.get("networks") != prior_document.get("services", {}).get("frontend", {}).get("networks")):
+        raise BuildControlError("Held UI successor changed the retained private network attachment")
+    from docker_dev_network import retained_requested_subnet
+    if retained_requested_subnet(document, None) != retained_requested_subnet(prior_document, None):
+        raise BuildControlError("Held UI successor changed the retained network subnet")
+    if (_retained_device_access(current, document)
+            != _retained_device_access(previous, prior_document)
+            or inputs.get("gpu_access_requested") != previous.get("inputs", {}).get("gpu_access_requested")):
+        raise BuildControlError("Held UI successor changed the resolved retained device policy")
+
+    for field in ("private_group_storage", "frontend_generation_id", "frontend_generation_subpath"):
+        if current.get(field) != previous.get(field):
+            raise BuildControlError("Held UI successor changed retained frontend generation " + field)
+    if previous.get("private_group_storage") == "group-volume-v1":
+        generation_id = previous.get("frontend_generation_id")
+        if generation_id is not None:
+            import docker_group_storage as group_storage
+            expected_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        else:
+            import docker_group_storage as group_storage
+            expected_subpath = group_storage.role_subpath(control, "frontend")
+        mounts = frontend.get("volumes")
+        if not isinstance(mounts, list):
+            raise BuildControlError("Held UI successor frontend generation volumes are malformed")
+        generation_mounts = [mount for mount in mounts
+                             if isinstance(mount, Mapping) and mount.get("target") == "/state/development"]
+        if (len(generation_mounts) != 1
+                or generation_mounts[0].get("volume", {}).get("subpath") != expected_subpath):
+            raise BuildControlError("Held UI successor frontend generation mount changed")
+        from docker_volume_frontend_seed_recovery import generation_receipt_fields
+        generation = generation_receipt_fields(control, previous, prior_document)
+        if generation:
+            previous_sha = hashlib.sha256(context["previous_raw"]).hexdigest()
+            expected_handoff = {
+                "schema": "fullmag.frontend-start-handoff.v1",
+                "attempt": previous["attempt"],
+                "terminal_sha256": previous_sha,
+                "current_sha256": previous_sha,
+                "compose_sha256": hashlib.sha256(context["document_raw"]).hexdigest(),
+                "verified_sha256": previous_sha,
+                "source_root": source["source_root"],
+                "state_root": str(context["state"]),
+                **generation,
+            }
+            if inputs.get("frontend_start_handoff") != expected_handoff:
+                raise BuildControlError("Held UI successor frontend generation handoff changed")
+        elif inputs.get("frontend_start_handoff") is not None:
+            raise BuildControlError("Held UI successor has an unexpected frontend generation handoff")
+    elif inputs.get("frontend_start_handoff") is not None:
+        raise BuildControlError("Held UI successor has a frontend handoff without retained generation authority")
+
+    prestart_pin = current.get("held_ui_successor_certificate_pin")
+    final_pin = current.get("held_ui_successor_certificate_final")
+    prestart_fields = {
+        "schema", "state_root", "certificate_sha256", "owner_marker_sha256",
+        "storage_profile", "owner_token", "image_id", "host_inode",
+    }
+    final_fields = {
+        "schema", "state_root", "certificate_sha256", "owner_marker_sha256",
+        "storage_profile", "owner_token", "image_id", "host_inode", "restart_verified",
+    }
+    if (not isinstance(prestart_pin, Mapping) or set(prestart_pin) != prestart_fields
+            or prestart_pin.get("schema") != "fullmag.held-ui-materialization-successor-certificate-pin.v1"
+            or not isinstance(final_pin, Mapping) or set(final_pin) != final_fields
+            or final_pin.get("schema") != "fullmag.held-ui-materialization-final-certificate.v1"
+            or final_pin.get("restart_verified") is not True
+            or final_pin.get("state_root") != str(context["state"])
+            or final_pin.get("state_root") != prestart_pin.get("state_root")
+            or final_pin.get("owner_token") != prestart_pin.get("owner_token")
+            or final_pin.get("storage_profile") != prestart_pin.get("storage_profile")
+            or final_pin.get("image_id") != inputs.get("image_id")):
+        raise BuildControlError("Held UI successor lacks its exact final state-root certificate proof")
+    host = _session_host()
+    certificate_path = _certificate_path(context["state"])
+    try:
+        certificate_raw = host.read_owned_regular(certificate_path)
+        owner_raw = host.read_owned_regular(Path(context["state"]) / host.OWNER_NAME)
+        certificate = json.loads(certificate_raw)
+        owner = json.loads(owner_raw)
+        local = host.local_volume(context["state"])
+    except (OSError, ValueError, TypeError, RuntimeError) as error:
+        raise BuildControlError("Held UI successor owner certificate cannot be read: " + str(error)) from error
+    if (hashlib.sha256(certificate_raw).hexdigest() != final_pin.get("certificate_sha256")
+            or hashlib.sha256(owner_raw).hexdigest() != final_pin.get("owner_marker_sha256")
+            or certificate_raw != owner_raw or certificate != owner
+            or certificate.get("schema") != host.HOST_SCHEMA
+            or certificate.get("storage_profile") != final_pin.get("storage_profile")
+            or certificate.get("owner_token") != final_pin.get("owner_token")
+            or certificate.get("image_id") != final_pin.get("image_id")
+            or certificate.get("restart_verified") is not True
+            or any(certificate.get(key) != value for key, value in local.items())):
+        raise BuildControlError("Held UI final owner certificate differs from the succeeded DEV proof")
+    if os.name != "nt" and (certificate.get("host_inode") != Path(context["state"]).stat().st_ino
+                             or final_pin.get("host_inode") != certificate.get("host_inode")):
+        raise BuildControlError("Held UI final certificate no longer binds the original state directory")
+
+    retained_process = context["proofs"]["api_quiescence"]["retained_process"]
+    store_path = retained_process.get("accepted_store")
+    bootstrap = process_receipt.get("bootstrap")
+    if (not isinstance(store_path, str)
+            or process_receipt.get("accepted_store") != store_path
+            or process_receipt.get("api_diagnostic_only", False) is not False
+            or not isinstance(bootstrap, Mapping)
+            or bootstrap.get("store_root") != store_path
+            or bootstrap.get("binding") != ack.get("accepted_store_binding")
+            or ack.get("accepted_store_binding") != context["proofs"]["preflight"]["accepted_store_binding"]
+            or runtime_receipt.get("api_instance_id") == accepted["old_api_instance_id"]):
+        raise BuildControlError("Held UI successor API changed its accepted store or process scope")
+    return True
+
+
+def _held_ui_context_with_recreate_claim(context):
+    """Load the exact optional one-shot claim without choosing a newer attempt."""
+    controller = context["controller"]
+    request_id = context["request"]["plan"]["maintenance_request_id"]
+    relative = controller.recreate_claim_relative(request_id)
+    raw = context["control"].read_bytes("runtime-control/" + relative, optional=True)
+    if raw is None:
+        return {**context, "claim": None, "claim_sha256": None}
+    claim = controller.decode(raw, "held UI recreate claim", maximum=controller.MAX_REQUEST_BYTES)
+    if raw != controller.canonical(claim) + b"\n":
+        raise BuildControlError("Held UI recreate claim is not canonical JSON plus LF")
+    claim_sha256 = controller.sha(raw)
+    try:
+        claim = controller.validate_recreate_claim(
+            claim, request=context["request"], request_sha256=context["request_sha256"],
+            expected_sha256=claim_sha256,
+        )
+    except Exception as error:
+        raise BuildControlError("Held UI recreate claim does not match the immutable request: " + str(error)) from error
+    return {**context, "claim": claim, "claim_sha256": claim_sha256}
+
+
+def _apply_held_ui_materialization(args, *, controller):
+    """Continue the exact accepted run through a reviewed stop/recreate/start handoff."""
+    if getattr(args, "apply", False) is not True or getattr(args, "preview", False) is not False:
+        raise BuildControlError("Held UI continuation requires the exact private --apply action")
+    expected_plan_sha256 = controller._digest(
+        getattr(args, "expected_plan_sha256", None), "approved preview plan digest",
+    )
+    pre_signal_parent = _held_ui_pre_signal_stop_pin_args(
+        args, controller=controller, applying=True,
+    )
+    _selected, _layout, _identity, existing_control = _held_ui_control_for_args(args)
+    request_relative = controller.request_relative(args.request_id)
+    existing_request_raw = existing_control.read_bytes(
+        "runtime-control/" + request_relative, optional=True,
+    )
+    if pre_signal_parent is not None and existing_request_raw is not None:
+        raise BuildControlError("Pre-signal continuation cannot resume a published held UI request")
+    stop_result = None
+    if existing_request_raw is None:
+        stop_result = _stop_held_ui_materialization(args, controller=controller)
+        if stop_result.get("plan_sha256") != expected_plan_sha256:
+            raise BuildControlError("Held UI stop/publish result differs from the approved plan")
+        context = _load_held_ui_request_context(
+            args, controller=controller, expected_plan_sha256=expected_plan_sha256,
+            expected_request_sha256=stop_result.get("request_sha256"),
+            require_original_state_binding=True,
+        )
+    else:
+        # An immutable request means the stop phase already completed. Do not
+        # call the stop adapter again: its old Docker IDs may already be gone.
+        context = _load_held_ui_request_context(
+            args, controller=controller, expected_plan_sha256=expected_plan_sha256,
+            require_original_state_binding=False,
+        )
+        if context["request_raw"] != existing_request_raw:
+            raise BuildControlError("Held UI request bytes changed during exact retry inspection")
+        stop_result = {
+            "plan_sha256": context["plan_sha256"],
+            "request_path": context["request_path"],
+            "request_sha256": context["request_sha256"],
+        }
+    context["controller"] = controller
+    if (stop_result.get("plan_sha256") != expected_plan_sha256
+            or context["request_path"] != stop_result.get("request_path")
+            or context["request"]["plan"]["maintenance_request_id"] != args.request_id
+            or context["request"]["accepted"]["run_id"] != args.run_id):
+        raise BuildControlError("Held UI immutable request differs from the requested run/maintenance scope")
+
+    context = _held_ui_context_with_recreate_claim(context)
+    if context["claim"] is not None:
+        # A durable claim means a prior invocation may already have removed
+        # containers or started Compose. Only an exact completed recreation
+        # without a launch can continue; every other state stays outcome-unknown.
+        completed = _held_ui_readback_or_resume_start(args, context)
+        if completed is not None:
+            return completed
+        # The exact succeeded recreation has not launched API yet. Preserve
+        # the full source owner/certificate pin until the first start begins.
+        context = _validate_held_ui_materialization_context(
+            args, _held_ui_context_value(context), expected_control=context["control"],
+            require_claim=True, require_original_state_binding=True, controller=controller,
+        )
+        context["controller"] = controller
+        claim = context["claim"]
+        args.completed_recreation_attempt = claim["recreate_attempt"]
+        terminal_raw = context["control"].read_bytes(
+            "recreate-services/attempts/" + claim["recreate_attempt"] + "/terminal.json",
+        )
+        args.completed_recreation_sha256 = hashlib.sha256(terminal_raw).hexdigest()
+        selected, layout = context["selected"], context["layout"]
+        completed_context = _completed_recreation_start_context(
+            context["control"], args, selected, layout, held_ui_context=context,
+        )
+        try:
+            start(args, held_ui_materialization=_held_ui_context_value(context),
+                  held_ui_control=context["control"], **completed_context)
+        except Exception as error:
+            raise BuildControlError(
+                "Held UI start outcome is unknown; retained resources and claim are preserved, no replay: "
+                + str(error)
+            ) from error
+        return _held_ui_readback_or_resume_start(args, context)
+
+    # A published stop request without a recreate claim still belongs to the
+    # original pre-recreate phase; revalidate its old owner and receipt now.
+    context = _validate_held_ui_materialization_context(
+        args, _held_ui_context_value(context), expected_control=context["control"],
+        require_claim=False, require_original_state_binding=True, controller=controller,
+    )
+    context["controller"] = controller
+    if context["control"].read_bytes("active", optional=True) is not None:
+        raise BuildControlError("Held UI recreation found an active managed operation; no mutation")
+    if (context["control"].read_bytes("development/current.json") != context["previous_raw"]
+            or context["control"].read_bytes("development/verified.json") != context["previous_raw"]):
+        raise BuildControlError("Held UI recreation no longer has the exact source DEV current/verified pins")
+    try:
+        _retained_operation(args, recreate_services=True,
+                            held_ui_materialization=_held_ui_context_value(context))
+    except Exception as error:
+        claim_after = _held_ui_context_with_recreate_claim(context)
+        if claim_after["claim"] is not None:
+            raise BuildControlError(
+                "Held UI recreate/start outcome is unknown; resources and one-shot claim are preserved, no replay: "
+                + str(error)
+            ) from error
+        raise
+    completed_context = _held_ui_context_with_recreate_claim(context)
+    if completed_context["claim"] is None:
+        raise BuildControlError("Held UI recreate returned without its one-shot claim")
+    result = _held_ui_readback_or_resume_start(args, completed_context)
+    if result is None:
+        raise BuildControlError("Held UI start did not publish its exact successor state")
+    return result
+
+
+def _validate_held_ui_start_fence(args, context, control, operation, *, before_start):
+    controller = context["controller"]
+    token = operation["receipt"].get("attempt")
+    if (control._active_operation is not operation
+            or operation.get("root") != "development/attempts/" + str(token)
+            or control.read_bytes("active") != (str(token) + "\n").encode()):
+        raise BuildControlError("Held UI start does not own the exact development group lease")
+    fresh = _validate_held_ui_materialization_context(
+        args, _held_ui_context_value(context), expected_control=control, require_claim=True,
+        require_original_state_binding=before_start, controller=controller,
+    )
+    fresh["controller"] = controller
+    if (fresh["request_raw"] != context["request_raw"]
+            or fresh["request_sha256"] != context["request_sha256"]
+            or fresh["recreate_input"] != context["recreate_input"]
+            or fresh["claim_sha256"] != context["claim_sha256"]):
+        raise BuildControlError("Held UI request or recreate claim changed under the development lease")
+    if before_start:
+        if operation.get("receipt", {}).get("held_ui_successor_certificate_pin") is not None:
+            raise BuildControlError("Held UI start has an unexpected preexisting successor certificate pin")
+    else:
+        _validate_held_ui_successor_certificate(fresh, operation)
+    base_current = control.read_bytes("development/current.json")
+    base_verified = control.read_bytes("development/verified.json")
+    if (base_current != fresh["previous_raw"] or base_verified != fresh["previous_raw"]):
+        raise BuildControlError("Held UI start requires the exact original DEV current/verified pins")
+    _held_ui_recreate_terminal(fresh, args)
+    launch_path = "runtime-control/" + str(PurePosixPath(fresh["request_path"]).parent / "launch.json")
+    if control.read_bytes(launch_path, optional=True) is not None:
+        raise BuildControlError("Held UI API launch already exists; start replay is refused")
+    return fresh
+
+
+def _revalidate_completed_recreation_start_handoff(
+    control, args, selected, layout, operation, *, reuse_state,
+    retained_device_access, previous_config_sha256,
+    validated_startup_diagnostic_restart, validated_native_restart_metadata,
+    validated_held_ui=None,
+):
+    """Revalidate completed removal under the active start lease.
+
+    Held UI authority is a dedicated typed handoff and must not be translated
+    into the legacy failed-owner restart fields used by ordinary continuation.
+    """
+    if validated_held_ui is None:
+        current = _completed_recreation_start_context(control, args, selected, layout)
+        expected = {
+            "previous_config_sha256": previous_config_sha256,
+            "retained_device_access": retained_device_access,
+        }
+        if validated_startup_diagnostic_restart is not None:
+            expected["startup_diagnostic_restart"] = validated_startup_diagnostic_restart
+        else:
+            expected["native_restart_metadata"] = validated_native_restart_metadata
+    else:
+        attempt = operation.get("receipt", {}).get("attempt")
+        if (control._active_operation is not operation
+                or not isinstance(attempt, str)
+                or operation.get("root") != "development/attempts/" + attempt
+                or control.read_bytes("active") != (attempt + "\n").encode()):
+            raise BuildControlError("Held UI completed recreation requires its active development lease")
+        current = _completed_recreation_start_context(
+            control, args, selected, layout, held_ui_context=validated_held_ui,
+        )
+        expected = {"retained_device_access": retained_device_access}
+    if current.pop("reuse_state", None) != reuse_state or current != expected:
+        raise BuildControlError("Completed recreation handoff changed before start")
+
+
+def _validate_held_ui_recreate_fence(args, context, control, operation, ids, actual):
+    """Revalidate the spent-stop handoff while the recreate lease is held."""
+    controller = context["controller"]
+    token = operation["receipt"].get("attempt")
+    if (control._active_operation is not operation
+            or operation.get("root") != "recreate-services/attempts/" + str(token)
+            or control.read_bytes("active") != (str(token) + "\n").encode()):
+        raise BuildControlError("Held UI recreate does not own the exact group lease")
+    fresh = _validate_held_ui_materialization_context(
+        args, _held_ui_context_value(context), expected_control=control, require_claim=False,
+        require_original_state_binding=True, controller=controller,
+    )
+    if (fresh["request_raw"] != context["request_raw"]
+            or fresh["request_sha256"] != context["request_sha256"]
+            or fresh["recreate_input"] != context["recreate_input"]
+            or fresh["claim"] is not None or fresh["claim_sha256"] is not None):
+        raise BuildControlError("Held UI request changed or already has a recreate claim")
+    if (control.read_bytes("development/current.json") != fresh["previous_raw"]
+            or control.read_bytes("development/verified.json") != fresh["previous_raw"]):
+        raise BuildControlError("Held UI source DEV authority changed before recreation")
+    if set(ids) != {"backend", "frontend"} or set(actual) != {"backend", "frontend"}:
+        raise BuildControlError("Held UI recreation requires the exact old backend/frontend pair")
+    for service in ("backend", "frontend"):
+        pinned = fresh["request"]["source_scope"]
+        expected_id = pinned[service + "_container_id"]
+        expected_started = pinned[service + "_started_at"]
+        observed_rows = json.loads(docker_text("inspect", ids[service]))
+        if len(observed_rows) != 1:
+            raise BuildControlError("Held UI service identity is ambiguous under recreate lease")
+        observed = observed_rows[0]
+        before = actual[service]
+        if (observed.get("Id") != expected_id or observed.get("Image") != before.get("Image")
+                or observed.get("State", {}).get("StartedAt") != expected_started
+                or observed.get("State", {}).get("Running") is not False
+                or observed.get("State", {}).get("Running") != before.get("State", {}).get("Running")):
+            raise BuildControlError("Held UI stopped service incarnation changed under recreate lease")
+    _assert_private_restart_network(
+        {service: json.loads(docker_text("inspect", ids[service]))[0]
+         for service in ("backend", "frontend")}, ids, control.project,
+    )
+    from docker_volume_activation_reconcile import assert_no_unresolved_activation
+    assert_no_unresolved_activation(control)
+    return fresh
+
+
 def _probe_retained_device_access(device_access, image, project):
     """A retained profile cannot gain or lose GPU access during recreation."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
@@ -2236,17 +4109,78 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None, prepared_recovery_constraints=None):
+          cold_budget_restore=None, prepared_recovery_constraints=None, failed_run_resume_context=None,
+          held_ui_materialization=None, held_ui_control=None, failed_held_ui_start_context=None):
     from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
+    from docker_volume_frontend_start_resume import validate_options as frontend_resume_options
+    failed_frontend_resume = frontend_resume_options(args)
+    if failed_frontend_resume and (reuse_state is None or recreation_resume_proof is None):
+        raise BuildControlError("Failed frontend start requires the validated recreation resume context")
     headless = getattr(args, "headless", False)
     if type(headless) is not bool:
         raise BuildControlError("Headless mode must be boolean")
     ui_mode = "headless" if headless else "gui"
     provided_control = control
     provided_operation = operation
+    validated_held_ui = None
+    held_ui_start_input = None
+    if held_ui_materialization is None:
+        if held_ui_control is not None:
+            raise BuildControlError("Held UI control was supplied without its typed start handoff")
+    else:
+        if held_ui_control is None:
+            raise BuildControlError("Held UI start requires the original managed control namespace")
+        incompatible = (
+            args.script is not None or getattr(args, "fresh_state", False)
+            or any(value is not None for value in (
+                recovery_environment, recovery_metadata, native_restart_metadata,
+                accepted_reattach_environment, accepted_reattach_metadata,
+                recreation_resume_proof, post_build_generation, maintenance,
+                startup_diagnostic_restart, terminal_observation, cold_budget_restore,
+                prepared_recovery_constraints, failed_run_resume_context,
+            ))
+            or provided_control is not None or provided_operation is not None
+            or reuse_state is None
+        )
+        if incompatible:
+            raise BuildControlError(
+                "Held UI start requires the exact retained completed recreation without other recovery modes"
+            )
+        import docker_volume_held_ui_materialization as held_ui_controller
+        validated_held_ui = _validate_held_ui_materialization_context(
+            args, held_ui_materialization, expected_control=held_ui_control,
+            require_claim=True, controller=held_ui_controller,
+        )
+        validated_held_ui["controller"] = held_ui_controller
+        claim = validated_held_ui["claim"]
+        if (getattr(args, "completed_recreation_attempt", None) != claim["recreate_attempt"]
+                or not isinstance(getattr(args, "completed_recreation_sha256", None), str)):
+            raise BuildControlError("Held UI start is not pinned to its exact completed recreation")
+        _held_ui_recreate_terminal(validated_held_ui, args)
+        held_ui_start_input = _held_ui_start_input(validated_held_ui)
+    validated_failed_held_ui = None
+    runtime_held_ui = validated_held_ui
+    if failed_held_ui_start_context is not None:
+        if (held_ui_materialization is not None or held_ui_control is not None
+                or provided_control is not None or provided_operation is not None
+                or reuse_state is None or args.script is not None or getattr(args, "fresh_state", False)
+                or any(value is not None for value in (
+                    recovery_environment, recovery_metadata, native_restart_metadata,
+                    accepted_reattach_environment, accepted_reattach_metadata, recreation_resume_proof,
+                    post_build_generation, maintenance, startup_diagnostic_restart,
+                    terminal_observation, cold_budget_restore, prepared_recovery_constraints,
+                    failed_run_resume_context,
+                ))):
+            raise BuildControlError("Failed held start retry requires only its typed retained authority")
+        import docker_volume_held_ui_start_retry_lifecycle as held_retry
+        validated_failed_held_ui = held_retry.validate_start_context(
+            args, failed_held_ui_start_context, reuse_state,
+        )
+        runtime_held_ui = validated_failed_held_ui["original_request_context"]
+        held_ui_start_input = _held_ui_start_input(runtime_held_ui)
     native_contracts = _native_contracts(getattr(args, "native_contract", None))
     if retained_device_access is not None and retained_device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
@@ -2293,6 +4227,21 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         raise BuildControlError("Recovery start requires both control and operation")
     if recreation_resume_proof is not None and (reuse_state is None or provided_operation is not None):
         raise BuildControlError("Recreation resume requires the retained state and a new managed start")
+    if failed_run_resume_context is not None:
+        if (reuse_state is None or args.script is not None or getattr(args, "fresh_state", False)
+                or any(value is not None for value in (
+                    recovery_environment, recovery_metadata, native_restart_metadata,
+                    accepted_reattach_environment, accepted_reattach_metadata,
+                    recreation_resume_proof, post_build_generation, startup_diagnostic_restart,
+                    terminal_observation, cold_budget_restore, maintenance, prepared_recovery_constraints))):
+            raise BuildControlError("Failed-run continuation requires its own retained authority without another restore")
+        request = failed_run_resume_context.get("context") if isinstance(failed_run_resume_context, Mapping) else None
+        stop = request.get("stop_pin") if isinstance(request, Mapping) else None
+        hashes = stop.get("runtime_hashes") if isinstance(stop, Mapping) else None
+        pinned_config = hashes.get("runtime_config_sha256") if isinstance(hashes, Mapping) else None
+        if (not isinstance(pinned_config, str) or re.fullmatch(r"[0-9a-f]{64}", pinned_config) is None
+                or previous_config_sha256 != pinned_config):
+            raise BuildControlError("Failed-run runtime config pin differs from its typed diagnostic-stop authority")
     validated_recovery_environment = _validate_recovery_environment(recovery_environment)
     validated_recovery_metadata = _validate_recovery_metadata(recovery_metadata)
     validated_native_restart_metadata = _validate_recovery_metadata(native_restart_metadata)
@@ -2397,7 +4346,15 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     device_access = _resolve_gpu_access(policy) if retained_device_access is None else retained_device_access
     if provided_operation is None:
         toolchain = build_volume_toolchain(selected)
-        control = BuildControl(identity, toolchain["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"])
+        helper_image = toolchain["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"]
+        if held_ui_control is not None:
+            if (held_ui_control.project != identity["project_name"]
+                    or held_ui_control.volume != BuildControl(identity, helper_image).volume
+                    or held_ui_control.image != helper_image):
+                raise BuildControlError("Held UI start control namespace or helper image changed")
+            control = held_ui_control
+        else:
+            control = BuildControl(identity, helper_image)
         helper_repo = Path(helper_source_binding["root"]) if helper_source_binding is not None else selected
         _revalidate_helper_source_binding(helper_source_binding, selected)
         if helper_source_binding is None:
@@ -2455,6 +4412,19 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record}
+    if held_ui_start_input is not None:
+        operation_inputs["held_ui_materialization"] = held_ui_start_input
+    if validated_failed_held_ui is not None:
+        operation_inputs["failed_held_ui_start"] = held_retry.start_input(validated_failed_held_ui)
+    frontend_handoff = reuse_state.get("frontend_start_handoff") if reuse_state is not None else None
+    if frontend_handoff is not None:
+        _validate_frontend_start_handoff(control, frontend_handoff, selected, reuse_state["state"])
+        operation_inputs["frontend_start_handoff"] = frontend_handoff
+    if failed_frontend_resume:
+        operation_inputs["failed_frontend_start"] = {
+            "attempt": args.failed_frontend_start,
+            "terminal_sha256": args.failed_frontend_start_sha256,
+        }
     if getattr(args, "completed_recreation_attempt", None):
         operation_inputs["completed_recreation"] = {
             "attempt": args.completed_recreation_attempt,
@@ -2496,10 +4466,36 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation_inputs["unclaimed_cancellation_image_transition"] = image_transition
     if provided_operation is not None:
         _validate_existing_operation_inputs(provided_operation.get("receipt", {}), operation_inputs)
+    if failed_run_resume_context is not None:
+        operation_inputs["failed_run_resume"] = failed_run_resume_context["context"]
+        if "prestart_failure" in failed_run_resume_context:
+            operation_inputs["failed_run_prestart_continuation"] = failed_run_resume_context["prestart_failure"]
     operation_context = (control.operation("development", operation_inputs)
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        if validated_failed_held_ui is not None:
+            held_retry.before_start(args, validated_failed_held_ui, control, operation, reuse_state)
+        if validated_held_ui is not None:
+            _validate_held_ui_start_fence(
+                args, validated_held_ui, control, operation, before_start=True,
+            )
+        if failed_run_resume_context is not None:
+            _revalidate_failed_run_handoff(control, args, failed_run_resume_context, phase="before-start")
+            from docker_volume_failed_run_resume import bind_start_attempt
+            bind_start_attempt(control, failed_run_resume_context["context"], operation)
+            operation["receipt"]["failed_run_resume"] = failed_run_resume_context["context"]
+        if held_ui_start_input is not None:
+            operation["receipt"]["held_ui_materialization"] = held_ui_start_input
+        if recreation_resume_proof is not None and (
+                validated_startup_diagnostic_restart is not None or failed_frontend_resume):
+            leased_records = _validate_recreation_resume_records(
+                args, control, selected, identity, expected_proof=recreation_resume_proof,
+                current_operation=operation, helper_source_binding=helper_source_binding,
+            )
+            if (validated_startup_diagnostic_restart is not None
+                    and leased_records["native_recovery_context"].get("startup_diagnostic_restart") != validated_startup_diagnostic_restart):
+                raise BuildControlError("Startup diagnostic recreation resume changed under start lease")
         prepared_budget_render = _preflight_prepared_start_budget(
             control, operation, maintenance, prepared_recovery_constraints, selected,
             native_contracts, include_untracked,
@@ -2507,25 +4503,18 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if prepared_budget_render is not None and cold_budget_restore is not None:
             raise BuildControlError("Prepared budget cannot be combined with another retained restore")
         operation["receipt"]["ui_mode"] = ui_mode
-        if validated_startup_diagnostic_restart is not None and recreation_resume_proof is not None:
-            leased_records = _validate_recreation_resume_records(
-                args, control, selected, identity, expected_proof=recreation_resume_proof,
-                current_operation=operation, helper_source_binding=helper_source_binding,
-            )
-            if leased_records["native_recovery_context"].get("startup_diagnostic_restart") != validated_startup_diagnostic_restart:
-                raise BuildControlError("Startup diagnostic recreation resume changed under start lease")
         if getattr(args, "completed_recreation_attempt", None):
             # Recheck the exact completed transition under the new development
             # lease before any state/cache/admission write or service creation.
-            current = _completed_recreation_start_context(control, args, selected, layout)
-            expected = {"previous_config_sha256": previous_config_sha256,
-                        "retained_device_access": retained_device_access}
-            if validated_startup_diagnostic_restart is not None:
-                expected["startup_diagnostic_restart"] = validated_startup_diagnostic_restart
-            else:
-                expected["native_restart_metadata"] = validated_native_restart_metadata
-            if (current.pop("reuse_state") != reuse_state or current != expected):
-                raise BuildControlError("Completed recreation handoff changed before start")
+            _revalidate_completed_recreation_start_handoff(
+                control, args, selected, layout, operation,
+                reuse_state=reuse_state,
+                retained_device_access=retained_device_access,
+                previous_config_sha256=previous_config_sha256,
+                validated_startup_diagnostic_restart=validated_startup_diagnostic_restart,
+                validated_native_restart_metadata=validated_native_restart_metadata,
+                validated_held_ui=validated_held_ui,
+            )
         operation["receipt"].update(operator_probe_record)
         if helper_source_binding is not None:
             operation["receipt"]["helper_source"] = helper_source_binding
@@ -2657,7 +4646,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     "Post-build continuation changed under the new development lease: " + str(error)
                 ) from error
         local_volume(state)
-        _pin_private_group_storage(control, operation, new_render=provided_operation is None)
+        _pin_start_frontend_storage(control, operation, selected, state, frontend_handoff,
+                                    new_render=provided_operation is None)
         cache = _backend_cache(control, operation, layout, selected, image, toolchain["image_id"])
         operation["receipt"]["backend_volumes"] = cache["volume_names"]
         frontend_inputs, frontend_volume = _frontend(control, operation, selected, state, args.port, image)
@@ -2684,6 +4674,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             reuse_certificate = runtime._reuse_host_certificate if os.name == "nt" else host.reuse_certificate
             certificate = reuse_certificate(reuse_state, provisional, engine_id,
                                                          development_build=delegation)
+        if runtime_held_ui is not None:
+            _record_held_ui_rotated_certificate(
+                host, state, certificate_path, certificate, control, operation,
+            )
         if validated_post_build_generation is not None:
             # Reuse may rotate image/source fields and clear readiness, but
             # cannot change the host identity authenticated under this lease.
@@ -2735,6 +4729,23 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             "FULLMAG_SOURCE_PROJECT_ID": identity["project_id"],
             "FULLMAG_SOURCE_WORKTREE_ID": identity["worktree_id"],
             "FULLMAG_SOURCE_CHECKOUT_KIND": identity["checkout_kind"]}
+        from docker_volume_held_ui_materialization import (
+            REQUEST_ENV as HELD_UI_REQUEST_ENV,
+            REQUEST_DIGEST_ENV as HELD_UI_REQUEST_DIGEST_ENV,
+            STDIN_ENV as HELD_UI_STDIN_ENV,
+            clear_start_environment as clear_held_ui_start_environment,
+            sanitize_backend_environment as sanitize_held_ui_backend_environment,
+            start_environment as held_ui_start_environment,
+        )
+        # A normal retained start must never inherit a prior held restore from
+        # the operator shell. PID 1 owns the private stdin switch exclusively.
+        clear_held_ui_start_environment(environment)
+        if runtime_held_ui is not None:
+            sanitize_held_ui_backend_environment(environment, enabled=True)
+            environment.update(runtime_held_ui["start_environment"])
+        if validated_failed_held_ui is not None:
+            from docker_volume_held_ui_retry_source import environment as retry_source_environment
+            environment.update(retry_source_environment(validated_failed_held_ui["plan"]["new_source"]))
         # Compose interpolation cannot inherit an operator's unrelated host
         # value; only the explicit CLI list is pinned into the backend below.
         environment.pop(INCLUDE_UNTRACKED_ENV, None)
@@ -2803,6 +4814,27 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         backend.pop("build", None)
         backend["environment"].update(cache["environment"])
         backend["environment"].update(ledger_backend["environment"])
+        clear_held_ui_start_environment(backend["environment"])
+        if runtime_held_ui is not None:
+            sanitize_held_ui_backend_environment(backend["environment"], enabled=True)
+            backend["environment"].update(held_ui_start_environment(
+                runtime_held_ui["request_path"], runtime_held_ui["request_sha256"],
+            ))
+            if (HELD_UI_STDIN_ENV in backend["environment"]
+                    or any(name in backend["environment"] for name in (
+                        "FULLMAG_ACCEPTED_REATTACH_REQUEST",
+                        "FULLMAG_ACCEPTED_REATTACH_REQUEST_SHA256",
+                        "FULLMAG_TERMINAL_OBSERVATION_REQUEST",
+                        "FULLMAG_TERMINAL_OBSERVATION_REQUEST_SHA256",
+                        "FULLMAG_ISOLATED_SNAPSHOT_START",
+                        "FULLMAG_ISOLATED_SNAPSHOT_START_SHA256",
+                        "FULLMAG_DEVELOPMENT_RESTORE_STDIN",
+                    ))):
+                raise BuildControlError("Held UI backend Compose environment combines another restore mode")
+        if validated_failed_held_ui is not None:
+            backend["environment"].update(retry_source_environment(
+                validated_failed_held_ui["plan"]["new_source"],
+            ))
         if control_namespace:
             backend["environment"]["FULLMAG_CONTROL_NAMESPACE"] = control_namespace
         else:
@@ -2879,7 +4911,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             import docker_group_storage as group_storage
             for mount in frontend["volumes"]:
                 if mount.get("target") == "/state/development":
-                    mount["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+                    mount["volume"]["subpath"] = operation["receipt"].get(
+                        "frontend_generation_subpath",
+                        group_storage.role_subpath(control, "frontend"))
             frontend["environment"]["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
         owner_tmpfs = "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
         existing_tmpfs = [
@@ -2947,6 +4981,14 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         operation["receipt"].update(state="starting-services", state_root=str(state),
             frontend_volume=frontend_volume, backend_volumes=cache["volume_names"])
         _revalidate_helper_source_binding(helper_source_binding, selected)
+        if validated_held_ui is not None:
+            validated_held_ui = _validate_held_ui_start_fence(
+                args, validated_held_ui, control, operation, before_start=False,
+            )
+        if failed_run_resume_context is not None:
+            _revalidate_failed_run_handoff(control, args, failed_run_resume_context, phase="before-start")
+        if validated_failed_held_ui is not None:
+            held_retry.before_compose(args, validated_failed_held_ui, control, operation, reuse_state)
         backend_id, frontend_id = _start_compose_services(
             control, operation, document, headless=headless,
         )
@@ -3115,6 +5157,10 @@ def _finish(control, operation, document, backend_id, frontend_id, selected, sta
     else:
         _session_host().complete_preflight(docker_text, backend_id, state, certificate_path, certificate,
                                            log_writer=log_writer)
+    if operation["receipt"].get("held_ui_materialization") is not None:
+        _record_held_ui_final_certificate(
+            _session_host(), state, certificate_path, certificate, control, operation,
+        )
     # The backend publishes its cgroup request only after storage admission.
     # Complete the independent guest probes first to avoid a circular wait.
     import docker_worker_cgroup
@@ -3587,6 +5633,67 @@ def require_empty_commands(commands):
     return (commands.get("commands")==[]
         and all(type(commands.get(key)) is int and commands[key]==0 for key in count_fields)
         and commands.get("can_accept_commands") is False)
+def require_prepared_commands(commands,run_id,status):
+    count_fields={"queued":"pending_count","accepted":"accepted_count",
+        "dispatched":"dispatched_count","running":"running_count",
+        "completed":"completed_count","rejected":"rejected_count",
+        "failed":"failed_count"}
+    if (not isinstance(commands,dict)
+            or type(commands.get("revision")) is not int or commands["revision"]<0
+            or type(commands.get("can_accept_commands")) is not bool
+            or not isinstance(commands.get("runtime_controls"),list)
+            or not isinstance(commands.get("commands"),list)):
+        return False
+    resources=status.get("resources")
+    if not isinstance(resources,dict): return False
+    commands_revision=resources.get("commands_revision")
+    completion_revision=resources.get("command_completion_revision")
+    if (type(commands_revision) is not int or commands_revision<0
+            or type(completion_revision) is not int or completion_revision<0):
+        return False
+    maximum_revision=18446744073709551615
+    legacy_revision=min(maximum_revision,commands_revision+completion_revision)
+    if commands["revision"] not in {commands_revision,legacy_revision}:
+        return False
+    counts={field:0 for field in count_fields.values()}
+    command_ids=set()
+    sequences=set()
+    records=commands["commands"]
+    for command in records:
+        if not isinstance(command,dict): return False
+        command_state=command.get("status")
+        count_field=count_fields.get(command_state)
+        if count_field is None: return False
+        counts[count_field]+=1
+        command_id=command.get("command_id")
+        sequence=command.get("seq")
+        if (not isinstance(command_id,str) or not command_id
+                or type(sequence) is not int or sequence<0
+                or command_id in command_ids or sequence in sequences):
+            return False
+        command_ids.add(command_id)
+        sequences.add(sequence)
+        if (command.get("kind")!="fdm_grid_refresh"
+                or command.get("target")!={"kind":"run","run_id":run_id}
+                or command_state!="completed"
+                or command.get("completion_status")!="completed"
+                or command.get("error") is not None):
+            return False
+        created=command.get("created_at_unix_ms")
+        dispatched=command.get("dispatched_at_unix_ms")
+        completed=command.get("completed_at_unix_ms")
+        if (any(type(value) is not int or value<0 for value in (created,completed))
+                or created>completed):
+            return False
+        # A synchronous completed grid has no dispatch timestamp. If the
+        # asynchronous path provides one, it must still lie within the receipt.
+        if dispatched is not None and (type(dispatched) is not int
+                or dispatched<created or dispatched>completed):
+            return False
+    for field,expected in counts.items():
+        value=commands.get(field)
+        if type(value) is not int or value<0 or value!=expected: return False
+    return True
 def require_ready_runtime(runtime):
     return runtime.get("configured") is True and runtime.get("state")=="ready"
 def startup_failed_preacceptance(status,run,identity):
@@ -3819,8 +5926,8 @@ else:
                 or len(stages["stage_statuses"])!=stages.get("total_stages")
                 or stages.get("completed_stage_indexes")!=[]
                 or any(value!="pending" for value in stages["stage_statuses"])
-                or commands.get("commands")!=[]):
-            raise RuntimeError("prepared restart requires a ready mesh and a never-started Study")
+                or not require_prepared_commands(commands,run_id,status)):
+            raise RuntimeError("prepared restart requires a ready mesh, a never-started Study, and only completed current-run grid receipts")
     if runtime.get("configured") is not True or runtime.get("state")!="ready":
         raise RuntimeError("terminal restart requires a live native runtime for drain")
     after=get("/v2/sessions/current/status")
@@ -3850,6 +5957,10 @@ else:
     if type(scene_revision) is int and scene_revision>=0:
         result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
+    if prepared:
+        # Retain the exact ledger admitted by this helper in the stop proof;
+        # the public target is the stored accepted-run binding, not a retarget.
+        result["prepared_commands"]=commands
     print(json.dumps(result,sort_keys=True))
 '''
     )
@@ -4859,7 +6970,7 @@ _SAVED_AUTHORING_SCENE_FIELDS = (
     'version', 'revision', 'scene', 'universe', 'objects', 'couplings', 'materials',
     'magnetization_assets', 'field_drives', 'monitors', 'selections',
     'magnetization_constraints', 'current_modules', 'current_transports',
-    'spin_transports', 'spin_torques', 'oersted_fields', 'study', 'outputs', 'editor',
+    'spin_transports', 'spin_torques', 'oersted_fields', 'study', 'outputs', 'analysis', 'editor',
     'antenna_port_modes', 'antenna_field_solve_stages', 'antenna_target_projections',
     'solved_antenna_drives', 'antenna_spectrum_requests',
 )
@@ -4939,7 +7050,7 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     if empty_authoring:
         _saved_authoring_require(archive['source_entry'] is None, 'empty UI authoring cannot bind a source file')
     else:
-        _saved_authoring_require(archive['source_entry'] == 'project/source/script.py'
+        _saved_authoring_require(archive['source_entry'] in {'project/source.py', 'project/source/script.py'}
             or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', archive['source_entry']),
             'UI authoring/source archive binding differs')
     hashes = [archive[k] for k in ('sha256', 'scene_sha256')]
@@ -5444,6 +7555,27 @@ def _retired_recreation_result(control, receipt, source_root):
             "runtime_control_archive": dict(archive)}
 
 
+def resume_failed_run(args):
+    """Continue the pinned accepted run through an explicit diagnostic-stop proof."""
+    return _retained_operation(args, recreate_services=True, failed_run_resume=True)
+
+
+def _revalidate_failed_run_handoff(control, args, handoff, *, phase):
+    required = {"context", "previous", "document", "actual", "state", "removal"}
+    if (not isinstance(handoff, Mapping)
+            or set(handoff) not in (required, required | {"prestart_failure"})):
+        raise BuildControlError("Failed-run continuation handoff is malformed")
+    from docker_volume_failed_run_resume import revalidate_resume_request
+    if "prestart_failure" in handoff:
+        from docker_volume_failed_run_resume import qualify_prestart_failure
+        qualify_prestart_failure(control, handoff["context"], pin=handoff["prestart_failure"])
+    return revalidate_resume_request(
+        control, args, handoff["context"], handoff["previous"], handoff["document"],
+        handoff["actual"], Path(handoff["state"]), phase=phase,
+        removal=handoff["removal"],
+    )
+
+
 def recreate(args):
     import docker_helper_source as helper_source
     helper_source.validate_option_pair(
@@ -5847,95 +7979,303 @@ def _native_failed_stop_recovery_context(
     }
 
 
-def _retained_recovery_context(
-    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
-):
-    context = _retained_native_recovery_context(
-        control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
-        removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+
+def _read_frontend_refresh_child_compose(control, relative, label, previous, *, child_attempt, parent_attempt):
+    """Read newline canonical Compose or the exact completion-published byte form."""
+    from docker_volume_stop_unadmitted import _control_bytes, _json
+
+    raw = _control_bytes(control, relative)
+    value = _json(raw, label)
+    if not isinstance(value, Mapping):
+        raise BuildControlError(label + " is not a JSON object")
+    canonical_raw = canonical(value)
+    if raw == canonical_raw + b"\n":
+        return raw, dict(value)
+    if raw != canonical_raw:
+        raise BuildControlError(label + " is not canonical")
+
+    marker = previous.get("frontend_refresh_completion")
+    marker_fields = {
+        "schema", "request", "request_sha256", "services_mutated", "original_compose",
+    }
+    if not isinstance(marker, Mapping):
+        raise BuildControlError(label + " lacks an authenticated frontend completion marker")
+    has_seed_completion = "seed_completion" in marker
+    if set(marker) != marker_fields | ({"seed_completion"} if has_seed_completion else set()):
+        raise BuildControlError(label + " completion marker fields differ")
+    request_sha = marker.get("request_sha256")
+    if (marker.get("schema") != "fullmag.docker-frontend-refresh-completion.v1"
+            or marker.get("services_mutated") is not False
+            or not isinstance(request_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", request_sha)):
+        raise BuildControlError(label + " completion marker is malformed")
+
+    child_root = "development/attempts/" + child_attempt
+    request_relative = "verification/frontend-refresh-completion/" + request_sha + "/request.json"
+    completion_root = child_root + "/completion/" + request_sha
+    if (marker.get("request") != request_relative
+            or marker.get("original_compose") != completion_root + "/original-compose.json"):
+        raise BuildControlError(label + " completion request/archive path differs")
+
+    import docker_volume_frontend_refresh_reconcile as completion
+    request_raw = _control_bytes(control, request_relative)
+    if hashlib.sha256(request_raw).hexdigest() != request_sha:
+        raise BuildControlError(label + " completion request digest differs")
+    request = _json(request_raw, "frontend refresh completion request")
+    if not isinstance(request, Mapping) or request_raw != canonical(request):
+        raise BuildControlError("Frontend refresh completion request is not canonical")
+    completion.validate_request(dict(request))
+    inputs = previous.get("inputs")
+    if (request.get("attempt") != child_attempt
+            or request.get("base_attempt") != parent_attempt
+            or request.get("compose_project") != control.project
+            or request.get("control_volume") != control.volume
+            or not isinstance(inputs, Mapping)
+            or request.get("source_root") != inputs.get("source_root")
+            or request.get("source_commit") != previous.get("source_commit")):
+        raise BuildControlError(label + " completion request identity differs")
+    request_evidence = request.get("evidence")
+    request_has_seed = (isinstance(request_evidence, Mapping)
+                        and "seed_completion" in request_evidence)
+    request_seed = request_evidence.get("seed_completion") if request_has_seed else None
+    if (has_seed_completion != request_has_seed
+            or has_seed_completion and (not isinstance(marker.get("seed_completion"), Mapping)
+                                        or marker.get("seed_completion") != request_seed)):
+        raise BuildControlError(label + " completion seed evidence differs")
+    if not completion.completed_publication(control, dict(request), request_sha):
+        raise BuildControlError(label + " is not published by a completed frontend refresh")
+    return raw, dict(value)
+
+
+def _validate_frontend_refresh_recovery_namespace(control, child, parent):
+    namespace = getattr(control, "namespace", "")
+    registry_sha = getattr(control, "namespace_registry_sha256", None)
+    records = (child, parent)
+    if namespace:
+        if (not isinstance(namespace, str) or _CONTROL_NAMESPACE.fullmatch(namespace) is None
+                or not isinstance(registry_sha, str)
+                or re.fullmatch(r"[0-9a-f]{64}", registry_sha) is None):
+            raise BuildControlError("Frontend refresh recovery active namespace identity is malformed")
+        if any(record.get("control_namespace") != namespace
+               or record.get("namespace_registry_sha256") != registry_sha
+               for record in records):
+            raise BuildControlError("Frontend refresh recovery namespace/registry pin differs")
+    elif any("control_namespace" in record or "namespace_registry_sha256" in record
+             for record in records):
+        raise BuildControlError("Unnamespaced frontend refresh recovery has namespace markers")
+
+
+def _resolve_frontend_refresh_recovery_lineage(control, previous, document, *, actual=None, expected_current_sha256=None):
+    """Restore only the missing pair from one authenticated immutable refresh parent."""
+    if not isinstance(previous, Mapping):
+        raise BuildControlError("Retained development receipt is malformed")
+    has_metadata = "container_recovery" in previous
+    has_names = "container_recovery_environment" in previous
+    # A partial current pair must reach the native validator unchanged and fail
+    # there; it must never select an ancestor as a repair source.
+    if has_metadata != has_names:
+        return previous
+
+    inputs = previous.get("inputs")
+    if not isinstance(inputs, Mapping):
+        inputs = {}
+    refresh_fields = (
+        "previous_development_attempt" in previous,
+        "previous_config_sha256" in previous,
+        "frontend_refresh_from_attempt" in inputs,
+        "frontend_refresh_from_config_sha256" in inputs,
+        "failed_seed_new_generation" in inputs,
     )
-    pin = previous.get("cold_budget_restore")
-    if pin is not None and not fresh_state:
-        from docker_volume_cold_budget_restore import authenticate_journal
-        journal = authenticate_journal(control, pin)
-        if journal["observation"]["source_root"] != previous.get("inputs", {}).get("source_root"):
-            raise BuildControlError("Retained budget restore source differs")
-        if context.get("cold_budget_restore", pin) != pin:
-            raise BuildControlError("Retained budget restore pin changed")
-        context["cold_budget_restore"] = pin
-    return context
+    has_frontend_lineage = any(refresh_fields[2:])
+    environment = document.get("services", {}).get("backend", {}).get("environment")
+    if not isinstance(environment, Mapping):
+        if has_metadata or has_names:
+            return previous
+        if has_frontend_lineage:
+            raise BuildControlError("Frontend refresh recovery lineage has no retained backend environment")
+        return previous
+    carried = {key: value for key, value in environment.items()
+               if isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
+    # Generic predecessor pins are also used by ordinary development handoffs.
+    # Only the explicit frontend-refresh markers authorize parent resolution.
+    if not has_frontend_lineage:
+        if carried and not (has_metadata and has_names):
+            raise BuildControlError("Retained container recovery capability has no authenticated refresh lineage")
+        return previous
+    if not all(refresh_fields[:4]):
+        raise BuildControlError("Frontend refresh recovery lineage is incomplete")
 
+    parent_attempt = previous.get("previous_development_attempt")
+    parent_config_sha = previous.get("previous_config_sha256")
+    if (not isinstance(parent_attempt, str) or not re.fullmatch(r"[0-9a-f]{32}", parent_attempt)
+            or parent_attempt == previous.get("attempt")
+            or not isinstance(parent_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", parent_config_sha)
+            or inputs.get("frontend_refresh_from_attempt") != parent_attempt
+            or inputs.get("frontend_refresh_from_config_sha256") != parent_config_sha):
+        raise BuildControlError("Frontend refresh recovery parent/config pins differ")
 
-def _retained_native_recovery_context(
-    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
-):
-    """Carry pending recovery authority, or consume a completed proof once.
+    child_attempt = previous.get("attempt")
+    child_config_sha = previous.get("config_sha256")
+    if (previous.get("schema") != "fullmag.docker-build-operation.v1"
+            or previous.get("phase") != "development"
+            or previous.get("state") != "succeeded"
+            or not isinstance(child_attempt, str) or not re.fullmatch(r"[0-9a-f]{32}", child_attempt)
+            or not isinstance(child_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", child_config_sha)
+            or child_config_sha != hashlib.sha256(canonical(document)).hexdigest()
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or document.get("name") != control.project):
+        raise BuildControlError("Frontend refresh recovery child identity/config differs")
 
-    PID 1 still authenticates the native request and current owner before any
-    recovery or service start. Pending authorization is carried unchanged;
-    a completed recovery receipt is validated before its authority is dropped.
-    A separate native-start-failure journal carries only reduced restart
-    evidence and never mints a recovery authorization.
-    """
-    from docker_volume_cold_budget_restore import retained_context as cold_restore_context
-    cold_restore = cold_restore_context(
-        control, previous, document, actual, fresh_state=fresh_state,
-        removed_container_proof=removed_container_proof,
+    child_root = "development/attempts/" + child_attempt
+    child_terminal_raw, child_terminal = _read_canonical_control_record(
+        control, child_root + "/terminal.json", "frontend refresh child terminal")
+    child_compose_raw, child_compose = _read_frontend_refresh_child_compose(
+        control, child_root + "/compose.json", "frontend refresh child Compose", previous,
+        child_attempt=child_attempt, parent_attempt=parent_attempt)
+    current_raw, current = _read_canonical_control_record(
+        control, "development/current.json", "current frontend refresh terminal")
+    if (child_terminal != previous or child_terminal_raw != canonical(previous) + b"\n"
+            or not ((current == previous and current_raw == child_terminal_raw)
+                    or (isinstance(expected_current_sha256, str)
+                        and hashlib.sha256(current_raw).hexdigest() == expected_current_sha256))
+            or child_compose != document
+            or child_compose_raw not in (canonical(document), canonical(document) + b"\n")):
+        raise BuildControlError("Frontend refresh child is not the exact current immutable receipt")
+
+    parent_root = "development/attempts/" + parent_attempt
+    parent_terminal_raw, parent = _read_canonical_control_record(
+        control, parent_root + "/terminal.json", "frontend refresh parent terminal")
+    _, parent_document = _read_canonical_control_record(
+        control, parent_root + "/compose.json", "frontend refresh parent Compose")
+    _validate_frontend_refresh_recovery_namespace(control, previous, parent)
+    parent_state = parent.get("state")
+    allowed_parent = (
+        parent_state == "succeeded"
+        or (parent_state == "failed-confirmed"
+            and parent.get("error") == "DEV service exited before readiness: frontend")
     )
-    if cold_restore is not None:
-        if drained_successor is not None:
-            raise BuildControlError("Cold budget restore cannot combine with drained successor")
-        return cold_restore
-    if drained_successor is not None:
-        if fresh_state:
-            raise BuildControlError("Drained successor requires retained storage")
-        from docker_volume_drained_successor import retained_context
-        return retained_context(control, previous, document, actual, *drained_successor,
-                                removed_container_proof=removed_container_proof)
+    parent_inputs = parent.get("inputs")
+    child_source = inputs.get("source_root")
+    if (parent.get("schema") != "fullmag.docker-build-operation.v1"
+            or parent.get("phase") != "development" or not allowed_parent
+            or parent.get("attempt") != parent_attempt
+            or parent.get("config_sha256") != parent_config_sha
+            or not isinstance(parent_config_sha, str)
+            or hashlib.sha256(canonical(parent_document)).hexdigest() != parent_config_sha
+            or parent.get("compose_project") != control.project
+            or parent.get("control_volume") != control.volume
+            or parent_document.get("name") != control.project
+            or not isinstance(parent_inputs, Mapping)
+            or not isinstance(child_source, str)
+            or parent_inputs.get("source_root") != child_source
+            or parent.get("state_root") != previous.get("state_root")
+            or parent.get("backend_volumes") != previous.get("backend_volumes")
+            or parent.get("backend_container") != previous.get("backend_container")
+            or parent.get("backend_started_at") != previous.get("backend_started_at")
+            or not isinstance(parent.get("backend_started_at"), str)
+            or parent.get("control_namespace") != previous.get("control_namespace")
+            or parent_document.get("services", {}).get("backend")
+                != document.get("services", {}).get("backend")):
+        raise BuildControlError("Frontend refresh recovery parent identity or backend declaration differs")
+    if (not isinstance(previous.get("state_root"), str) or not previous.get("state_root")
+            or not isinstance(previous.get("backend_container"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", previous["backend_container"])):
+        raise BuildControlError("Frontend refresh recovery backend/storage identity is incomplete")
+    if actual is not None:
+        backend = actual.get("backend") if isinstance(actual, Mapping) else None
+        if (not isinstance(backend, Mapping)
+                or backend.get("Id") != previous.get("backend_container")
+                or backend.get("State", {}).get("StartedAt") != previous.get("backend_started_at")):
+            raise BuildControlError("Frontend refresh recovery live backend identity differs")
+
+    seed_marker = inputs.get("failed_seed_new_generation")
+    if seed_marker is not None:
+        if (not isinstance(seed_marker, Mapping)
+                or set(seed_marker) != {"schema", "failed_attempt", "failed_config_sha256",
+                                        "source_pins", "prior_terminal_sha256",
+                                        "prior_input_manifest_sha256"}
+                or seed_marker.get("schema") != "fullmag.docker-frontend-failed-seed-recovery.v1"
+                or seed_marker.get("failed_attempt") != parent_attempt
+                or seed_marker.get("failed_config_sha256") != parent_config_sha
+                or not isinstance(seed_marker.get("source_pins"), Mapping)
+                or not isinstance(seed_marker.get("prior_input_manifest_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", seed_marker["prior_input_manifest_sha256"])
+                or seed_marker.get("prior_terminal_sha256") != hashlib.sha256(parent_terminal_raw).hexdigest()):
+            raise BuildControlError("Frontend seed recovery marker does not authenticate its exact parent terminal")
+
+    parent_environment = parent_document.get("services", {}).get("backend", {}).get("environment")
+    if not isinstance(parent_environment, Mapping):
+        raise BuildControlError("Frontend refresh recovery parent backend environment is malformed")
+    parent_carried = {key: value for key, value in parent_environment.items()
+                      if isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
+    parent_has_metadata = "container_recovery" in parent
+    parent_has_names = "container_recovery_environment" in parent
+    if parent_has_metadata != parent_has_names:
+        raise BuildControlError("Frontend refresh recovery parent capability pair is partial")
+    if parent_carried or parent_has_metadata:
+        from docker_volume_container_recovery import (
+            AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV,
+        )
+        if (set(parent_carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV}
+                or not parent_has_metadata or not isinstance(parent.get("container_recovery"), Mapping)
+                or parent.get("container_recovery_environment") != sorted(parent_carried)
+                or set(carried) != set(parent_carried)):
+            raise BuildControlError("Frontend refresh recovery parent capability binding is incomplete")
+        parent_env = _validate_recovery_environment(parent_carried)
+        parent_metadata = _validate_recovery_metadata(parent["container_recovery"])
+        if has_metadata:
+            if (previous.get("container_recovery") != parent_metadata
+                    or previous.get("container_recovery_environment") != sorted(parent_env)):
+                raise BuildControlError("Frontend refresh recovery current capability differs from its parent")
+            return previous
+        resolved = dict(previous)
+        resolved["container_recovery"] = parent_metadata
+        resolved["container_recovery_environment"] = sorted(parent_env)
+        return resolved
+    if carried or has_metadata:
+        raise BuildControlError("Frontend refresh recovery capability is not present in its authenticated parent")
+    return previous
+
+
+def _retained_container_recovery_present(previous, document):
+    """Check only whether native container-recovery metadata is present."""
+    if not isinstance(previous, Mapping) or not isinstance(document, Mapping):
+        return False
+    if "container_recovery" in previous or "container_recovery_environment" in previous:
+        return True
+    services = document.get("services")
+    backend = services.get("backend") if isinstance(services, Mapping) else None
+    environment = backend.get("environment") if isinstance(backend, Mapping) else None
+    return isinstance(environment, Mapping) and any(
+        isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")
+        for key in environment)
+
+
+def _retained_container_recovery_capability(control, previous, document, *, fresh_state):
+    """Authenticate the exact retained native recovery pair without lifecycle-specific probes."""
     import docker_volume_container_recovery as recovery_module
     from docker_volume_container_recovery import (
         AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV, CONTROL_ROOT,
-        _control_bytes, _parse_json, _relative_control_path,
-        validate_runtime_authorization,
+        _control_bytes, _parse_json, _relative_control_path, validate_runtime_authorization,
     )
     environment = document["services"]["backend"]["environment"]
     carried = {key: value for key, value in environment.items()
                if key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
     metadata = previous.get("container_recovery")
-    if not carried and metadata is None:
-        native = _native_failed_stop_recovery_context(
-            control, previous, backend_id=backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if native is not None:
-            return native
-        from docker_volume_native_init_successor import retained_context as retained_successor_context
-        successor = retained_successor_context(
-            control, previous, document, backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if successor is not None:
-            return successor
-        from docker_volume_pre_api_stop import retained_context as retained_pre_api_context
-        pre_api = retained_pre_api_context(
-            control, previous, document, backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if pre_api is not None:
-            return pre_api
-        if removed_container_proof is None:
-            from docker_volume_pre_ack_retry import retained_pre_ack_context
-            retry = retained_pre_ack_context(
-                control, previous, document, backend_id or previous.get("backend_container"), fresh_state=fresh_state
-            )
-            if retry is not None:
-                return retry
-        return {}
+    has_metadata = "container_recovery" in previous
+    has_environment_names = "container_recovery_environment" in previous
+    if has_metadata != has_environment_names:
+        raise BuildControlError("Retained container recovery capability is incomplete")
+    if not has_metadata:
+        if carried:
+            raise BuildControlError("Retained container recovery capability has no receipt binding")
+        return None
+    if (not isinstance(metadata, Mapping)
+            or not isinstance(previous.get("container_recovery_environment"), list)):
+        raise BuildControlError("Retained container recovery capability is malformed")
     if fresh_state:
         raise BuildControlError("Pending container recovery must retain its original session storage")
-    if set(carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV} or not isinstance(metadata, Mapping):
+    if set(carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV}:
         raise BuildControlError("Retained container recovery capability is incomplete")
     if previous.get("container_recovery_environment") != sorted(carried):
         raise BuildControlError("Retained container recovery environment differs from its receipt")
@@ -5965,7 +8305,222 @@ def _retained_native_recovery_context(
     }
     if metadata != expected:
         raise BuildControlError("Retained container recovery metadata differs from authorization")
-    if _validate_completed_recovery_receipt(control, authorization, recovery_module):
+    completed = _validate_completed_recovery_receipt(control, authorization, recovery_module)
+    return {
+        "recovery_environment": _validate_recovery_environment(carried),
+        "recovery_metadata": _validate_recovery_metadata(expected),
+        "authorization": authorization,
+        "completed": completed,
+        "recovery_module": recovery_module,
+    }
+
+
+def preflight_retained_recovery_handoff(control, previous, document, actual, *, backend_id=None):
+    """Read-only capability binding before a managed up drains a running group.
+
+    The full state-dependent native recovery validator still runs later under the
+    recreate lease, after the exact stop/drain evidence is available.
+    """
+    _capture_frontend_start_handoff(control, previous, document)
+    previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual)
+    if not _retained_container_recovery_present(previous, document):
+        return None
+    capability = _retained_container_recovery_capability(
+        control, previous, document, fresh_state=False)
+    if capability is None:
+        return None
+    backend = actual.get("backend") if isinstance(actual, Mapping) else None
+    backend_id = backend_id or (backend.get("Id") if isinstance(backend, Mapping) else None)
+    if (not isinstance(backend, Mapping) or backend.get("Id") != backend_id
+            or backend_id != previous.get("backend_container")
+            or backend.get("State", {}).get("StartedAt") != previous.get("backend_started_at")
+            or backend.get("Image") != document["services"]["backend"].get("image")):
+        raise BuildControlError("Retained recovery preflight backend identity differs")
+    env_rows = backend.get("Config", {}).get("Env")
+    if not isinstance(env_rows, list):
+        raise BuildControlError("Retained recovery preflight backend environment is unavailable")
+    observed = {}
+    for row in env_rows:
+        if not isinstance(row, str):
+            raise BuildControlError("Retained recovery preflight backend environment is malformed")
+        if "=" not in row:
+            if row.startswith("FULLMAG_CONTAINER_RECOVERY_"):
+                raise BuildControlError("Retained recovery preflight backend environment is malformed")
+            continue
+        name, value = row.split("=", 1)
+        if name.startswith("FULLMAG_CONTAINER_RECOVERY_"):
+            if name in observed:
+                raise BuildControlError("Retained recovery preflight backend environment is ambiguous")
+            observed[name] = value
+    if observed != capability["recovery_environment"]:
+        raise BuildControlError("Retained recovery preflight backend capability differs from Compose")
+    return {
+        "container_recovery": capability["recovery_metadata"],
+        "container_recovery_environment": sorted(capability["recovery_environment"]),
+    }
+
+
+def _serialize_frontend_refresh_recovery_context(context):
+    """Project only already-validated recovery provenance into a DEV receipt."""
+    if not isinstance(context, Mapping):
+        raise BuildControlError("Frontend refresh recovery context is not a mapping")
+    allowed = {
+        "recovery_environment", "recovery_metadata", "native_restart_metadata",
+        "previous_config_sha256", "cold_budget_restore", "startup_diagnostic_restart",
+    }
+    unknown = set(context) - allowed
+    if unknown:
+        raise BuildControlError("Frontend refresh recovery context has unsupported fields")
+    receipt, inputs = {}, {}
+    environment = context.get("recovery_environment")
+    metadata = context.get("recovery_metadata")
+    if environment is not None or metadata is not None:
+        if environment is None or metadata is None:
+            raise BuildControlError("Frontend refresh recovery context capability pair is partial")
+        validated_environment = _validate_recovery_environment(environment)
+        validated_metadata = _validate_recovery_metadata(metadata)
+        receipt["container_recovery"] = validated_metadata
+        receipt["container_recovery_environment"] = sorted(validated_environment)
+    native_restart = context.get("native_restart_metadata")
+    if native_restart is not None:
+        inputs["native_failed_restart"] = _validate_recovery_metadata(native_restart)
+    previous_config_sha = context.get("previous_config_sha256")
+    if previous_config_sha is not None:
+        if not isinstance(previous_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", previous_config_sha):
+            raise BuildControlError("Frontend refresh recovery runtime config pin is invalid")
+        inputs["previous_config_sha256"] = previous_config_sha
+    cold_budget = context.get("cold_budget_restore")
+    if cold_budget is not None:
+        if not isinstance(cold_budget, Mapping):
+            raise BuildControlError("Frontend refresh cold-budget receipt is malformed")
+        inputs["cold_budget_restore"] = dict(cold_budget)
+        receipt["cold_budget_restore"] = dict(cold_budget)
+    startup = context.get("startup_diagnostic_restart")
+    if startup is not None:
+        from docker_volume_startup_diagnostic_restart import validate_metadata
+        startup = validate_metadata(startup)
+        inputs["startup_diagnostic_restart"] = startup
+        receipt["startup_diagnostic_restart"] = startup
+    from docker_volume_drained_successor import DrainedSuccessorContext
+    if isinstance(context, DrainedSuccessorContext):
+        witness = context.witness
+        if not isinstance(witness, Mapping):
+            raise BuildControlError("Frontend refresh drained-successor witness is malformed")
+        receipt["drained_successor"] = dict(witness)
+    from docker_volume_native_init_successor import NativeInitSuccessorContext
+    if isinstance(context, NativeInitSuccessorContext):
+        witness = context.witness
+        if not isinstance(witness, Mapping):
+            raise BuildControlError("Frontend refresh native-init successor witness is malformed")
+        receipt["native_init_successor"] = dict(witness)
+    return {"receipt": receipt, "inputs": inputs}
+
+
+def _frontend_refresh_recovery_handoff(
+    control, previous, document, actual, *, backend_id=None, expected=None,
+):
+    effective_previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual)
+    context = _retained_recovery_context(
+        control, effective_previous, document, fresh_state=False,
+        backend_id=backend_id or effective_previous.get("backend_container"), actual=actual,
+    )
+    handoff = _serialize_frontend_refresh_recovery_context(context)
+    if expected is not None and handoff != expected:
+        raise BuildControlError("Retained frontend recovery handoff changed under its operation lease")
+    return handoff
+
+
+def _retained_recovery_context(
+    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
+    drained_successor=None, actual=None, frontend_current_sha256=None,
+):
+    context = _retained_native_recovery_context(
+        control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
+        removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+        **({"frontend_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}),
+    )
+    pin = previous.get("cold_budget_restore")
+    if pin is not None and not fresh_state:
+        from docker_volume_cold_budget_restore import authenticate_journal
+        journal = authenticate_journal(control, pin)
+        if journal["observation"]["source_root"] != previous.get("inputs", {}).get("source_root"):
+            raise BuildControlError("Retained budget restore source differs")
+        if context.get("cold_budget_restore", pin) != pin:
+            raise BuildControlError("Retained budget restore pin changed")
+        context["cold_budget_restore"] = pin
+    return context
+
+
+def _retained_native_recovery_context(
+    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
+    drained_successor=None, actual=None, frontend_current_sha256=None,
+):
+    """Carry pending recovery authority, or consume a completed proof once."""
+    if frontend_current_sha256 is not None:
+        if (not isinstance(removed_container_proof, Mapping)
+                or removed_container_proof.get("prior_terminal_sha256") != hashlib.sha256(canonical(previous) + b"\n").hexdigest()
+                or removed_container_proof.get("prior_compose_sha256") not in {
+                    hashlib.sha256(canonical(document)).hexdigest(),
+                    hashlib.sha256(canonical(document) + b"\n").hexdigest()}):
+            raise BuildControlError("Historical frontend lineage requires its exact removed recreation proof")
+    previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual,
+        **({"expected_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}))
+    capability = None
+    if _retained_container_recovery_present(previous, document):
+        capability = _retained_container_recovery_capability(
+            control, previous, document, fresh_state=fresh_state)
+    from docker_volume_cold_budget_restore import retained_context as cold_restore_context
+    cold_restore = cold_restore_context(
+        control, previous, document, actual, fresh_state=fresh_state,
+        removed_container_proof=removed_container_proof,
+    )
+    if cold_restore is not None:
+        if drained_successor is not None:
+            raise BuildControlError("Cold budget restore cannot combine with drained successor")
+        return cold_restore
+    if drained_successor is not None:
+        if fresh_state:
+            raise BuildControlError("Drained successor requires retained storage")
+        from docker_volume_drained_successor import retained_context
+        return retained_context(control, previous, document, actual, *drained_successor,
+                                removed_container_proof=removed_container_proof)
+
+    if capability is None:
+        native = _native_failed_stop_recovery_context(
+            control, previous, backend_id=backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if native is not None:
+            return native
+        from docker_volume_native_init_successor import retained_context as retained_successor_context
+        successor = retained_successor_context(
+            control, previous, document, backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if successor is not None:
+            return successor
+        from docker_volume_pre_api_stop import retained_context as retained_pre_api_context
+        pre_api = retained_pre_api_context(
+            control, previous, document, backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if pre_api is not None:
+            return pre_api
+        if removed_container_proof is None:
+            from docker_volume_pre_ack_retry import retained_pre_ack_context
+            retry = retained_pre_ack_context(
+                control, previous, document, backend_id or previous.get("backend_container"), fresh_state=fresh_state
+            )
+            if retry is not None:
+                return retry
+        return {}
+
+    if capability["completed"]:
+        authorization = capability["authorization"]
+        recovery_module = capability["recovery_module"]
         from docker_volume_startup_diagnostic_restart import retained_context as diagnostic_context
         startup_stop = diagnostic_context(
             control, previous, document, backend_id or previous.get("backend_container"),
@@ -5980,11 +8535,11 @@ def _retained_native_recovery_context(
         )
         if native_restart is not None:
             return native_restart
-        # The first post-recovery Failed owner still needs the original
-        # capability for its authorized configuration-generation rotation.
-        # A completed receipt alone does not prove a later owner existed.
-    return {"recovery_environment": _validate_recovery_environment(carried),
-            "recovery_metadata": _validate_recovery_metadata(expected)}
+        # A completed receipt alone does not prove that a later owner exists.
+    return {
+        "recovery_environment": capability["recovery_environment"],
+        "recovery_metadata": capability["recovery_metadata"],
+    }
 
 
 def _read_canonical_control_record(control, relative, label):
@@ -6300,7 +8855,7 @@ def _validate_failed_prestart_successor(
 def _validate_removed_recreation_proof(
     args, control, previous, document, identity, *, operation_id, operation_raw,
     operation_terminal, retained_raw, retained, previous_raw, document_raw, operator_probe_record,
-    helper_source_binding=None,
+    helper_source_binding=None, frontend_current_sha256=None, held_ui_context=None,
 ):
     """Validate the retained incarnation and native proof after exact app-ID removal.
 
@@ -6313,6 +8868,28 @@ def _validate_removed_recreation_proof(
         "config_sha256": args.config_sha256,
         **operator_probe_record,
     }
+    if held_ui_context is not None:
+        held_ui_context = _validate_held_ui_materialization_context(
+            args, _held_ui_context_value(held_ui_context), expected_control=control, require_claim=True,
+        )
+        if (held_ui_context["claim"].get("recreate_attempt") != operation_id
+                or held_ui_context["previous_raw"] != previous_raw
+                or held_ui_context["document_raw"] != document_raw):
+            raise BuildControlError("Held UI removal proof is not bound to the exact request and old DEV authority")
+        expected_operation_inputs["held_ui_materialization"] = held_ui_context["recreate_input"]
+        claim_reference = operation_terminal.get("held_ui_materialization_recreate_claim")
+        controller = held_ui_context["controller"]
+        expected_claim_reference = {
+            "path": controller.recreate_claim_relative(
+                held_ui_context["request"]["plan"]["maintenance_request_id"],
+            ),
+            "sha256": held_ui_context["claim_sha256"],
+        }
+        if (held_ui_context["claim"].get("recreate_attempt") != operation_id
+                or claim_reference != expected_claim_reference):
+            raise BuildControlError("Held UI recreate claim does not bind the completed removal")
+    elif operation_terminal.get("held_ui_materialization_recreate_claim") is not None:
+        raise BuildControlError("Held UI recreate terminal requires its typed continuation context")
     try:
         import docker_helper_source as helper_source
         stored_helper_source = helper_source.compare_operation_binding(
@@ -6469,15 +9046,21 @@ def _validate_removed_recreation_proof(
         successor_path, successor_sha = recorded_pins
     if bool(successor_path) != bool(successor_sha):
         raise BuildControlError("Completed recreation requires paired drained-successor pins")
-    native_recovery_context = _retained_recovery_context(
-        control,
-        previous,
-        document,
-        fresh_state=False,
-        backend_id=ids["backend"],
-        removed_container_proof=proof,
-        drained_successor=((successor_path, successor_sha) if successor_path else None), actual=snapshot,
-    )
+    if held_ui_context is not None:
+        if successor_path or operation_terminal.get("accepted_reattach") is not None:
+            raise BuildControlError("Held UI recreation cannot carry another native recovery mode")
+        native_recovery_context = {}
+    else:
+        native_recovery_context = _retained_recovery_context(
+            control,
+            previous,
+            document,
+            fresh_state=False,
+            backend_id=ids["backend"],
+            removed_container_proof=proof,
+            drained_successor=((successor_path, successor_sha) if successor_path else None), actual=snapshot,
+            **({"frontend_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}),
+        )
     from docker_volume_drained_successor import DrainedSuccessorContext
     if isinstance(native_recovery_context, DrainedSuccessorContext):
         witness = native_recovery_context.witness
@@ -6501,6 +9084,8 @@ def _validate_removed_recreation_proof(
 def _validate_recreation_resume_records(args, control, selected, identity, *, expected_proof=None,
                                         current_operation=None, helper_source_binding=None):
     """Revalidate one completed recreation and prove its old app IDs are absent."""
+    import docker_volume_frontend_start_resume as frontend_resume
+    failed_frontend_resume = frontend_resume.validate_options(args)
 
     from docker_volume_stop_unadmitted import _control_bytes
 
@@ -6537,9 +9122,13 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
         raise BuildControlError("Recreation resume has no immutable prior image identity")
 
-    document_raw, document = _read_canonical_control_record(
-        control, previous_root + "/compose.json", "prior development Compose document"
-    )
+    if "frontend_refresh_completion" in previous:
+        document_raw, document = _read_frontend_refresh_child_compose(
+            control, previous_root + "/compose.json", "prior development Compose document", previous,
+            child_attempt=args.attempt, parent_attempt=previous.get("previous_development_attempt"))
+    else:
+        document_raw, document = _read_canonical_control_record(
+            control, previous_root + "/compose.json", "prior development Compose document")
     if (
         hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256
         or document.get("name") != control.project
@@ -6609,16 +9198,29 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     retained_raw, retained = _read_canonical_control_record(
         control, operation_root + "/retained-containers.json", "recreation retained-container snapshot"
     )
+    if failed_frontend_resume:
+        _validate_frontend_refresh_recovery_namespace(control, current, previous)
+        frontend_resume.validate_failed_start_boundary(
+            args, control, selected, identity, current_raw=current_raw, current=current,
+            previous_raw=previous_raw, previous=previous, operation_raw=operation_raw,
+            operation_terminal=operation_terminal, operator_probe_record=operator_probe_record)
     snapshot, proof, native_recovery_context = _validate_removed_recreation_proof(
         args, control, previous, document, identity, operation_id=operation_id,
         operation_raw=operation_raw, operation_terminal=operation_terminal,
         retained_raw=retained_raw, retained=retained, previous_raw=previous_raw,
         document_raw=document_raw, operator_probe_record=operator_probe_record,
         helper_source_binding=helper_source_binding,
+        **({"frontend_current_sha256": hashlib.sha256(current_raw).hexdigest()} if failed_frontend_resume else {}),
     )
     if expected_proof is not None and proof != expected_proof:
         raise BuildControlError("Recreation resume evidence changed before the new start admission")
-    if current_raw != canonical(current) + b"\n" or current != previous:
+    if failed_frontend_resume:
+        frontend_resume.validate_failed_start(
+            args, control, selected, identity, current_raw=current_raw, current=current,
+            previous_raw=previous_raw, previous=previous, operation_raw=operation_raw,
+            operation_terminal=operation_terminal, operator_probe_record=operator_probe_record,
+            capability=native_recovery_context)
+    elif current_raw != canonical(current) + b"\n" or current != previous:
         _validate_failed_prestart_successor(
             args,
             control,
@@ -6646,6 +9248,7 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
         "operator_probe_record": operator_probe_record,
         "proof": proof,
         "native_recovery_context": native_recovery_context,
+        "current_sha256": hashlib.sha256(current_raw).hexdigest(),
     }
 
 
@@ -6845,6 +9448,11 @@ def _resume_recreated_operation(args, control, selected, layout, identity, *, he
     }
     if helper_source_binding is not None:
         reuse["helper_source_binding"] = helper_source_binding
+    if previous.get("private_group_storage") == "group-volume-v1":
+        handoff = _capture_frontend_start_handoff(
+            control, previous, document, expected_current_sha256=records["current_sha256"])
+        if handoff is not None:
+            reuse["frontend_start_handoff"] = handoff
     recovery_context.update(accepted_reattach_context)
     args.include_untracked = include_untracked_from_compose(document)
     args.gpu_access = previous["inputs"]["gpu_access_requested"]
@@ -6951,13 +9559,22 @@ print(json.dumps({'processes':sorted(processes,key=lambda p:p['pid']),'api_insta
     return json.loads(output)
 
 
-def _frontend_refresh_document(document, volume, inputs, *, frontend_image=None):
+def _frontend_refresh_document(document, volume, inputs, *, frontend_image=None,
+                              frontend_generation_subpath=None):
     import copy
     refreshed = copy.deepcopy(document)
     refreshed['volumes']['frontend-build']['name'] = volume
     refreshed['services']['frontend']['environment']['FULLMAG_SOURCE_COMMIT'] = inputs['source_commit']
     # Upgrade the former default; preserve explicitly different retained limits.
     frontend = refreshed['services']['frontend']
+    if frontend_generation_subpath is not None:
+        mounts = [mount for mount in frontend.get('volumes', [])
+                  if isinstance(mount, Mapping) and mount.get('target') == '/state/development']
+        if (len(mounts) != 1 or mounts[0].get('type') != 'volume'
+                or mounts[0].get('source') != 'frontend-build'
+                or not isinstance(mounts[0].get('volume'), Mapping)):
+            raise BuildControlError('Frontend refresh generation mount is missing or ambiguous')
+        mounts[0]['volume']['subpath'] = frontend_generation_subpath
     if str(frontend.get('mem_limit')) in ('6442450944', '6g'):
         frontend['mem_limit'] = str(8 * 1024**3)
     if frontend_image is not None:
@@ -7075,7 +9692,8 @@ def _repin_frontend_daemon_binds(document, actual, selected, reconcile):
 
 
 def _refresh_frontend_services(control, args, previous_root, previous, document, selected,
-                               layout, actual, ids, image, operator_probe_record, *, recover_oom=False, frozen_context=None):
+                               layout, actual, ids, image, operator_probe_record, *, recover_oom=False,
+                               frozen_context=None, failed_seed_context=None):
     """Create a new DEV handoff by replacing only the frontend generation."""
     import docker_dev_codegen as codegen
     from docker_development_inputs import describe, frontend_view
@@ -7083,6 +9701,10 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     host = _session_host()
     read_owned_regular = host.read_owned_regular
     from docker_build_control import ControlOutcomeUnknown
+    if failed_seed_context is not None and (recover_oom or frozen_context is not None):
+        raise BuildControlError('Failed-seed generation cannot combine with another frontend recovery mode')
+    recovery_handoff = _frontend_refresh_recovery_handoff(
+        control, previous, document, actual, backend_id=ids['backend'])
     state = storage.validate_path(Path(previous['state_root']), layout['runtime_root'], 'retained sessions')
     if args.port != int(document['services']['frontend']['environment']['FULLMAG_FRONTEND_HOST_PORT']):
         raise BuildControlError('Frontend refresh port differs from retained published port')
@@ -7113,6 +9735,33 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     if recover_oom:
         frontend_image, image_witness = _verified_frontend_recovery_image(control, selected)
         backend_observation = _frontend_recovery_backend_observation(ids['backend'])
+    seed_recovery = None
+    seed_backend_anchor = None
+    if failed_seed_context is not None:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        backend_observation = _frontend_recovery_backend_observation(ids['backend'], allow_empty=True)
+        seed_backend_anchor = seed_recovery.backend_anchor(
+            actual['backend'], fingerprint(actual['backend']),
+            json.loads(certificate), backend_observation)
+
+    def validate_seed_backend(backend):
+        if failed_seed_context is None:
+            return None
+        observed_certificate = read_owned_regular(certificate_path)
+        observed_owner = read_owned_regular(owner_path)
+        try:
+            certificate_document = json.loads(observed_certificate)
+            owner_document = json.loads(observed_owner)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BuildControlError('Frontend seed recovery backend certificate is malformed') from error
+        if canonical(owner_document) != canonical(certificate_document):
+            raise BuildControlError('Frontend seed recovery backend owner/certificate diverged')
+        observation = _frontend_recovery_backend_observation(ids['backend'], allow_empty=True)
+        current_anchor = seed_recovery.backend_anchor(
+            backend, fingerprint(backend), certificate_document, observation)
+        seed_recovery.validate_backend_anchor(seed_backend_anchor, current_anchor)
+        return observation
+
     def inspect_services(frontend_id):
         current = {name: json.loads(docker_text('inspect', identifier))[0]
                    for name, identifier in {'backend': ids['backend'], 'frontend': frontend_id}.items()}
@@ -7132,10 +9781,13 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 raise BuildControlError('Backend processes/session changed during frontend recovery')
         if frozen_context is not None and backend_observation(ids['backend']) != backend_observation_pin:
             raise BuildControlError('Terminal backend observation changed during frontend refresh')
+        validate_seed_backend(backend)
         _assert_private_restart_network(current, {'backend': ids['backend'], 'frontend': frontend_id}, control.project)
         return current
     health_script = "import json,urllib.request\nwith urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5) as r:\n value=json.load(r)\n if r.status!=200 or value.get('status')!='ok' or value.get('active_session') is not False:raise RuntimeError('Frontend refresh requires an empty healthy API')\n print(json.dumps(value))"
     def source_matches(probe, backend_source, package):
+        if failed_seed_context is not None:
+            return True
         if frozen_context is None:
             return codegen._source_matches(probe, backend_source)
         from docker_volume_frontend_frozen_recovery import source_qualification
@@ -7143,6 +9795,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                              probe, backend_source, package['source'])
         return True
     def healthy_idle():
+        if failed_seed_context is not None:
+            return validate_seed_backend(json.loads(docker_text('inspect', ids['backend']))[0])
         if frozen_context is not None:
             value = backend_observation(ids['backend'])
             if value != backend_observation_pin:
@@ -7159,14 +9813,38 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                       selected_source_qualification='NOT VERIFIED')
     if frozen_context is not None:
         inputs['helper_transition'] = frozen_context['request']['source_transition']
+    if failed_seed_context is not None:
+        inputs['failed_seed_new_generation'] = {
+            'schema': failed_seed_context['schema'],
+            'failed_attempt': failed_seed_context['attempt'],
+            'failed_config_sha256': failed_seed_context['config_sha256'],
+            'source_pins': failed_seed_context['source_pins'],
+            'prior_terminal_sha256': failed_seed_context['terminal_sha256'],
+            'prior_input_manifest_sha256': failed_seed_context['input_manifest_sha256'],
+        }
+    inputs.update(recovery_handoff['inputs'])
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
     carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
+
+    def validate_recovery_handoff(current_actual):
+        return _frontend_refresh_recovery_handoff(
+            control, previous, document, current_actual, backend_id=ids['backend'],
+            expected=recovery_handoff,
+        )
     bind_reconcile = _frontend_refresh_bind_reconciler(document)
     # A refused preflight must not displace the still-live verified DEV fence.
     inspect_services(ids['frontend']); healthy_idle()
     with control.operation('development', inputs) as operation:
-        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
+        leased_actual = inspect_services(ids['frontend'])
+        healthy_idle()
+        leased_handoff = _frontend_refresh_recovery_handoff(
+            control, previous, document, leased_actual, backend_id=ids['backend'],
+            expected=recovery_handoff,
+        )
+        operation['receipt'].update(leased_handoff['receipt'])
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous,
+                                   document=document)
         operation['receipt'].update(operator_probe_record)
         operation['receipt'].update(state='validating-frontend-refresh', state_root=str(state),
             backend_volumes=previous['backend_volumes'], previous_frontend_volume=previous['frontend_volume'])
@@ -7176,53 +9854,136 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             repeated = refresh_context(control, args, previous, document, actual)
             if repeated != frozen_context:
                 raise BuildControlError('Frozen frontend proof changed under refresh lease')
+        if failed_seed_context is not None:
+            current_actual = inspect_services(ids['frontend'])
+            seed_recovery.revalidate_context(
+                control, args, previous, document, current_actual, selected, failed_seed_context)
+            # Persist the stable empty backend incarnation before any frontend
+            # seed/publication/lifecycle work, so post-recreation completion has
+            # its own authority even when the base DEV receipt failed.
+            import docker_volume_frontend_seed_completion as seed_completion
+            from docker_volume_reconcile import write_immutable
+            baseline = seed_completion.capture_baseline(current_actual['backend'],
+                _frontend_recovery_backend_observation(ids['backend'], allow_empty=True))
+            record = seed_completion.baseline_record(operation['receipt']['attempt'],
+                args.attempt, baseline, 'captured-under-lease')
+            write_immutable(control, operation['root'] + '/backend-incarnation-baseline.json',
+                            canonical(record))
         try:
             package, provenance, package_sha, binary_provenance = codegen._backend_documents(ids['backend'])
-            backend_source, _, _ = codegen._validate_backend(package, provenance, package_sha, binary_provenance)
+            backend_source, backend_provenance_sha, backend_binary_sha = codegen._validate_backend(
+                package, provenance, package_sha, binary_provenance)
             source_probe = None
-            if not recover_oom:
+            if not recover_oom and failed_seed_context is None:
                 source_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
         except codegen.CodegenError as error:
             if error.reconciliation_required:
                 raise ControlOutcomeUnknown(str(error)) from error
             raise
-        if not recover_oom and not source_matches(source_probe, backend_source, package):
+        if failed_seed_context is not None:
+            seed_recovery.validate_live_backend_pins(
+                failed_seed_context['source_pins'], backend_source,
+                receipt_sha256=package_sha, provenance_sha256=backend_provenance_sha,
+                binary_sha256=backend_binary_sha)
+        elif not recover_oom and not source_matches(source_probe, backend_source, package):
             raise BuildControlError('Frontend refresh requires the current native source capture; run the canonical idle restart first')
         desired = describe(selected, args.port)
+        if failed_seed_context is not None and desired['files'] != failed_seed_context['current_inputs'].get('files'):
+            raise BuildControlError('Selected frontend seed changed after the prior manifest capture')
         control.write(operation['root'] + '/rollback-compose.json', document)
         control.write(operation['root'] + '/rollback-development-inputs.json',
                       control.read('frontend/development-inputs.json'))
         for name, value in carry_documents.items():
             control.write(operation['root'] + '/' + name, value)
-        # Quiesce the sole browser admission route before the final empty-API
-        # fence. Unknown stop/seed outcomes retain this exact control lease.
+        # Quiesce the sole browser admission route only after the capability
+        # has been reauthenticated against the exact pre-stop service pair.
+        if not recover_oom and failed_seed_context is None:
+            pre_stop_actual = inspect_services(ids['frontend'])
+            healthy_idle()
+            validate_recovery_handoff(pre_stop_actual)
+        # Unknown stop/seed outcomes retain this exact control lease.
         operation['daemon_pending'] = True
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             docker_capture('stop', '--time', '60', ids['frontend'], timeout=90)
         quiesced = inspect_services(ids['frontend'])
         if quiesced['frontend']['State'].get('Running') is not False:
             raise BuildControlError('Owned frontend did not quiesce before refresh')
         healthy_idle()
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             source_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
             if not source_matches(source_probe, backend_source, package):
                 raise BuildControlError('Backend source changed after frontend quiescence')
-        seeded, volume = _frontend(control, operation, selected, state, args.port, frontend_image)
-        if seeded['files'] != desired['files']:
-            raise BuildControlError('Frontend seed changed during refresh')
-        refreshed = _frontend_refresh_document(document, volume, seeded,
-            frontend_image=frontend_image if recover_oom else None)
-        control.write(operation['root'] + '/compose.json', refreshed)
         control.write(operation['root'] + '/backend-build-receipt.json', package)
         control.write(operation['root'] + '/provenance.json', provenance)
         if recover_oom:
             if (_verified_frontend_recovery_image(control, selected) != (frontend_image, image_witness)
                     or codegen._backend_documents(ids['backend']) != (package, provenance, package_sha, binary_provenance)):
                 raise BuildControlError('Recovery image or backend package changed before frontend recreation')
-        healthy_idle(); inspect_services(ids['frontend'])
-        operation['receipt']['state'] = 'recreating-owned-frontend'
-        compose_capture(refreshed, 'up', '--detach', '--no-build', '--pull', 'never',
-                        '--no-deps', '--force-recreate', 'frontend', timeout=180)
+        if failed_seed_context is not None:
+            def guard_prior_consumers():
+                fresh = inspect_services(ids['frontend'])
+                seed_recovery.assert_group_local_consumers(
+                    control, fresh['backend'], fresh['frontend'], document)
+
+            def stage_generation():
+                seeded_inputs, seed_volume = _frontend(
+                    control, operation, selected, state, args.port, frontend_image,
+                    create_generation=True,
+                    old_generation_id=failed_seed_context['active_generation']['generation_id'],
+                    old_seed_sha256=failed_seed_context['failure_identity']['old_seed_sha256'],
+                    publish_inputs=False)
+                if seeded_inputs != failed_seed_context['current_inputs']:
+                    raise BuildControlError('New frontend generation seed differs from the authenticated source manifest')
+                if seeded_inputs['files'] != desired['files']:
+                    raise BuildControlError('Frontend seed changed during refresh')
+                probe = operation['receipt'].get('frontend_generation_probe')
+                seed_recovery.validate_generation_probe(
+                    probe, generation_id=operation['receipt'].get('frontend_generation_id'),
+                    old_generation_id=failed_seed_context['active_generation']['generation_id'],
+                    old_seed_sha256=failed_seed_context['failure_identity']['old_seed_sha256'])
+                new_document = _frontend_refresh_document(document, seed_volume, seeded_inputs,
+                    frontend_generation_subpath=operation['receipt'].get('frontend_generation_subpath'))
+                return {"inputs": seeded_inputs, "compose": new_document, "volume": seed_volume}
+
+            def guard_consumers(staged_generation):
+                fresh = inspect_services(ids['frontend'])
+                seed_recovery.assert_group_local_consumers(
+                    control, fresh['backend'], fresh['frontend'], staged_generation['compose'])
+
+            def final_prior_cas(staged_generation):
+                healthy_idle()
+                fresh = inspect_services(ids['frontend'])
+                validate_recovery_handoff(fresh)
+                seed_recovery.revalidate_context(
+                    control, args, previous, document, fresh, selected, failed_seed_context)
+                if describe(selected, args.port)['files'] != staged_generation['inputs']['files']:
+                    raise BuildControlError('Selected frontend seed changed before generation publication')
+
+            operation['receipt']['state'] = 'recreating-owned-frontend'
+            staged = seed_recovery.stage_and_publish_generation(
+                control, operation, guard_prior_consumers=guard_prior_consumers,
+                stage_generation=stage_generation,
+                guard_consumers=guard_consumers,
+                revalidate_prior=final_prior_cas,
+                compose_apply=lambda compose: compose_capture(
+                    compose, 'up', '--detach', '--no-build', '--pull', 'never',
+                    '--no-deps', '--force-recreate', 'frontend', timeout=180),
+            )
+            seeded, refreshed, volume = staged['inputs'], staged['compose'], staged['volume']
+        else:
+            seeded, volume = _frontend(control, operation, selected, state, args.port, frontend_image)
+            if seeded['files'] != desired['files']:
+                raise BuildControlError('Frontend seed changed during refresh')
+            refreshed = _frontend_refresh_document(document, volume, seeded,
+                frontend_image=frontend_image if recover_oom else None,
+                frontend_generation_subpath=operation['receipt'].get('frontend_generation_subpath'))
+            healthy_idle()
+            before_compose = inspect_services(ids['frontend'])
+            validate_recovery_handoff(before_compose)
+            operation['receipt']['state'] = 'recreating-owned-frontend'
+            control.write(operation['root'] + '/compose.json', refreshed)
+            compose_capture(refreshed, 'up', '--detach', '--no-build', '--pull', 'never',
+                            '--no-deps', '--force-recreate', 'frontend', timeout=180)
         frontend_id = compose_capture(refreshed, 'ps', '--all', '--quiet', 'frontend').decode().strip()
         if not re.fullmatch('[0-9a-f]{64}', frontend_id) or frontend_id == ids['frontend']:
             raise BuildControlError('Frontend refresh did not produce one new owned incarnation')
@@ -7252,14 +10013,16 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         control.write(operation['root'] + '/frontend-source-view.json', view)
         again_package, again_provenance, again_sha, again_binary = codegen._backend_documents(ids['backend'])
         again_probe = None
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             again_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
         if (again_package != package or again_provenance != provenance or again_sha != package_sha
                 or again_binary != binary_provenance
-                or (not recover_oom and not source_matches(again_probe, backend_source, package))
+                or (not recover_oom and failed_seed_context is None
+                    and not source_matches(again_probe, backend_source, package))
                 or describe(selected, args.port)['files'] != seeded['files']
-                or read_owned_regular(certificate_path) != certificate
-                or read_owned_regular(owner_path) != owner):
+                or (failed_seed_context is None
+                    and (read_owned_regular(certificate_path) != certificate
+                         or read_owned_regular(owner_path) != owner))):
             raise BuildControlError('Backend package/source, frontend seed or session storage changed during refresh')
         if recover_oom and _verified_frontend_recovery_image(control, selected) != (frontend_image, image_witness):
             raise BuildControlError('Frontend recovery image inputs changed after recreation')
@@ -7268,6 +10031,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 or final['frontend']['State'].get('Running') is not True
                 or final['frontend']['State'].get('Health', {}).get('Status') != 'healthy'):
             raise BuildControlError('New frontend changed during source-view verification')
+        if failed_seed_context is not None:
+            validate_seed_backend(final['backend'])
         if frontend_bind_witness is not None:
             operation['receipt']['frontend_bind_source_witness'] = frontend_bind_witness
         new_config_sha = hashlib.sha256(canonical(refreshed)).hexdigest()
@@ -7283,6 +10048,24 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             complete_refresh(control, operation, frozen_context, final['backend'])
             operation['receipt']['frontend_frozen_resume'] = {
                 'attempt': frozen_context['resume'], 'terminal_sha256': frozen_context['terminal_sha256']}
+        if failed_seed_context is not None:
+            operation['receipt'].update(frontend_input_commit=seeded['source_commit'],
+                backend_app_commit=backend_source['commit'], frontend_generation_changed=True,
+                frontend_seed_recovery={
+                    'schema': failed_seed_context['schema'],
+                    'failed_attempt': failed_seed_context['attempt'],
+                    'failed_config_sha256': failed_seed_context['config_sha256'],
+                    'prior_terminal_sha256': failed_seed_context['terminal_sha256'],
+                    'prior_current_sha256': failed_seed_context['current_sha256'],
+                    'prior_verified_sha256': failed_seed_context['verified_sha256'],
+                    'prior_compose_sha256': failed_seed_context['compose_sha256'],
+                    'prior_input_manifest_sha256': failed_seed_context['input_manifest_sha256'],
+                    'failed_frontend_identity': failed_seed_context['failure_identity'],
+                    'source_pins': failed_seed_context['source_pins'],
+                    'controller_source_sha256': failed_seed_context['controller_source_sha256'],
+                    'new_generation_probe': operation['receipt']['frontend_generation_probe'],
+                    'backend_anchor_sha256': hashlib.sha256(canonical(seed_backend_anchor)).hexdigest(),
+                })
         operation['receipt'].update(frontend_volume=volume, backend_container=ids['backend'],
             frontend_container=frontend_id, backend_started_at=backend_pin[0], config_sha256=new_config_sha,
             source_commit=backend_source['commit'], source_digest=backend_source['source_digest'],
@@ -7295,10 +10078,12 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
 
 
 def refresh_frontend(args):
+    import docker_volume_frontend_seed_recovery as seed_recovery
+    seed_recovery.validate_refresh_options(args)
     return _retained_operation(args, recreate_services=False, refresh_frontend_service=True)
 
 
-def _completed_recreation_start_context(control, args, selected, layout):
+def _completed_recreation_start_context(control, args, selected, layout, *, held_ui_context=None):
     """Continue one exact completed removal; never repeat container deletion."""
     from docker_volume_stop_unadmitted import _control_bytes
     from docker_volume_container_recovery import _assert_container_absent
@@ -7361,22 +10146,50 @@ def _completed_recreation_start_context(control, args, selected, layout):
         control, base + "/retained-containers.json", "completed recreation retained-container snapshot"
     )
     operator_probe_record = _operator_probe_record_from_retained(previous, document)
+    if held_ui_context is not None:
+        held_ui_context = _validate_held_ui_materialization_context(
+            args, _held_ui_context_value(held_ui_context), expected_control=control, require_claim=True,
+        )
+        if (held_ui_context["claim"].get("recreate_attempt") != attempt
+                or held_ui_context["previous_raw"] != previous_raw
+                or held_ui_context["document_raw"] != document_raw):
+            raise BuildControlError("Held UI continuation is not pinned to this old DEV authority/recreate attempt")
     _, removed_proof, recovery = _validate_removed_recreation_proof(
         args, control, previous, document, control.identity, operation_id=attempt,
         operation_raw=raw, operation_terminal=completed, retained_raw=retained_raw,
         retained=retained, previous_raw=previous_raw, document_raw=document_raw,
-        operator_probe_record=operator_probe_record,
+        operator_probe_record=operator_probe_record, held_ui_context=held_ui_context,
     )
-    from docker_volume_drained_successor import DrainedSuccessorContext
-    from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
-    if (not isinstance(recovery, (DrainedSuccessorContext, StartupDiagnosticStopContext))
-            and (not recovery.get("previous_config_sha256") or not recovery.get("native_restart_metadata")
-                 or recovery.get("recovery_environment") or recovery.get("recovery_metadata"))):
-        raise BuildControlError("Completed recreation requires the exact managed failed-owner restart proof")
+    if held_ui_context is None:
+        from docker_volume_drained_successor import DrainedSuccessorContext
+        from docker_volume_startup_diagnostic_restart import StartupDiagnosticStopContext
+        if (not isinstance(recovery, (DrainedSuccessorContext, StartupDiagnosticStopContext))
+                and (not recovery.get("previous_config_sha256") or not recovery.get("native_restart_metadata")
+                     or recovery.get("recovery_environment") or recovery.get("recovery_metadata"))):
+            raise BuildControlError("Completed recreation requires the exact managed failed-owner restart proof")
+    else:
+        held_ui_context = _validate_held_ui_materialization_context(
+            args, _held_ui_context_value(held_ui_context), expected_control=control, require_claim=True,
+        )
+        if (held_ui_context["claim"].get("recreate_attempt") != attempt
+                or completed.get("inputs", {}).get("held_ui_materialization")
+                    != held_ui_context["recreate_input"]
+                or completed.get("held_ui_materialization_recreate_claim") != {
+                    "path": held_ui_context["controller"].recreate_claim_relative(
+                        held_ui_context["request"]["plan"]["maintenance_request_id"]),
+                    "sha256": held_ui_context["claim_sha256"],
+                }
+                or recovery):
+            raise BuildControlError("Completed held UI recreation lacks its exact one-shot claim")
+        _held_ui_recreate_terminal(held_ui_context, args)
     reuse = {"state": state, "host_certificate": certificate_path,
         "owner_marker": owner_marker, "receipt": {"image_id": image},
         "operator_probe_environment_record": operator_probe_record,
         "removed_recreation_proof_sha256": hashlib.sha256(canonical(removed_proof)).hexdigest()}
+    if previous.get("private_group_storage") == "group-volume-v1":
+        handoff = _capture_frontend_start_handoff(control, previous, document)
+        if handoff is not None:
+            reuse["frontend_start_handoff"] = handoff
     return {"reuse_state": reuse,
             "retained_device_access": _retained_device_access(previous, document), **recovery}
 
@@ -7777,9 +10590,54 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
+    failed_run_resume=False, held_ui_materialization=None, failed_held_ui_start_context=None,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    if failed_held_ui_start_context is not None:
+        if (not recreate_services or restart_idle_service or stop_after_drain
+                or resume_recreation_id is not None or refresh_frontend_service or retire_only
+                or failed_run_resume or held_ui_materialization is not None):
+            raise BuildControlError("Failed held start retry cannot combine other retained operations")
+        from docker_volume_held_ui_start_retry_lifecycle import apply as apply_held_retry
+        return apply_held_retry(args, failed_held_ui_start_context)
+    held_ui_context = None
+    if held_ui_materialization is not None:
+        if (not recreate_services or restart_idle_service or stop_after_drain
+                or resume_recreation_id is not None or refresh_frontend_service or retire_only
+                or failed_run_resume or getattr(args, "fresh_state", False)
+                or getattr(args, "script", None) is not None
+                or getattr(args, "recovery_authorization", None) is not None
+                or getattr(args, "container_recovery_authorization", None) is not None
+                or getattr(args, "quiesce_api", False)
+                or getattr(args, "capture_terminal_observation", False)
+                or getattr(args, "capture_prelaunch_failure", False)
+                or getattr(args, "native_terminal_stop", None) is not None
+                or getattr(args, "terminal_observation_proof", None) is not None
+                or getattr(args, "terminal_observation_stop", None) is not None
+                or getattr(args, "headless", False) is True
+                or getattr(args, "lost_state_stop", None) is not None
+                or getattr(args, "drained_successor_proof", None) is not None
+                or getattr(args, "offline_reconciliation", None) is not None
+                or getattr(args, "completed_recreation_attempt", None) is not None
+                or getattr(args, "completed_recreation_sha256", None) is not None
+                or getattr(args, "helper_source_root", None) is not None
+                or getattr(args, "helper_source_commit", None) is not None
+                or getattr(args, "restart_backend", False)):
+            raise BuildControlError("Held UI continuation requires plain retained recreate without other recovery modes")
+        held_ui_context = _validate_held_ui_materialization_context(
+            args, held_ui_materialization, require_claim=False,
+        )
+    if failed_run_resume and (not recreate_services or restart_idle_service or stop_after_drain
+            or resume_recreation_id is not None or refresh_frontend_service or retire_only
+            or getattr(args, "fresh_state", False) or getattr(args, "script", None) is not None):
+        raise BuildControlError("Failed-run continuation requires retained recreation without a script")
+    from docker_volume_frontend_start_resume import validate_options as frontend_resume_options
+    frontend_resume_options(args)
     capture_terminal = getattr(args, "capture_terminal_observation", False)
+    failed_seed_new_generation = False
+    if refresh_frontend_service:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        failed_seed_new_generation = seed_recovery.validate_refresh_options(args)
     quiesce_api = getattr(args, "quiesce_api", False)
     from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
     capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
@@ -7878,6 +10736,25 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    if held_ui_context is not None:
+        held_ui_context = _validate_held_ui_materialization_context(
+            args, held_ui_materialization, expected_control=control,
+            require_original_state_binding=True,
+        )
+        if (held_ui_context["previous_raw"] != canonical(previous) + b"\n"
+                or held_ui_context["document_raw"] != canonical(document) + b"\n"):
+            raise BuildControlError("Held UI recreate source DEV authority changed")
+        environment = document["services"]["backend"].get("environment", {})
+        if ("accepted_reattach" in previous
+                or previous.get("post_build_generation") is not None
+                or previous.get("post_build_start") is not None
+                or previous.get("startup_diagnostic_restart") is not None
+                or previous.get("cold_budget_restore") is not None
+                or environment.get("FULLMAG_STARTUP_ENABLED") == "1"
+                or any(name.startswith(("FULLMAG_ACCEPTED_REATTACH_",
+                                       "FULLMAG_HELD_UI_MATERIALIZATION_"))
+                       for name in environment)):
+            raise BuildControlError("Held UI continuation cannot combine with legacy accepted-run reattach")
     from docker_dev_network import retained_requested_subnet
     retained_subnet = retained_requested_subnet(document, getattr(args, "network_subnet", None))
     if retained_subnet is not None:
@@ -7890,8 +10767,20 @@ def _retained_operation(
     prepared_fresh_archive = require_prepared_fresh_archive(
         control, args, previous, document, recreate_services=recreate_services,
         allow_running_frontend=True)
+    if held_ui_context is not None and (
+            capture_prelaunch_failure or capture_native or native_terminal_pin is not None
+            or empty_api_abort_pin is not None or preparation_abort is not None
+            or prepared_fresh_archive is not None):
+        raise BuildControlError("Held UI recreation cannot combine with legacy failure/archive recovery")
     retained_contracts = _retained_prepared_fresh_contracts(previous, document, prepared_fresh_archive)
     requested_contracts = getattr(args, "native_contract", None)
+    if held_ui_context is not None and requested_contracts is not None:
+        try:
+            normalized_requested = _native_contracts(requested_contracts)
+        except Exception as error:
+            raise BuildControlError("Held UI retained native contracts are malformed") from error
+        if normalized_requested != retained_contracts:
+            raise BuildControlError("Held UI recreation cannot change the retained native contract")
     if requested_contracts is None and retained_contracts:
         args.native_contract = list(retained_contracts)
     elif requested_contracts is not None:
@@ -7928,6 +10817,8 @@ def _retained_operation(
         raise BuildControlError(
             "Retained terminal observation requires proof pins, managed stop-only, explicit fresh state, or same-container failed-start resume"
         )
+    if held_ui_context is not None and retained_terminal_observation:
+        raise BuildControlError("Held UI recreation cannot combine with terminal-observation startup mode")
     if resume_recreation_id is not None:
         if (recreate_services or restart_idle_service or stop_after_drain or refresh_frontend_service
                 or getattr(args, "completed_recreation_attempt", None)
@@ -7944,6 +10835,10 @@ def _retained_operation(
         )
     if recreate_services:
         requested_allowlist = getattr(args, "include_untracked", None)
+        if (held_ui_context is not None and requested_allowlist is not None
+                and normalize_include_untracked_paths(requested_allowlist)
+                    != include_untracked_from_compose(document)):
+            raise BuildControlError("Held UI recreation cannot change the retained source allowlist")
         args.include_untracked = (
             include_untracked_from_compose(document)
             if requested_allowlist is None
@@ -8027,6 +10922,13 @@ def _retained_operation(
         return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
             layout, actual, ids, image, operator_probe_record, recover_oom=True)
     if refresh_frontend_service:
+        if failed_seed_new_generation:
+            import docker_volume_frontend_seed_recovery as seed_recovery
+            failed_seed_context = seed_recovery.refresh_context(
+                control, args, previous, document, actual, selected)
+            return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
+                layout, actual, ids, image, operator_probe_record,
+                failed_seed_context=failed_seed_context)
         from docker_volume_frontend_frozen_recovery import refresh_context
         frozen_context = refresh_context(control, args, previous, document, actual)
         return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
@@ -8421,8 +11323,19 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
                 actual=actual, store_root=native_terminal_store,
             )
+        failed_resume_prepared = None
+        if failed_run_resume:
+            from docker_volume_failed_run_resume import prepare_resume_request
+            resume_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "failed-run retained sessions")
+            failed_resume_prepared = prepare_resume_request(
+                control, args, previous, document, actual, resume_state)
+            if args.preview:
+                return {"state": "preview-passed", "plan": failed_resume_prepared["plan"],
+                        "plan_sha256": failed_resume_prepared["context"]["plan_sha256"]}
         pre_activation_stop = None
-        if (document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
+        if (failed_resume_prepared is None
+                and document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
                 and preparation_abort is None and native_terminal_pin is None
                 and prelaunch_failure_pin is None):
             stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
@@ -8445,6 +11358,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         certificate_path = _certificate_path(state)
         owner_path = state / _session_host().OWNER_NAME
         fresh_state = bool(getattr(args, "fresh_state", False))
+        frontend_handoff = (None if fresh_state else
+            _capture_frontend_start_handoff(control, previous, document))
         lost_state_pin = getattr(args, "lost_state_stop", None)
         lost_state = None
         if lost_state_pin is not None:
@@ -8464,11 +11379,23 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 raise BuildControlError("Retained storage image differs")
         # A fresh session archives its entire old runtime namespace below.
         # It must not carry permissions to recover or restore the old owner.
-        recovery_context = {} if fresh_state else _retained_recovery_context(
-            control, previous, document, fresh_state=False,
-            backend_id=actual["backend"].get("Id"),
-            drained_successor=drained_successor_pins, actual=actual,
-        )
+        if held_ui_context is not None:
+            if certificate.get("restart_verified") is not True:
+                raise BuildControlError("Held UI continuation requires the exact verified retained session")
+            recovery_context = {}
+        elif failed_resume_prepared is not None:
+            if certificate.get("restart_verified") is not True:
+                raise BuildControlError("Failed-run continuation requires verified retained storage")
+            recovery_context = {
+                "failed_run_resume_context": failed_resume_prepared["context"],
+                "previous_config_sha256": failed_resume_prepared["context"]["stop_pin"]["runtime_hashes"]["runtime_config_sha256"],
+            }
+        else:
+            recovery_context = {} if fresh_state else _retained_recovery_context(
+                control, previous, document, fresh_state=False,
+                backend_id=actual["backend"].get("Id"),
+                drained_successor=drained_successor_pins, actual=actual,
+            )
         from docker_volume_drained_successor import DrainedSuccessorContext
         drained_successor = isinstance(recovery_context, DrainedSuccessorContext)
         from docker_volume_native_init_successor import NativeInitSuccessorContext
@@ -8505,7 +11432,17 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # marker and only lets that helper release its own technical lease.
         from docker_volume_activation_reconcile import reconcile_unknown_activation
         offline_attempt = getattr(args, "offline_reconciliation", None)
-        if prelaunch_failure_pin is not None:
+        if held_ui_context is not None:
+            if offline_attempt is not None:
+                raise BuildControlError("Held UI continuation cannot combine with offline reconciliation")
+            from docker_volume_activation_reconcile import assert_no_unresolved_activation
+            assert_no_unresolved_activation(control)
+            reconciliation = None
+        elif failed_resume_prepared is not None:
+            if offline_attempt is not None:
+                raise BuildControlError("Failed-run continuation cannot combine offline reconciliation")
+            reconciliation = None
+        elif prelaunch_failure_pin is not None:
             if offline_attempt is not None or getattr(args, "script", None) is not None:
                 raise BuildControlError("Prelaunch failure archival cannot reconcile or replay an old operation")
             reconciliation = None
@@ -8520,6 +11457,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 raise BuildControlError("The requested offline reconciliation proof is absent")
             # Terminal runs and their results are preserved in place. They
             # are not a held accepted run requiring automatic reattachment.
+            reconciliation = None
+        elif held_ui_context is not None:
+            from docker_volume_activation_reconcile import assert_no_unresolved_activation
+            assert_no_unresolved_activation(control)
             reconciliation = None
         else:
             reconciliation = reconcile_unknown_activation(
@@ -8604,6 +11545,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if (not fresh_state and pre_activation_stop is None and not pre_api_stopped
                 and not original_after_ready_stop and not native_init_successor and not drained_successor
                 and not startup_diagnostic_stopped and not cold_budget_stopped and not linux_supervision_stop
+                and failed_resume_prepared is None
                 and certificate.get("restart_verified") is True):
             retained_environment = document["services"]["backend"]["environment"]
             retained_reattach_declared = (
@@ -8657,6 +11599,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # pre-admission path merely because the old storage probe was limited.
         if (not fresh_state and not pre_api_stopped and not native_init_successor and not drained_successor
                 and not startup_diagnostic_stopped and not cold_budget_stopped
+                and failed_resume_prepared is None
                 and not certificate.get("restart_verified")):
             retained_environment = document["services"]["backend"]["environment"]
             observed_environment = actual["backend"].get("Config", {}).get("Env") or []
@@ -8757,6 +11700,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 helper_ids.append(helper_document["Id"])
         recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
                            **operator_probe_record}
+        if held_ui_context is not None:
+            recreate_inputs["held_ui_materialization"] = held_ui_context["recreate_input"]
         if prelaunch_failure_pin is not None:
             recreate_inputs["prelaunch_failure_stop"] = {
                 "attempt": prelaunch_failure_pin[0], "terminal_sha256": prelaunch_failure_pin[1],
@@ -8765,7 +11710,16 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             recreate_inputs["helper_source"] = helper_source_binding
         if offline_attempt is not None:
             recreate_inputs["offline_reconciliation"] = offline_attempt
+        if failed_resume_prepared is not None:
+            recreate_inputs["failed_run_resume"] = failed_resume_prepared["context"]
+        held_ui_claim_context = None
         with control.operation("recreate-services", recreate_inputs) as operation:
+            if held_ui_context is not None:
+                _validate_held_ui_recreate_fence(
+                    args, held_ui_context, control, operation, ids, actual,
+                )
+            if frontend_handoff is not None:
+                _validate_frontend_start_handoff(control, frontend_handoff, selected, state)
             if offline_attempt is not None:
                 if not validate_for_recreate(
                     control, previous, document, actual, selected, args.config_sha256,
@@ -8782,11 +11736,24 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             # complete old runtime and its recovery authority without consuming
             # or carrying it. The fresh-state incarnation/archive fences below
             # still apply under this same lease.
-            leased_recovery_context = {} if fresh_state else _retained_recovery_context(
-                control, previous, document, fresh_state=fresh_state,
-                backend_id=actual["backend"].get("Id"),
-                drained_successor=drained_successor_pins, actual=successor_actual,
-            )
+            if failed_resume_prepared is not None:
+                from docker_volume_failed_run_resume import revalidate_resume_request
+                revalidate_resume_request(
+                    control, args, failed_resume_prepared["context"], previous, document,
+                    actual, state, phase="recreate-lease")
+                leased_recovery_context = {
+                    "failed_run_resume_context": failed_resume_prepared["context"],
+                    "previous_config_sha256": failed_resume_prepared["context"]["stop_pin"]["runtime_hashes"]["runtime_config_sha256"],
+                }
+                operation["receipt"]["failed_run_resume"] = failed_resume_prepared["context"]
+            elif held_ui_context is not None:
+                leased_recovery_context = {}
+            else:
+                leased_recovery_context = {} if fresh_state else _retained_recovery_context(
+                    control, previous, document, fresh_state=fresh_state,
+                    backend_id=actual["backend"].get("Id"),
+                    drained_successor=drained_successor_pins, actual=successor_actual,
+                )
             if require_prepared_fresh_archive(
                     control, args, previous, document, actual,
                     recreate_services=recreate_services, allow_running_frontend=True,
@@ -9108,6 +12075,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 operation["receipt"]["pre_activation_stop_receipt"] = pre_activation_stop
             operation["receipt"].update(state="stopping-owned-frontend", previous_state_root=str(state),
                                         fresh_state=fresh_state)
+            if (held_ui_context is not None
+                    and (actual["backend"]["State"].get("Running") is not False
+                         or actual["frontend"]["State"].get("Running") is not False)):
+                raise BuildControlError("Held UI services must remain stopped after authenticated quiescence")
             operation["daemon_pending"] = True
             if actual["frontend"]["State"]["Running"]:
                 _revalidate_helper_source_binding(helper_source_binding, selected)
@@ -9157,6 +12128,29 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 }
                 control.write(operation["root"] + "/receipt.json", operation["receipt"])
             _revalidate_helper_source_binding(helper_source_binding, selected)
+            if failed_resume_prepared is not None:
+                revalidate_resume_request(
+                    control, args, failed_resume_prepared["context"], previous, document,
+                    actual, state, phase="before-remove")
+            if held_ui_context is not None:
+                fresh_held = _validate_held_ui_recreate_fence(
+                    args, held_ui_context, control, operation, ids, stopped_actual,
+                )
+                from docker_volume_held_ui_materialization import (
+                    publish_recreate_claim, recreate_claim_relative,
+                )
+                claim, claim_sha256 = publish_recreate_claim(
+                    control, operation, fresh_held["recreate_input"],
+                )
+                claim_path = recreate_claim_relative(
+                    fresh_held["request"]["plan"]["maintenance_request_id"],
+                )
+                operation["receipt"]["held_ui_materialization_recreate_claim"] = {
+                    "path": claim_path, "sha256": claim_sha256,
+                }
+                held_ui_claim_context = {
+                    **fresh_held, "claim": claim, "claim_sha256": claim_sha256,
+                }
             docker_capture("rm", *ids.values())
             if helper_ids:
                 docker_capture("rm", *helper_ids)
@@ -9237,9 +12231,32 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             "operator_probe_environment_record": operator_probe_record}
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding
+        if reuse is not None and frontend_handoff is not None:
+            reuse["frontend_start_handoff"] = frontend_handoff
         recovery_context.update(accepted_reattach_context)
+        if failed_resume_prepared is not None:
+            recovery_context["failed_run_resume_context"] = {
+                "context": failed_resume_prepared["context"], "previous": previous,
+                "document": document, "actual": actual, "state": str(state),
+                "removal": dict(operation["receipt"]),
+            }
         if retained_restore_pin is not None and not fresh_state:
             recovery_context["cold_budget_restore"] = retained_restore_pin
+        if held_ui_context is not None:
+            if held_ui_claim_context is None:
+                raise BuildControlError("Held UI recreate completed without its immutable one-shot claim")
+            args.completed_recreation_attempt = held_ui_claim_context["claim"]["recreate_attempt"]
+            completed_terminal_raw = control.read_bytes(
+                "recreate-services/attempts/" + args.completed_recreation_attempt + "/terminal.json",
+            )
+            args.completed_recreation_sha256 = hashlib.sha256(completed_terminal_raw).hexdigest()
+            completed_context = _completed_recreation_start_context(
+                control, args, selected, layout, held_ui_context=held_ui_claim_context,
+            )
+            return start(
+                args, held_ui_materialization=_held_ui_context_value(held_ui_claim_context),
+                held_ui_control=control, **completed_context,
+            )
         return start(
             args, reuse_state=reuse, retained_device_access=retained_device_access,
             terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
@@ -9277,7 +12294,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         operation["receipt"].update(state="resuming-observation", state_root=str(state),
             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
         _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
-        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous,
+                                   document=document)
         if terminal_context is not None:
             fresh = {name: json.loads(docker_text("inspect", identifier))[0] for name, identifier in ids.items()}
             _assert_private_restart_network(fresh, ids, control.project)

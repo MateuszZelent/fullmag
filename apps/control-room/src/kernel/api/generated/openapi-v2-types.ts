@@ -6333,6 +6333,7 @@ export interface components {
             code: string;
             diagnostics?: components["schemas"]["ApiErrorDiagnosticResponse"][] | null;
             error: string;
+            intent_disposition?: null | components["schemas"]["IntentDisposition"];
             message: string;
             request_id?: string | null;
             revision_context?: unknown;
@@ -10134,6 +10135,8 @@ export interface components {
             session_id: string;
             status: string;
         };
+        /** @enum {string} */
+        IntentDisposition: "not_accepted";
         /** @description Inspector document of one workspace item. */
         ItemDetail: (components["schemas"]["ProjectDetail"] & {
             /** @enum {string} */
@@ -14770,6 +14773,9 @@ export interface components {
             precision: components["schemas"]["SceneTransportPrecision"];
         };
         SceneResource: {
+            analysis?: {
+                [key: string]: unknown;
+            } | null;
             antenna_field_solve_stages?: components["schemas"]["AntennaFieldSolveStageResource"][];
             antenna_port_modes?: components["schemas"]["AntennaPortModeResource"][];
             antenna_spectrum_requests?: components["schemas"]["AntennaSpectrumRequestResource"][];

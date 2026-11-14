@@ -64,7 +64,11 @@ function statusAt(
   return {
     capabilities: { binary_fields: true },
     domain: { discretization: "fdm" },
-    resources: { scene_revision: sceneRevision },
+    resources: {
+      commands_revision: 0,
+      mesh_revision: 0,
+      scene_revision: sceneRevision,
+    },
     run,
     session: {
       request_scope_epoch: "api-instance:scratch",
