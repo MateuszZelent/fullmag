@@ -1115,6 +1115,7 @@ jobs:
           python -B scripts/test_docker_terminal_observation_producer.py -v
           python -B scripts/test_docker_terminal_observation_exit.py -v
           python -B scripts/test_docker_terminal_source_origin.py -v
+          python -B scripts/test_docker_terminal_legacy_origin.py -v
           python -B scripts/test_docker_volume_ownerless_terminal_receipts.py -v
           python -B scripts/test_docker_volume_resumed_budget_proof.py -v
           python -B scripts/test_docker_volume_resumed_budget_projection.py -v

@@ -7899,6 +7899,19 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
             package_built=True, runtime_started=False, storage_admitted=False, runtime_qualification="NOT VERIFIED")
 
 
+def _terminal_legacy_source_preflight(preflight, *, pins, control, selected, state):
+    from docker_terminal_legacy_origin import augment_preflight
+    if pins is None:
+        return preflight
+    store_root = storage.validate_path(
+        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
+    )
+    return augment_preflight(
+        preflight, pins=pins, control=control, store_root=store_root, source_root=selected,
+        project=control.project, volume=control.volume, namespace=control.namespace,
+    )
+
+
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
@@ -7906,6 +7919,15 @@ def _retained_operation(
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
     quiesce_api = getattr(args, "quiesce_api", False)
+    from docker_terminal_legacy_origin import validate_options as legacy_source_options
+    try:
+        legacy_source_pins = legacy_source_options(
+            args, restart_idle_service=restart_idle_service, stop_after_drain=stop_after_drain,
+            recreate_services=recreate_services, resume_recreation_id=resume_recreation_id,
+            refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+        )
+    except ValueError as error:
+        raise BuildControlError(str(error)) from error
     from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
     capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
         args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
@@ -8205,6 +8227,9 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
+                                            **({"terminal_source_activation": legacy_source_pins[0],
+                                                "terminal_source_activation_sha256": legacy_source_pins[1]}
+                                               if legacy_source_pins is not None else {}),
                                             **({"capture_native_terminal": True} if capture_native else {}),
                                             **({"capture_prelaunch_failure": True} if capture_prelaunch_failure else {}),
                                             **({"quiesce_api": True} if quiesce_api else {}),
@@ -8282,6 +8307,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                             ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
                         )
                         if terminal_session is not None:
+                            terminal_session = _terminal_legacy_source_preflight(
+                                terminal_session, pins=legacy_source_pins, control=control,
+                                selected=selected, state=state,
+                            )
                             control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
                             operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
                                 canonical(terminal_session)
@@ -8306,10 +8335,20 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     store_root = storage.validate_path(
                         state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
                     )
-                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
-                    if _terminal_session_restart_probe(
+                    native_capture = capture_terminal_observation(
+                        ids["backend"], store_root, terminal_session, control=control,
+                        scope={"compose_project": control.project, "control_volume": control.volume,
+                               "source_root": str(selected), "image_id": image},
+                    )
+                    fresh_terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                    ) != terminal_session:
+                    )
+                    if fresh_terminal_session is not None:
+                        fresh_terminal_session = _terminal_legacy_source_preflight(
+                            fresh_terminal_session, pins=legacy_source_pins, control=control,
+                            selected=selected, state=state,
+                        )
+                    if fresh_terminal_session != terminal_session:
                         raise BuildControlError("Terminal session changed during native capture")
                     capture_raw = canonical(native_capture) + b"\n"
                     control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)

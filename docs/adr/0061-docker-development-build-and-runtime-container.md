@@ -920,6 +920,26 @@ widok terminalny; próba przygotowania jego względnej siatki FEM zwraca
 Zwykłe sceny UI zachowują własną ścieżkę assetów. Ten kontrakt wymaga
 odrębnej weryfikacji zarządzanego runtime; sam diff nie stanowi jej dowodu.
 
+Jeżeli starsza odtworzona sesja nie ma origin, nowy capture może przyjąć
+jawne, sparowane `--terminal-source-activation` i
+`--terminal-source-activation-sha256`. Obowiązują wyłącznie przy zwykłym
+terminal-capture stop-only. Producent ponownie kwalifikuje sześć rekordów
+aktywacji, terminalny startup Run z obiema rodzinami zwolnionych lease,
+zgodne definition/snapshot/execution-input oraz logiczną sesję i native
+epoch obu RunIntentów. Bieżący skrypt musi mieć te same bajty, rozmiar
+i ścieżkę w wybranym mountcie. `source_origin_legacy_activation` w nowym
+preflight przypina aktywację i oba raw RunIntenty. API niezależnie sprawdza
+te rekordy pod istniejącą blokadą dowodu terminalnego. Stary proof pozostaje
+niezmieniony; nie powstaje nowa aktywacja ani kopia assetu.
+
+Powtórny capture po odtworzeniu obserwuje nowe API, choć RunIntent pozostaje
+niezmienny. Różnica API wymaga uwierzytelnionego istniejącego
+`process.terminal_observation`: poprzedni proof, launch i installed receipt
+muszą pasować do bieżącego ownera/obrazu, API oraz dokładnie tego samego
+run/intent/catalog/spec/definition/session/epoch. Nadal obowiązuje nowy
+natywny dowód terminalny i ponowna kontrola bieżących bajtów. Brak tego
+łańcucha zachowuje odmowę; ID API w RunIntent nie jest przepisywane.
+
 `just docker-dev-capture-terminal <attempt> <config_sha256> <source_root> <port>`
 wykonuje zarządzane zatrzymanie. Przed wygaszeniem zapisuje pin natywnego
 odczytu, właściciela, RunIntent i katalogu w obrębie próby zatrzymania.

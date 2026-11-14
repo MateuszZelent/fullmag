@@ -3,6 +3,7 @@
 use super::*;
 
 pub(super) mod source_origin;
+mod legacy_source_origin;
 
 pub(super) const ENV: &str = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN";
 const SCHEMA: &str = "fullmag.development-terminal-observation-input.v1";
@@ -361,6 +362,38 @@ fn validate_native_process_receipt_fields(process: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A repeated capture may observe a new API while the accepted intent remains
+/// immutable. The caller has already authenticated the historical annotation
+/// against the drained native owner, proof, launch and installed receipt.
+fn validate_captured_api_binding(
+    control_root: &Path, proof: &Proof, preflight: &Value, live: &Value,
+    historical_annotation: Option<&Value>,
+) -> Result<()> {
+    let admitted_api = string(live, "api_instance_id")?;
+    validate_api_instance_id(admitted_api, "accepted terminal intent API")?;
+    let observed_api = string(preflight, "api_instance_id")?;
+    if admitted_api == observed_api { return Ok(()) }
+    let annotation = historical_annotation.context(
+        "accepted API differs without an authenticated same-intent terminal installation",
+    )?;
+    equal(annotation, "api_instance_id", observed_api)?;
+    equal(annotation, "run_id", &proof.run_id)?;
+    equal(annotation, "session_id", &proof.session_id)?;
+    let prior_sha = string(annotation, "proof_sha256")?;
+    let prior: Proof = serde_json::from_value(control_json(control_root,
+        &format!("runtime-control/terminal-observation/{prior_sha}/proof.json"), prior_sha)?)?;
+    if prior.run_id != proof.run_id || prior.project_id != proof.project_id
+        || prior.session_id != proof.session_id || prior.session_epoch != proof.session_epoch
+        || prior.scene_revision != proof.scene_revision || prior.intent_sha256 != proof.intent_sha256
+        || prior.definition_sha256 != proof.definition_sha256
+        || prior.specification_sha256 != proof.specification_sha256
+        || prior.catalog_sha256 != proof.catalog_sha256 || prior.catalog_revision != proof.catalog_revision
+    {
+        bail!("historical installation does not bind the unchanged accepted terminal run");
+    }
+    Ok(())
+}
+
 /// No run, admission, Start or lease transitions. Canonical writer fences may
 /// update their own lock-owner metadata. Both the original
 /// native drain and exact durable accepted run are independently checked.
@@ -593,7 +626,7 @@ fn restore(
         bail!("terminal observation immutable accepted identity differs");
     }
     let live = specification.parameters.get("live_workspace").context("accepted observation has no live binding")?;
-    equal(live, "api_instance_id", old_api)?;
+    validate_captured_api_binding(control_root, &proof, &preflight, live, historical_terminal_observation)?;
     equal(live, "session_id", &proof.session_id)?;
     if live.get("session_epoch").and_then(Value::as_u64) != Some(proof.session_epoch)
         || live.get("scene_revision").and_then(Value::as_u64) != Some(proof.scene_revision)
@@ -666,6 +699,7 @@ fn restore(
     // Canonical host-before-store validation already checked causal admissions,
     // leases, exit/no-spawn evidence and exact host release proofs. No recovery,
     // journal repair or successful scientific result is inferred.
+    legacy_source_origin::validate(control_root, &store, &preflight, &proof)?;
     let relative = format!("runs/{}", proof.run_id);
     raw(store.root(), &format!("{relative}/run_intent.json"), &proof.intent_sha256)?;
     if store.read_run_intent(&proof.run_id)?.as_ref() != Some(&accepted.run.intent) {
@@ -970,6 +1004,31 @@ mod tests {
             operation_image,
             ready_owner,
         )
+    }
+
+    #[test]
+    fn repeated_capture_api_change_requires_exact_previously_installed_intent() {
+        let (root, annotation, ready, image) = historical_annotation_fixture(COMPUTE_PROOF_SCHEMA);
+        validate_fixture(root.path(), &annotation, &ready, &image).unwrap();
+        let proof_sha = annotation["proof_sha256"].as_str().unwrap();
+        let current: Proof = serde_json::from_value(control_json(root.path(),
+            &format!("runtime-control/terminal-observation/{proof_sha}/proof.json"), proof_sha).unwrap()).unwrap();
+        let preflight = json!({"api_instance_id": HISTORICAL_API_ID});
+        let live = json!({"api_instance_id":"abcdef12-1234-4234-8234-123456789abc"});
+        assert!(validate_captured_api_binding(root.path(), &current, &preflight, &live, None).is_err());
+        assert!(validate_captured_api_binding(root.path(), &current, &preflight, &live, Some(&annotation)).is_ok());
+        for field in ["run_id", "session_id", "api_instance_id"] {
+            let mut changed=annotation.clone(); changed[field]=json!("foreign");
+            assert!(validate_captured_api_binding(root.path(), &current, &preflight, &live, Some(&changed)).is_err());
+        }
+        let mut changed: Proof = serde_json::from_value(control_json(root.path(),
+            &format!("runtime-control/terminal-observation/{proof_sha}/proof.json"), proof_sha).unwrap()).unwrap();
+        changed.intent_sha256 = "f".repeat(64);
+        assert!(validate_captured_api_binding(root.path(), &changed, &preflight, &live, Some(&annotation)).is_err());
+        changed.intent_sha256 = current.intent_sha256.clone(); changed.session_epoch += 1;
+        assert!(validate_captured_api_binding(root.path(), &changed, &preflight, &live, Some(&annotation)).is_err());
+        let same_api=json!({"api_instance_id":HISTORICAL_API_ID});
+        assert!(validate_captured_api_binding(root.path(), &current, &preflight, &same_api, None).is_ok());
     }
 
     #[test]

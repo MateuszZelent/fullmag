@@ -3222,7 +3222,7 @@ mod tests {
         assert!(super::restored_asset_origin_error(&snapshot).is_none());
         snapshot.metadata = Some(serde_json::json!({"accepted_run_reattach": {
             "schema": "fullmag.development-terminal-observation-input.v1"
-        }}));
+        }}).into());
         assert_eq!(super::restored_asset_origin_error(&snapshot).unwrap().code.as_deref(),
             Some("restored_asset_origin_unavailable"));
         snapshot.session.script_path = "/opt/fullmag/source/examples/model.py".into();

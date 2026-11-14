@@ -152,9 +152,9 @@ class ProducerTests(unittest.TestCase):
             producer.canonical(drain["process_receipt"]) + b"\n")
         self.control[relative] = producer.canonical(drain) + b"\n"
 
-    def attach_terminal_observation(self):
+    def attach_terminal_observation(self, prior_proof=None):
         """Attach one producer-shaped, prior-run runtime receipt and its CAS files."""
-        prior_proof = {
+        prior_proof = copy.deepcopy(prior_proof) if prior_proof is not None else {
             "schema": producer.PROOF_SCHEMA,
             "original_iteration": "1" * 32,
             "compose_project": self.scope["compose_project"],
@@ -193,7 +193,8 @@ class ProducerTests(unittest.TestCase):
             "session_id": prior_proof["session_id"],
             "session_epoch": prior_proof["session_epoch"],
             "scene_revision": prior_proof["scene_revision"],
-            "terminal_outcome": "completed",
+            "terminal_outcome": (producer.decode(self.control[BASE + "terminal-session-preflight.json"])["run"]["status"]
+                                 if prior_proof["run_id"] == RUN else "completed"),
             "proof_sha256": proof_sha,
             "launch_sha256": launch_sha,
             "source_image_id": prior_proof["image_id"],
@@ -312,6 +313,60 @@ class ProducerTests(unittest.TestCase):
         self.change_native(lambda value: value.update(shutdown_error="unknown"))
         with self.assertRaises(ValueError):
             self.build()
+
+    def repeated_capture(self):
+        self.use_compute_intent()
+        # Keep the original managed stop immutable in its own attempt namespace.
+        old = "1" * 32
+        old_base = f"iteration/attempts/{old}/"
+        for path, raw in list(self.control.items()):
+            if path.startswith(BASE):
+                self.control[old_base + path.removeprefix(BASE)] = raw
+        for name in ("terminal.json", "receipt.json"):
+            self.mutate(old_base + name, lambda value: value.update(attempt=old))
+        prior = producer.build_proof(self.control.__getitem__, self.store.__getitem__,
+            iteration=old, run_id=RUN, scope=self.scope,
+            native_config_sha256="a" * 64, terminal_evidence_sha256="b" * 64)
+        annotation = self.attach_terminal_observation(prior)
+        api = annotation["api_instance_id"]
+        self.change_preflight(lambda value: value.update(api_instance_id=api, request_scope_epoch=f"{api}:1"))
+        return prior, annotation
+
+    def test_repeated_capture_retains_immutable_intent_with_a_new_authenticated_api(self):
+        prior, annotation = self.repeated_capture()
+        before = dict(self.store)
+        proof = self.build()
+        self.assertEqual(proof["intent_sha256"], prior["intent_sha256"])
+        self.assertEqual(proof["catalog_sha256"], prior["catalog_sha256"])
+        self.assertNotEqual(proof["original_iteration"], prior["original_iteration"])
+        self.assertEqual(self.store, before)
+        source = producer.decode(self.control[BASE + "terminal-session-preflight.json"])
+        self.assertEqual(source["api_instance_id"], annotation["api_instance_id"])
+        self.assertNotEqual(producer.decode(self.store[f"runs/{RUN}/run_intent.json"])
+                            ["specification"]["parameters"]["live_workspace"]["api_instance_id"],
+                            source["api_instance_id"])
+
+    def test_repeated_capture_refuses_changed_intent_catalog_scope_or_missing_installation(self):
+        for mutation in ("intent", "catalog", "epoch", "session", "api", "annotation", "owner"):
+            with self.subTest(mutation=mutation):
+                self.setUp(); self.repeated_capture()
+                if mutation == "intent":
+                    self.mutate(f"runs/{RUN}/run_intent.json", lambda value: value.update(unknown="drift"), self.store)
+                elif mutation == "catalog":
+                    self.mutate(f"runs/{RUN}/run_catalog.json", lambda value: value.update(revision=8), self.store)
+                elif mutation == "epoch":
+                    self.mutate(f"runs/{RUN}/run_intent.json", lambda value:
+                        value["specification"]["parameters"]["live_workspace"].update(session_epoch=2), self.store)
+                elif mutation == "session":
+                    self.change_preflight(lambda value: value.update(session_id="foreign-session"))
+                elif mutation == "api":
+                    self.change_preflight(lambda value: value.update(api_instance_id="foreign-api", request_scope_epoch="foreign-api:1"))
+                elif mutation == "annotation":
+                    self.change_native(lambda value: value.pop("terminal_observation"))
+                else:
+                    self.change_native(lambda value: value["service_owner"].update(build_commit="f" * 40))
+                with self.assertRaises(ValueError):
+                    self.build()
 
     def test_terminal_observation_runtime_annotation_is_accepted_from_its_own_archives(self):
         annotation = self.attach_terminal_observation()

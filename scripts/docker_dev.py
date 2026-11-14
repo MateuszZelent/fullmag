@@ -2682,6 +2682,10 @@ def _parser() -> argparse.ArgumentParser:
         "--capture-terminal-observation", action="store_true",
         help="capture native evidence for a completed or failed run during a managed stop-only drain",
     )
+    idle_restart.add_argument("--terminal-source-activation",
+                              help="explicit historical activation supplying source origin for terminal capture")
+    idle_restart.add_argument("--terminal-source-activation-sha256",
+                              help="exact raw receipt SHA-256 for --terminal-source-activation")
     idle_restart.add_argument("--quiesce-api", action="store_true",
                               help="with native capture stop-only: close only the exact pinned API before native inspection")
     idle_restart.add_argument("--capture-native-terminal", action="store_true",
