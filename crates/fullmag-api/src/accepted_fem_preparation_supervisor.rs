@@ -2,11 +2,13 @@
 
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
-    FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch, FmsPreparationResourceLease,
+    FmsPreparationPhaseTimings, FmsPreparationProcessExitReceipt, FmsPreparationProcessLaunch,
+    FmsPreparationResourceLease,
     FmsResourceLeaseState, PreparationProcessFinalizationDisposition,
     PreparationProcessLaunchCommitDisposition, SessionStore,
     FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA, FMS_PREPARATION_PROCESS_LAUNCH_SCHEMA,
 };
+use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
@@ -25,6 +27,103 @@ const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
 const STORE_WRITER_RETRY_DELAY: Duration = Duration::from_millis(10);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PROCESS_DIAGNOSTIC_TAIL_LIMIT: usize = 64 * 1024;
+const PREPARER_SUMMARY_LINE_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug)]
+struct PreparationSummaryIdentity<'a> {
+    run_id: &'a str,
+    task_id: &'a str,
+    step_id: &'a str,
+    preparation_id: &'a str,
+    plan_fingerprint: &'a str,
+    preparation_attempt_id: &'a str,
+    process_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreparerSummary {
+    schema_version: String,
+    status: String,
+    run_id: String,
+    task_id: String,
+    step_id: String,
+    preparation_id: String,
+    plan_fingerprint: String,
+    preparation_attempt_id: String,
+    process_id: u32,
+    phase_timings: Option<FmsPreparationPhaseTimings>,
+}
+
+fn parse_preparer_summary(
+    stdout: &[u8],
+    expected: &PreparationSummaryIdentity<'_>,
+) -> Result<Option<FmsPreparationPhaseTimings>> {
+    if stdout.last() != Some(&b'\n') {
+        bail!("preparer stdout has no complete final summary line");
+    }
+    let line_end = stdout.len() - 1;
+    let line_start = stdout[..line_end]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    let mut line = &stdout[line_start..line_end];
+    if line.last() == Some(&b'\r') {
+        line = &line[..line.len() - 1];
+    }
+    if line.is_empty() || line.len() > PREPARER_SUMMARY_LINE_LIMIT {
+        bail!("preparer final summary line is empty or exceeds its bound");
+    }
+    let summary: PreparerSummary = serde_json::from_slice(line)
+        .context("parse the final accepted FEM preparer summary line")?;
+    if summary.schema_version != "accepted_fem_preparation_summary.v1"
+        || !matches!(summary.status.as_str(), "prepared" | "replayed")
+        || summary.run_id != expected.run_id
+        || summary.task_id != expected.task_id
+        || summary.step_id != expected.step_id
+        || summary.preparation_id != expected.preparation_id
+        || summary.plan_fingerprint != expected.plan_fingerprint
+        || summary.preparation_attempt_id != expected.preparation_attempt_id
+        || summary.process_id != expected.process_id
+    {
+        bail!("preparer summary identity or status differs from its active lease, observed process, or durable task receipt");
+    }
+    let Some(timings) = summary.phase_timings else {
+        return Ok(None);
+    };
+    timings.validate().context("validate preparer phase timing diagnostics")?;
+    Ok(Some(timings))
+}
+
+fn phase_timings_from_child(
+    store: &SessionStore,
+    active_lease: &FmsPreparationResourceLease,
+    process_id: u32,
+    stdout: &[u8],
+) -> Result<Option<FmsPreparationPhaseTimings>> {
+    active_lease.validate()?;
+    if active_lease.state != FmsResourceLeaseState::Active {
+        bail!("preparer timing summary requires the active supervised lease");
+    }
+    let receipt = store
+        .read_task_preparation_receipt(&active_lease.run_id, &active_lease.task_id)?
+        .context("preparer summary has no durable task preparation receipt")?;
+    if receipt.run_id != active_lease.run_id || receipt.task_id != active_lease.task_id {
+        bail!("durable task preparation receipt identity differs from the supervised process");
+    }
+    parse_preparer_summary(
+        stdout,
+        &PreparationSummaryIdentity {
+            run_id: &receipt.run_id,
+            task_id: &receipt.task_id,
+            step_id: &receipt.step_id,
+            preparation_id: &receipt.preparation_id,
+            plan_fingerprint: &receipt.plan_fingerprint,
+            preparation_attempt_id: &active_lease.preparation_attempt_id,
+            process_id,
+        },
+    )
+}
 
 /// Only an observed, reaped exit may enter this retry path. It has no spawn
 /// capability: transient contention delays proof publication/release, not work.
@@ -506,6 +605,21 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
     )?;
     let status_success =
         observed.status.success() && !observed.timed_out && observed.failure_reason.is_none();
+    let phase_timings = if status_success {
+        match phase_timings_from_child(store, &active_lease, observed.process_id, &observed.stdout) {
+            Ok(Some(timings)) => Some(timings),
+            Ok(None) => {
+                eprintln!("accepted FEM preparer timing diagnostics unavailable: summary omitted phase_timings");
+                None
+            }
+            Err(error) => {
+                eprintln!("accepted FEM preparer timing diagnostics ignored: {error:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let failure_reason = if status_success {
         None
     } else {
@@ -526,6 +640,7 @@ pub(crate) fn run_supervised_accepted_fem_preparation_with_host(
         exit_code: observed.status.code(),
         timed_out: observed.timed_out,
         failure_reason,
+        phase_timings,
         observed_at: chrono::Utc::now(),
     };
     // The resident scheduler may never reach its final summary. Publish the
@@ -1213,8 +1328,106 @@ mod terminal_recovery_tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("preparer failed".into()),
+            phase_timings: None,
             observed_at: chrono::Utc::now(),
         }
+    }
+
+    fn summary_identity() -> PreparationSummaryIdentity<'static> {
+        PreparationSummaryIdentity {
+            run_id: "run-test",
+            task_id: "task-test",
+            step_id: "step-test",
+            preparation_id: "prep-task-test",
+            plan_fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            preparation_attempt_id: "attempt-test",
+            process_id: 420,
+        }
+    }
+
+    fn summary(timings: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "accepted_fem_preparation_summary.v1",
+            "status": "prepared",
+            "run_id": "run-test",
+            "task_id": "task-test",
+            "step_id": "step-test",
+            "preparation_id": "prep-task-test",
+            "plan_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "preparation_attempt_id": "attempt-test",
+            "process_id": 420,
+            "phase_timings": timings,
+        })
+    }
+
+    fn summary_timings() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": fullmag_session::FMS_PREPARATION_PHASE_TIMINGS_SCHEMA,
+            "scope": fullmag_session::FMS_PREPARATION_PHASE_TIMINGS_SCOPE,
+            "total_body_ns": 100_u64,
+            "load_accepted_snapshot_ns": 10_u64,
+            "replay_validation_ns": 20_u64,
+            "native_mesh_space_ns": 30_u64,
+        })
+    }
+
+    #[test]
+    fn final_preparer_summary_requires_complete_bounded_identity_and_keeps_null_as_missing() {
+        let expected = summary_identity();
+        let valid = summary(summary_timings());
+        let mut stdout = b"diagnostic line\n".to_vec();
+        stdout.extend_from_slice(&serde_json::to_vec(&valid).unwrap());
+        stdout.push(b'\n');
+        let parsed = parse_preparer_summary(&stdout, &expected).unwrap().unwrap();
+        assert_eq!(parsed.native_mesh_space_ns, Some(30));
+
+        let mut null_timings = summary(serde_json::Value::Null);
+        null_timings["status"] = serde_json::json!("replayed");
+        let mut stdout = serde_json::to_vec(&null_timings).unwrap();
+        stdout.push(b'\n');
+        assert!(parse_preparer_summary(&stdout, &expected).unwrap().is_none());
+
+        let mut spoofed = summary(summary_timings());
+        spoofed["task_id"] = serde_json::json!("task-foreign");
+        let mut stdout = serde_json::to_vec(&spoofed).unwrap();
+        stdout.push(b'\n');
+        assert!(parse_preparer_summary(&stdout, &expected).is_err());
+
+        let mut stale_attempt = summary(summary_timings());
+        stale_attempt["preparation_attempt_id"] = serde_json::json!("previous-attempt");
+        let mut stdout = serde_json::to_vec(&stale_attempt).unwrap();
+        stdout.push(b'\n');
+        assert!(parse_preparer_summary(&stdout, &expected).is_err());
+
+        let mut foreign_process = summary(summary_timings());
+        foreign_process["process_id"] = serde_json::json!(421_u32);
+        let mut stdout = serde_json::to_vec(&foreign_process).unwrap();
+        stdout.push(b'\n');
+        assert!(parse_preparer_summary(&stdout, &expected).is_err());
+
+        let mut unknown = summary(summary_timings());
+        unknown["untrusted"] = serde_json::json!(true);
+        let mut stdout = serde_json::to_vec(&unknown).unwrap();
+        stdout.push(b'\n');
+        assert!(parse_preparer_summary(&stdout, &expected).is_err());
+
+        let mut unfinished = serde_json::to_vec(&valid).unwrap();
+        unfinished.extend_from_slice(b"\npartial");
+        assert!(parse_preparer_summary(&unfinished, &expected).is_err());
+
+        let oversized = format!("{}\n", "x".repeat(PREPARER_SUMMARY_LINE_LIMIT + 1));
+        assert!(parse_preparer_summary(oversized.as_bytes(), &expected).is_err());
+    }
+
+    #[test]
+    fn malformed_timing_summary_can_be_ignored_without_changing_child_outcome() {
+        let expected = summary_identity();
+        let mut malformed = summary(summary_timings());
+        malformed["phase_timings"]["total_body_ns"] = serde_json::json!(1_u64);
+        let mut stdout = serde_json::to_vec(&malformed).unwrap();
+        stdout.push(b'\n');
+        // The supervisor's non-fatal caller stores no diagnostic metric on error.
+        assert!(parse_preparer_summary(&stdout, &expected).is_err());
     }
 
     #[test]

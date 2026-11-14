@@ -3769,6 +3769,7 @@ mod tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("fixture failure".into()),
+            phase_timings: None,
             observed_at: now,
         };
         store

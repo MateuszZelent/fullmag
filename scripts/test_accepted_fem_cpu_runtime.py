@@ -11,6 +11,27 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import accepted_fem_cpu_runtime as runtime
+import verify_accepted_fem_preparation_runtime as preparation_runtime
+
+
+def test_preparation_phase_timings_are_optional_and_strict():
+    assert preparation_runtime._validate_preparation_phase_timings(None)
+    valid = {
+        "schema_version": "fem_preparation_phase_timings.v1",
+        "scope": "accepted_fem_preparation_process_body.v1",
+        "total_body_ns": 19,
+        "load_accepted_snapshot_ns": 3,
+        "native_mesh_space_ns": 8,
+        "task_preparation_commit_ns": 4,
+    }
+    assert preparation_runtime._validate_preparation_phase_timings(valid)
+    for changed in (
+        {**valid, "unknown": 1},
+        {**valid, "total_body_ns": True},
+        {**valid, "native_mesh_space_ns": 20},
+        {**valid, "scope": "other"},
+    ):
+        assert not preparation_runtime._validate_preparation_phase_timings(changed)
 
 
 def write_json(path, value):

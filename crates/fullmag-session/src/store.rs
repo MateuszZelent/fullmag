@@ -8591,11 +8591,40 @@ mod tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("fixture failure".into()),
+            phase_timings: Some(crate::FmsPreparationPhaseTimings {
+                schema_version: crate::FMS_PREPARATION_PHASE_TIMINGS_SCHEMA.into(),
+                scope: crate::FMS_PREPARATION_PHASE_TIMINGS_SCOPE.into(),
+                total_body_ns: 10,
+                load_accepted_snapshot_ns: Some(3),
+                replay_validation_ns: Some(2),
+                native_mesh_space_ns: None,
+                prepared_fields_evaluation_ns: None,
+                prepared_bundle_publication_ns: None,
+                prepared_observation_commit_ns: None,
+                task_preparation_commit_ns: None,
+            }),
             observed_at: now,
         };
         store
             .commit_preparation_process_exit_receipt(&failed_exit)
             .unwrap();
+        assert_eq!(
+            store
+                .commit_preparation_process_exit_receipt(&failed_exit)
+                .unwrap(),
+            PreparationProcessExitReceiptCommitDisposition::Replayed
+        );
+        let mut changed_metrics = failed_exit.clone();
+        changed_metrics.phase_timings = None;
+        assert!(store
+            .commit_preparation_process_exit_receipt(&changed_metrics)
+            .is_err());
+        assert_eq!(
+            store
+                .read_preparation_process_exit_receipt(run_id, &failed_exit.receipt_id)
+                .unwrap(),
+            Some(failed_exit.clone())
+        );
         assert_eq!(
             store
                 .finalize_preparation_process_exit(&failed_exit)
@@ -11837,6 +11866,7 @@ mod admission_tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("fixture preparation failure".into()),
+            phase_timings: None,
             observed_at: now,
         };
         store.commit_preparation_process_exit_receipt(&exit).unwrap();
@@ -11967,6 +11997,7 @@ mod admission_tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("fixture preparation failure".into()),
+            phase_timings: None,
             observed_at: now,
         };
         store.commit_preparation_process_exit_receipt(&exit).unwrap();

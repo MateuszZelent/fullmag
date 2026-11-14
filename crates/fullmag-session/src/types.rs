@@ -2802,6 +2802,63 @@ pub enum PreparationProcessLaunchCommitDisposition {
     Replayed,
 }
 
+pub const FMS_PREPARATION_PHASE_TIMINGS_SCHEMA: &str = "fem_preparation_phase_timings.v1";
+pub const FMS_PREPARATION_PHASE_TIMINGS_SCOPE: &str = "accepted_fem_preparation_process_body.v1";
+
+/// Optional, non-authoritative timing diagnostics for one accepted FEM
+/// preparation process body. Every phase is measured at most once; omitted
+/// phases mean that the work was not performed or was not measured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FmsPreparationPhaseTimings {
+    pub schema_version: String,
+    pub scope: String,
+    pub total_body_ns: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_accepted_snapshot_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_validation_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_mesh_space_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_fields_evaluation_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_bundle_publication_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_observation_commit_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_preparation_commit_ns: Option<u64>,
+}
+
+impl FmsPreparationPhaseTimings {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != FMS_PREPARATION_PHASE_TIMINGS_SCHEMA {
+            bail!("unsupported FEM preparation phase timing schema `{}`", self.schema_version);
+        }
+        if self.scope != FMS_PREPARATION_PHASE_TIMINGS_SCOPE {
+            bail!("unsupported FEM preparation phase timing scope `{}`", self.scope);
+        }
+        let phases = [
+            self.load_accepted_snapshot_ns,
+            self.replay_validation_ns,
+            self.native_mesh_space_ns,
+            self.prepared_fields_evaluation_ns,
+            self.prepared_bundle_publication_ns,
+            self.prepared_observation_commit_ns,
+            self.task_preparation_commit_ns,
+        ];
+        let measured_total = phases.into_iter().flatten().try_fold(0_u64, |total, phase| {
+            total
+                .checked_add(phase)
+                .context("FEM preparation phase timing sum overflows u64")
+        })?;
+        if measured_total > self.total_body_ns {
+            bail!("FEM preparation phase timings exceed total body duration");
+        }
+        Ok(())
+    }
+}
+
 pub const FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA: &str = "preparation_process_exit_receipt.v1";
 
 /// Immutable proof that the supervisor reaped one accepted-run preparation
@@ -2826,6 +2883,8 @@ pub struct FmsPreparationProcessExitReceipt {
     pub timed_out: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase_timings: Option<FmsPreparationPhaseTimings>,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -2875,6 +2934,9 @@ impl FmsPreparationProcessExitReceipt {
                 bail!("failed preparation process exit requires a failure reason")
             }
             _ => {}
+        }
+        if let Some(phase_timings) = &self.phase_timings {
+            phase_timings.validate()?;
         }
         Ok(())
     }
@@ -5355,7 +5417,7 @@ mod batch_output_storage_snapshot_tests {
         FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_LEGACY_SCHEMA, FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA,
         canonical_json_sha256, validate_batch_output_storage_snapshot,
     };
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     fn legacy_snapshot(settings: Value) -> Value {
         json!({
@@ -5497,4 +5559,120 @@ pub fn validate_terminal_publication_storage(
     let mut read = read;
     crate::typed_documents::inspect_published_frozen_outputs(bytes,owner,catalog,|reference,budget|read(reference,budget))?;
     crate::typed_documents::inspect_terminal_publication(bytes,owner,catalog,read)
+}
+
+#[cfg(test)]
+mod preparation_phase_timing_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn preparation_phase_timings_match_shared_wire_corpus() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/preparation-phase-timings.v1.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let parsed = serde_json::from_value::<Option<FmsPreparationPhaseTimings>>(
+                case["input"].clone(),
+            );
+            let valid = match parsed {
+                Ok(Some(timings)) => timings.validate().is_ok(),
+                Ok(None) => true,
+                Err(_) => false,
+            };
+            assert_eq!(valid, case["valid"].as_bool().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    fn legacy_exit_receipt() -> Value {
+        json!({
+            "schema_version": FMS_PREPARATION_PROCESS_EXIT_RECEIPT_SCHEMA,
+            "receipt_id": "prep-exit-1",
+            "run_id": "run-1",
+            "task_id": "task-1",
+            "preparation_attempt_id": "attempt-1",
+            "resource_id": "resource-1",
+            "lease_token": "lease-1",
+            "lease_heartbeat_sequence": 1,
+            "process_id": 10,
+            "status_success": true,
+            "exit_code": 0,
+            "timed_out": false,
+            "observed_at": "2026-11-14T12:00:00Z"
+        })
+    }
+
+    fn phase_timings() -> Value {
+        json!({
+            "schema_version": FMS_PREPARATION_PHASE_TIMINGS_SCHEMA,
+            "scope": FMS_PREPARATION_PHASE_TIMINGS_SCOPE,
+            "total_body_ns": 9_007_199_254_742_000_u64,
+            "load_accepted_snapshot_ns": 9_007_199_254_740_993_u64,
+            "replay_validation_ns": 2,
+            "native_mesh_space_ns": 3,
+            "prepared_fields_evaluation_ns": 4,
+            "prepared_bundle_publication_ns": 5,
+            "prepared_observation_commit_ns": 6,
+            "task_preparation_commit_ns": 7
+        })
+    }
+
+    #[test]
+    fn preparation_process_exit_keeps_legacy_wire_and_roundtrips_all_timings() {
+        let legacy: FmsPreparationProcessExitReceipt =
+            serde_json::from_value(legacy_exit_receipt()).unwrap();
+        legacy.validate().unwrap();
+        assert!(serde_json::to_value(legacy).unwrap().get("phase_timings").is_none());
+
+        let mut explicit_null = legacy_exit_receipt();
+        explicit_null["phase_timings"] = Value::Null;
+        let null_receipt: FmsPreparationProcessExitReceipt =
+            serde_json::from_value(explicit_null).unwrap();
+        null_receipt.validate().unwrap();
+        assert!(serde_json::to_value(null_receipt)
+            .unwrap()
+            .get("phase_timings")
+            .is_none());
+
+        let mut wire = legacy_exit_receipt();
+        wire["phase_timings"] = phase_timings();
+        let receipt: FmsPreparationProcessExitReceipt = serde_json::from_value(wire).unwrap();
+        receipt.validate().unwrap();
+        let serialized = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(serialized["phase_timings"], phase_timings());
+        assert_eq!(
+            serialized["phase_timings"]["load_accepted_snapshot_ns"],
+            json!(9_007_199_254_740_993_u64)
+        );
+    }
+
+    #[test]
+    fn preparation_phase_timings_reject_invalid_sum_scope_and_unknown_fields() {
+        let mut wire = legacy_exit_receipt();
+        let mut timings = phase_timings();
+        timings["total_body_ns"] = json!(1_u64);
+        wire["phase_timings"] = timings;
+        let receipt: FmsPreparationProcessExitReceipt = serde_json::from_value(wire).unwrap();
+        assert!(receipt.validate().is_err());
+
+        let mut wire = legacy_exit_receipt();
+        let mut timings = phase_timings();
+        timings["scope"] = json!("other");
+        wire["phase_timings"] = timings;
+        let receipt: FmsPreparationProcessExitReceipt = serde_json::from_value(wire).unwrap();
+        assert!(receipt.validate().is_err());
+
+        let mut wire = legacy_exit_receipt();
+        let mut timings = phase_timings();
+        timings["hidden_metric"] = json!(0);
+        wire["phase_timings"] = timings;
+        assert!(serde_json::from_value::<FmsPreparationProcessExitReceipt>(wire).is_err());
+
+        let mut wire = legacy_exit_receipt();
+        let mut timings = phase_timings();
+        timings["native_mesh_space_ns"] = json!(true);
+        wire["phase_timings"] = timings;
+        assert!(serde_json::from_value::<FmsPreparationProcessExitReceipt>(wire).is_err());
+    }
 }

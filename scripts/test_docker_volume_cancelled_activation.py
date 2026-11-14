@@ -246,6 +246,25 @@ def _drained_receipt(proof: dict[str, object]) -> tuple[bytes, dict[str, object]
 
 
 class CancelledActivationProofTests(unittest.TestCase):
+    def test_failed_preparation_timing_metadata_is_optional_and_strict(self):
+        self.assertTrue(module._validate_preparation_phase_timings(None))
+        valid = {
+            "schema_version": "fem_preparation_phase_timings.v1",
+            "scope": "accepted_fem_preparation_process_body.v1",
+            "total_body_ns": 5,
+            "load_accepted_snapshot_ns": 2,
+            "replay_validation_ns": 1,
+        }
+        self.assertTrue(module._validate_preparation_phase_timings(valid))
+        for changed in (
+            {**valid, "unexpected": 1},
+            {**valid, "total_body_ns": True},
+            {**valid, "load_accepted_snapshot_ns": 6},
+            {**valid, "scope": "other"},
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(module._validate_preparation_phase_timings(changed))
+
     def test_completed_retirement_reader_only_calls_image_owned_read_helpers(self):
         context = {"helper_sha256": "1" * 64, "operation_id": ATTEMPT,
                    "inputs_sha256": "2" * 64, "session_id": "old-session",

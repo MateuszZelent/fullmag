@@ -46,6 +46,25 @@ class StoreProofTests(unittest.TestCase):
     def observe(self):
         return subject.observe_store(self.store, self.ledger, self.store_id)
 
+    def test_preparation_phase_timing_validator_accepts_legacy_and_rejects_bad_metrics(self):
+        self.assertTrue(subject._validate_preparation_phase_timings(None))
+        valid = {
+            'schema_version': 'fem_preparation_phase_timings.v1',
+            'scope': 'accepted_fem_preparation_process_body.v1',
+            'total_body_ns': 12,
+            'load_accepted_snapshot_ns': 3,
+            'replay_validation_ns': 4,
+        }
+        self.assertTrue(subject._validate_preparation_phase_timings(valid))
+        for changed in (
+            {**valid, 'surprise': 1},
+            {**valid, 'total_body_ns': False},
+            {**valid, 'replay_validation_ns': 10},
+            {**valid, 'schema_version': 'other'},
+        ):
+            with self.subTest(changed=changed):
+                self.assertFalse(subject._validate_preparation_phase_timings(changed))
+
     def test_held_and_terminal_runs_are_pinned_and_byte_drift_changes_proof(self):
         terminal = self.store / 'runs' / 'run-done'
         write(terminal / 'run_intent.json', intent(self.store, 'run-done'))

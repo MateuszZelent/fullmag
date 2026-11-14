@@ -9031,6 +9031,7 @@ mod tests {
             exit_code: Some(1),
             timed_out: false,
             failure_reason: Some("fixture failure".to_string()),
+            phase_timings: None,
             observed_at: now,
         };
         (policy, request, reservation, receipt, lease)

@@ -1,0 +1,17 @@
+[
+  {"name":"missing_metrics","valid":true,"input":null},
+  {"name":"no_optional_phases","valid":true,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":0}},
+  {"name":"explicit_null_phase","valid":true,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":10,"load_accepted_snapshot_ns":null,"native_mesh_space_ns":8}},
+  {"name":"all_null_phases","valid":true,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":0,"load_accepted_snapshot_ns":null,"replay_validation_ns":null,"native_mesh_space_ns":null,"prepared_fields_evaluation_ns":null,"prepared_bundle_publication_ns":null,"prepared_observation_commit_ns":null,"task_preparation_commit_ns":null}},
+  {"name":"exact_large_u64","valid":true,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":9007199254740993,"load_accepted_snapshot_ns":9007199254740993}},
+  {"name":"null_required_total","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":null}},
+  {"name":"boolean_total","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":true}},
+  {"name":"boolean_phase","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":10,"native_mesh_space_ns":false}},
+  {"name":"negative_phase","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":10,"native_mesh_space_ns":-1}},
+  {"name":"fractional_phase","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":10,"native_mesh_space_ns":0.5}},
+  {"name":"sum_exceeds_total","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":8,"load_accepted_snapshot_ns":5,"native_mesh_space_ns":4}},
+  {"name":"sum_overflows_u64","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":18446744073709551615,"load_accepted_snapshot_ns":18446744073709551615,"native_mesh_space_ns":1}},
+  {"name":"total_exceeds_u64","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":18446744073709551616}},
+  {"name":"unknown_null_field","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"accepted_fem_preparation_process_body.v1","total_body_ns":0,"unknown_phase":null}},
+  {"name":"wrong_scope","valid":false,"input":{"schema_version":"fem_preparation_phase_timings.v1","scope":"other","total_body_ns":0}}
+]

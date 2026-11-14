@@ -30,6 +30,43 @@ INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
 _MAX_INCLUDE_UNTRACKED_BYTES = 64 * 1024
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
+_PREPARATION_PHASE_TIMING_SCHEMA = "fem_preparation_phase_timings.v1"
+_PREPARATION_PHASE_TIMING_SCOPE = "accepted_fem_preparation_process_body.v1"
+_PREPARATION_PHASE_TIMING_FIELDS = frozenset({
+    "load_accepted_snapshot_ns",
+    "replay_validation_ns",
+    "native_mesh_space_ns",
+    "prepared_fields_evaluation_ns",
+    "prepared_bundle_publication_ns",
+    "prepared_observation_commit_ns",
+    "task_preparation_commit_ns",
+})
+_U64_MAX = (1 << 64) - 1
+
+
+def _validate_preparation_phase_timings(value):
+    """Accept absent legacy timing data or one exact, bounded diagnostic object."""
+    if value is None:
+        return True
+    required = {"schema_version", "scope", "total_body_ns"}
+    if (not isinstance(value, dict)
+            or not required.issubset(value)
+            or not set(value).issubset(required | _PREPARATION_PHASE_TIMING_FIELDS)
+            or value.get("schema_version") != _PREPARATION_PHASE_TIMING_SCHEMA
+            or value.get("scope") != _PREPARATION_PHASE_TIMING_SCOPE):
+        return False
+    durations = []
+    for key in {"total_body_ns"} | _PREPARATION_PHASE_TIMING_FIELDS:
+        if key not in value:
+            continue
+        duration = value[key]
+        if duration is None and key != "total_body_ns":
+            continue
+        if type(duration) is not int or not 0 <= duration <= _U64_MAX:
+            return False
+        if key != "total_body_ns":
+            durations.append(duration)
+    return sum(durations) <= value["total_body_ns"]
 
 
 def _session_host():
@@ -4290,6 +4327,25 @@ try:
         exit_required={"schema_version","receipt_id","run_id","task_id","preparation_attempt_id",
                        "resource_id","lease_token","lease_heartbeat_sequence","process_id",
                        "status_success","exit_code","timed_out","observed_at"}
+        def valid_phase_timings(value):
+            if value is None: return True
+            required={"schema_version","scope","total_body_ns"}
+            phases={"load_accepted_snapshot_ns","replay_validation_ns","native_mesh_space_ns",
+                    "prepared_fields_evaluation_ns","prepared_bundle_publication_ns",
+                    "prepared_observation_commit_ns","task_preparation_commit_ns"}
+            if (not isinstance(value,dict) or not required.issubset(value)
+                    or not set(value).issubset(required|phases)
+                    or value.get("schema_version")!="fem_preparation_phase_timings.v1"
+                    or value.get("scope")!="accepted_fem_preparation_process_body.v1"):
+                return False
+            durations=[]
+            for key in {"total_body_ns"}|phases:
+                if key not in value: continue
+                duration=value[key]
+                if duration is None and key!="total_body_ns": continue
+                if type(duration) is not int or not 0<=duration<=(1<<64)-1: return False
+                if key!="total_body_ns": durations.append(duration)
+            return sum(durations)<=value["total_body_ns"]
         lease_required={"schema_version","resource_id","budget","run_id","task_id","preparation_attempt_id",
                         "lease_token","state","acquired_at","heartbeat_at","heartbeat_sequence","released_at"}
         if (not all(isinstance(value,str) and value and len(value)<=200
@@ -4313,7 +4369,8 @@ try:
                 or any(launch.get(key)!=value for key,value in identity.items())
                 or exit_record["path"]!="preparation_process_exit_receipts/"+exit_id+".json"
                 or not exit_required.issubset(process_exit)
-                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason"})
+                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason","phase_timings"})
+                or not valid_phase_timings(process_exit.get("phase_timings"))
                 or process_exit.get("schema_version")!="preparation_process_exit_receipt.v1"
                 or any(process_exit.get(key)!=value for key,value in identity.items())
                 or process_exit.get("lease_heartbeat_sequence")!=exit_heartbeat
@@ -4602,6 +4659,10 @@ def _cancelled_activation_store_probe(
         value["preparation_evidence"] = _cancelled_activation_preparation_evidence(
             value["preparation_evidence"], "store probe preparation evidence",
         )
+    failed_preparation = value.get("failed_preparation")
+    if (isinstance(failed_preparation, dict)
+            and not _validate_preparation_phase_timings(failed_preparation.get("phase_timings"))):
+        raise BuildControlError("Cancelled activation store probe returned malformed preparation timings")
     if "preparation_host_reservations" in value:
         value["preparation_host_reservations"] = _cancelled_activation_preparation_host_reservations(
             value["preparation_host_reservations"], "store probe preparation host reservations",

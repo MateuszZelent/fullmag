@@ -199,6 +199,8 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparer --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparation-supervisor --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves
           cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
           cargo test -p fullmag-api --bin fullmag-api old_preparation_terminalization_does_not_mutate_replacement_session_ledger
@@ -1094,6 +1096,7 @@ jobs:
           python -B scripts/test_docker_completed_cache_reconcile.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
+          python -B scripts/test_docker_volume_cancelled_activation.py -v
           python -B scripts/test_docker_preaccepted_clock.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_interaction_abi_checks.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_pbc_abi_checks.py -v
@@ -1239,6 +1242,11 @@ jobs:
 
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
+
+      - name: Verify optional FEM preparation process timings
+        run: |
+          python -B scripts/test_preparation_phase_timings_wire.py -q
+          python -B -m pytest -q scripts/test_accepted_fem_cpu_runtime.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |
