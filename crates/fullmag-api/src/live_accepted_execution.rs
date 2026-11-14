@@ -777,6 +777,19 @@ pub(crate) async fn release_accepted_live_study_with_transition(
     release_accepted_live_study_with_request(state, context, request_id, None).await
 }
 
+/// Release an already persisted manual accepted run with its original
+/// immutable live Compute receipt. This narrow adapter is used only by the
+/// private held-UI materialization restore path; public requests continue to
+/// enter through the normal admission handler.
+pub(crate) async fn release_accepted_live_study_with_receipt(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    request_id: &str,
+    receipt: fullmag_session::LiveComputeRequestReceipt,
+) -> Result<Option<AcceptedLiveExecution>, ApiError> {
+    release_accepted_live_study_with_request(state, context, request_id, Some(receipt)).await
+}
+
 async fn release_accepted_live_study_with_request(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,

@@ -380,7 +380,7 @@ async fn read_input() -> Result<Input, String> {
 
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct LoadedRun {
     pub(super) run_id: RunId,
     pub(super) project_id: ProjectId,
@@ -392,6 +392,7 @@ pub(super) struct LoadedRun {
     pub(super) release_exists: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct ValidatedHeldAuthority {
     pub(super) input: Input,
     pub(super) input_sha256: String,
@@ -462,6 +463,312 @@ fn validate_catalog_without_progress(
     Ok(true)
 }
 
+/// Validate the immutable task identities of a catalog after the original
+/// start gate has been released. Scheduler lifecycle, attempt, and revision
+/// fields are expected to advance; task membership and input fingerprints are
+/// still fixed by the accepted RunIntent.
+fn validate_catalog_task_identity(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+) -> Result<()> {
+    let mut expected = std::collections::BTreeMap::new();
+    for step in accepted.lowered.steps.iter()
+        .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+    {
+        let task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id)?;
+        let fingerprint = fullmag_application::study_task_input_fingerprint(
+            &accepted.run.specification,
+            step,
+        )?;
+        if expected.insert(task_id, fingerprint).is_some() {
+            bail!("held UI accepted plan derives duplicate task identities");
+        }
+    }
+    if expected.is_empty() {
+        bail!("held UI RunIntent has no planned executable tasks");
+    }
+    let catalog = store.read_run_catalog(run_id)?
+        .context("released held UI run has no task catalog")?;
+    if catalog.run_id != run_id || catalog.tasks.len() != expected.len() {
+        bail!("released held UI catalog has a foreign run or task set");
+    }
+    let mut observed = std::collections::BTreeSet::new();
+    for task in &catalog.tasks {
+        let fingerprint = expected.get(&task.task_id)
+            .context("released held UI catalog contains a foreign task")?;
+        if fingerprint != &task.input_fingerprint || !observed.insert(task.task_id.as_str()) {
+            bail!("released held UI task identity or accepted input fingerprint changed");
+        }
+    }
+    if observed.len() != expected.len() {
+        bail!("released held UI catalog lost an accepted task");
+    }
+    Ok(())
+}
+
+fn validate_released_run_directory(
+    store: &fullmag_session::SessionStore,
+    run_id: &str,
+) -> Result<()> {
+    let relative = format!("runs/{run_id}");
+    let directory = fullmag_session::repository_path::checked_path(store.root(), &relative)?;
+    let metadata = std::fs::symlink_metadata(&directory)
+        .context("inspect released held UI run directory")?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("released held UI run directory is not a real directory");
+    }
+    for required in ["live_demand.v1.json", "run_intent.json", "run_catalog.json", "start_release.json"] {
+        let path = directory.join(required);
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("inspect released held UI `{required}`"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            bail!("released held UI `{required}` is not a regular file");
+        }
+    }
+    // After the original gate opens, preserve the ordinary scheduler's native
+    // history as opaque data. It is not restore authority: exact RunIntent/CAS,
+    // typed catalog task identities, release receipt, and command readback are
+    // validated separately. No links or special files are admitted here.
+    validate_no_link_tree(&directory, 0)
+}
+
+fn validate_no_link_tree(path: &std::path::Path, depth: usize) -> Result<()> {
+    if depth > 32 {
+        bail!("released held UI run history exceeds the directory depth bound");
+    }
+    for entry in std::fs::read_dir(path).context("list released held UI history")? {
+        let entry = entry?;
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+            bail!("released held UI run history contains a link or special file");
+        }
+        if metadata.is_dir() {
+            validate_no_link_tree(&entry.path(), depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
+fn materialize_held_catalog(authority: &ValidatedHeldAuthority) -> Result<fullmag_session::FmsRunCatalog> {
+    let input = &authority.input;
+    let loaded = &authority.loaded;
+    let store = fullmag_session::SessionStore::open_existing(&authority.store_root)
+        .context("open held UI accepted store for catalog materialization")?;
+    let run_id = loaded.run_id.as_str();
+    let intent_relative = format!("runs/{run_id}/run_intent.json");
+    let intent_raw = fullmag_session::repository_path::read_bounded_regular_file(
+        &authority.store_root,
+        &intent_relative,
+        MAX_PROOF_BYTES,
+    ).context("re-read immutable held UI RunIntent before catalog materialization")?;
+    if sha256(&intent_raw) != input.accepted.run_intent_sha256 {
+        bail!("held UI RunIntent changed before catalog materialization");
+    }
+    let intent: fullmag_session::FmsRunIntent =
+        serde_json::from_slice(&intent_raw).context("decode held UI RunIntent before materialization")?;
+    if intent != loaded.intent
+        || intent.payload_sha256 != input.accepted.run_intent_payload_sha256
+    {
+        bail!("held UI immutable RunIntent differs before catalog materialization");
+    }
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+        &store,
+        &loaded.run_id,
+        &loaded.project_id,
+    ).context("reload held UI accepted CAS snapshot before catalog materialization")?;
+    if accepted.run.intent != loaded.intent || accepted.run.specification != loaded.specification {
+        bail!("held UI accepted RunIntent or CAS specification changed before catalog materialization");
+    }
+
+    let catalog_present = validate_catalog_without_progress(&store, run_id, &accepted)
+        .context("check held UI catalog for conflicting identity or progress")?;
+    if loaded.release_exists
+        || store.read_accepted_run_start_release(run_id)?.is_some()
+        || store.accepted_run_start_permitted(run_id)?
+    {
+        bail!("held UI catalog materialization requires the original start gate to remain closed");
+    }
+    let planned_task_ids = accepted.lowered.steps.iter()
+        .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+        .map(|step| fullmag_session::task_id_for_study_step(run_id, &step.step_id))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    validate_run_directory(&store, run_id, catalog_present, false, &planned_task_ids)
+        .context("validate held UI run directory before catalog materialization")?;
+
+    // The prior readers return owned snapshots and leave no store transaction
+    // open across the normal catalog writer.
+    let catalog = crate::run_intent_persistence::materialize_accepted_run_catalog(
+        &store,
+        run_id,
+        &loaded.project_id,
+    ).context("materialize held UI catalog from the exact accepted CAS snapshot")?;
+    if catalog.run_id != run_id || catalog.revision != 1 {
+        bail!("held UI catalog writer returned another run or revision");
+    }
+
+    let post_intent_raw = fullmag_session::repository_path::read_bounded_regular_file(
+        &authority.store_root,
+        &intent_relative,
+        MAX_PROOF_BYTES,
+    ).context("re-read held UI RunIntent after catalog materialization")?;
+    if sha256(&post_intent_raw) != input.accepted.run_intent_sha256 || post_intent_raw != intent_raw {
+        bail!("held UI catalog materialization changed the immutable RunIntent bytes");
+    }
+    let post_snapshot = fullmag_runtime_control::load_accepted_study_snapshot(
+        &store,
+        &loaded.run_id,
+        &loaded.project_id,
+    ).context("re-read held UI accepted CAS snapshot after catalog materialization")?;
+    if post_snapshot.run.intent != loaded.intent
+        || post_snapshot.run.specification != loaded.specification
+        || !validate_catalog_without_progress(&store, run_id, &post_snapshot)?
+    {
+        bail!("held UI catalog is not the exact no-progress materialization of its accepted RunIntent");
+    }
+    validate_run_directory(&store, run_id, true, false, &planned_task_ids)
+        .context("validate held UI run directory after catalog materialization")?;
+    let persisted = store.read_run_catalog(run_id)?
+        .context("held UI run catalog disappeared after materialization")?;
+    if persisted.run_id != catalog.run_id || persisted.revision != catalog.revision
+        || persisted.tasks != catalog.tasks {
+        bail!("held UI persisted catalog differs from the exact materialized catalog");
+    }
+    if store.read_accepted_run_start_release(run_id)?.is_some()
+        || store.accepted_run_start_permitted(run_id)? {
+        bail!("held UI catalog materialization opened the accepted run start gate");
+    }
+    Ok(persisted)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HeldStoreEvidence {
+    catalog_sha256: String,
+    start_release_sha256: Option<String>,
+}
+
+fn raw_run_record_sha256(authority: &ValidatedHeldAuthority, file_name: &str) -> Result<String> {
+    if !matches!(file_name, "run_catalog.json" | "start_release.json") {
+        bail!("held UI run record name is not allowed");
+    }
+    let relative = format!("runs/{}/{}", authority.loaded.run_id.as_str(), file_name);
+    let raw = fullmag_session::repository_path::read_bounded_regular_file(
+        &authority.store_root,
+        &relative,
+        MAX_PROOF_BYTES,
+    )
+    .with_context(|| format!("read held UI `{file_name}` bytes"))?;
+    Ok(sha256(&raw))
+}
+
+/// Re-read and bind the exact accepted catalog and optional original release.
+/// This is deliberately read-only; callers invoke it before release and after
+/// release so a retry cannot create a second gate or synthesize a command.
+fn validate_held_store_evidence(
+    authority: &ValidatedHeldAuthority,
+    expect_release: bool,
+) -> Result<HeldStoreEvidence> {
+    let input = &authority.input;
+    let loaded = &authority.loaded;
+    let store = fullmag_session::SessionStore::open_existing(&authority.store_root)
+        .context("open held UI accepted store for release verification")?;
+    let run_id = loaded.run_id.as_str();
+    let intent_relative = format!("runs/{run_id}/run_intent.json");
+    let intent_raw = fullmag_session::repository_path::read_bounded_regular_file(
+        &authority.store_root,
+        &intent_relative,
+        MAX_PROOF_BYTES,
+    )
+    .context("read held UI immutable RunIntent before release verification")?;
+    if sha256(&intent_raw) != input.accepted.run_intent_sha256 {
+        bail!("held UI RunIntent changed before release verification");
+    }
+    let intent: fullmag_session::FmsRunIntent =
+        serde_json::from_slice(&intent_raw).context("decode held UI RunIntent before release verification")?;
+    if intent != loaded.intent || intent.payload_sha256 != input.accepted.run_intent_payload_sha256 {
+        bail!("held UI RunIntent differs before release verification");
+    }
+    let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+        &store,
+        &loaded.run_id,
+        &loaded.project_id,
+    )
+    .context("reload held UI accepted CAS before release verification")?;
+    if accepted.run.intent != intent || accepted.run.specification != loaded.specification {
+        bail!("held UI accepted CAS differs before release verification");
+    }
+    let release = store.read_accepted_run_start_release(run_id)?;
+    if release.is_some() != expect_release
+        || store.accepted_run_start_permitted(run_id)? != expect_release
+    {
+        bail!("held UI start release state differs from the expected gate phase");
+    }
+    if let Some(release) = release.as_ref() {
+        let expected_id = crate::live_accepted_execution::accepted_start_release_request_id(
+            run_id,
+            &input.accepted.request_id,
+        );
+        if release.run_id != run_id
+            || release.specification_sha256 != intent.payload_sha256
+            || release.request_id != expected_id
+            || release.live_request.as_ref() != Some(&loaded.receipt)
+        {
+            bail!("held UI start release differs from the original accepted request receipt");
+        }
+    }
+
+    let planned_task_ids = accepted.lowered.steps.iter()
+        .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+        .map(|step| fullmag_session::task_id_for_study_step(run_id, &step.step_id))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    if expect_release {
+        validate_catalog_task_identity(&store, run_id, &accepted)
+            .context("validate held UI released catalog task identities")?;
+        validate_released_run_directory(&store, run_id)
+            .context("validate held UI released run history")?;
+    } else {
+        if !validate_catalog_without_progress(&store, run_id, &accepted)
+            .context("validate held UI closed-gate catalog before release verification")?
+        {
+            bail!("held UI accepted catalog is missing before release verification");
+        }
+        validate_run_directory(&store, run_id, true, false, &planned_task_ids)
+            .context("validate held UI closed-gate run directory before release verification")?;
+    }
+
+    let start_release_sha256 = if let Some(release) = release {
+        let readback = crate::live_compute_request::accepted_command_readback(
+            &store,
+            &intent,
+            "waiting_for_compute",
+        )
+        .map_err(|error| anyhow::anyhow!("held UI original command readback failed: {error}"))?
+        .context("held UI original accepted command is missing after release")?;
+        let binding = readback.command.execution_binding.as_ref()
+            .context("held UI original command readback has no execution binding")?;
+        let binding_target = binding.requested_target.as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("encode held UI readback target")?;
+        if readback.command.command_id != input.accepted.command_id
+            || readback.command.kind != input.accepted.command_kind
+            || readback.command.client_intent_id.as_deref() != Some(input.accepted.client_intent_id.as_str())
+            || readback.request_id.as_deref() != Some(input.accepted.request_id.as_str())
+            || binding.run_id != input.accepted.run_id
+            || binding_target != loaded.receipt.requested_target
+        {
+            bail!("held UI original accepted command readback differs from its immutable receipt");
+        }
+        Some(raw_run_record_sha256(authority, "start_release.json")?)
+    } else {
+        None
+    };
+    Ok(HeldStoreEvidence {
+        catalog_sha256: raw_run_record_sha256(authority, "run_catalog.json")?,
+        start_release_sha256,
+    })
+}
+
 fn validate_live_workspace_binding(live: &Value, accepted: &AcceptedPins) -> Result<()> {
     if live.get("session_id").and_then(Value::as_str) != Some(accepted.session_id.as_str())
         || live.get("session_epoch").and_then(Value::as_u64) != Some(accepted.session_epoch)
@@ -526,6 +833,7 @@ fn validate_inventory_files(
     inventory: &InventoryProof,
     specification: &RunSpecification,
     scene: &SceneDocument,
+    preflight: &PreflightProof,
 ) -> Result<()> {
     let side = &inventory.before;
     let run_id = &input.accepted.run_id;
@@ -554,10 +862,11 @@ fn validate_inventory_files(
         ] {
         bail!("held UI inventory file hashes differ from the current accepted run");
     }
+    let pinned_http_scene = preflight_scene_document(preflight, &input.accepted)?;
     if specification.snapshot.definition_sha256 != input.accepted.definition_sha256
         || specification.study.plan_sha256 != input.accepted.study_sha256
         || scene.revision != input.accepted.scene_revision
-        || fullmag_session::canonical_json_sha256(&serde_json::to_value(scene)?) != input.accepted.accepted_scene_sha256 {
+        || pinned_http_scene != *scene {
         bail!("held UI immutable definition, Study, or scene differs from its pins");
     }
     let identity = crate::live_execution_binding::input_identity(scene)
@@ -635,14 +944,13 @@ fn validate_store(input: &Input, store_root: &Path, inventory: &InventoryProof, 
         bail!("held UI immutable accepted snapshot differs from its RunIntent");
     }
     let scene = super::scene_from_definition(&accepted.run.definition_bytes, &specification)?;
-    validate_inventory_files(&store, input, inventory, &specification, &scene)?;
+    validate_inventory_files(&store, input, inventory, &specification, &scene, preflight)?;
     let planned = accepted.lowered.steps.iter()
         .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
         .map(|step| fullmag_session::task_id_for_study_step(run_id.as_str(), &step.step_id))
         .collect::<Result<std::collections::BTreeSet<_>>>()?;
-    let catalog_present = validate_catalog_without_progress(&store, run_id.as_str(), &accepted)?;
     let release = store.read_accepted_run_start_release(run_id.as_str())?;
-    let release_exists = if let Some(release) = release {
+    let release_exists = if let Some(release) = release.as_ref() {
         let expected_id = crate::live_accepted_execution::accepted_start_release_request_id(
             run_id.as_str(), &input.accepted.request_id,
         );
@@ -654,11 +962,19 @@ fn validate_store(input: &Input, store_root: &Path, inventory: &InventoryProof, 
         }
         true
     } else { false };
-    if release_exists && !catalog_present { bail!("held UI start release exists without its accepted catalog"); }
-    validate_run_directory(&store, run_id.as_str(), catalog_present, release_exists, &planned)?;
     if store.accepted_run_start_permitted(run_id.as_str())? != release_exists {
         bail!("held UI manual accepted run release and start gate differ");
     }
+    let catalog_present = if release_exists {
+        validate_catalog_task_identity(&store, run_id.as_str(), &accepted)?;
+        validate_released_run_directory(&store, run_id.as_str())?;
+        true
+    } else {
+        let present = validate_catalog_without_progress(&store, run_id.as_str(), &accepted)?;
+        validate_run_directory(&store, run_id.as_str(), present, false, &planned)?;
+        present
+    };
+    if release_exists && !catalog_present { bail!("held UI start release exists without its accepted catalog"); }
     Ok(LoadedRun {
         run_id, project_id, specification, scene, intent, receipt,
         total_steps: accepted.lowered.steps.iter().filter(|step|
@@ -754,11 +1070,12 @@ fn read_raw(root: &Path, reference: &RecordRef, maximum: usize, label: &str) -> 
     Ok(bytes)
 }
 
-fn read_canonical_record(root: &Path, reference: &RecordRef, label: &str) -> Result<Value> {
+fn read_transport_record(root: &Path, reference: &RecordRef, label: &str) -> Result<Value> {
     let bytes = read_raw(root, reference, MAX_PROOF_BYTES, label)?;
-    let value = parse_unique_value(&bytes, label)?;
-    if canonical_lf(&value) != bytes { bail!("{label} is not canonical JSON plus LF"); }
-    Ok(value)
+    // Python owns these immutable transport proofs and pins their exact raw
+    // bytes. Keep duplicate-key and typed-schema rejection, but do not
+    // reserialize Python floats through Rust's different exponent formatter.
+    parse_unique_value(&bytes, label)
 }
 
 fn validate_launch_and_request(root: &Path, input: &Input) -> Result<()> {
@@ -868,6 +1185,26 @@ fn validate_preflight_scope(proof: &PreflightProof, input: &Input) -> Result<()>
     Ok(())
 }
 
+fn preflight_scene_document(proof: &PreflightProof, accepted: &AcceptedPins) -> Result<SceneDocument> {
+    let body = proof.api_response.responses.get("scene")
+        .context("held UI preflight has no raw scene response")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&body.raw_base64)
+        .context("decode held UI raw scene response")?;
+    if bytes.len() > MAX_PROOF_BYTES
+        || sha256(&bytes) != body.sha256
+        || body.sha256 != accepted.accepted_scene_sha256
+    {
+        bail!("held UI raw scene response differs from its accepted byte pin");
+    }
+    let value = parse_unique_value(&bytes, "held UI raw scene response")?;
+    let scene: SceneDocument = serde_json::from_value(value)
+        .context("decode held UI raw scene document")?;
+    if scene.revision != accepted.scene_revision {
+        bail!("held UI raw scene response has another scene revision");
+    }
+    Ok(scene)
+}
+
 fn validate_preflight(proof: &PreflightProof, input: &Input) -> Result<()> {
     validate_preflight_scope(proof, input)?;
     let expected_responses = ["health", "status", "run", "scene", "queue", "commands", "runtime"]
@@ -921,7 +1258,7 @@ fn validate_preflight(proof: &PreflightProof, input: &Input) -> Result<()> {
     }
     let scene = &decoded["scene"];
     if scene.get("revision").and_then(Value::as_u64) != Some(accepted.scene_revision)
-        || fullmag_session::canonical_json_sha256(scene) != accepted.accepted_scene_sha256 {
+        || preflight_scene_document(proof, accepted)?.revision != accepted.scene_revision {
         bail!("held UI preflight scene digest or revision differs");
     }
     let queue = &decoded["queue"];
@@ -1048,30 +1385,39 @@ fn validate_api_pin(pin: &Value, accepted: &AcceptedPins) -> Result<()> {
     Ok(())
 }
 
-fn validate_ready_process(
+fn validate_process_diagnostic_mode(receipt: &Value) -> Result<()> {
+    match receipt.get("api_diagnostic_only") {
+        None | Some(Value::Bool(false)) => Ok(()),
+        _ => bail!("held UI preflight process receipt has an invalid diagnostic-only marker"),
+    }
+}
+
+fn validate_retained_closed_process(
     receipt: &Value,
     api_pin: &Value,
     expected_owner_identity: &Value,
     store_root: &Path,
     store_binding: &str,
 ) -> Result<()> {
+    validate_process_diagnostic_mode(receipt)?;
     if receipt.get("schema").and_then(Value::as_str) != Some("fullmag.docker-process-tree.v1")
-        || receipt.get("state").and_then(Value::as_str) != Some("ready")
+        || receipt.get("state").and_then(Value::as_str) != Some("failed_outcome_retained")
         || receipt.get("api_pid").and_then(Value::as_u64) != api_pin.get("pid").and_then(Value::as_u64)
+        || receipt.get("api_exit_code").and_then(Value::as_i64) != Some(-15)
+        || receipt.get("api_diagnostic_only").and_then(Value::as_bool) != Some(false)
         || receipt.get("accepted_store").and_then(Value::as_str) != store_root.to_str()
-        || receipt.get("api_diagnostic_only").and_then(Value::as_bool) == Some(true)
         || receipt.pointer("/bootstrap/binding").and_then(Value::as_str) != Some(store_binding)
     {
-        bail!("held UI preflight process receipt is not the pinned Ready API process");
+        bail!("held UI retained process receipt is not the closed pinned API process");
     }
     let owner = super::validate_native_owner(
-        receipt.get("service_owner").context("held UI Ready process has no service owner")?,
-        "held UI preflight Ready owner",
+        receipt.get("service_owner").context("held UI retained process has no service owner")?,
+        "held UI retained Ready owner",
         fullmag_session::runtime_service::RuntimeServiceState::Ready,
         &["running"],
     )?;
     if owner_identity_value(&owner)? != *expected_owner_identity {
-        bail!("held UI Ready process owner differs from preflight");
+        bail!("held UI retained process owner differs from the original Ready owner");
     }
     Ok(())
 }
@@ -1086,7 +1432,7 @@ fn validate_stop_authority(
     let authority = &input.stop_authority;
     let scope = &input.source_scope;
     let accepted = &input.accepted;
-    let quiescence_value = read_canonical_record(root, &authority.api_quiescence, "held UI API quiescence")?;
+    let quiescence_value = read_transport_record(root, &authority.api_quiescence, "held UI API quiescence")?;
     let quiescence: QuiescenceProof = serde_json::from_value(quiescence_value.clone())
         .context("decode held UI API quiescence")?;
     if quiescence.schema != "fullmag.native-terminal-api-quiescence.v1"
@@ -1102,13 +1448,18 @@ fn validate_stop_authority(
     }
     let api_pin = &quiescence.api_pin;
     let retained = &quiescence.retained_process;
-    if sha256(&canonical_lf(retained)) != quiescence.retained_process_sha256
-        || quiescence.retained_process_sha256 != preflight.process_sha256 {
-        bail!("held UI quiescence does not retain the exact preflight process receipt");
+    if sha256(&canonical_lf(retained)) != quiescence.retained_process_sha256 {
+        bail!("held UI quiescence retained-process bytes differ from their own digest");
     }
     let store_binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
         .context("resolve held UI process accepted-store binding")?;
-    validate_ready_process(retained, api_pin, &preflight.ready_owner_identity, store_root, &store_binding)?;
+    validate_retained_closed_process(
+        retained,
+        api_pin,
+        &preflight.ready_owner_identity,
+        store_root,
+        &store_binding,
+    )?;
 
     let process_raw = read_raw(root, &authority.native_drain, MAX_PROOF_BYTES, "held UI native drain")?;
     let process = parse_unique_value(&process_raw, "held UI native drain")?;
@@ -1168,6 +1519,7 @@ fn validate_stop_authority(
         || inputs.get("capture_held_ui_materialization").and_then(Value::as_bool) != Some(true) {
         bail!("held UI stop terminal does not bind the exact source, plan, run, namespace, and service IDs");
     }
+    validate_terminal_stop_proof_refs(&terminal_value, authority)?;
     let services_value = terminal_value.get("held_ui_stop_services")
         .context("held UI stop terminal has no typed stopped-service pins")?;
     let services = services_value.as_object().context("held UI stopped-service pins are not an object")?;
@@ -1239,6 +1591,30 @@ fn validate_stop_authority(
     Ok(())
 }
 
+fn validate_terminal_stop_proof_refs(terminal: &Value, authority: &StopAuthority) -> Result<()> {
+    let proofs = terminal.get("held_ui_stop_proofs")
+        .context("held UI stop terminal has no typed stop-proof references")?
+        .as_object()
+        .context("held UI stop-proof references are not an object")?;
+    if proofs.len() != 4 {
+        bail!("held UI stop terminal must bind exactly four pre-stop proofs");
+    }
+    for (name, expected) in [
+        ("preflight", &authority.preflight),
+        ("api_quiescence", &authority.api_quiescence),
+        ("native_drain", &authority.native_drain),
+        ("inventory", &authority.inventory),
+    ] {
+        let actual: RecordRef = serde_json::from_value(
+            proofs.get(name).context("held UI stop terminal omits a pre-stop proof reference")?.clone(),
+        ).with_context(|| format!("decode held UI {name} terminal proof reference"))?;
+        if &actual != expected {
+            bail!("held UI stop terminal {name} proof reference differs from the immutable request");
+        }
+    }
+    Ok(())
+}
+
 fn validate_and_load_held_authority(
     input: Input,
     runtime_control_root: &Path,
@@ -1251,14 +1627,14 @@ fn validate_and_load_held_authority(
     validate_environment_and_target(&input, store_root)
         .context("validate held UI target runtime")?;
 
-    let preflight_value = read_canonical_record(
+    let preflight_value = read_transport_record(
         runtime_control_root, &input.stop_authority.preflight, "held UI preflight",
     )?;
     let preflight: PreflightProof = serde_json::from_value(preflight_value)
         .context("decode held UI preflight")?;
     validate_preflight(&preflight, &input).context("validate held UI preflight")?;
 
-    let inventory_value = read_canonical_record(
+    let inventory_value = read_transport_record(
         runtime_control_root, &input.stop_authority.inventory, "held UI inventory",
     )?;
     let inventory: InventoryProof = serde_json::from_value(inventory_value)
@@ -1429,11 +1805,16 @@ pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         .ok_or_else(|| "held UI materialization has no configured accepted store".to_owned())?;
     let runtime_control_root = super::configured_runtime_control_root()
         .map_err(|error| format!("held UI runtime control is unavailable: {error:#}"))?;
+    let ack_control_root = runtime_control_root.clone();
     let build_control_root = std::path::PathBuf::from(STOP_TERMINAL_ROOT);
     let validation = tokio::task::spawn_blocking(move || {
         validate_and_load_held_authority(input, &runtime_control_root, &build_control_root, &store_root)
     }).await.map_err(|error| format!("held UI authority validation task failed: {error}"))?
         .map_err(|error| format!("held UI authority validation failed: {error:#}"))?;
+    let already_released = validation.loaded.release_exists;
+    let ack_input = validation.input.clone();
+    let ack_input_sha256 = validation.input_sha256.clone();
+
     let _transition = state.current_live_session_transition.lock().await;
     if state.current_live_state.read().await.is_some()
         || state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire) != 0 {
@@ -1450,7 +1831,144 @@ pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
         *current = Some(snapshot);
     }
     drop(_transition);
-    Err("held UI snapshot is hydrated in memory; durable catalog, frontier, and start release remain fail-closed".into())
+
+    // The authority validator has completed every source/store/stop check
+    // before this point. A previously released run is only rebound and read
+    // back; it never enters either normal catalog or release writer.
+    let store_authority = validation.clone();
+    let initial_evidence = tokio::task::spawn_blocking(move || {
+        if !already_released {
+            materialize_held_catalog(&store_authority)
+                .map_err(|error| format!("materialize held UI accepted catalog failed: {error:#}"))?;
+        }
+        validate_held_store_evidence(&store_authority, already_released)
+            .map_err(|error| format!("validate held UI catalog/release failed: {error:#}"))
+    })
+    .await
+    .map_err(|error| format!("held UI catalog task failed: {error}"))??;
+
+    let context = crate::capture_current_live_request_context(state)
+        .await
+        .map_err(|error| format!("capture restored held UI request context failed: {error}"))?;
+    if context.session_id != ack_input.accepted.session_id
+        || context.session_epoch != ack_input.accepted.session_epoch
+        || context.run_id.as_deref() != Some(ack_input.accepted.run_id.as_str()) {
+        return Err("restored held UI request context differs from the accepted pins".into());
+    }
+    if !already_released {
+        crate::live_scene_preparation::publish_accepted_frontier_preparation(
+            state,
+            &context,
+            &ack_input.accepted.command_kind,
+            None,
+        )
+        .await
+        .map_err(|error| format!("held UI accepted frontier preparation failed: {error}"))?;
+    }
+
+    let gate_action = if already_released {
+        "already_released_exact"
+    } else {
+        let before_release_authority = validation.clone();
+        let before_release = tokio::task::spawn_blocking(move || {
+            validate_held_store_evidence(&before_release_authority, false)
+                .map_err(|error| format!("revalidate held UI store before release failed: {error:#}"))
+        })
+        .await
+        .map_err(|error| format!("held UI pre-release verification task failed: {error}"))??;
+        if before_release.start_release_sha256.is_some() {
+            return Err("held UI store changed before the original start release".into());
+        }
+        let receipt = validation.loaded.receipt.clone();
+        let released = crate::live_accepted_execution::release_accepted_live_study_with_receipt(
+            state,
+            &context,
+            &ack_input.accepted.request_id,
+            receipt,
+        )
+        .await
+        .map_err(|error| format!("held UI original accepted-run release failed: {error}"))?
+        .ok_or_else(|| "held UI original accepted-run release returned no execution".to_owned())?;
+        if released.run_id != ack_input.accepted.run_id {
+            return Err("held UI original accepted-run release returned another run".into());
+        }
+        "released"
+    };
+
+    let verify_authority = validation;
+    let final_evidence = tokio::task::spawn_blocking(move || {
+        validate_held_store_evidence(&verify_authority, true)
+            .map_err(|error| format!("verify held UI original release/readback failed: {error:#}"))
+    })
+    .await
+    .map_err(|error| format!("held UI release verification task failed: {error}"))??;
+    if already_released
+        && final_evidence.start_release_sha256 != initial_evidence.start_release_sha256
+    {
+        return Err("held UI exact start release changed during read-only restoration".into());
+    }
+    publish_held_restore_ack(
+        &ack_control_root,
+        &ack_input,
+        &ack_input_sha256,
+        &final_evidence,
+        &state.request_scope_instance_id,
+        gate_action,
+    )
+    .map_err(|error| format!("publish held UI restore ack failed: {error:#}"))?;
+    Ok(())
+}
+
+fn publish_held_restore_ack(
+    control_root: &Path,
+    input: &Input,
+    input_sha256: &str,
+    evidence: &HeldStoreEvidence,
+    api_instance_id: &str,
+    gate_action: &str,
+) -> Result<String> {
+    if !matches!(gate_action, "released" | "already_released_exact") {
+        bail!("held UI restore ack has an invalid gate action");
+    }
+    validate_digest(input_sha256, "held UI restore input digest")?;
+    super::validate_api_instance_id(api_instance_id, "held UI restored API instance")?;
+    let start_release_sha256 = evidence.start_release_sha256.as_deref()
+        .context("held UI restore ack requires the verified original start release")?;
+    let ack = RestoreAck {
+        accepted_store_binding: input.target_runtime.accepted_store_binding.clone(),
+        api_instance_id: api_instance_id.to_owned(),
+        catalog_sha256: evidence.catalog_sha256.clone(),
+        command_id: input.accepted.command_id.clone(),
+        config_sha256: input.target_runtime.config_sha256.clone(),
+        gate_action: gate_action.to_owned(),
+        input_sha256: input_sha256.to_owned(),
+        launch_id: input.launch_id.clone(),
+        project_id: input.accepted.project_id.clone(),
+        request_receipt_sha256: input.accepted.request_receipt_sha256.clone(),
+        run_id: input.accepted.run_id.clone(),
+        scene_revision: input.accepted.scene_revision,
+        session_created_at_unix_ms: input.accepted.session_created_at_unix_ms,
+        schema: ACK_SCHEMA.into(),
+        session_epoch: input.accepted.session_epoch,
+        session_id: input.accepted.session_id.clone(),
+        start_release_sha256: start_release_sha256.to_owned(),
+        state: "restored".into(),
+    };
+    let mut bytes = fullmag_session::canonical_json_bytes(
+        &serde_json::to_value(&ack).context("encode held UI restore ack")?,
+    );
+    bytes.push(b'\n');
+    if bytes.len() > MAX_INPUT_BYTES {
+        bail!("held UI restore ack exceeds its size bound");
+    }
+    let relative = format!(
+        "{PROOF_DIR}/{}/restore-ack-{}.json",
+        input.plan.maintenance_request_id,
+        input.launch_id,
+    );
+    fullmag_session::repository_path::validate_relative_path(&relative)
+        .context("held UI restore ack path is unsafe")?;
+    super::publish_immutable_restore_bytes(control_root, &relative, &bytes)
 }
 
 #[cfg(test)]
@@ -1502,6 +2020,125 @@ mod tests {
                 accepted_store_binding: "1".repeat(64),
             },
         }
+    }
+
+    #[test]
+    fn ready_process_diagnostic_marker_accepts_only_missing_or_boolean_false() {
+        assert!(validate_process_diagnostic_mode(&json!({})).is_ok());
+        assert!(validate_process_diagnostic_mode(&json!({"api_diagnostic_only": false})).is_ok());
+        for value in [json!(true), json!(null), json!("false"), json!(0)] {
+            assert!(
+                validate_process_diagnostic_mode(&json!({"api_diagnostic_only": value})).is_err(),
+                "malformed diagnostic marker must not be treated as an ordinary Ready receipt",
+            );
+        }
+    }
+
+    #[test]
+    fn post_close_receipt_binds_original_ready_owner_without_reusing_ready_hash() {
+        let store = tempfile::tempdir().unwrap();
+        let api_pin = json!({
+            "pid": 19080,
+            "start_token": "19517880",
+            "ppid": 1,
+            "argv": ["/opt/fullmag/package/bin/fullmag-api"],
+            "exe": "/opt/fullmag/package/bin/fullmag-api",
+        });
+        let owner = json!({
+            "schema_version": "runtime_service_owner.v1",
+            "owner_token": "11111111-1111-4111-8111-111111111111",
+            "process_start_token": "22222222-2222-4222-8222-222222222222",
+            "pid": 3241,
+            "host": "fullmag-test-host",
+            "target_id": "docker-all",
+            "protocol": "stdin-v1",
+            "state": "ready",
+            "acquired_at": "2026-10-19T10:00:00Z",
+            "heartbeat_at": "2026-10-19T10:00:01Z",
+            "control_address": "127.0.0.1:43123",
+            "build_commit": "6".repeat(40),
+            "build_snapshot": "7".repeat(64),
+            "compute_pool_id": "compute-pool",
+            "preparation_pool_id": "preparation-pool",
+            "compute_pool_generation": 7,
+            "preparation_pool_generation": 8,
+            "children": [
+                {"role": "compute", "pid": 3250, "status": "running"},
+                {"role": "preparation", "pid": 3251, "status": "running"},
+            ],
+        });
+        let owner_identity = owner_identity_value(&owner).unwrap();
+        let binding = "a".repeat(64);
+        let ready = json!({
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "ready",
+            "api_pid": 19080,
+            "accepted_store": store.path(),
+            "bootstrap": {"binding": binding},
+            "service_owner": owner,
+        });
+        let retained = json!({
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "failed_outcome_retained",
+            "api_pid": 19080,
+            "api_exit_code": -15,
+            "api_diagnostic_only": false,
+            "accepted_store": store.path(),
+            "bootstrap": {"binding": binding},
+            "service_owner": owner,
+        });
+        let original_ready_sha = sha256(&canonical_lf(&ready));
+        let retained_sha = sha256(&canonical_lf(&retained));
+        assert_ne!(original_ready_sha, retained_sha);
+        validate_retained_closed_process(
+            &retained,
+            &api_pin,
+            &owner_identity,
+            store.path(),
+            &binding,
+        ).unwrap();
+
+        let mut wrong_store = retained.clone();
+        wrong_store["accepted_store"] = json!("/other/store");
+        assert!(validate_retained_closed_process(
+            &wrong_store, &api_pin, &owner_identity, store.path(), &binding,
+        ).is_err());
+        let mut wrong_api = retained.clone();
+        wrong_api["api_pid"] = json!(19081);
+        assert!(validate_retained_closed_process(
+            &wrong_api, &api_pin, &owner_identity, store.path(), &binding,
+        ).is_err());
+        let mut wrong_owner = retained;
+        wrong_owner["service_owner"]["owner_token"] = json!("33333333-3333-4333-8333-333333333333");
+        assert!(validate_retained_closed_process(
+            &wrong_owner, &api_pin, &owner_identity, store.path(), &binding,
+        ).is_err());
+    }
+
+    #[test]
+    fn stop_terminal_binds_exact_pre_stop_proof_references() {
+        let input = fixture();
+        let authority = &input.stop_authority;
+        let terminal = json!({
+            "held_ui_stop_proofs": {
+                "preflight": authority.preflight.clone(),
+                "api_quiescence": authority.api_quiescence.clone(),
+                "native_drain": authority.native_drain.clone(),
+                "inventory": authority.inventory.clone(),
+            }
+        });
+        assert!(validate_terminal_stop_proof_refs(&terminal, authority).is_ok());
+
+        let mut mutated = terminal.clone();
+        mutated["held_ui_stop_proofs"]["inventory"]["sha256"] = Value::String("f".repeat(64));
+        assert!(validate_terminal_stop_proof_refs(&mutated, authority).is_err());
+
+        let mut extra = terminal;
+        extra["held_ui_stop_proofs"]["unbound"] = json!({
+            "path": "held-ui-materialization/foreign.json",
+            "sha256": "e".repeat(64),
+        });
+        assert!(validate_terminal_stop_proof_refs(&extra, authority).is_err());
     }
 
     #[test]
@@ -1624,6 +2261,96 @@ mod tests {
         assert_eq!(std::fs::read_dir(runtime_control.path()).unwrap().count(), before);
         assert_eq!(std::fs::read_dir(build_control.path()).unwrap().count(), 0);
         assert_eq!(std::fs::read_dir(store.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn python_transport_proof_uses_pinned_raw_float_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let proof_path = root.path().join("scene-proof.json");
+        let raw = br#"{"geometry":{"bounds_max":[4e-09,2e-09,1e-09]}}"#;
+        std::fs::write(&proof_path, raw).unwrap();
+        let reference = RecordRef {
+            path: "scene-proof.json".into(),
+            sha256: sha256(raw),
+        };
+
+        let parsed = read_transport_record(root.path(), &reference, "scene proof").unwrap();
+        assert_eq!(
+            parsed["geometry"]["bounds_max"],
+            json!([4e-9, 2e-9, 1e-9]),
+        );
+        assert_ne!(
+            reference.sha256,
+            fullmag_session::canonical_json_sha256(&parsed),
+            "Python's raw float exponent spelling is authenticated by its byte pin",
+        );
+
+        let duplicate_path = root.path().join("duplicate-proof.json");
+        let duplicate_raw = br#"{"x":1,"x":2}"#;
+        std::fs::write(&duplicate_path, duplicate_raw).unwrap();
+        let duplicate = RecordRef {
+            path: "duplicate-proof.json".into(),
+            sha256: sha256(duplicate_raw),
+        };
+        assert!(read_transport_record(root.path(), &duplicate, "duplicate proof").is_err());
+    }
+
+    #[test]
+    fn preflight_scene_uses_raw_pin_then_deserializes_for_cas_equality() {
+        let mut input = fixture();
+        let raw = br#"{"revision":2,"objects":[{"id":"magnet","name":"magnet","geometry":{"geometry_kind":"Box","geometry_params":{"size":[8e-09,4e-09,2e-09]},"bounds_min":[-4e-09,-2e-09,-1e-09],"bounds_max":[4e-09,2e-09,1e-09]},"material_ref":"CoFeB"}],"materials":[{"id":"CoFeB","name":"CoFeB","properties":{"Ms":600000.0,"Aex":1e-11,"alpha":0.5}}],"study":{"stages":[{"kind":"relax","entrypoint_kind":"relax","id":"relax-a"},{"kind":"relax","entrypoint_kind":"relax","id":"relax-b"},{"kind":"relax","entrypoint_kind":"relax","id":"relax-c"}]}}"#;
+        input.accepted.accepted_scene_sha256 = sha256(raw);
+        let proof = PreflightProof {
+            api_pin: Value::Null,
+            api_response: ApiResponseProof {
+                responses: std::collections::BTreeMap::from([(
+                    "scene".into(),
+                    HttpBodyRef {
+                        raw_base64: base64::engine::general_purpose::STANDARD.encode(raw),
+                        sha256: sha256(raw),
+                    },
+                )]),
+                snapshot: Value::Null,
+            },
+            commands: CommandProof {
+                command: Value::Null,
+                detail: CommandDetailProof {
+                    http_status: 404,
+                    raw_base64: String::new(),
+                    sha256: "0".repeat(64),
+                },
+                ledger: Value::Null,
+                request_receipt: Value::Null,
+                request_receipt_sha256: "0".repeat(64),
+            },
+            execution_input_sha256: input.accepted.execution_input_sha256.clone(),
+            native_config_sha256: "0".repeat(64),
+            process_sha256: "0".repeat(64),
+            ready_owner_identity: Value::Null,
+            ready_owner_sha256: "0".repeat(64),
+            run_intent_sha256: input.accepted.run_intent_sha256.clone(),
+            schema: "fullmag.held-ui-materialization-preflight.v1".into(),
+            source_scope: input.source_scope.clone(),
+        };
+
+        let http_scene = preflight_scene_document(&proof, &input.accepted).unwrap();
+        let accepted_cas_scene: SceneDocument = serde_json::from_slice(raw).unwrap();
+        assert_eq!(http_scene, accepted_cas_scene);
+        assert_eq!(http_scene.objects[0].geometry.bounds_max, Some([4e-9, 2e-9, 1e-9]));
+        assert_eq!(
+            serde_json::to_value(&http_scene).unwrap()["objects"][0]["geometry"]["geometry_params"]["size"],
+            json!([8e-9, 4e-9, 2e-9]),
+        );
+        assert_ne!(
+            sha256(raw),
+            fullmag_session::canonical_json_sha256(&serde_json::to_value(&http_scene).unwrap()),
+            "the scene transport hash pins Python bytes with nm-scale exponent floats",
+        );
+        assert_eq!(http_scene.study.stages.len(), 3);
+
+        let mut wrong_pin = input.accepted;
+        wrong_pin.accepted_scene_sha256 = "f".repeat(64);
+        assert!(preflight_scene_document(&proof, &wrong_pin).is_err());
     }
 
     #[test]
@@ -1772,5 +2499,475 @@ mod tests {
         assert_eq!(marker["held_ui_materialization"]["state"], "pending_materialization");
         assert!(marker.get("startup_provenance").is_none());
         assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 0);
+    }
+
+    fn accepted_catalog_fixture() -> (tempfile::TempDir, ValidatedHeldAuthority, Vec<u8>) {
+        use fullmag_application::{
+            ProjectEnvelope, ProjectId, ProjectSnapshot, RequestedExecution,
+            RequestedResourceBudget, RunIntent, RunSpecification, StudyId, StudyReference,
+        };
+        use fullmag_authoring::{
+            PrimitiveStageNode, StudyDiscretizationReference, StudyExecutionProfileReference,
+            StudyModelReference, StudyPipelineDocument, StudyPipelineNode,
+            StudyPipelineNodeSource, StudyPlan, StudyPlanMigrationDefaults,
+            StudyPrimitiveStageKind, StudySolverConfigReference,
+            STUDY_PLAN_SCHEMA_VERSION_V2,
+        };
+        use fullmag_plan::{StudyProblemCatalog, StudyProblemCatalogEntry};
+        use fullmag_session::SessionStore;
+        use serde_json::json;
+        use std::collections::BTreeMap;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let store_root = temporary.path().join("accepted-store");
+        let store = SessionStore::open(&store_root).unwrap();
+
+        let mut authored_scene = SceneDocument::default();
+        authored_scene.revision = 2;
+        authored_scene.study.stages = ["relax-a", "relax-b", "relax-c"]
+            .into_iter()
+            .map(|id| fullmag_authoring::SceneStudyStageState {
+                kind: "relax".into(),
+                entrypoint_kind: "relax".into(),
+                extra: BTreeMap::from([("id".into(), json!(id))]),
+                ..Default::default()
+            })
+            .collect();
+        let mut definition = ProjectEnvelope::blank(
+            ProjectId::parse("project-held-ui-catalog").unwrap(),
+            "Held UI catalog fixture",
+        )
+        .unwrap();
+        definition
+            .replace_scene(
+                fullmag_application::RawJsonEnvelope::from_value(
+                    serde_json::to_value(&authored_scene).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        // The authored scene remains A/B/C while this accepted RunIntent
+        // contains only the compiled execution step for the selected A.
+        let pipeline = StudyPipelineDocument {
+            version: "study_pipeline.v2".into(),
+            nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                id: "script-execution-a".into(),
+                label: "relax-a".into(),
+                enabled: true,
+                notes: None,
+                source: Some(StudyPipelineNodeSource::UiAuthored),
+                stage_kind: StudyPrimitiveStageKind::Run,
+                payload: [("until_seconds".into(), json!("1e-9"))]
+                    .into_iter()
+                    .collect(),
+            })],
+        };
+        let defaults = StudyPlanMigrationDefaults {
+            model: StudyModelReference { model_id: "model:one".into(), version: "v1".into() },
+            solver_config: StudySolverConfigReference { preset_id: "solver:default".into(), version: "v1".into() },
+            discretization: StudyDiscretizationReference { recipe_id: "mesh:default".into(), version: "v1".into() },
+            execution_profile: StudyExecutionProfileReference { profile_id: "exec:auto".into(), version: "v1".into() },
+        };
+        let study = StudyPlan::from_pipeline("study-held-ui", 1, &pipeline, &defaults).unwrap();
+        assert_eq!(study.steps.len(), 1);
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert("active_stage_id".into(), json!("relax-a"));
+        let study_catalog = StudyProblemCatalog::from_entries(
+            &study,
+            vec![StudyProblemCatalogEntry::from_step(&study.steps[0], problem)],
+        )
+        .unwrap();
+        let study_catalog_value = serde_json::to_value(&study_catalog).unwrap();
+        let specification = RunSpecification::new(
+            ProjectSnapshot::from_envelope(&definition).unwrap(),
+            StudyReference {
+                study_id: StudyId::parse("study-held-ui").unwrap(),
+                plan_version: STUDY_PLAN_SCHEMA_VERSION_V2.into(),
+                plan_sha256: study.canonical_sha256().unwrap(),
+            },
+            fullmag_session::canonical_json_sha256(&study_catalog_value),
+            json!({
+                "fullmag.accepted_run_start": {
+                    "schema_version": "accepted_run_start_policy.v1",
+                    "mode": "manual"
+                }
+            }),
+            RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: Some(RequestedResourceBudget {
+                    cpu_millis: 100,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                }),
+            },
+        );
+        let run_intent = RunIntent::new("submit-held-ui-catalog", specification);
+        crate::run_intent_persistence::commit_validated_run_intent(
+            &store,
+            &run_intent,
+            &definition,
+            &study,
+            &study_catalog,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let run_id = run_intent.specification.run_id.clone();
+        let persisted_intent = store.read_run_intent(run_id.as_str()).unwrap().unwrap();
+        let intent_relative = format!("runs/{run_id}/run_intent.json");
+        let intent_raw = fullmag_session::repository_path::read_bounded_regular_file(
+            &store_root,
+            &intent_relative,
+            MAX_PROOF_BYTES,
+        )
+        .unwrap();
+        let typed_specification: RunSpecification =
+            serde_json::from_value(persisted_intent.specification.clone()).unwrap();
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &run_id,
+            &typed_specification.snapshot.project_id,
+        )
+        .unwrap();
+        assert_eq!(accepted.catalog.entries().len(), 1);
+        assert_eq!(
+            accepted.catalog.entries()[0].problem().problem_meta.runtime_metadata["active_stage_id"],
+            "relax-a",
+        );
+        let planned = accepted
+            .lowered
+            .steps
+            .iter()
+            .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+            .collect::<Vec<_>>();
+        assert_eq!(planned.len(), 1);
+
+        let mut input = fixture();
+        input.accepted.run_id = run_id.to_string();
+        input.accepted.project_id = typed_specification.snapshot.project_id.to_string();
+        input.accepted.run_intent_sha256 = sha256(&intent_raw);
+        input.accepted.run_intent_payload_sha256 = persisted_intent.payload_sha256.clone();
+        input.accepted.definition_sha256 = typed_specification.snapshot.definition_sha256.clone();
+        input.accepted.study_sha256 = typed_specification.study.plan_sha256.clone();
+        input.target_runtime.accepted_store_binding =
+            fullmag_runtime_control::accepted_store::store_binding(&store_root).unwrap();
+
+        // Production direct-Compute acceptance stores this immutable demand
+        // sidecar before startup; the fixture supplies the exact run binding.
+        let run_directory = store_root.join("runs").join(run_id.as_str());
+        std::fs::write(
+            run_directory.join("live_demand.v1.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": "fullmag.accepted_live_demand.v1",
+                "run_id": run_id.as_str(),
+                "quantities": ["m"],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let authority = ValidatedHeldAuthority {
+            input,
+            input_sha256: "a".repeat(64),
+            store_root: store_root.clone(),
+            loaded: LoadedRun {
+                run_id: RunId::parse(run_id.to_string()).unwrap(),
+                project_id: typed_specification.snapshot.project_id.clone(),
+                specification: typed_specification,
+                scene: authored_scene,
+                intent: persisted_intent,
+                receipt: fullmag_session::LiveComputeRequestReceipt {
+                    key_sha256: "b".repeat(64),
+                    request_sha256: "c".repeat(64),
+                    command_id: "command-held-ui-catalog".into(),
+                    request_id: Some("request-held-ui-catalog".into()),
+                    command_kind: Some("relax".into()),
+                    client_intent_id: Some("study:relax:fixture".into()),
+                    requested_target: Some(json!({"kind": "stage_id", "stage_id": "relax-a"})),
+                },
+                total_steps: planned.len(),
+                release_exists: false,
+            },
+        };
+        (temporary, authority, intent_raw)
+    }
+
+    #[test]
+    fn held_catalog_materializes_only_selected_compiled_stage_and_keeps_gate_closed() {
+        use fullmag_session::SessionStore;
+
+        let (_temporary, authority, original_intent_bytes) = accepted_catalog_fixture();
+        assert_eq!(authority.loaded.scene.study.stages.len(), 3);
+        let run_id = authority.loaded.run_id.as_str();
+        let catalog = materialize_held_catalog(&authority).unwrap();
+        assert_eq!(catalog.tasks.len(), 1);
+        assert_eq!(catalog.tasks[0].lifecycle, FmsTaskLifecycle::Accepted);
+        assert!(matches!(&catalog.tasks[0].readiness, FmsTaskReadiness::Blocked { .. }));
+        assert!(catalog.tasks[0].attempt_id.is_none());
+        assert!(catalog.tasks[0].ownership_epoch.is_none());
+        assert!(catalog.tasks[0].observation.is_none());
+        assert!(catalog.tasks[0].artifact_ids.is_empty());
+
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let intent_relative = format!("runs/{run_id}/run_intent.json");
+        let after_first = fullmag_session::repository_path::read_bounded_regular_file(
+            &authority.store_root, &intent_relative, MAX_PROOF_BYTES,
+        ).unwrap();
+        assert_eq!(after_first, original_intent_bytes);
+        assert!(store.read_accepted_run_start_release(run_id).unwrap().is_none());
+        assert!(!store.accepted_run_start_permitted(run_id).unwrap());
+
+        let replay = materialize_held_catalog(&authority).unwrap();
+        assert_eq!(replay, catalog, "an exact no-progress catalog is idempotently read back");
+        assert!(store.read_accepted_run_start_release(run_id).unwrap().is_none());
+        assert!(!store.accepted_run_start_permitted(run_id).unwrap());
+
+        let run_directory = authority.store_root.join("runs").join(run_id);
+        let names = std::fs::read_dir(&run_directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(names.contains("run_catalog.json"));
+        assert!(!names.contains("start_release.json"));
+        for prohibited in ["task_attempts", "task_admissions", "resource_leases", "outputs"] {
+            assert!(!names.contains(prohibited), "unexpected progress directory: {prohibited}");
+        }
+    }
+
+    #[test]
+    fn held_release_readback_binds_original_receipt_and_is_read_only_on_replay() {
+        use fullmag_session::SessionStore;
+
+        let (_temporary, authority, original_intent_bytes) = accepted_catalog_fixture();
+        let catalog = materialize_held_catalog(&authority).unwrap();
+        let before_release = validate_held_store_evidence(&authority, false).unwrap();
+        assert_eq!(before_release.catalog_sha256, raw_run_record_sha256(&authority, "run_catalog.json").unwrap());
+        assert!(before_release.start_release_sha256.is_none());
+
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let release_request_id = crate::live_accepted_execution::accepted_start_release_request_id(
+            authority.loaded.run_id.as_str(),
+            &authority.input.accepted.request_id,
+        );
+        store.release_accepted_run_start_for_live_request(
+            authority.loaded.run_id.as_str(),
+            &authority.loaded.intent.payload_sha256,
+            &release_request_id,
+            &authority.loaded.receipt,
+        ).unwrap();
+        let release_path = authority.store_root.join("runs")
+            .join(authority.loaded.run_id.as_str()).join("start_release.json");
+        let release_before = std::fs::read(&release_path).unwrap();
+
+        let released = validate_held_store_evidence(&authority, true).unwrap();
+        let expected_release_sha256 = sha256(&release_before);
+        assert_eq!(released.catalog_sha256, before_release.catalog_sha256);
+        assert_eq!(released.start_release_sha256.as_deref(), Some(expected_release_sha256.as_str()));
+        let repeated = validate_held_store_evidence(&authority, true).unwrap();
+        assert_eq!(repeated.catalog_sha256, released.catalog_sha256);
+        assert_eq!(repeated.start_release_sha256, released.start_release_sha256);
+        assert_eq!(std::fs::read(&release_path).unwrap(), release_before);
+        assert_eq!(store.read_accepted_run_start_release(authority.loaded.run_id.as_str()).unwrap()
+            .unwrap().live_request.as_ref(), Some(&authority.loaded.receipt));
+        assert_eq!(
+            std::fs::read(authority.store_root.join("runs").join(authority.loaded.run_id.as_str()).join("run_intent.json")).unwrap(),
+            original_intent_bytes,
+        );
+        assert_eq!(catalog.run_id, authority.loaded.run_id.as_str());
+
+        let control = tempfile::tempdir().unwrap();
+        let ack_dir = control.path().join(PROOF_DIR).join(&authority.input.plan.maintenance_request_id);
+        std::fs::create_dir_all(&ack_dir).unwrap();
+        let api_instance_id = "00000000-0000-4000-8000-000000000003";
+        let ack_sha = publish_held_restore_ack(
+            control.path(),
+            &authority.input,
+            &"f".repeat(64),
+            &released,
+            api_instance_id,
+            "already_released_exact",
+        ).unwrap();
+        let ack_path = ack_dir.join(format!("restore-ack-{}.json", authority.input.launch_id));
+        let ack_raw = std::fs::read(&ack_path).unwrap();
+        assert_eq!(sha256(&ack_raw), ack_sha);
+        let ack: Value = serde_json::from_slice(&ack_raw).unwrap();
+        assert_eq!(ack["schema"], ACK_SCHEMA);
+        assert_eq!(ack["state"], "restored");
+        assert_eq!(ack["gate_action"], "already_released_exact");
+        assert_eq!(ack["api_instance_id"], api_instance_id);
+        assert_eq!(ack["run_id"], authority.input.accepted.run_id);
+        assert_eq!(
+            publish_held_restore_ack(
+                control.path(),
+                &authority.input,
+                &"f".repeat(64),
+                &released,
+                api_instance_id,
+                "already_released_exact",
+            ).unwrap(),
+            ack_sha,
+            "exact ack replay is immutable and idempotent",
+        );
+        assert!(publish_held_restore_ack(
+            control.path(),
+            &authority.input,
+            &"f".repeat(64),
+            &released,
+            api_instance_id,
+            "released",
+        ).is_err(), "a conflicting gate action must not overwrite the ack");
+    }
+
+    #[test]
+    fn released_held_catalog_allows_exact_scheduler_progress_and_rejects_foreign_tasks() {
+        use chrono::Utc;
+        use fullmag_session::{
+            FmsTaskLifecycle, FmsTaskReadiness, SessionStore,
+        };
+
+        let (_temporary, authority, _) = accepted_catalog_fixture();
+        let catalog = materialize_held_catalog(&authority).unwrap();
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let run_id = authority.loaded.run_id.as_str();
+        let release_request_id = crate::live_accepted_execution::accepted_start_release_request_id(
+            run_id,
+            &authority.input.accepted.request_id,
+        );
+        store.release_accepted_run_start_for_live_request(
+            run_id,
+            &authority.loaded.intent.payload_sha256,
+            &release_request_id,
+            &authority.loaded.receipt,
+        ).unwrap();
+
+        let release_path = authority.store_root.join("runs").join(run_id).join("start_release.json");
+        let release_before = std::fs::read(&release_path).unwrap();
+        let mut progressed = catalog.clone();
+        progressed.revision += 1;
+        progressed.updated_at = Utc::now();
+        let task = &mut progressed.tasks[0];
+        task.lifecycle = FmsTaskLifecycle::Succeeded;
+        task.readiness = FmsTaskReadiness::Ready;
+        task.observation = Some(fullmag_session::FmsObservationState::Stale);
+        task.attempt_id = Some("attempt-held-ui-progressed".into());
+        task.ownership_epoch = Some(1);
+        task.resolved_input_fingerprint = Some(task.input_fingerprint.clone());
+        store.commit_run_catalog(&progressed).unwrap();
+        let catalog_path = authority.store_root.join("runs").join(run_id).join("run_catalog.json");
+        let progressed_catalog_bytes = std::fs::read(&catalog_path).unwrap();
+
+        let evidence = validate_held_store_evidence(&authority, true)
+            .expect("the exact released run may advance before restore acknowledgement");
+        let release_sha256 = sha256(&release_before);
+        assert_eq!(evidence.catalog_sha256, sha256(&progressed_catalog_bytes));
+        assert_eq!(evidence.start_release_sha256.as_deref(), Some(release_sha256.as_str()));
+        let repeated = validate_held_store_evidence(&authority, true)
+            .expect("read-only released-state rebind is idempotent after progress");
+        assert_eq!(repeated, evidence);
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), progressed_catalog_bytes);
+        assert_eq!(std::fs::read(&release_path).unwrap(), release_before);
+
+        let mut foreign = progressed;
+        foreign.revision += 1;
+        foreign.updated_at = Utc::now();
+        foreign.tasks[0].task_id = "foreign-task-held-ui".into();
+        store.commit_run_catalog(&foreign).unwrap();
+        assert!(validate_held_store_evidence(&authority, true).is_err());
+        assert_eq!(std::fs::read(&release_path).unwrap(), release_before);
+    }
+
+    #[test]
+    fn released_held_store_rejects_foreign_release_run_or_receipt() {
+        use fullmag_session::SessionStore;
+
+        let (_temporary, authority, _) = accepted_catalog_fixture();
+        materialize_held_catalog(&authority).unwrap();
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let run_id = authority.loaded.run_id.as_str();
+        let release_request_id = crate::live_accepted_execution::accepted_start_release_request_id(
+            run_id,
+            &authority.input.accepted.request_id,
+        );
+        store.release_accepted_run_start_for_live_request(
+            run_id,
+            &authority.loaded.intent.payload_sha256,
+            &release_request_id,
+            &authority.loaded.receipt,
+        ).unwrap();
+        let path = authority.store_root.join("runs").join(run_id).join("start_release.json");
+        let original = std::fs::read(&path).unwrap();
+        let mut release: Value = serde_json::from_slice(&original).unwrap();
+
+        release["run_id"] = Value::String("foreign-run-held-ui".into());
+        std::fs::write(&path, serde_json::to_vec_pretty(&release).unwrap()).unwrap();
+        assert!(validate_held_store_evidence(&authority, true).is_err());
+
+        release = serde_json::from_slice(&original).unwrap();
+        release["request_id"] = Value::String("foreign-request-held-ui".into());
+        std::fs::write(&path, serde_json::to_vec_pretty(&release).unwrap()).unwrap();
+        assert!(validate_held_store_evidence(&authority, true).is_err());
+    }
+
+    #[test]
+    fn held_catalog_refuses_progressed_catalog_without_overwriting_it() {
+        use chrono::Utc;
+        use fullmag_session::{
+            FmsRunCatalog, FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskReadiness,
+            SessionStore, FMS_RUN_CATALOG_SCHEMA,
+        };
+
+        let (_temporary, authority, original_intent_bytes) = accepted_catalog_fixture();
+        let store = SessionStore::open_existing(&authority.store_root).unwrap();
+        let run_id = authority.loaded.run_id.as_str();
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &authority.loaded.run_id,
+            &authority.loaded.project_id,
+        )
+        .unwrap();
+        let step = accepted.lowered.steps.iter()
+            .find(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+            .unwrap();
+        let task_id = fullmag_session::task_id_for_study_step(run_id, &step.step_id).unwrap();
+        let input_fingerprint = fullmag_application::study_task_input_fingerprint(
+            &authority.loaded.specification, step,
+        ).unwrap();
+        let progressed = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: Utc::now(),
+            tasks: vec![FmsTaskCatalogEntry {
+                task_id,
+                input_fingerprint,
+                lifecycle: FmsTaskLifecycle::Running,
+                readiness: FmsTaskReadiness::Ready,
+                observation: None,
+                attempt_id: Some("attempt-held-ui-fixture".into()),
+                ownership_epoch: Some(1),
+                resolved_input_fingerprint: None,
+                artifact_ids: Vec::new(),
+                resource_id: None,
+                coordinator_watermark: None,
+                coordinator_genesis: None,
+            }],
+        };
+        store.commit_run_catalog(&progressed).unwrap();
+        let catalog_path = authority.store_root.join("runs").join(run_id).join("run_catalog.json");
+        let catalog_before = std::fs::read(&catalog_path).unwrap();
+        let intent_path = authority.store_root.join("runs").join(run_id).join("run_intent.json");
+        let intent_before = std::fs::read(&intent_path).unwrap();
+
+        assert!(materialize_held_catalog(&authority).is_err());
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), catalog_before);
+        assert_eq!(std::fs::read(&intent_path).unwrap(), original_intent_bytes);
+        assert_eq!(std::fs::read(&intent_path).unwrap(), intent_before);
+        assert!(store.read_accepted_run_start_release(run_id).unwrap().is_none());
+        assert!(!store.accepted_run_start_permitted(run_id).unwrap());
     }
 }
