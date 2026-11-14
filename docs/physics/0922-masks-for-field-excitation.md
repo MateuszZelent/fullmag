@@ -296,9 +296,12 @@ a float32 `.npy` of shape `(nz, ny, nx, 3)` in tesla.
 - Requested intent: the IR keeps functions as authored (parameters, locals,
   outputs). Resolved execution: the plan keeps one basis and one time program per
   term with a signature; provenance records both.
-- Script → scene → script keeps every equation, parameter name and value, and
-  the order of locals and terms. Comments and formatting of the original
-  functions are not kept. An array mask is exported as a file load.
+- Script → scene → script keeps every equation, parameter name and value, the
+  order of locals and terms, the function names and the stage actions (Add,
+  Update, Remove). A function used by several terms is exported once; values are
+  exported as exact literals at the call. Comments, formatting and the display
+  text of parameter values (`source`) are not kept. An array mask is exported as
+  a file load (not yet realized).
 - Terms produced by a ready antenna of `fullmag.antennas` carry the call (name
   and arguments) so the Control Room can change the arguments and rebuild them.
 - Failures are explicit and happen before a solver is allocated: the codes of
@@ -359,9 +362,14 @@ E_{\mathrm{drive}}=-\mu_0\sum_{c}V_c\,M_{s,c}\,\mathbf m_c\cdot
 
 FDM CPU evaluates $f_i$ with the Rust interpreter of the time bytecode. FDM CUDA
 evaluates $f_i$ on the host, once per field evaluation, and passes the numbers to
-the device kernels; the basis is stored in the solver precision, the multiplier in
-double precision. Runge–Kutta substages use their own times, as for built-in
-waveforms.
+the device kernels by value (regional-drive waveform `HOST_MULTIPLIER`, descriptor
+v3); the basis is stored in the solver precision, the multiplier in double
+precision. Runge–Kutta substages use their own times, as for built-in waveforms.
+The argument $\tau$ is the stage-local or the absolute time of the regional-drive
+clock (note 0530). Before stepping, both runners check every time program at 4097
+uniform times of the stage and stop with `mask_expression_non_finite`; CUDA also
+checks each host evaluation. At upload the CUDA runner compares the library's
+interpreter with the Rust interpreter on every program (4 ulp).
 
 ### 8.3 FEM CPU and FEM GPU
 
@@ -374,8 +382,8 @@ the time evaluation is the same as on FDM.
 
 | Solver | Device | Status | Boundary |
 |---|---|---|---|
-| FDM | CPU | implementation in progress | single grid, one magnet |
-| FDM | GPU | implementation in progress | single grid; at most 8 time-dependent mask terms per stage; host-driven step loop |
+| FDM | CPU | realized (function masks) | single grid, one magnet; array masks not yet |
+| FDM | GPU | realized (function masks) | single grid; at most 8 mask terms per stage; array masks not yet |
 | FEM | CPU | unsupported | explicit rejection; path described in 8.3 |
 | FEM | GPU | unsupported | explicit rejection; path described in 8.3 |
 
@@ -385,15 +393,19 @@ every regional drive.
 (implementation-mapping)=
 ## 9. Implementation mapping
 
-| Claim | Planned owner |
+| Claim | Owner |
 |---|---|
 | restricted Python → equations | `packages/fullmag-py/src/fullmag/model/mask_function.py` |
+| antennas, targets, terms, Update | `packages/fullmag-py/src/fullmag/model/mask_field_drive.py`, `packages/fullmag-py/src/fullmag/world.py` |
 | equation language and bytecode | `crates/fullmag-expr` |
-| IR types and validation | `crates/fullmag-ir/src/mask_field_drive.rs` |
-| {eq}`mask-support`, {eq}`mask-fdm-basis`, {eq}`mask-fdm-array` | `crates/fullmag-plan/src/mask_field.rs`, `crates/fullmag-plan/src/selection/fdm.rs` |
-| {eq}`mask-fdm-update` on CUDA | `backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh`, `native/include/fullmag_time_expression.h` |
-| {eq}`mask-fdm-update` on CPU | `crates/fullmag-engine/src/fdm/shared/terms.rs` |
-| {eq}`mask-fdm-energy` on CUDA tables | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` |
+| IR types, validation, Update | `crates/fullmag-ir/src/mask_field_drive.rs` |
+| {eq}`mask-support`, {eq}`mask-fdm-basis` | `crates/fullmag-plan/src/mask_field.rs` |
+| {eq}`mask-fdm-update` on CUDA | `backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh`, `backends/fdm/gpu/cuda/runtime/context.cu`, `native/include/fullmag_time_expression.h`, `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` |
+| {eq}`mask-fdm-update` on CPU | `crates/fullmag-engine/src/fdm/shared/terms.rs`, `crates/fullmag-runner/src/fdm/cpu/reference.rs` |
+| {eq}`mask-fdm-energy` | CUDA: `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs`; CPU: `crates/fullmag-runner/src/fdm/cpu/reference.rs` |
+| time programs on the stage horizon | `crates/fullmag-runner/src/fdm/mask_time.rs` |
+| stage actions Add, Update, Remove | `crates/fullmag-application/src/script_stage_materialization.rs` |
+| scene and script round trip | `crates/fullmag-authoring/src/{scene.rs,builder.rs,adapters.rs,validation.rs}`, `packages/fullmag-py/src/fullmag/runtime/{script_builder.py,scene_document.py}` |
 
 (validation)=
 ## 10. Validation strategy
@@ -410,7 +422,23 @@ every regional drive.
    `VectorMask` at every cell, time factor equal to the tabulated `B_ext`, a
    100 ps trajectory (plan Tasks 10 and 11).
 
-No result is recorded yet.
+Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
+
+- Planner probe `scripts/benchmarks/fdm_mask_plan_checks.py`: 15/15 cases; maps
+  equal the authored Python functions at every cell centre bit for bit; time
+  programs equal the independent oracle; a plan without masks is byte-identical
+  to the base binary.
+- Host interpreter: `native/include/fullmag_time_expression.h` reproduces the
+  time-program golden file (67 checks in C99, C11 and C++17).
+- Runtime through the managed API, 16 × 8 × 4 cells, 1 ns: a mask term
+  $(0,b,0)\sin(2\pi ft)$ equals the equivalent built-in sinusoidal regional drive
+  bit for bit on FDM CPU and to 2.2e-16 in $\mathbf m$ on FDM CUDA.
+- Stage pipeline, Add → Run → Update → Run → Remove → Run → Add → Run: Update
+  equals Remove plus Add of an antenna with the new values bit for bit on CPU and
+  CUDA; $E_{\mathrm{drive}}=0$ exactly while the antenna is removed.
+
+Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Items 3
+(untouched cells, energy closed form) and 4 are open.
 
 (limitations)=
 ## 11. Limitations and deferred work

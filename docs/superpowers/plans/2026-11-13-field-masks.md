@@ -266,7 +266,7 @@ Deferred to the tasks that add the features: `ready_antenna` (`gaussian_k_source
 - [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `15/15 cases passed`, exit 0.
 - [ ] **Step 4: Commit** `feat(plan): resolve hand-written masks into FDM bases`.
 
-### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU
+### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU — PARTIAL (`2f35afe73`: descriptor v3 and HOST_MULTIPLIER on CUDA, `DriveTimeFunction::Expression` on CPU, horizon check, E_drive; verified through the API, see Task 7; open: Step 0 `H_drive` readback)
 
 **Files:**
 - Create: `native/include/fullmag_time_expression.h` (header-only host C function `fullmag_time_expression_eval(const double *code, uint64_t len, double t)`; `FULLMAG_TIME_EXPRESSION_VERSION 1`)
@@ -284,7 +284,7 @@ Deferred to the tasks that add the features: `ready_antenna` (`gaussian_k_source
 - [ ] **Step 3: Check:** rebuild the worktree backend — the `phase: development` receipt reports success; `just check-api-source` exit 0.
 - [ ] **Step 4: Commit** `feat(fdm): add host-evaluated time multipliers for mask terms`.
 
-### Task 7: Stage pipeline, scene, script and API round trip
+### Task 7: Stage pipeline, scene, script and API round trip — PARTIAL (`c1ea04542` scene, `980a8c4e5` stage actions; Update equals Remove + Add bit for bit on CPU and CUDA through the API; open: API resource CRUD and ready-antenna endpoints, array-mask export, the Rust tests of Step 1)
 
 **Files:**
 - Modify (stage pipeline): `crates/fullmag-application/src/script_stage_contract.rs` (`ScriptExecutionStageAction::AddMaskFieldDrive { drive: MaskFieldDriveIR }`, `UpdateMaskFieldDrive { drive_id, term, mask_parameters, time_parameters }` and the resolved variants), `crates/fullmag-application/src/script_stage_materialization.rs` (materialize the action and the pipeline payload, `ensure_mask_field_drive_can_be_added`, `remove_field_drive` searches both lists, transition metadata = continue in place), `crates/fullmag-application/src/script_pipeline_compilation.rs` (authored-configuration check), `crates/fullmag-cli/src/orchestrator.rs` (synthetic stage record `add_mask_field_drive`), `crates/fullmag-cli/src/control_room.rs` (stage kind lists), `crates/fullmag-authoring/src/builder.rs` (`StudyPrimitiveStageKind::AddMaskFieldDrive`, pipeline-input configuration), `crates/fullmag-api/src/openapi_v2.rs` (stage kind enum)
@@ -417,6 +417,17 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 - [ ] **Step 5: Finish** with `finishing-a-development-branch`, local steps only: clean worktree, head hash, commit list, evidence paths. Ask the user about the merge, the full 16.53 ns run and the FEM follow-up.
 
 ---
+
+## Findings outside the masks (2026-11-14, not fixed)
+
+1. A staged `RegionalFieldDrive` fails in the API worker ("physics_graph execution
+   observation references unknown module ID"): the scene physics graph lists only
+   whole-study drives. The run stays in `waiting_for_compute` instead of failing, and
+   after a Stop the workspace cannot be retired until the group restarts.
+2. `study.solver(..., max_error=..., dt_max=...)` without `dt_initial` writes
+   `"dt_initial": null` into the scene, which the API rejects.
+3. CPU and CUDA adaptive RK45 differ by about 1e-4 in m after 1 ns at max_error 1e-9,
+   for regional drives and masks alike.
 
 ## User decisions (2026-11-13)
 
