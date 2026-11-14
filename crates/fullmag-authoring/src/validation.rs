@@ -1264,56 +1264,97 @@ fn validate_scene_field_drives(
             )));
         }
 
-        let require_object = |object_id: &str| {
-            if object_ids.contains(object_id) {
+        let label = "regional field drive";
+        validate_scene_field_target(scene, object_ids, label, &drive.id, &drive.target)?;
+        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
+            require_scene_object(object_ids, label, &drive.id, object_id)?;
+        }
+        validate_scene_drive_stages(&stage_ids, label, &drive.id, &drive.activation)?;
+    }
+    for drive in &scene.field_drives.mask_drives {
+        let label = "mask antenna";
+        if drive.id.trim().is_empty() || !drive_ids.insert(drive.id.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{label} id '{}' must be non-empty and unique among field drives",
+                drive.id
+            )));
+        }
+        validate_scene_field_target(scene, object_ids, label, &drive.id, &drive.target)?;
+        validate_scene_drive_stages(&stage_ids, label, &drive.id, &drive.activation)?;
+    }
+    Ok(())
+}
+
+fn require_scene_object(
+    object_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    object_id: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if object_ids.contains(object_id) {
+        Ok(())
+    } else {
+        Err(SceneDocumentValidationError::new(format!(
+            "{label} '{drive_id}' references missing object '{object_id}'"
+        )))
+    }
+}
+
+/// The object or region a field drive targets exists in the scene.
+fn validate_scene_field_target(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    target: &FieldTargetIR,
+) -> Result<(), SceneDocumentValidationError> {
+    match target {
+        FieldTargetIR::Global {} => Ok(()),
+        FieldTargetIR::Object { object_id } => {
+            require_scene_object(object_ids, label, drive_id, object_id)
+        }
+        FieldTargetIR::Region {
+            object_id,
+            region_id,
+        } => {
+            require_scene_object(object_ids, label, drive_id, object_id)?;
+            let object = scene
+                .objects
+                .iter()
+                .find(|object| object.id == *object_id)
+                .unwrap();
+            let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
+                || object
+                    .regions
+                    .iter()
+                    .any(|region| region.region_id == *region_id);
+            if exists {
                 Ok(())
             } else {
                 Err(SceneDocumentValidationError::new(format!(
-                    "regional field drive '{}' references missing object '{}'",
-                    drive.id, object_id
+                    "{label} '{drive_id}' references missing region '{region_id}' on object '{object_id}'"
                 )))
             }
-        };
-        match &drive.target {
-            FieldTargetIR::Global {} => {}
-            FieldTargetIR::Object { object_id } => require_object(object_id)?,
-            FieldTargetIR::Region {
-                object_id,
-                region_id,
-            } => {
-                require_object(object_id)?;
-                let object = scene
-                    .objects
-                    .iter()
-                    .find(|object| object.id == *object_id)
-                    .unwrap();
-                let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
-                    || object
-                        .regions
-                        .iter()
-                        .any(|region| region.region_id == *region_id);
-                if !exists {
-                    return Err(SceneDocumentValidationError::new(format!(
-                        "regional field drive '{}' references missing region '{}' on object '{}'",
-                        drive.id, region_id, object_id
-                    )));
-                }
-            }
         }
-        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
-            require_object(object_id)?;
-        }
-        if let DriveActivationIR::StageIds {
-            stage_ids: requested,
-        } = &drive.activation
-        {
-            for stage_id in requested {
-                if !stage_ids.contains(stage_id) {
-                    return Err(SceneDocumentValidationError::new(format!(
-                        "regional field drive '{}' references missing stage '{}'",
-                        drive.id, stage_id
-                    )));
-                }
+    }
+}
+
+/// Stage-scoped activation names existing pipeline stages.
+fn validate_scene_drive_stages(
+    stage_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    activation: &DriveActivationIR,
+) -> Result<(), SceneDocumentValidationError> {
+    if let DriveActivationIR::StageIds {
+        stage_ids: requested,
+    } = activation
+    {
+        for stage_id in requested {
+            if !stage_ids.contains(stage_id) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{label} '{drive_id}' references missing stage '{stage_id}'"
+                )));
             }
         }
     }

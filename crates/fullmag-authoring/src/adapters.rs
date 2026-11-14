@@ -70,6 +70,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         magnetization_assets,
         field_drives: crate::SceneFieldDrivesState {
             drives: builder.field_drives.clone(),
+            mask_drives: builder.mask_field_drives.clone(),
         },
         monitors: crate::SceneMonitorState {
             planar: builder.planar_monitors.clone(),
@@ -298,6 +299,7 @@ pub fn scene_document_to_script_builder(
             .map(builder_mesh_interface_from_scene)
             .collect(),
         field_drives: normalized_scene.field_drives.drives.clone(),
+        mask_field_drives: normalized_scene.field_drives.mask_drives.clone(),
         planar_monitors: normalized_scene.monitors.planar.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         current_transports: normalized_scene.current_transports.clone(),
@@ -714,6 +716,10 @@ pub fn scene_document_to_script_builder_overrides(
             serde_json::to_value(storage).unwrap_or(Value::Null)
         }).unwrap_or(Value::Null),
         "field_drives": builder.field_drives.iter()
+            .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        // Replaces the loaded mask antennas, as for regional drives.
+        "mask_field_drives": builder.mask_field_drives.iter()
             .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
         "initial_state": builder.initial_state.as_ref().map(|initial_state| serde_json::json!({
@@ -2994,6 +3000,7 @@ mod tests {
                 },
             }],
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),

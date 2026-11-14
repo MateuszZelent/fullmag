@@ -1692,6 +1692,15 @@ def _validated_rotated_dmi_object_ids(
     return list(term.object_ids or ())
 
 
+def _scene_field_drives(builder: Mapping[str, object]) -> dict[str, object]:
+    """Regional drives and mask antennas of the builder (mask list omitted when empty)."""
+    state: dict[str, object] = {"drives": copy.deepcopy(builder.get("field_drives") or [])}
+    mask_drives = builder.get("mask_field_drives") or []
+    if mask_drives:
+        state["mask_drives"] = copy.deepcopy(mask_drives)
+    return state
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
     geometries = builder.get("geometries") or []
     rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
@@ -1858,7 +1867,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         },
         "current_transports": _canonical_current_transports(current_transport_entries),
         "couplings": builder.get("couplings") or [],
-        "field_drives": {"drives": copy.deepcopy(builder.get("field_drives") or [])},
+        "field_drives": _scene_field_drives(builder),
         "monitors": {"planar": copy.deepcopy(builder.get("planar_monitors") or [])},
         "study": {
             "backend": builder.get("backend"),
@@ -2293,7 +2302,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         field_drives = scene["field_drives"]
         if not isinstance(field_drives, Mapping):
             raise ValueError("SceneDocument.field_drives must be an object")
-        unknown_field_drive_fields = set(field_drives) - {"drives"}
+        unknown_field_drive_fields = set(field_drives) - {"drives", "mask_drives"}
         if unknown_field_drive_fields:
             names = ", ".join(
                 sorted(str(name) for name in unknown_field_drive_fields)
@@ -2311,6 +2320,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
                     f"{index}] must be an object"
                 )
         builder["field_drives"] = copy.deepcopy(drives)
+        mask_drives = field_drives.get("mask_drives", [])
+        if not isinstance(mask_drives, list) or any(
+            not isinstance(drive, Mapping) for drive in mask_drives
+        ):
+            raise ValueError("SceneDocument.field_drives.mask_drives must be a list of objects")
+        builder["mask_field_drives"] = copy.deepcopy(mask_drives)
     if "monitors" in scene:
         monitors = scene["monitors"]
         if not isinstance(monitors, Mapping):
@@ -2639,6 +2654,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "geometries": builder.get("geometries") or [],
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],
+        "mask_field_drives": builder.get("mask_field_drives") or [],
         "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
@@ -2675,6 +2691,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
     _copy_present_collection(builder, overrides, "field_drives")
+    _copy_present_collection(builder, overrides, "mask_field_drives")
     _copy_present_collection(builder, overrides, "antenna_port_modes")
     _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
     _copy_present_collection(builder, overrides, "antenna_target_projections")

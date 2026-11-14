@@ -62,6 +62,9 @@ pub struct FunctionLocalIR {
 #[serde(deny_unknown_fields)]
 pub struct FunctionIR {
     pub expression_version: String,
+    /// Name of the authored Python function, used when a script is exported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<FunctionParameterIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

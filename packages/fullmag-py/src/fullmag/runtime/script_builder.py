@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import keyword
 import math
 import re
 import tempfile
@@ -130,18 +131,16 @@ _MASK_STAGE_ACTIONS = frozenset({"add_mask_field_drive", "update_mask_field_driv
 
 
 def _reject_mask_antennas(loaded: LoadedProblem) -> None:
-    """Fail closed: a scene without the script's mask antennas would run without them."""
-    problems = [loaded.problem, loaded.workspace_problem]
-    problems.extend(stage.problem for stage in loaded.stages)
-    if any(problem is not None and problem.mask_field_drives for problem in problems) or any(
+    """Fail closed: a scene without the script's staged mask antennas would run without them."""
+    if any(
         isinstance(stage.action, Mapping) and stage.action.get("kind") in _MASK_STAGE_ACTIONS
         for stage in loaded.stages
     ):
         raise MaskAntennasNotInScene(
-            "mask_field_drive_unsupported_lane:scene: mask antennas are not carried by the "
-            "Control Room scene yet, so the managed API and the Control Room would run this "
-            "script without its antenna; run it with the fullmag CLI "
-            "(fullmag --headless script.py) until scene support lands"
+            "mask_field_drive_unsupported_lane:scene: mask antennas added or updated by study "
+            "stages are not carried by the Control Room scene yet, so the managed API and the "
+            "Control Room would run this script without them; add the antenna for the whole "
+            "study with study.field_drives.add(antenna), or run the script with the fullmag CLI"
         )
 
 
@@ -455,6 +454,7 @@ def export_builder_draft(
             for module in base_problem.spin_transports
         ],
         "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
+        "mask_field_drives": [antenna.to_ir() for antenna in base_problem.mask_field_drives],
         "planar_monitors": [monitor.to_ir() for monitor in base_problem.monitors],
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
@@ -577,6 +577,9 @@ def render_loaded_problem_as_script(
     surface = _script_api_surface(base_problem, overrides=overrides)
     if any(getattr(loaded.antenna_inventory, name) for name in _ANTENNA_SCENE_COLLECTIONS[1:]):
         surface = "study"
+    mask_payloads = _mask_field_drive_payloads(base_problem, overrides)
+    if mask_payloads:
+        surface = "study"
     magnet_vars = _magnet_variable_names(base_problem, overrides=overrides)
     lines: list[str] = []
     source_root = loaded.source_path.parent
@@ -584,6 +587,9 @@ def render_loaded_problem_as_script(
     lines.extend(_render_header(loaded.source_path, loaded.entrypoint_kind))
     lines.append("")
     lines.append("import fullmag as fm")
+    math_names = _mask_math_names(mask_payloads)
+    if math_names:
+        lines.append(f"from math import {', '.join(math_names)}")
     lines.append("")
     if surface == "study":
         lines.extend(_render_study_binding(base_problem))
@@ -669,6 +675,15 @@ def render_loaded_problem_as_script(
     if field_drive_lines:
         lines.append("")
         lines.extend(field_drive_lines)
+
+    mask_lines = _render_mask_field_drives(
+        mask_payloads,
+        reserved_names={"study", "fm", *magnet_vars.values()},
+        source_root=source_root,
+    )
+    if mask_lines:
+        lines.append("")
+        lines.extend(mask_lines)
 
     oersted_lines = _render_oersted_terms(
         base_problem, overrides=overrides, surface=surface
@@ -6385,6 +6400,174 @@ def _render_field_drives(
         else:
             lines.append(f"fm.field_drive({expression})")
     return lines
+
+
+_MASK_MATH_NAMES = (
+    "pi", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sinh", "cosh", "tanh", "exp", "log", "sqrt",
+)
+_IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _mask_field_drive_payloads(
+    problem: Problem,
+    overrides: Mapping[str, object] | None,
+) -> list[dict[str, object]]:
+    """Mask antennas of the script: the builder's list replaces the loaded one."""
+    override_payload = overrides or {}
+    if "mask_field_drives" in override_payload:
+        raw = override_payload["mask_field_drives"]
+        if not isinstance(raw, list) or any(not isinstance(item, Mapping) for item in raw):
+            raise ValueError("mask_field_drives override must be a list of objects")
+        return [copy.deepcopy(dict(item)) for item in raw]
+    return [antenna.to_ir() for antenna in problem.mask_field_drives]
+
+
+def _mask_functions(payload: Mapping[str, object]) -> list[tuple[str, Mapping[str, object]]]:
+    functions: list[tuple[str, Mapping[str, object]]] = []
+    for term in payload.get("terms") or []:
+        mask = _normalize_mapping(_normalize_mapping(term).get("mask"))
+        if mask.get("kind") != "function":
+            raise ValueError(
+                f"mask antenna {payload.get('id')!r}: array masks cannot be exported to a script yet"
+            )
+        functions.append(("mask", _normalize_mapping(mask.get("function"))))
+        time = _normalize_mapping(term).get("time")
+        if time is not None:
+            functions.append(("time", _normalize_mapping(time)))
+    return functions
+
+
+def _field_expr_as_python(text: str) -> str:
+    """``field_expr.v1`` is Python syntax except for ``^`` (power)."""
+    return text.replace("^", "**")
+
+
+def _mask_math_names(payloads: Sequence[Mapping[str, object]]) -> list[str]:
+    used: set[str] = set()
+    for payload in payloads:
+        for _, function in _mask_functions(payload):
+            texts = [str(local["expression"]) for local in function.get("locals") or []]
+            texts.extend(str(output) for output in function.get("outputs") or [])
+            for text in texts:
+                used.update(_IDENTIFIER_TOKEN.findall(text))
+    return sorted(name for name in _MASK_MATH_NAMES if name in used)
+
+
+def _unique_identifier(base: str, taken: set[str]) -> str:
+    candidate = re.sub(r"[^A-Za-z0-9_]", "_", base) or "antenna"
+    if candidate[0].isdigit() or keyword.iskeyword(candidate):
+        candidate = f"antenna_{candidate}"
+    name = candidate
+    suffix = 2
+    while name in taken:
+        name = f"{candidate}_{suffix}"
+        suffix += 1
+    taken.add(name)
+    return name
+
+
+def _render_mask_function_def(kind: str, name: str, function: Mapping[str, object]) -> list[str]:
+    variables = ["x", "y", "z"] if kind == "mask" else ["t"]
+    parameters = [str(item["name"]) for item in function.get("parameters") or []]
+    lines = [f"def {name}({', '.join([*variables, *parameters])}):"]
+    for local in function.get("locals") or []:
+        lines.append(f"    {local['name']} = {_field_expr_as_python(str(local['expression']))}")
+    outputs = [_field_expr_as_python(str(output)) for output in function.get("outputs") or []]
+    if kind == "mask":
+        lines.append(f"    return ({', '.join(outputs)})")
+    else:
+        lines.append(f"    return {outputs[0]}")
+    return lines
+
+
+def _render_mask_function_call(kind: str, name: str, function: Mapping[str, object]) -> str:
+    # Exact literals: a mask parameter must survive the round trip bit for bit.
+    values = [
+        f"{item['name']}={_py_float_roundtrip(float(item['value']))}"
+        for item in function.get("parameters") or []
+    ]
+    return f"fm.{kind}({', '.join([name, *values])})"
+
+
+def _render_mask_activation_expr(value: object) -> str:
+    activation = _normalize_mapping(value)
+    if not activation or activation.get("kind") == "all_time_evolution":
+        return "fm.DriveActivation.all_time_evolution()"
+    if activation.get("kind") == "stage_ids":
+        return f"fm.DriveActivation.stage_ids({_py_literal(list(activation.get('stage_ids') or []))})"
+    raise ValueError(f"unsupported mask antenna activation {activation!r}")
+
+
+def _render_mask_field_drives(
+    payloads: Sequence[Mapping[str, object]],
+    *,
+    reserved_names: set[str],
+    source_root: Path,
+) -> list[str]:
+    """Hand-written mask antennas: one ``def`` per distinct function, then the antennas."""
+    if not payloads:
+        return []
+    taken = set(reserved_names) | set(_MASK_MATH_NAMES) | {"abs", "min", "max", "x", "y", "z", "t"}
+    rendered_defs: dict[tuple[str, str], str] = {}
+    def_lines: list[str] = []
+    antenna_lines: list[str] = []
+    for payload in payloads:
+        drive_id = str(payload["id"])
+        variable = _unique_identifier(drive_id, taken)
+        position = [float(value) for value in payload.get("position_m") or (0.0, 0.0, 0.0)]
+        arguments = [
+            _render_field_target_payload_expr(payload.get("target")),
+            _render_region_shape_expr_from_payload(
+                payload.get("shape"), region_name=f"{drive_id}_support", source_root=source_root
+            ),
+            f"position=({', '.join(_py_float_roundtrip(value) for value in position)})",
+            f"frame={_py_repr(str(payload.get('frame') or 'local'))}",
+            f"time_origin={_py_repr(str(payload.get('time_origin') or 'stage_local'))}",
+        ]
+        activation = _normalize_mapping(payload.get("activation"))
+        if activation and activation.get("kind") != "all_time_evolution":
+            arguments.append(f"activation={_render_mask_activation_expr(activation)}")
+        arguments.append(f"name={_py_repr(str(payload.get('name') or drive_id))}")
+        arguments.append(f"id={_py_repr(drive_id)}")
+        antenna_lines.append(f"{variable} = study.add_simpleantenna.arbitrary_mask(")
+        antenna_lines.extend(f"    {argument}," for argument in arguments)
+        antenna_lines.append(")")
+        for index, term in enumerate(payload.get("terms") or []):
+            term = _normalize_mapping(term)
+            calls = []
+            for kind in ("mask", "time"):
+                if kind == "mask":
+                    function = _normalize_mapping(_normalize_mapping(term.get("mask")).get("function"))
+                else:
+                    if term.get("time") is None:
+                        continue
+                    function = _normalize_mapping(term.get("time"))
+                body_key = json.dumps(
+                    {key: function.get(key) for key in ("locals", "outputs")}
+                    | {"parameters": [item["name"] for item in function.get("parameters") or []]},
+                    sort_keys=True,
+                )
+                def_name = rendered_defs.get((kind, body_key))
+                if def_name is None:
+                    preferred = str(function.get("name") or f"{variable}_{kind}_{index}")
+                    def_name = _unique_identifier(preferred, taken)
+                    rendered_defs[(kind, body_key)] = def_name
+                    def_lines.extend(_render_mask_function_def(kind, def_name, function))
+                    def_lines.extend(["", ""])
+                calls.append(_render_mask_function_call(kind, def_name, function))
+            if term.get("name") is not None:
+                calls.append(f"name={_py_repr(str(term['name']))}")
+            antenna_lines.append(f"{variable}.add({', '.join(calls)})")
+        if payload.get("enabled") is False:
+            antenna_lines.append(f"{variable}.enabled = False")
+        antenna_lines.append(f"study.field_drives.add({variable})")
+        antenna_lines.append("")
+    while def_lines and def_lines[-1] == "":
+        def_lines.pop()
+    while antenna_lines and antenna_lines[-1] == "":
+        antenna_lines.pop()
+    return ["# Mask antennas (hand-written masks, ADR 0081)", *def_lines, "", "", *antenna_lines]
 
 
 def _render_planar_monitors(

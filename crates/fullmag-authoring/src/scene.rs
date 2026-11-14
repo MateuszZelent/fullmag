@@ -158,6 +158,9 @@ pub struct ScenePostprocessingDataRef {
 pub struct SceneFieldDrivesState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

@@ -107,7 +107,7 @@ class _Function:
         )
 
     def to_ir(self) -> dict[str, object]:
-        payload: dict[str, object] = {"expression_version": FIELD_EXPR_VERSION}
+        payload: dict[str, object] = {"expression_version": FIELD_EXPR_VERSION, "name": self.name}
         if self.parameters:
             payload["parameters"] = [parameter.to_ir() for parameter in self.parameters]
         if self.locals:
@@ -133,6 +133,7 @@ class _Function:
             (str(item["name"]), str(item["expression"])) for item in value.get("locals", ())
         )
         outputs = tuple(str(item) for item in value["outputs"])
+        name = str(value.get("name") or name)
         return cls(kind=kind, name=name, parameters=parameters, locals=locals_, outputs=outputs)
 
 

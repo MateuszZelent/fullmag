@@ -103,6 +103,7 @@ class MaskFunctionTests(unittest.TestCase):
             ir,
             {
                 "expression_version": "field_expr.v1",
+                "name": "antenna_time",
                 "parameters": [
                     {"name": "frequency", "value": 3.6e9},
                     {"name": "t0", "value": 0.0},

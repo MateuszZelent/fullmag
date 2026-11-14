@@ -2376,6 +2376,7 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: Vec::new(),
             current_transports: Vec::new(),
