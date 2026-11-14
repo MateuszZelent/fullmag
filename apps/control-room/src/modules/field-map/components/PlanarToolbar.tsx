@@ -29,6 +29,7 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 import { usePlanarActiveTool } from "@/kernel/visualization/planarToolStore";
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -142,10 +143,17 @@ export function PlanarToolbar() {
   const multisliceEnabled = planar?.multislice?.enabled ?? false;
   const panelCount = String(planar?.multislice?.position_fractions.length ?? 3);
   const panelsEnabled = commands.isEnabled("field-map.multislice-panels", context);
+  const toolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [context] });
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div aria-label="2D view tools" className="fm-planar-toolbar" role="toolbar">
+      <div
+        aria-label="2D view tools"
+        className="fm-planar-toolbar"
+        onKeyDown={toolbar.onKeyDown}
+        ref={toolbar.ref}
+        role="toolbar"
+      >
         <div aria-label="Section plane" className="fm-planar-toolbar__group" role="radiogroup">
           {PLANES.map((item) => (
             <ToolbarButton context={context} item={item} key={item.commandId} kind="radio" onRun={run} />

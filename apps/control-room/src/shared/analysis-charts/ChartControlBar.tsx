@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
   Select,
   SelectContent,
@@ -85,17 +86,21 @@ export function ChartControlBar({
   timeRangeSupported = true,
 }: ChartControlBarProps) {
   const isPaused = liveMode === "paused";
+  const toolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [rangeMode, liveMode] });
 
   return (
-    <div className="fm-chart-control-bar" role="toolbar" aria-label="Chart controls">
+    <div
+      ref={toolbar.ref}
+      className="fm-chart-control-bar"
+      role="toolbar"
+      aria-label="Chart controls"
+      onKeyDown={toolbar.onKeyDown}
+    >
       {/* Live / Paused toggle */}
       <Button
-        aria-label={
-          isPaused
-            ? "Resume live chart updates"
-            : "Pause chart — freeze current revision"
-        }
+        aria-label="Pause live chart updates"
         aria-pressed={isPaused}
+        title={isPaused ? "Resume live chart updates" : "Pause chart — freeze current revision"}
         className={`fm-chart-control-bar__live-btn${isPaused ? " fm-chart-control-bar__live-btn--paused" : ""}`}
         onClick={onLiveModeToggle}
         size="sm"

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import { Fragment, useLayoutEffect, useRef } from "react";
+import { Fragment } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -9,6 +9,7 @@ import type {
 } from "react";
 
 import { DisabledReason } from "@/shared/ui/DisabledReason";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -276,51 +277,14 @@ function RibbonGroup({
   onAction?: (actionId: string, input?: unknown) => void;
   onCommandDetail?: (commandId: string) => void;
 }) {
-  const toolbarRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    const toolbar = toolbarRef.current;
-    if (!toolbar) return;
-    const items = ribbonToolbarItems(toolbar);
-    if (items.length === 0) return;
-    const focused = items.find((item) => item === document.activeElement);
-    const current = focused ?? items.find((item) => item.tabIndex === 0) ?? items[0];
-    for (const item of items) item.tabIndex = item === current ? 0 : -1;
-  }, [density, group.actions]);
-
-  function handleToolbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-    const target = event.target;
-    if (
-      !(target instanceof Element) ||
-      target.closest(
-        "input, textarea, select, [role='slider'], [role='menu'], [role='menuitem'], [data-radix-popper-content-wrapper]",
-      )
-    ) {
-      return;
-    }
-    const items = ribbonToolbarItems(event.currentTarget);
-    const currentIndex = items.findIndex(
-      (item) => item === target || item.contains(target),
-    );
-    if (currentIndex < 0 || items.length === 0) return;
-
-    let nextIndex: number | undefined;
-    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % items.length;
-    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + items.length) % items.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = items.length - 1;
-    if (nextIndex === undefined) return;
-
-    event.preventDefault();
-    items.forEach((item, index) => {
-      item.tabIndex = index === nextIndex ? 0 : -1;
-    });
-    items[nextIndex]?.focus();
-  }
+  const toolbar = useToolbarRovingFocus<HTMLDivElement>({
+    itemSelector: RIBBON_TOOLBAR_ITEM_SELECTOR,
+    deps: [density, group.actions],
+  });
 
   return (
     <div
-      ref={toolbarRef}
+      ref={toolbar.ref}
       className="fm-ribbon-group"
       data-group-id={group.id}
       data-tone={group.tone ?? "neutral"}
@@ -328,7 +292,7 @@ function RibbonGroup({
       aria-label={group.subtitle ? `${group.title}: ${group.subtitle}` : group.title}
       aria-orientation="horizontal"
       role="toolbar"
-      onKeyDown={handleToolbarKeyDown}
+      onKeyDown={toolbar.onKeyDown}
     >
       {density === "collapsed" ? (
         <DropdownMenu>
@@ -423,13 +387,8 @@ function categoryForRibbonGroup(
   }
 }
 
-function ribbonToolbarItems(toolbar: HTMLElement): HTMLElement[] {
-  return Array.from(
-    toolbar.querySelectorAll<HTMLElement>(
-      'button[data-ribbon-toolbar-item="true"]:not(:disabled), .fm-ribbon-action-shell[data-disabled-reason]',
-    ),
-  );
-}
+const RIBBON_TOOLBAR_ITEM_SELECTOR =
+  'button[data-ribbon-toolbar-item="true"]:not(:disabled), .fm-ribbon-action-shell[data-disabled-reason]';
 
 function actionToMenuNodes(
   action: RibbonGroupData["actions"][number],
