@@ -214,7 +214,7 @@ function SavedPlaybackCanvas({
     };
   }, [geometry]);
   return (
-    <div className="fm-saved-playback-canvas" style={{ flex: 1, minHeight: 260, position: "relative" }}>
+    <div className="fm-saved-playback-canvas">
       <Viewport3DErrorBoundary diagnosticRecorder={diagnosticRecorder}>
         <Viewport3DCanvas camera={camera} frameloop="demand" gl={{ preserveDrawingBuffer: true, antialias: true }}
           style={{ background: typeof themeColors?.background === "string" ? themeColors.background : "var(--fm-bg-viewport)" }}>

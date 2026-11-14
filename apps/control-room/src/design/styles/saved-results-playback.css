@@ -293,3 +293,9 @@
   block-size: 12px;
   border-radius: var(--fm-radius-sm);
 }
+
+.fm-saved-playback-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 260px;
+}
