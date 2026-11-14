@@ -281,6 +281,9 @@ class LoadedProblem:
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
+            mask_field_drives=tuple(
+                drive for drive in candidate.mask_field_drives if drive.id not in introduced_ids
+            ),
             antenna_target_projections=tuple(
                 projection for projection in candidate.antenna_target_projections
                 if projection.id not in introduced_projection_ids

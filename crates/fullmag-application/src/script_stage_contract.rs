@@ -2,7 +2,10 @@
 //! CLI stage records. They do not define a second canonical StudyPlan or
 //! ProblemIR contract and have no runtime, solver, or operating-system layer.
 
-use fullmag_ir::{GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
+use fullmag_ir::{
+    GeometryAssetsIR, MaskFieldDriveIR, MaskTermSelectorIR, OutputIR, ProblemIR,
+    RegionalFieldDriveIR, TableAutosaveIR,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -375,6 +378,18 @@ pub enum ScriptExecutionStageAction {
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
     },
+    AddMaskFieldDrive {
+        drive: MaskFieldDriveIR,
+    },
+    UpdateMaskFieldDrive {
+        drive_id: String,
+        #[serde(default)]
+        term: Option<MaskTermSelectorIR>,
+        #[serde(default)]
+        mask_parameters: BTreeMap<String, f64>,
+        #[serde(default)]
+        time_parameters: BTreeMap<String, f64>,
+    },
     RemoveFieldDrive {
         drive_id: String,
     },
@@ -473,6 +488,15 @@ pub enum ResolvedScriptStageAction {
     },
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
+    },
+    AddMaskFieldDrive {
+        drive: MaskFieldDriveIR,
+    },
+    UpdateMaskFieldDrive {
+        drive_id: String,
+        term: Option<MaskTermSelectorIR>,
+        mask_parameters: BTreeMap<String, f64>,
+        time_parameters: BTreeMap<String, f64>,
     },
     RemoveFieldDrive {
         drive_id: String,

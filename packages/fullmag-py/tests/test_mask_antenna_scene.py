@@ -76,6 +76,37 @@ ANTENNA_SCRIPT = textwrap.dedent(
 )
 
 
+STAGED_SCRIPT = ANTENNA_SCRIPT.split("antenna = film.add_simpleantenna")[0] + textwrap.dedent(
+    """
+    antenna = film.add_simpleantenna.arbitrary_mask(
+        shape=fm.Box(400e-9, 100e-9, 10e-9),
+        position=(0.0, 0.0, -5e-9),
+        frame="world",
+        time_origin="absolute",
+        name="Antenna",
+    )
+    antenna.add(
+        fm.mask(antenna_mask, B01=0.2 * mT, wavelength=60 * nm, fwhm_y=40 * nm, xs=100 * nm),
+        fm.time(antenna_time, frequency=3.6 * GHz, t0=0.0),
+        name="carrier",
+    )
+    study.stages.add_field_drive(antenna, stage_id="source_on")
+    study.stages.add_run(stage_id="run_initial", until=2e-12)
+    study.stages.update_field_drive(
+        antenna,
+        mask_parameters={"B01": 0.1 * mT},
+        time_parameters={"frequency": 4.0 * GHz},
+        term="carrier",
+        stage_id="source_changed",
+    )
+    study.stages.add_run(stage_id="run_changed", until=2e-12)
+    study.stages.remove_field_drive(antenna.id, stage_id="source_off")
+    study.stages.add_run(stage_id="run_without_source", until=1e-12)
+    study.stages.add_field_drive(antenna, stage_id="source_on_again")
+    study.stages.add_run(stage_id="run_again", until=1e-12)
+    """
+)
+
 def _without_sources(value: object) -> object:
     """Parameter sources are display text and are not exported."""
     if isinstance(value, dict):
@@ -135,6 +166,44 @@ class MaskAntennaSceneTests(unittest.TestCase):
         self.assertEqual(drives["drives"], [])
         self.assertEqual([drive["id"] for drive in drives["mask_drives"]], ["antenna", "probe"])
         json.dumps(scene)  # the scene stays plain JSON
+
+    def test_staged_mask_antenna_survives_script_scene_script(self) -> None:
+        original, rendered, source = self._round_trip(STAGED_SCRIPT)
+
+        def stages(path: Path) -> list[tuple[str | None, str | None, list[object]]]:
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            result = []
+            for stage in loaded.stages:
+                kind = stage.action.get("kind") if isinstance(stage.action, dict) else None
+                drives = stage.problem.to_ir(include_geometry_assets=False).get(
+                    "mask_field_drives", []
+                )
+                result.append((stage.stage_id, kind, _without_sources(drives)))
+            return result
+
+        before = stages(original)
+        self.assertEqual(
+            [(stage_id, kind) for stage_id, kind, _ in before],
+            [
+                ("source_on", "add_mask_field_drive"),
+                ("run_initial", None),
+                ("source_changed", "update_mask_field_drive"),
+                ("run_changed", None),
+                ("source_off", "remove_field_drive"),
+                ("run_without_source", None),
+                ("source_on_again", "add_mask_field_drive"),
+                ("run_again", None),
+            ],
+        )
+        self.assertEqual(stages(rendered), before)
+        self.assertEqual(source.count("def antenna_mask("), 1)
+        self.assertEqual(source.count("antenna = study.add_simpleantenna.arbitrary_mask("), 1)
+        self.assertEqual(source.count("study.stages.add_field_drive(antenna, stage_id="), 2)
+        self.assertIn(
+            "study.stages.update_field_drive(antenna, mask_parameters={'B01': 0.0001}, "
+            "time_parameters={'frequency': 4000000000.0}, term='carrier', stage_id='source_changed')",
+            source.replace('"', "'"),
+        )
 
     def test_script_without_masks_renders_without_mask_sections(self) -> None:
         plain = ANTENNA_SCRIPT.split("def antenna_mask")[0] + 'study.stages.add_run(stage_id="run", until=1e-12)\n'

@@ -33,7 +33,6 @@ from fullmag.runtime.run_config_export import (
     export_run_config as export_run_config,
 )
 from fullmag.runtime.script_builder import (
-    MaskAntennasNotInScene,
     PinnedFemMeshSourceOutsideRoot,
     export_builder_draft,
     render_scene_document_as_script,
@@ -496,7 +495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ScriptLoadRejected(error, Path(args.script)) from error
         try:
             draft = export_builder_draft(loaded)
-        except (PinnedFemMeshSourceOutsideRoot, MaskAntennasNotInScene) as error:
+        except PinnedFemMeshSourceOutsideRoot as error:
             raise ScriptLoadRejected(error, Path(args.script)) from error
         print(json.dumps(build_scene_document_from_builder(draft)))
         emit_progress("Scene document exported")

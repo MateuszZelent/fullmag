@@ -429,41 +429,6 @@ class MaskAntennaTests(unittest.TestCase):
             ir = run.problem.to_ir(include_geometry_assets=False)
             self.assertEqual(ir["mask_field_drives"][0]["terms"][0]["mask"]["function"]["outputs"][0], "B01 * sin(k * x)")
 
-    def test_scene_export_refuses_staged_mask_antennas(self) -> None:
-        from fullmag.runtime.script_builder import MaskAntennasNotInScene, export_builder_draft
-
-        body = textwrap.dedent(
-            """
-            import fullmag as fm
-
-            def b_static(x, y, z, b):
-                return (0.0, 0.0, b)
-
-            study = fm.study("scene-guard")
-            film = study.geometry(fm.Box(100e-9, 50e-9, 10e-9), name="film")
-            film.Ms = 800e3
-            film.Aex = 13e-12
-            film.alpha = 0.01
-            study.exchange()
-            antenna = film.add_simpleantenna.arbitrary_mask(fm.Box(50e-9, 50e-9, 10e-9))
-            antenna.add(fm.mask(b_static, b=1e-3))
-            """
-        )
-        whole_study = "study.field_drives.add(antenna)\nstudy.stages.add_run(stage_id='run', until=1e-12)\n"
-        staged = "study.stages.add_field_drive(antenna, stage_id='on')\nstudy.stages.add_run(stage_id='run', until=1e-12)\n"
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "whole_study.py"
-            path.write_text(body + whole_study, encoding="utf-8")
-            draft = export_builder_draft(fm.load_problem_from_script(path, lightweight_assets=True))
-            self.assertEqual([drive["id"] for drive in draft["mask_field_drives"]], ["antenna"])
-            path = Path(directory) / "staged.py"
-            path.write_text(body + staged, encoding="utf-8")
-            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
-            with self.assertRaisesRegex(
-                MaskAntennasNotInScene, "mask_field_drive_unsupported_lane:scene"
-            ):
-                export_builder_draft(loaded)
-
 
 if __name__ == "__main__":
     unittest.main()

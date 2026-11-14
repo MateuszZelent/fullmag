@@ -156,7 +156,105 @@ pub struct MaskFieldDriveIR {
     pub activation: DriveActivationIR,
 }
 
+/// The term an `update_mask_field_drive` stage addresses: its name or index.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MaskTermSelectorIR {
+    Index(u32),
+    Name(String),
+}
+
+fn set_parameters(
+    label: &str,
+    function: &mut FunctionIR,
+    values: &BTreeMap<String, f64>,
+) -> Result<(), String> {
+    for (name, value) in values {
+        if !value.is_finite() {
+            return Err(format!(
+                "mask_update_invalid: {label} parameter '{name}' must be finite"
+            ));
+        }
+        let parameter = function
+            .parameters
+            .iter_mut()
+            .find(|parameter| parameter.name == *name)
+            .ok_or_else(|| {
+                format!("mask_update_invalid: {label} has no parameter '{name}'")
+            })?;
+        parameter.value = *value;
+        parameter.source = None;
+    }
+    Ok(())
+}
+
 impl MaskFieldDriveIR {
+    /// A copy with new parameter values of one term (an Update stage). The
+    /// whole update is rejected when any name, value or selector is invalid.
+    pub fn with_updated_parameters(
+        &self,
+        term: Option<&MaskTermSelectorIR>,
+        mask_parameters: &BTreeMap<String, f64>,
+        time_parameters: &BTreeMap<String, f64>,
+    ) -> Result<Self, String> {
+        if mask_parameters.is_empty() && time_parameters.is_empty() {
+            return Err(format!(
+                "mask_update_invalid: antenna '{}': give mask_parameters and/or time_parameters",
+                self.id
+            ));
+        }
+        let index = match term {
+            None if self.terms.len() == 1 => 0,
+            None => {
+                return Err(format!(
+                    "mask_update_invalid: antenna '{}' has {} terms; select one with term=<name or index>",
+                    self.id,
+                    self.terms.len()
+                ))
+            }
+            Some(MaskTermSelectorIR::Index(index)) => {
+                let index = *index as usize;
+                if index >= self.terms.len() {
+                    return Err(format!(
+                        "mask_update_invalid: antenna '{}' has no term {index}",
+                        self.id
+                    ));
+                }
+                index
+            }
+            Some(MaskTermSelectorIR::Name(name)) => self
+                .terms
+                .iter()
+                .position(|term| term.name.as_deref() == Some(name.as_str()))
+                .ok_or_else(|| {
+                    format!(
+                        "mask_update_invalid: antenna '{}' has no term named '{name}'",
+                        self.id
+                    )
+                })?,
+        };
+        let mut updated = self.clone();
+        let label = format!("antenna '{}' term {index}", self.id);
+        let term = &mut updated.terms[index];
+        if !mask_parameters.is_empty() {
+            let MaskSourceIR::Function { function } = &mut term.mask else {
+                return Err(format!(
+                    "mask_update_invalid: {label} is an array mask without parameters"
+                ));
+            };
+            set_parameters(&format!("{label} mask"), function, mask_parameters)?;
+        }
+        if !time_parameters.is_empty() {
+            let Some(function) = term.time.as_mut() else {
+                return Err(format!(
+                    "mask_update_invalid: {label} is static and has no time function"
+                ));
+            };
+            set_parameters(&format!("{label} time"), function, time_parameters)?;
+        }
+        Ok(updated)
+    }
+
     /// `true` when any term has a time function that reads `t`.
     pub fn is_time_dependent(&self) -> bool {
         self.terms.iter().any(|term| {

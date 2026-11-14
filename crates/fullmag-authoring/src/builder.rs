@@ -378,6 +378,8 @@ pub enum StudyPrimitiveStageKind {
     AntennaFieldSolve,
     ChangeDevice,
     AddFieldDrive,
+    AddMaskFieldDrive,
+    UpdateMaskFieldDrive,
     RemoveFieldDrive,
     TableAutosave,
     Autosave,
@@ -399,6 +401,8 @@ impl StudyPrimitiveStageKind {
         Self::AntennaFieldSolve,
         Self::ChangeDevice,
         Self::AddFieldDrive,
+        Self::AddMaskFieldDrive,
+        Self::UpdateMaskFieldDrive,
         Self::RemoveFieldDrive,
         Self::TableAutosave,
         Self::Autosave,
@@ -416,7 +420,8 @@ impl StudyPrimitiveStageKind {
         matches!(
             self,
             Self::SetField | Self::SetCurrent
-                | Self::AddFieldDrive | Self::RemoveFieldDrive
+                | Self::AddFieldDrive | Self::AddMaskFieldDrive
+                | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
                 | Self::TableAutosave | Self::Autosave
         )
     }
