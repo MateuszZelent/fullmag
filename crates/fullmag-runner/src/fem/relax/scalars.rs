@@ -5,33 +5,8 @@ use std::collections::{BTreeSet, HashMap};
 use fullmag_ir::{FemMeshPartRole, FemObjectSegmentIR, FemPlanIR};
 
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
-use crate::types::{LiveStepConsumer, StepAction, StepStats, StepUpdate};
-
-pub(crate) fn publish_initial_scalar_without_field_snapshot(
-    live: Option<&mut LiveStepConsumer<'_>>,
-    stats: &StepStats,
-    fem_mesh_generation_id: &Option<String>,
-) -> Option<StepAction> {
-    let live = live.filter(|consumer| !consumer.initial_snapshot)?;
-    Some((live.on_step)(StepUpdate {
-        coupled_checkpoint: None,
-        stats: stats.clone(),
-        grid: live.grid,
-        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
-        magnetization: None,
-        preview_field: None,
-        cached_preview_fields: None,
-        hysteresis_field_m_t: None,
-        hysteresis_point_index: None,
-        hysteresis_settle_step_index: None,
-        hysteresis_settle_step_kind: None,
-        hysteresis_settle_step_method: None,
-        scalar_row_due: true,
-        terminal_field_snapshot: false,
-        finished: false,
-        magnetization_carrier: None,
-    }))
-}
+pub(crate) use super::initial_observation::publish_initial_scalar_without_field_snapshot;
+use crate::types::StepStats;
 
 pub(crate) fn ensure_fem_object_scalars(stats: &mut StepStats, plan: &FemPlanIR) {
     if !stats.per_object_scalars.is_empty() {
@@ -113,6 +88,7 @@ mod tests {
             grid: [0, 0, 0],
             field_every_n: 8,
             initial_snapshot: false,
+            initial_native_gpu_fields: false,
             display_selection: None,
             interrupt_requested: None,
             on_step: &mut on_step,
@@ -156,6 +132,7 @@ mod tests {
             grid: [0, 0, 0],
             field_every_n: 8,
             initial_snapshot: true,
+            initial_native_gpu_fields: false,
             display_selection: None,
             interrupt_requested: None,
             on_step: &mut on_step,

@@ -3617,7 +3617,7 @@ fn execute_native_fem(
     );
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
-            .is_some_and(|consumer| consumer.initial_snapshot),
+            .is_some_and(|consumer| consumer.initial_snapshot || consumer.initial_native_gpu_fields),
         native_relaxation_step.is_some(),
         !field_schedules.is_empty(),
         stage_autosave_initial_table_requested,

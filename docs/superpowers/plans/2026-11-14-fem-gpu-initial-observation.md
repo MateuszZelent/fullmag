@@ -34,16 +34,18 @@ Pliki: `crates/fullmag-api/src/accepted_fem_preparer.rs`, `accepted_fem_preparer
 - [x] Zmierzyć osobno load, replay validation, mesh/space, fizyczne evaluate, bundle/CAS, commit observation i commit task receipt.
 - [x] Przekazać podsumowanie przez istniejący bounded stdout; supervisor przyjmuje wyłącznie metryki procesu z dokładnie zgodnymi identyfikatorami, bez nadawania im roli authority.
 - [x] Uaktualnić wszystkie ścisłe czytniki; dodać testy starego schematu, uszkodzonych metryk i retry.
-- [ ] Wykonać adekwatne testy w zarządzanej ścieżce/CI, review, commit spójnego fragmentu; dopiero potem runtime baseline na tej samej fizyce SP4 z pełnym Zarr.
+- [x] Wykonać adekwatne testy w zarządzanej ścieżce/CI, review, commit spójnego fragmentu; dopiero potem runtime baseline na tej samej fizyce SP4 z pełnym Zarr.
 
-Stan etapu 1: commit `cbbf162dc108e7b600ca27c9983871a65f123e6e`, sześć workflow CI i zarządzana bramka natywnego Poissona PASS. Nowy SP4 baseline odmówiony HTTP 400 przed RunIntent: terminal restore gubi ścieżkę skryptu i względnej siatki. Nie ma nowego pomiaru faz ani nowego Zarr z tej odmówionej próby.
+Stan etapu 1: commit `cbbf162dc108e7b600ca27c9983871a65f123e6e`, sześć workflow CI i zarządzana bramka natywnego Poissona PASS. Pierwsza próba baseline została odmówiona przed RunIntent z powodu brakującego origin. Po naprawie etapu 1b nowy publiczny Run ukończył się z pełnym Zarr i przeszedł niezmienione bramki naukowe oraz pomiarów faz. Szczegółowe wyniki pozostają w prywatnym checkpointcie kampanii.
 
 ## Etap 1b: odtworzenie origin potrzebne do porównywalnych powtórzeń
 
-- [ ] Zachować opcjonalny, zahashowany `source_origin` przy nowym managed terminal capture; plik readonly/nofollow, zamknięty DTO i parytet walidacji Python/Rust.
-- [ ] Przekazywać do hydratacji wyłącznie zweryfikowany locator; stare proofy bez origin zachowują widok, a względna siatka otrzymuje jawny błąd przed lowering/RunIntent.
-- [ ] Dla aktualnej starej sesji wykonać nowy capture z jawnymi pinami aktywacji, zgodnymi oboma RunIntentami i kompletnym inventory obu rodzin lease; nie przepisywać proofu `c7`, nie kopiować assetów ani nie zwiększać limitu aktywacji.
-- [ ] Dokończyć review, CI i zarządzany build w tej samej grupie SP4; restore nie może wykonać Solve ani nowego RunIntent. Następnie wykonać baseline z metrykami faz i pełnym Zarr.
+- [x] Zachować opcjonalny, zahashowany `source_origin` przy nowym managed terminal capture; plik readonly/nofollow, zamknięty DTO i parytet walidacji Python/Rust.
+- [x] Przekazywać do hydratacji wyłącznie zweryfikowany locator; stare proofy bez origin zachowują widok, a względna siatka otrzymuje jawny błąd przed lowering/RunIntent.
+- [x] Dla aktualnej starej sesji wykonać nowy capture z jawnymi pinami aktywacji, zgodnymi oboma RunIntentami i kompletnym inventory obu rodzin lease; nie przepisywać proofu `c7`, nie kopiować assetów ani nie zwiększać limitu aktywacji.
+- [x] Dokończyć review, CI i zarządzany build w tej samej grupie SP4; restore nie może wykonać Solve ani nowego RunIntent. Następnie wykonać baseline z metrykami faz i pełnym Zarr.
+
+Stan etapu 1b: commity `7770a95b50423c74d6496d19f708ffe009e92170` i `cb16b1e84f7fdd9967a267155e389c58509946b7`; sześć workflow CI oraz zarządzany build/restore PASS. Historyczne odmowy pozostają zachowane; nie powtarzano Solve w trakcie odtwarzania.
 
 ## Etap 2: jednokrotne początkowe obserwacje GPU
 

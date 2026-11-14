@@ -806,6 +806,23 @@ terminal SP4 observations, and the unchanged energy, torque, true-residual and
 complete-Zarr gates. Submitted-copy counts alone do not prove a performance
 gain or the removal of every blocking operation in AMG.
 
+Update 2026-11-14 initial-observation execution policy (implementation and
+runtime qualification **NOT VERIFIED**): a task requesting FEM GPU must not
+evaluate its prepared initial fields in a separate FEM CPU backend. Mesh/space
+preparation remains under the preparation lease; its observation record may
+explicitly defer physical fields until the existing compute worker owns the
+GPU. The native context already evaluates its initial effective field. A
+separate one-shot observation mode copies a coherent field generation from
+that context before the first integrator/minimizer step, with its actual
+post-begin-stage clock and local-node map. This is observation I/O, not a new
+Poisson solve, CPU fallback, accepted endpoint or legacy per-step snapshot
+request. Explicit CPU requests retain their existing CPU prepared observations;
+Auto has no preparer physics observation and the worker uses its actual admitted
+device when selecting the one-shot capture. Equations,
+operators, residual certificates, tolerances, and Zarr autosave are unchanged.
+See ADR 0071 and the initial-observation design for admission, budgeting,
+initial Stop/Pause handling and the required runtime parity evidence.
+
 The CPU direct-minimizer profile also accumulates linear iterations from each
 sample (current field, rejected/accepted trial and explicit refinement) before
 publishing the accepted row. Its accepted-field cache contributes zero physical
@@ -1217,6 +1234,10 @@ managed-runtime qualification.
 
 | Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
 |---|---|---|---|---|---|---|
+| Initial physical evaluation deferral | `crates/fullmag-api/src/accepted_fem_preparer.rs` | `prepared_observation_outcome` | Defers GPU fields without an evaluator or bundle publication under the preparation CPU lease. | FEM GPU | Callback-spy regressions added; CI and managed SP4 pending. | Unpublished task candidate. |
+| Initial native GPU fields | `crates/fullmag-runner/src/fem/relax/preview.rs` | `publish_initial_native_fem_observation` | Copies all active initial fields from the existing context and actual clock/map. | FEM GPU | Managed initial-frame and full-Zarr parity pending. | Unpublished task candidate. |
+| Initial callback control | `crates/fullmag-runner/src/fem/relax/initial_observation.rs` | `publish_initial_fem_observation_with_capture` | Preserves one callback, Stop/Pause and legacy behavior without a physical step. | FEM callbacks | Executable regressions added; CI pending. | Unpublished task candidate. |
+| Admitted initial observation budget | `crates/fullmag-api/src/accepted_fem_study_worker.rs` | `initial_observation_policy` | Requires actual GPU allocation and the existing full-generation live budget gate. | FEM GPU worker | Source contract; runtime pending. | Unpublished task candidate. |
 | Native Robin coefficient | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `robin_reference_radius_for_mesh`; `initialize_demag_poisson_boundary_operator` | Resolves the open-axis reference radius, mode coefficient and positive boundary mass contribution. | FEM CPU/GPU | Source contract; no new free-space or runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L27) |
 | Legacy Robin provenance units | `crates/fullmag-runner/src/fem/runtime_contract.rs` | `fem_poisson_demag_provenance` | Copies the dimensionless plan factor into the historically named `robin_beta` JSON field. | FEM CPU/GPU artifacts | Existing serialization, not native effective-beta telemetry. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/fem/runtime_contract.rs#L318) |
 | Robin mode adapter | `crates/fullmag-runner/src/native_fem.rs` | `create_backend_with_initial_effective_field` | Maps `legacy`, `dipole` and `user` to native coefficient modes. | FEM CPU/GPU | Existing adapter contract; no policy change. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/native_fem.rs#L3802) |

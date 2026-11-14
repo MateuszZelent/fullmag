@@ -311,6 +311,44 @@ pub(crate) fn prepare_accepted_fem_task(
 /// Upper bound for the field values of one prepared-state observation.
 const MAX_PREPARED_OBSERVATION_BYTES: u64 = 1 << 30;
 const MAX_UNAVAILABLE_REASON_CHARS: usize = 1024;
+const GPU_INITIAL_FIELDS_DEFERRED: &str = "native_gpu_initial_fields_deferred_to_compute_lease";
+
+fn prepared_physical_evaluation_lane(device: &str) -> Result<&'static str> {
+    match device {
+        "cpu" => Ok("fem_cpu"),
+        "gpu" => Ok("fem_gpu"),
+        _ => bail!("prepared FEM physics requires an explicit device request"),
+    }
+}
+
+fn prepared_observation_outcome<T>(
+    requested_device: &str,
+    timings: &mut PreparationPhaseTimingAccumulator,
+    evaluate: impl FnOnce() -> std::result::Result<T, String>,
+    publish: impl FnOnce(T) -> Result<fullmag_session::FmsTaskPreparedObservationOutcome>,
+) -> Result<fullmag_session::FmsTaskPreparedObservationOutcome> {
+    if prepared_physical_evaluation_lane(requested_device)? == "fem_gpu" {
+        // Neither phase ran. In particular, a preparation CPU lease must not
+        // create a physical GPU or CPU evaluator for this requested GPU task.
+        return Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: GPU_INITIAL_FIELDS_DEFERRED.into(),
+        });
+    }
+    let evaluation_started = std::time::Instant::now();
+    let evaluated = evaluate();
+    timings.prepared_fields_evaluation_ns = Some(elapsed_ns(evaluation_started));
+    match evaluated {
+        Ok(batch) => {
+            let publication_started = std::time::Instant::now();
+            let published = publish(batch);
+            timings.prepared_bundle_publication_ns = Some(elapsed_ns(publication_started));
+            published
+        }
+        Err(reason) => Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: reason.chars().take(MAX_UNAVAILABLE_REASON_CHARS).collect(),
+        }),
+    }
+}
 
 struct PreparedObservationTarget<'a> {
     run_id: &'a str,
@@ -324,10 +362,9 @@ struct PreparedObservationTarget<'a> {
     memory_bytes: u64,
 }
 
-/// Evaluate the prepared initial state's fields on the FEM CPU lane under this
-/// preparation lease and publish an immutable observation record (ADR 0071
-/// v1). An evaluator failure or exhausted budget is recorded as unavailable;
-/// only a store failure returns an error.
+/// CPU tasks evaluate under the preparation lease. GPU tasks explicitly defer
+/// fields to the already admitted compute worker, without creating a second
+/// physical backend (ADR 0071). An unavailable outcome is not execution proof.
 fn publish_prepared_observation(
     store: &SessionStore,
     problem: &fullmag_ir::ProblemIR,
@@ -343,6 +380,7 @@ fn publish_prepared_observation(
     else {
         return Ok(());
     };
+    let evaluation_lane = prepared_physical_evaluation_lane(target.requested_device)?;
     let values = &fem.initial_magnetization;
     let flattened = values.iter().flatten().copied().collect::<Vec<_>>();
     let identity = fullmag_runner::PreparedStateIdentity {
@@ -354,27 +392,19 @@ fn publish_prepared_observation(
         magnetization_values_sha256: fullmag_runner::live_preview_values_sha256(&flattened),
     };
     let byte_budget = (target.memory_bytes / 4).min(MAX_PREPARED_OBSERVATION_BYTES);
-    let evaluation_started = std::time::Instant::now();
-    let evaluated = evaluate_prepared_fem_fields(problem, execution_plan, &identity, values, byte_budget);
-    timings.prepared_fields_evaluation_ns = Some(elapsed_ns(evaluation_started));
-    let outcome = match evaluated {
-        Ok(batch) => {
-            let publication_started = std::time::Instant::now();
-            let published = store_prepared_bundle(store, batch, requested_lane);
-            timings.prepared_bundle_publication_ns = Some(elapsed_ns(publication_started));
-            published?
-        }
-        Err(reason) => fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
-            reason: reason.chars().take(MAX_UNAVAILABLE_REASON_CHARS).collect(),
-        },
-    };
+    let outcome = prepared_observation_outcome(
+        target.requested_device,
+        timings,
+        || evaluate_prepared_fem_fields(problem, execution_plan, &identity, values, byte_budget, target.requested_device),
+        |batch| store_prepared_bundle(store, batch, requested_lane),
+    )?;
     let record = fullmag_session::FmsTaskPreparedObservation::new(
         target.run_id,
         target.step_id,
         target.preparation_id,
         target.plan_fingerprint,
         identity.magnetization_values_sha256.clone(),
-        "fem_cpu",
+        evaluation_lane,
         requested_lane,
         outcome,
     )?;
@@ -392,15 +422,19 @@ fn publish_prepared_observation(
     Ok(())
 }
 
-/// Observation-only evaluation on the CPU lane. A GPU task is evaluated on
-/// the CPU here and the record names both lanes; the solver lane is unchanged.
+/// Observation-only CPU evaluation. Reject GPU plans before any materializer,
+/// including callers other than the preparation publication path.
 fn evaluate_prepared_fem_fields(
     problem: &fullmag_ir::ProblemIR,
     execution_plan: &fullmag_ir::ExecutionPlanIR,
     identity: &fullmag_runner::PreparedStateIdentity,
     values: &[[f64; 3]],
     byte_budget: u64,
+    requested_device: &str,
 ) -> std::result::Result<fullmag_runner::PreparedMaterializationBatch, String> {
+    if prepared_physical_evaluation_lane(requested_device).map_err(|error| error.to_string())? != "fem_cpu" {
+        return Err(GPU_INITIAL_FIELDS_DEFERRED.into());
+    }
     let lane = fullmag_runner::AcceptedMaterializationLane::FemCpu;
     let active = fullmag_runner::accepted_observation_quantity_ids(execution_plan, lane)?;
     let components = active
@@ -595,6 +629,51 @@ fn produce_native_fem_evidence(
 mod tests {
     use super::*;
     use anyhow::Error;
+
+    #[test]
+    fn gpu_preparation_never_invokes_a_physical_evaluator_or_bundle_publisher() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let outcome = prepared_observation_outcome::<()>(
+            "gpu", &mut timings,
+            || panic!("GPU task invoked a physical evaluator under the CPU preparation lease"),
+            |_| panic!("GPU task published a prepared field bundle"),
+        ).unwrap();
+        assert_eq!(outcome, fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: GPU_INITIAL_FIELDS_DEFERRED.into(),
+        });
+        assert_eq!(timings.prepared_fields_evaluation_ns, None);
+        assert_eq!(timings.prepared_bundle_publication_ns, None);
+    }
+
+    #[test]
+    fn cpu_preparation_evaluates_and_publishes_its_exact_result() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let outcome = prepared_observation_outcome(
+            "cpu", &mut timings,
+            || Ok(vec![1.0, 2.0, 3.0]),
+            |values| {
+                assert_eq!(values, [1.0, 2.0, 3.0]);
+                Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Published {
+                    bundle_object_ref: "a".repeat(64), object_refs: vec!["a".repeat(64)],
+                })
+            },
+        ).unwrap();
+        assert!(matches!(outcome, fullmag_session::FmsTaskPreparedObservationOutcome::Published { .. }));
+        assert!(timings.prepared_fields_evaluation_ns.is_some());
+        assert!(timings.prepared_bundle_publication_ns.is_some());
+    }
+
+    #[test]
+    fn unresolved_preparation_never_chooses_a_cpu_physical_evaluator() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let error = prepared_observation_outcome::<()>(
+            "auto", &mut timings,
+            || panic!("unresolved task evaluated physics"),
+            |_| panic!("unresolved task published fields"),
+        ).unwrap_err();
+        assert!(error.to_string().contains("explicit device request"));
+        assert_eq!(timings.prepared_fields_evaluation_ns, None);
+    }
 
     #[test]
     fn timing_accumulator_preserves_unmeasured_phases_as_absent() {

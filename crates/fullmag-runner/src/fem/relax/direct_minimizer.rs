@@ -19,7 +19,7 @@ use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_c
 use crate::types::{LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate};
 
 use super::preview::FemPreviewHandoff;
-use super::scalars::{ensure_fem_object_scalars, publish_initial_scalar_without_field_snapshot};
+use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
     pub(crate) latest_stats: Option<StepStats>,
@@ -52,11 +52,14 @@ pub(crate) fn execute_direct_minimizer(
     let mut last_cached_preview_revision = last_preview_revision;
     let mut preview_handoff = FemPreviewHandoff::default();
 
-    if let Some(action) = publish_initial_scalar_without_field_snapshot(
+    if let Some(action) = super::preview::publish_initial_native_fem_observation(
+        backend,
+        engine,
+        plan,
+        fem_mesh_generation_id,
         live.as_deref_mut(),
         &current_stats,
-        fem_mesh_generation_id,
-    ) {
+    )? {
         match action {
             StepAction::Continue => {}
             StepAction::Stop => cancelled = true,

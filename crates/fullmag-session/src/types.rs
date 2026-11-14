@@ -1656,7 +1656,8 @@ pub struct FmsTaskPreparedObservation {
     pub plan_fingerprint: String,
     /// Bare SHA-256 of the prepared magnetization as little-endian f64 values.
     pub magnetization_values_sha256: String,
-    /// Lane the evaluator ran on, e.g. `fem_cpu`.
+    /// Evaluation lane, e.g. `fem_cpu`. Only a Published outcome attests an
+    /// evaluation; Unavailable may name the planned lane with a deferral reason.
     pub evaluation_lane: String,
     /// Lane the task requests for solving, e.g. `fem_gpu`.
     pub requested_lane: String,

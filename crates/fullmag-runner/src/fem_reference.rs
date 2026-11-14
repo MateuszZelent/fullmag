@@ -3112,6 +3112,7 @@ mod tests {
                 grid: [0, 0, 0],
                 field_every_n: 2,
                 initial_snapshot: false,
+                initial_native_gpu_fields: false,
                 display_selection: None,
                 interrupt_requested: None,
                 on_step: &mut on_step,

@@ -5266,6 +5266,27 @@ pub struct AuxiliaryArtifact {
     pub bytes: Vec<u8>,
 }
 
+/// Selects whether the runner publishes an initial live observation.
+///
+/// The legacy magnetization snapshot preserves the historical host-copy
+/// behavior. Native GPU fields are a distinct, explicit FEM GPU-only mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialObservationPolicy {
+    None,
+    LegacyMagnetizationSnapshot,
+    NativeGpuInitialFields,
+}
+
+impl From<bool> for InitialObservationPolicy {
+    fn from(initial_snapshot: bool) -> Self {
+        if initial_snapshot {
+            Self::LegacyMagnetizationSnapshot
+        } else {
+            Self::None
+        }
+    }
+}
+
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
     /// Cadence for heavier live payloads such as full magnetization snapshots.
@@ -5273,6 +5294,9 @@ pub(crate) struct LiveStepConsumer<'a> {
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,
+    /// Whether the consumer requests the one-time native FEM GPU initial
+    /// fields observation instead of the legacy magnetization snapshot.
+    pub initial_native_gpu_fields: bool,
     pub display_selection: Option<&'a (dyn Fn() -> crate::DisplaySelectionState + Send + Sync)>,
     #[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
     pub interrupt_requested: Option<&'a AtomicBool>,

@@ -38,7 +38,7 @@ use crate::types::{FieldSnapshot, LiveStepConsumer, RunError, StepAction, StepSt
 #[cfg(feature = "fem-native")]
 use super::preview::FemPreviewHandoff;
 #[cfg(feature = "fem-native")]
-use super::scalars::{ensure_fem_object_scalars, publish_initial_scalar_without_field_snapshot};
+use super::scalars::ensure_fem_object_scalars;
 
 fn convergence_controller_policy() -> RelaxationControllerPolicyProvenance {
     RelaxationControllerPolicyProvenance {
@@ -208,11 +208,14 @@ pub(crate) fn execute_llg_overdamped(
             crate::schedules::OUTPUT_TIME_TOLERANCE,
         );
 
-    if let Some(action) = publish_initial_scalar_without_field_snapshot(
+    if let Some(action) = super::preview::publish_initial_native_fem_observation(
+        backend,
+        engine,
+        plan,
+        fem_mesh_generation_id,
         live.as_deref_mut(),
         &current_stats,
-        fem_mesh_generation_id,
-    ) {
+    )? {
         match action {
             StepAction::Continue => {}
             StepAction::Stop => cancelled = true,

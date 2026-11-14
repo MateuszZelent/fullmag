@@ -162,6 +162,34 @@ Wymagane dowody v1: przygotowana sesja FEM CPU w Docker DEV pokazuje przed Run `
 `torque` i `eden_total` w viewport; rekord jest osiągalny po GC; zmiana sceny nie adoptuje
 starego pakietu.
 
+### Rewizja 14.11.2026: początkowe obserwacje przydzielonego FEM GPU
+
+Decyzja wykonawcza zastępuje punkt 2 v1 dla jawnie żądanego toru FEM GPU.
+Preparer zachowuje przygotowanie siatki/przestrzeni i tożsamość początkowego `m`, ale
+nie tworzy backendu fizycznego CPU ani GPU. Zapisuje `unavailable` z jawnym powodem
+odroczenia pól do przydzielenia compute lease GPU. `evaluation_lane` dla takiego
+nieopublikowanego wyniku wskazuje planowany tor `fem_gpu`; sam ten wpis nie dowodzi
+wykonania ewaluacji. Brak pomiaru ewaluacji i publikacji bundle pozostaje `None`,
+a nie zmierzonym zerem. Jawnie żądany CPU zachowuje dotychczasową ewaluację CPU.
+Przy `auto` preparer nadal nie publikuje obserwacji fizycznej: przed przyznaniem
+compute lease nie dowodzi docelowego urządzenia. Żądane `auto` i faktycznie rozwiązany
+tor pozostają rozróżnione w provenance workera. Jednorazowy capture wybiera worker
+według rzeczywistego przydziału GPU, również przy pierwotnym żądaniu `auto`.
+
+Po przyznaniu GPU istniejący worker może pobrać jeden spójny komplet pól z własnego
+natywnego kontekstu po `begin_stage_with_waveform_origin`, przed pierwszym krokiem.
+Jest to obserwacja działającego zadania z rzeczywistym zegarem i mapą węzłów, bez
+rekonstrukcji backendu, nowego rodzaju leasu lub syntetycznego `AcceptedStateRef`.
+Jawny tryb tej obserwacji jest oddzielony od legacy `initial_snapshot`; nie włącza
+kopiowania magnetyzacji na hosta przy każdym kroku. Stop/Pause z początkowego callbacku
+blokuje wykonanie pierwszego kroku. Brak obsługi lub budżetu live nie upoważnia do
+ewaluacji CPU; początkowe i końcowe artefakty Zarr zachowują istniejący tor zapisu.
+
+Zakres dotyczy wyłącznie obserwacji: równania, operatory, tolerancje, kryteria stopu
+i niezależny certyfikat Poissona pozostają bez zmian. Implementacja i kwalifikacja
+runtime tej rewizji są **NOT VERIFIED** do czasu testów obu pętli FEM, bramek
+clock/map/Stop/Pause i porównania pełnego Zarr oraz energii, torque i residuum SP4.
+
 ### Dowody v1 (27.10.2026, grupa Docker DEV `prepared-fem-verify-20261027`, commit `6d9c238cb`)
 
 - FEM CPU, sesja interaktywna przed Compute: rekord `task_prepared_observation.v1` w stanie

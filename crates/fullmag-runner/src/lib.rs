@@ -691,7 +691,7 @@ pub use types::{
     FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
     FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuMinimizerExecutionReceipt,
     FemMeshPartPayload, FemMeshPayload,
-    InitialTimestepReason, LegacyDtPolicy,
+    InitialObservationPolicy, InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LiveParallelExecutionTelemetry, LivePreviewRequest, LiveVectorFieldSnapshot,
     LiveFemLocalNodeMapIdentity, LiveMagnetizationCarrier,
@@ -4222,6 +4222,7 @@ fn run_planned_problem_with_callback_artifact_context(
                     grid,
                     field_every_n,
                     initial_snapshot: false,
+                    initial_native_gpu_fields: false,
                     display_selection: None,
                     interrupt_requested: None,
                     on_step: &mut on_step,
@@ -4267,6 +4268,7 @@ fn run_planned_problem_with_callback_artifact_context(
                 grid: [0, 0, 0],
                 field_every_n,
                 initial_snapshot: false,
+                initial_native_gpu_fields: false,
                 display_selection: None,
                 interrupt_requested: None,
                 on_step: &mut on_step,
@@ -4689,6 +4691,40 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     )
 }
 
+/// Run a planned problem with an explicit policy for the initial live
+/// observation. `NativeGpuInitialFields` is restricted to a resolved native
+/// FEM GPU lane and a live field cadence.
+#[allow(clippy::too_many_arguments)]
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_observation_and_fem_mesh_identity_and_autosave_root(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    autosave_root: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_observation: InitialObservationPolicy,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_live_preview_artifact_context(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        autosave_root,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_observation,
+        on_step,
+        None,
+        None,
+    )
+}
+
 /// Execute an FMR plan with exact artifact ownership.
 /// Native execution requires the FEM feature; dense execution must be explicit.
 /// Identity is runner-owned and does not change the canonical ProblemIR.
@@ -4778,6 +4814,60 @@ fn live_step_action_with_interrupt<T>(
     }
 }
 
+fn validate_initial_observation_request(
+    policy: InitialObservationPolicy,
+    backend_plan: &BackendPlanIR,
+    resolved_backend: fullmag_ir::BackendTarget,
+    is_hysteresis: bool,
+    field_every_n: u64,
+) -> Result<(), RunError> {
+    if policy != InitialObservationPolicy::NativeGpuInitialFields {
+        return Ok(());
+    }
+    if !matches!(backend_plan, BackendPlanIR::Fem(_))
+        || resolved_backend != fullmag_ir::BackendTarget::Fem
+    {
+        return Err(RunError {
+            message: "native GPU initial fields require a resolved FEM execution plan".into(),
+        });
+    }
+    if is_hysteresis {
+        return Err(RunError {
+            message: "native GPU initial fields are not supported for hysteresis studies".into(),
+        });
+    }
+    if field_every_n == 0 || field_every_n == u64::MAX {
+        return Err(RunError {
+            message: "native GPU initial fields require an enabled positive field cadence".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_initial_observation_engine(
+    policy: InitialObservationPolicy,
+    engine: dispatch::FemEngine,
+    fallback_occurred: bool,
+) -> Result<(), RunError> {
+    if policy == InitialObservationPolicy::NativeGpuInitialFields
+        && (engine != dispatch::FemEngine::NativeGpu || fallback_occurred)
+    {
+        return Err(RunError {
+            message: "native GPU initial fields require native FEM GPU execution without fallback".into(),
+        });
+    }
+    Ok(())
+}
+
+fn initial_observation_consumer_flags(
+    policy: InitialObservationPolicy,
+) -> (bool, bool) {
+    (
+        policy == InitialObservationPolicy::LegacyMagnetizationSnapshot,
+        policy == InitialObservationPolicy::NativeGpuInitialFields,
+    )
+}
+
 fn run_planned_problem_with_live_preview_artifact_context(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -4788,11 +4878,21 @@ fn run_planned_problem_with_live_preview_artifact_context(
     field_every_n: u64,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
-    initial_snapshot: bool,
+    initial_observation: impl Into<InitialObservationPolicy>,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
+    let initial_observation = initial_observation.into();
+    validate_initial_observation_request(
+        initial_observation,
+        &plan.backend_plan,
+        plan.common.resolved_backend,
+        matches!(&problem.study, fullmag_ir::StudyIR::Hysteresis { .. }),
+        field_every_n,
+    )?;
+    let (initial_snapshot, initial_native_gpu_fields) =
+        initial_observation_consumer_flags(initial_observation);
     let mut performance = run_performance_integration::start(problem, plan, output_dir, "live_callback");
     let result = (|| {
     let mut consumer = bind_live_magnetization_layout(plan, on_step);
@@ -4879,6 +4979,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                     grid,
                     field_every_n,
                     initial_snapshot,
+                    initial_native_gpu_fields,
                     display_selection: live_display_selection,
                     interrupt_requested,
                     on_step: &mut capture_terminal_fields,
@@ -4926,6 +5027,11 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 fem,
                 field_every_n != u64::MAX,
             )?;
+            validate_initial_observation_engine(
+                initial_observation,
+                resolution.engine,
+                resolution.fallback.is_some(),
+            )?;
             let crossover_decision = resolution.fem_crossover_decision.clone();
             eprintln!(
                 "[fullmag-runner] live FEM engine: resolved_engine_id={} fallback={:?}",
@@ -4936,6 +5042,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 grid: [0, 0, 0],
                 field_every_n,
                 initial_snapshot,
+                initial_native_gpu_fields,
                 display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut on_step,
@@ -7142,6 +7249,108 @@ pub fn run_eigen_k_worker_request_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_observation_policy_preserves_legacy_bool_mapping() {
+        assert_eq!(InitialObservationPolicy::from(false), InitialObservationPolicy::None);
+        assert_eq!(
+            InitialObservationPolicy::from(true),
+            InitialObservationPolicy::LegacyMagnetizationSnapshot
+        );
+        assert_eq!(
+            initial_observation_consumer_flags(InitialObservationPolicy::None),
+            (false, false)
+        );
+        assert_eq!(
+            initial_observation_consumer_flags(
+                InitialObservationPolicy::LegacyMagnetizationSnapshot
+            ),
+            (true, false)
+        );
+        assert_eq!(
+            initial_observation_consumer_flags(
+                InitialObservationPolicy::NativeGpuInitialFields
+            ),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn native_gpu_initial_observation_rejects_non_fem_hysteresis_and_disabled_cadence() {
+        let policy = InitialObservationPolicy::NativeGpuInitialFields;
+        let fdm = BackendPlanIR::Fdm(FdmPlanIR::default());
+        assert!(validate_initial_observation_request(
+            InitialObservationPolicy::None,
+            &fdm,
+            fullmag_ir::BackendTarget::Fdm,
+            true,
+            0,
+        )
+        .is_ok());
+        assert!(validate_initial_observation_request(
+            InitialObservationPolicy::LegacyMagnetizationSnapshot,
+            &fdm,
+            fullmag_ir::BackendTarget::Fdm,
+            true,
+            u64::MAX,
+        )
+        .is_ok());
+        assert!(validate_initial_observation_request(
+            policy, &fdm, fullmag_ir::BackendTarget::Fdm, false, 1
+        )
+        .is_err());
+
+        let fem = BackendPlanIR::Fem(dispatch::test_tiny_fem_plan());
+        assert!(validate_initial_observation_request(
+            policy, &fem, fullmag_ir::BackendTarget::Fdm, false, 1
+        )
+        .is_err());
+        assert!(validate_initial_observation_request(
+            policy, &fem, fullmag_ir::BackendTarget::Fem, true, 1
+        )
+        .is_err());
+        assert!(validate_initial_observation_request(
+            policy, &fem, fullmag_ir::BackendTarget::Fem, false, 0
+        )
+        .is_err());
+        assert!(validate_initial_observation_request(
+            policy, &fem, fullmag_ir::BackendTarget::Fem, false, u64::MAX
+        )
+        .is_err());
+        assert!(validate_initial_observation_request(
+            policy, &fem, fullmag_ir::BackendTarget::Fem, false, 1
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn native_gpu_initial_observation_requires_native_gpu_resolution_without_fallback() {
+        let policy = InitialObservationPolicy::NativeGpuInitialFields;
+        assert!(validate_initial_observation_engine(
+            policy,
+            dispatch::FemEngine::NativeGpu,
+            false
+        )
+        .is_ok());
+        assert!(validate_initial_observation_engine(
+            policy,
+            dispatch::FemEngine::CpuNative,
+            false
+        )
+        .is_err());
+        assert!(validate_initial_observation_engine(
+            policy,
+            dispatch::FemEngine::NativeGpu,
+            true
+        )
+        .is_err());
+        assert!(validate_initial_observation_engine(
+            InitialObservationPolicy::LegacyMagnetizationSnapshot,
+            dispatch::FemEngine::CpuNative,
+            true
+        )
+        .is_ok());
+    }
 
     #[test]
     fn fdm_multilayer_interrupt_publishes_accepted_update_before_stop() {

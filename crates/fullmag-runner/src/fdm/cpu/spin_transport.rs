@@ -4039,6 +4039,7 @@ mod tests {
                     grid: plan.grid.cells,
                     field_every_n: 1,
                     initial_snapshot: true,
+                    initial_native_gpu_fields: false,
                     display_selection: None,
                     interrupt_requested: None,
                     on_step: &mut |_| {
@@ -4264,6 +4265,7 @@ mod tests {
                     grid: candidate_plan.grid.cells,
                     field_every_n: 1,
                     initial_snapshot: true,
+                    initial_native_gpu_fields: false,
                     display_selection: None,
                     interrupt_requested: None,
                     on_step: &mut |_| {
@@ -4390,6 +4392,7 @@ mod tests {
                 grid: plan.grid.cells,
                 field_every_n: 1,
                 initial_snapshot: false,
+                initial_native_gpu_fields: false,
                 display_selection: Some(&display),
                 interrupt_requested: None,
                 on_step: &mut |update| {

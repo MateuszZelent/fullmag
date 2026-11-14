@@ -119,6 +119,9 @@ jobs:
         # its tests. This does not link or qualify the MFEM runtime.
         run: |
           cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
+          cargo test --locked -p fullmag-runner --lib fem::relax::initial_observation::tests
+          cargo test --locked -p fullmag-runner --lib initial_observation_policy_preserves_legacy_bool_mapping
+          cargo test --locked -p fullmag-runner --lib native_gpu_initial_observation_
           FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
 
       - name: Check FDM CUDA runner contracts

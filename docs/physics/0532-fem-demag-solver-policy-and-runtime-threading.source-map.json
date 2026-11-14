@@ -754,6 +754,38 @@
       "responsibility": "Maps legacy/dipole/user Robin plan modes to native mode integers before native FEM creation.",
       "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
       "evidence_status": "Existing adapter source contract; no policy change."
+    },
+    {
+      "id": "initial-fields-preparation-deferral",
+      "path": "crates/fullmag-api/src/accepted_fem_preparer.rs",
+      "symbol": "prepared_observation_outcome",
+      "responsibility": "Defers requested GPU physical fields without invoking an evaluator or bundle publisher under the CPU preparation lease; keeps both phase timings absent.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Task source candidate with callback-spy regressions; CI and managed SP4 parity pending."
+    },
+    {
+      "id": "initial-fields-native-gpu-capture",
+      "path": "crates/fullmag-runner/src/fem/relax/preview.rs",
+      "symbol": "publish_initial_native_fem_observation",
+      "responsibility": "Copies the complete active initial field generation from the admitted native GPU context with its actual clock and local-node map; does not create a physical backend.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Source candidate; managed GPU execution, initial payload and full-Zarr parity pending."
+    },
+    {
+      "id": "initial-fields-callback-control",
+      "path": "crates/fullmag-runner/src/fem/relax/initial_observation.rs",
+      "symbol": "publish_initial_fem_observation_with_capture",
+      "responsibility": "One initial callback preserves the post-begin-stage clock and returns Stop/Pause before the physical loop; no terminal or finished endpoint is fabricated.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Executable regression source present; CI execution pending."
+    },
+    {
+      "id": "initial-fields-admitted-worker-budget",
+      "path": "crates/fullmag-api/src/accepted_fem_study_worker.rs",
+      "symbol": "initial_observation_policy",
+      "responsibility": "Enables one-shot native initial fields only for an actual GPU allocation and the existing full-generation live budget gate; retains bounded preview behavior elsewhere.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Source candidate; no solver or scheduler lane added, runtime qualification pending."
     }
   ],
   "public_api": {
