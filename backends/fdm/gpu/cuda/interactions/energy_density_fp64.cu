@@ -104,6 +104,7 @@ __global__ void energy_density_kernel(
     const Scalar *regional_drive_z,
     const RegionalFieldDriveParams *regional_drive_params,
     const double *regional_drive_points,
+    RegionalFieldDriveHostMultipliers regional_drive_host,
     uint32_t regional_drive_count,
     uint64_t regional_drive_cell_count,
     double evaluation_time_s,
@@ -174,13 +175,13 @@ __global__ void energy_density_kernel(
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE) &&
         include_regional_field) {
         const double field_x = regional_field_drive_component(
-            regional_drive_x, regional_drive_params, regional_drive_points,
+            regional_drive_x, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
         const double field_y = regional_field_drive_component(
-            regional_drive_y, regional_drive_params, regional_drive_points,
+            regional_drive_y, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
         const double field_z = regional_field_drive_component(
-            regional_drive_z, regional_drive_params, regional_drive_points,
+            regional_drive_z, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
         density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
     }
@@ -412,6 +413,7 @@ bool launch_energy_density_observable(
             static_cast<const double *>(ctx.regional_field_drive_z),
             ctx.regional_field_drive_params,
             ctx.regional_field_drive_points,
+            context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
             ctx.regional_field_drive_count,
             ctx.cell_count,
             ctx.current_time,
@@ -483,6 +485,7 @@ bool launch_energy_density_observable(
             static_cast<const float *>(ctx.regional_field_drive_z),
             ctx.regional_field_drive_params,
             ctx.regional_field_drive_points,
+            context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
             ctx.regional_field_drive_count,
             ctx.cell_count,
             ctx.current_time,

@@ -19,6 +19,7 @@ pub const FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED: u32 = 1;
 pub const FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM: u32 = 1;
 pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
+pub const FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1: u64 = 1_u64 << 1;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1: u32 = 1;
@@ -553,6 +554,10 @@ pub const FULLMAG_FDM_EXCHANGE_OPERATOR_FACES: u32 = 1;
 
 pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2: u32 = 2;
+pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3: u32 = 3;
+pub const FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES: u32 = 8;
+/// `FULLMAG_TIME_EXPRESSION_VERSION` of `native/include/fullmag_time_expression.h`.
+pub const FULLMAG_TIME_EXPRESSION_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -562,6 +567,7 @@ pub enum fullmag_fdm_regional_field_drive_waveform {
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5,
 }
 
 #[repr(C)]
@@ -598,6 +604,15 @@ pub struct fullmag_fdm_regional_field_drive_desc_v1 {
 pub struct fullmag_fdm_regional_field_drive_desc_v2 {
     pub drive: fullmag_fdm_regional_field_drive_desc_v1,
     pub waveform_origin_time_s: f64,
+}
+
+/// v3: the time program (`fullmag_time_expr.v1`) of a HOST_MULTIPLIER drive.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_regional_field_drive_desc_v3 {
+    pub drive: fullmag_fdm_regional_field_drive_desc_v2,
+    pub time_program: *const f64,
+    pub time_program_len: u64,
 }
 
 #[repr(C)]
@@ -2013,6 +2028,12 @@ extern "C" {
         drives: *const fullmag_fdm_regional_field_drive_desc_v2,
         drive_count: u32,
     ) -> i32;
+    pub fn fullmag_fdm_backend_set_regional_field_drives_v3(
+        handle: *mut fullmag_fdm_backend,
+        drives: *const fullmag_fdm_regional_field_drive_desc_v3,
+        drive_count: u32,
+    ) -> i32;
+    pub fn fullmag_fdm_time_expression_eval_v1(code: *const f64, len: u64, t_s: f64) -> f64;
 
     pub fn fullmag_fdm_backend_step(
         handle: *mut fullmag_fdm_backend,
@@ -2411,6 +2432,28 @@ mod tests {
             *const fullmag_fdm_regional_field_drive_desc_v2,
             u32,
         ) -> i32 = fullmag_fdm_backend_set_regional_field_drives_v2;
+    }
+
+    #[test]
+    fn regional_field_drive_v3_appends_the_time_program() {
+        assert_eq!(FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3, 3);
+        assert_eq!(size_of::<fullmag_fdm_regional_field_drive_desc_v3>(), 144);
+        assert_eq!(
+            offset_of!(fullmag_fdm_regional_field_drive_desc_v3, time_program),
+            128
+        );
+        assert_eq!(
+            fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER
+                as u32,
+            5
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *const fullmag_fdm_regional_field_drive_desc_v3,
+            u32,
+        ) -> i32 = fullmag_fdm_backend_set_regional_field_drives_v3;
+        let _eval: unsafe extern "C" fn(*const f64, u64, f64) -> f64 =
+            fullmag_fdm_time_expression_eval_v1;
     }
 
     #[test]

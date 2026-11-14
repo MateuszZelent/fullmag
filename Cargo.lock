@@ -1313,6 +1313,7 @@ dependencies = [
 name = "fullmag-engine"
 version = "0.1.0"
 dependencies = [
+ "fullmag-expr",
  "fullmag-fdm-demag",
  "fullmag-ir",
  "rayon",
@@ -1411,6 +1412,7 @@ dependencies = [
  "fullmag-antenna-artifacts",
  "fullmag-build-info",
  "fullmag-engine",
+ "fullmag-expr",
  "fullmag-fdm-demag",
  "fullmag-fdm-sys",
  "fullmag-fem-sys",

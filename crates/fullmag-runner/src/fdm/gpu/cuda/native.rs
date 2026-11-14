@@ -707,11 +707,85 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
     }
 }
 
+// The host interpreter of the native library and fullmag-expr must read the
+// same bytecode version.
+#[cfg(feature = "cuda")]
+const _: () = assert!(fullmag_expr::TIME_PROGRAM_VERSION == ffi::FULLMAG_TIME_EXPRESSION_VERSION);
+
 #[cfg(feature = "cuda")]
 struct NativeRegionalFieldDrivePayload {
     _fields: Vec<Vec<f64>>,
     _piecewise_points: Vec<Vec<f64>>,
+    /// Time programs of HOST_MULTIPLIER (mask term) drives, aligned with
+    /// `descriptors`; empty for built-in waveforms.
+    time_programs: Vec<Vec<f64>>,
     descriptors: Vec<ffi::fullmag_fdm_regional_field_drive_desc_v2>,
+}
+
+#[cfg(feature = "cuda")]
+impl NativeRegionalFieldDrivePayload {
+    fn has_host_multipliers(&self) -> bool {
+        self.time_programs.iter().any(|program| !program.is_empty())
+    }
+
+    /// The same drives as v3 descriptors; the programs stay owned by `self`.
+    fn v3_descriptors(&self) -> Vec<ffi::fullmag_fdm_regional_field_drive_desc_v3> {
+        self.descriptors
+            .iter()
+            .zip(&self.time_programs)
+            .map(|(descriptor, program)| {
+                let mut drive = *descriptor;
+                drive.drive.abi_version = ffi::FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3;
+                drive.drive.struct_size =
+                    std::mem::size_of::<ffi::fullmag_fdm_regional_field_drive_desc_v3>() as u32;
+                ffi::fullmag_fdm_regional_field_drive_desc_v3 {
+                    drive,
+                    time_program: if program.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        program.as_ptr()
+                    },
+                    time_program_len: program.len() as u64,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Mask terms need the native HOST_MULTIPLIER capability, and the library's
+/// interpreter must agree with fullmag-expr on every program (4 ulp).
+#[cfg(feature = "cuda")]
+fn check_native_host_multipliers(payload: &NativeRegionalFieldDrivePayload) -> Result<(), RunError> {
+    let capabilities = unsafe { ffi::fullmag_fdm_capability_bits_v1() };
+    if capabilities & ffi::FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1 == 0 {
+        return Err(RunError {
+            message: "mask_field_drive_unsupported_lane:fdm_cuda: the native CUDA FDM library does not advertise host-multiplier drives".to_string(),
+        });
+    }
+    const SAMPLE_TIMES_S: [f64; 5] = [0.0, 1.0e-12, 3.7e-11, 1.0e-9, 2.5e-8];
+    for (index, program) in payload.time_programs.iter().enumerate() {
+        if program.is_empty() {
+            continue;
+        }
+        for time_s in SAMPLE_TIMES_S {
+            let native = unsafe {
+                ffi::fullmag_fdm_time_expression_eval_v1(program.as_ptr(), program.len() as u64, time_s)
+            };
+            let rust = fullmag_expr::eval_time_program(program, time_s);
+            let scale = native.abs().max(rust.abs());
+            let agree = native == rust
+                || (native.is_nan() && rust.is_nan())
+                || (native - rust).abs() <= 4.0 * f64::EPSILON * scale;
+            if !agree {
+                return Err(RunError {
+                    message: format!(
+                        "native and Rust time interpreters disagree for drive {index} at t = {time_s:e} s: {native:e} vs {rust:e}"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]
@@ -750,14 +824,23 @@ fn native_regional_field_drive_payload(
             .iter()
             .map(NativeDriveSpec::Solved),
     );
-    if specs.is_empty() {
+    if specs.is_empty() && plan.mask_field_term_bases.is_empty() {
         return Ok(None);
+    }
+    if plan.mask_field_term_bases.len() > ffi::FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES as usize {
+        return Err(RunError {
+            message: format!(
+                "mask_too_many_terms: {} mask terms are active; the CUDA FDM lane evaluates at most {} per stage",
+                plan.mask_field_term_bases.len(),
+                ffi::FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES
+            ),
+        });
     }
     let cell_count = plan.initial_magnetization.len();
     let flat_len = cell_count.checked_mul(3).ok_or_else(|| RunError {
         message: "regional field drive basis length overflows usize".to_string(),
     })?;
-    let drive_count = u32::try_from(specs.len()).map_err(|_| RunError {
+    let drive_count = u32::try_from(specs.len() + plan.mask_field_term_bases.len()).map_err(|_| RunError {
         message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
     })?;
     let mut fields = Vec::with_capacity(specs.len());
@@ -900,11 +983,67 @@ fn native_regional_field_drive_payload(
             waveform_origin_time_s: plan.time_stage.waveform_origin_time_s(),
         });
     }
+    let mut time_programs = vec![Vec::new(); descriptors.len()];
+
+    // Mask terms (ADR 0081): the host evaluates each time program once per
+    // field build; the kernels only scale the basis by that value.
+    for basis in &plan.mask_field_term_bases {
+        if basis.field_xyz.len() != cell_count {
+            return Err(RunError {
+                message: format!(
+                    "mask drive '{}' term {} basis length {} differs from FDM cell count {}",
+                    basis.drive_id,
+                    basis.term_index,
+                    basis.field_xyz.len(),
+                    cell_count
+                ),
+            });
+        }
+        let mut field = Vec::with_capacity(flat_len);
+        for value in &basis.field_xyz {
+            field.extend_from_slice(value);
+        }
+        fields.push(field);
+        piecewise_points.push(Vec::new());
+        time_programs.push(basis.time_program.clone());
+        let field_storage = fields.last().expect("field storage was just appended");
+        descriptors.push(ffi::fullmag_fdm_regional_field_drive_desc_v2 {
+            drive: ffi::fullmag_fdm_regional_field_drive_desc_v1 {
+                abi_version: ffi::FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2,
+                struct_size: std::mem::size_of::<ffi::fullmag_fdm_regional_field_drive_desc_v2>()
+                    as u32,
+                field_xyz: field_storage.as_ptr(),
+                field_len: field_storage.len() as u64,
+                waveform: ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER,
+                time_origin: match basis.time_origin {
+                    fullmag_ir::FieldTimeOriginIR::StageLocal => {
+                        ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
+                    }
+                    fullmag_ir::FieldTimeOriginIR::Absolute => {
+                        ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE
+                    }
+                },
+                stage_start_time_s: plan.time_stage.start_time_s,
+                frequency_hz: 0.0,
+                phase_rad: 0.0,
+                offset: 0.0,
+                t_on_s: 0.0,
+                t_off_s: 0.0,
+                cutoff_hz: 0.0,
+                t0_s: 0.0,
+                amplitude: 1.0,
+                piecewise_points: std::ptr::null(),
+                piecewise_point_count: 0,
+            },
+            waveform_origin_time_s: plan.time_stage.waveform_origin_time_s(),
+        });
+    }
 
     debug_assert_eq!(descriptors.len(), drive_count as usize);
     Ok(Some(NativeRegionalFieldDrivePayload {
         _fields: fields,
         _piecewise_points: piecewise_points,
+        time_programs,
         descriptors,
     }))
 }
@@ -2298,12 +2437,28 @@ impl NativeFdmBackend {
         }
 
         if let Some(regional_drives) = native_regional_field_drive_payload(plan)? {
+            let host_multipliers = regional_drives.has_host_multipliers();
+            if host_multipliers {
+                if let Err(error) = check_native_host_multipliers(&regional_drives) {
+                    unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                    return Err(error);
+                }
+            }
+            let extended = regional_drives.v3_descriptors();
             let drive_status = unsafe {
-                ffi::fullmag_fdm_backend_set_regional_field_drives_v2(
-                    handle,
-                    regional_drives.descriptors.as_ptr(),
-                    regional_drives.descriptors.len() as u32,
-                )
+                if host_multipliers {
+                    ffi::fullmag_fdm_backend_set_regional_field_drives_v3(
+                        handle,
+                        extended.as_ptr(),
+                        extended.len() as u32,
+                    )
+                } else {
+                    ffi::fullmag_fdm_backend_set_regional_field_drives_v2(
+                        handle,
+                        regional_drives.descriptors.as_ptr(),
+                        regional_drives.descriptors.len() as u32,
+                    )
+                }
             };
             if drive_status != ffi::FULLMAG_FDM_OK {
                 let message = unsafe {

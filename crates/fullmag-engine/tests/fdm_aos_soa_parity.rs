@@ -164,7 +164,7 @@ fn aos_and_soa_effective_fields_include_regional_drive_once() {
     );
     problem.regional_field_drives.push(RegionalFieldDriveTerm {
         basis_field: vec![[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0]],
-        waveform: fullmag_ir::TimeDependenceIR::Constant,
+        time: fullmag_engine::DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
         time_offset_s: 0.0,
         enabled: true,
     });

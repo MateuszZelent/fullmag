@@ -129,7 +129,10 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::HDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some()
             || plan.spin_transport_plans.iter().any(|transport| {
                 transport.fdm_cpu_double.as_ref().is_some_and(|descriptor| descriptor.oersted_source_bound)
@@ -149,7 +152,10 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::EdenDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }

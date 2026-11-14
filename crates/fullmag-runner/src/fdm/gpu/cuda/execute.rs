@@ -450,6 +450,19 @@ pub(crate) fn apply_regional_drive_energy(
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
+    for basis in &plan.mask_field_term_bases {
+        let local_time_s =
+            crate::fdm::mask_time::mask_term_local_time(plan, basis.time_origin, stats.time);
+        let multiplier = fullmag_expr::eval_time_program(&basis.time_program, local_time_s);
+        for (index, (m, field)) in magnetization.iter().zip(&basis.field_xyz).enumerate() {
+            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+                continue;
+            }
+            magnetization_dot_field += multiplier
+                * saturation_magnetisation(index)
+                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+        }
+    }
     split_native_regional_drive_energy(stats, -crate::MU0 * cell_volume * magnetization_dot_field);
 }
 
@@ -546,6 +559,10 @@ fn plan_uploads_time_dependent_drive(plan: &FdmPlanIR) -> bool {
             .solved_antenna_drive_bases
             .iter()
             .any(|basis| dynamic(&basis.drive.waveform))
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent)
 }
 
 #[cfg(feature = "cuda")]
@@ -816,7 +833,11 @@ pub(crate) fn execute_cuda_fdm(
         })
         || plan.solved_antenna_drive_bases.iter().any(|basis| {
             !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
-        });
+        })
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent);
     if has_dynamic_drive
         && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
     {
@@ -836,6 +857,7 @@ pub(crate) fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    crate::fdm::mask_time::check_mask_time_programs(plan, until_seconds)?;
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;

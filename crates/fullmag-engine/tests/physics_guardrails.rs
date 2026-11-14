@@ -501,11 +501,11 @@ fn guardrail_regional_drive_is_evaluated_at_requested_rhs_time() {
     );
     problem.regional_field_drives.push(RegionalFieldDriveTerm {
         basis_field: vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]],
-        waveform: fullmag_ir::TimeDependenceIR::Sinusoidal {
+        time: fullmag_engine::DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Sinusoidal {
             frequency_hz: 0.25,
             phase_rad: 0.0,
             offset: 0.0,
-        },
+        }),
         time_offset_s: 0.0,
         enabled: true,
     });
@@ -533,10 +533,10 @@ fn guardrail_heun_uses_end_stage_time_for_regional_drive() {
     );
     problem.regional_field_drives.push(RegionalFieldDriveTerm {
         basis_field: vec![[0.0, 1.0, 0.0]],
-        waveform: fullmag_ir::TimeDependenceIR::Pulse {
+        time: fullmag_engine::DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Pulse {
             t_on: 0.5,
             t_off: 1.5,
-        },
+        }),
         time_offset_s: 0.0,
         enabled: true,
     });

@@ -19,6 +19,7 @@ __device__ inline double regional_field_drive_stable_sinc(double x)
 __device__ inline double regional_field_drive_multiplier(
     const RegionalFieldDriveParams &params,
     const double *piecewise_points,
+    const RegionalFieldDriveHostMultipliers &host,
     double evaluation_time_s)
 {
     constexpr double two_pi = 6.283185307179586476925286766559;
@@ -48,6 +49,9 @@ __device__ inline double regional_field_drive_multiplier(
     case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE:
         return params.amplitude * regional_field_drive_stable_sinc(
             two_pi * params.cutoff_hz * (time_s - params.t0_s));
+    case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER:
+        // Evaluated once per field build on the host (mask terms, ADR 0081).
+        return host.value[params.host_multiplier_slot];
     default:
         return 0.0;
     }
@@ -58,6 +62,7 @@ __device__ inline double regional_field_drive_component(
     const Scalar *basis,
     const RegionalFieldDriveParams *params,
     const double *piecewise_points,
+    const RegionalFieldDriveHostMultipliers &host,
     uint32_t drive_count,
     uint64_t cell_count,
     uint64_t cell_index,
@@ -67,7 +72,7 @@ __device__ inline double regional_field_drive_component(
     double value = 0.0;
     for (uint32_t drive = 0; drive < drive_count; ++drive) {
         const double multiplier = regional_field_drive_multiplier(
-            params[drive], piecewise_points, evaluation_time_s);
+            params[drive], piecewise_points, host, evaluation_time_s);
         value += multiplier * static_cast<double>(
             basis[static_cast<uint64_t>(drive) * cell_count + cell_index]);
     }

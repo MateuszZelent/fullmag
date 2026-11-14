@@ -541,7 +541,7 @@ pub(crate) fn resolved_regional_field_drives(
         .iter()
         .map(|resolved| RegionalFieldDriveTerm {
             basis_field: resolved.field_xyz.clone(),
-            waveform: resolved.drive.waveform.clone(),
+            time: fullmag_engine::DriveTimeFunction::Waveform(resolved.drive.waveform.clone()),
             time_offset_s: match resolved.drive.time_origin {
                 fullmag_ir::FieldTimeOriginIR::StageLocal => plan
                     .time_stage
@@ -553,6 +553,20 @@ pub(crate) fn resolved_regional_field_drives(
         })
         .collect();
     drives.extend(resolved_solved_antenna_drives(plan, stage_start_time_s));
+    // Hand-written mask terms (ADR 0081): the same basis × multiplier path,
+    // with the multiplier from the term's time program.
+    drives.extend(plan.mask_field_term_bases.iter().map(|basis| RegionalFieldDriveTerm {
+        basis_field: basis.field_xyz.clone(),
+        time: fullmag_engine::DriveTimeFunction::Expression(basis.time_program.clone()),
+        time_offset_s: match basis.time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => plan
+                .time_stage
+                .waveform_origin_time_s
+                .unwrap_or(stage_start_time_s),
+            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
+        },
+        enabled: true,
+    }));
     drives
 }
 
@@ -582,7 +596,7 @@ fn resolved_solved_antenna_drives(
                     ]
                 })
                 .collect(),
-            waveform: basis.drive.waveform.clone(),
+            time: fullmag_engine::DriveTimeFunction::Waveform(basis.drive.waveform.clone()),
             time_offset_s: match basis.drive.time_origin {
                 FieldTimeOriginIR::StageLocal => plan
                     .time_stage
@@ -1590,6 +1604,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 .to_string(),
         });
     }
+    crate::fdm::mask_time::check_mask_time_programs(plan, until_seconds)?;
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: format!(

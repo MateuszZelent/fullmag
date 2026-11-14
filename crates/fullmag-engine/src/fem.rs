@@ -4746,11 +4746,11 @@ mod tests {
         problem
             .set_dynamic_field_drives(vec![RegionalFieldDriveTerm {
                 basis_field: vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes],
-                waveform: TimeDependenceIR::Sinusoidal {
+                time: crate::fdm::DriveTimeFunction::Waveform(TimeDependenceIR::Sinusoidal {
                     frequency_hz: 0.5 / dt,
                     phase_rad: 0.0,
                     offset: 0.0,
-                },
+                }),
                 time_offset_s: 0.0,
                 enabled: true,
             }])
@@ -4779,11 +4779,11 @@ mod tests {
         problem
             .set_dynamic_field_drives(vec![RegionalFieldDriveTerm {
                 basis_field: vec![[0.0, 0.0, amplitude]; problem.topology.n_nodes],
-                waveform: TimeDependenceIR::Sinusoidal {
+                time: crate::fdm::DriveTimeFunction::Waveform(TimeDependenceIR::Sinusoidal {
                     frequency_hz,
                     phase_rad: 0.0,
                     offset: 0.0,
-                },
+                }),
                 time_offset_s: 0.0,
                 enabled: true,
             }])

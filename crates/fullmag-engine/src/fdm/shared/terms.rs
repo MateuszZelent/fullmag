@@ -4,13 +4,21 @@ use crate::magnetoelastic;
 use crate::Vector3;
 use fullmag_ir::TimeDependenceIR;
 
+/// Time factor of one regional drive: a built-in waveform, or the
+/// `fullmag_time_expr.v1` program of a hand-written mask term (ADR 0081).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriveTimeFunction {
+    Waveform(TimeDependenceIR),
+    Expression(Vec<f64>),
+}
+
 /// Immutable cell-wise spatial basis plus a time envelope for one canonical
 /// regional magnetic drive. The planner/runner owns target realization;
 /// integrators only evaluate this basis at their exact RK stage time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegionalFieldDriveTerm {
     pub basis_field: Vec<Vector3>,
-    pub waveform: TimeDependenceIR,
+    pub time: DriveTimeFunction,
     /// Absolute time subtracted before waveform evaluation for stage-local drives.
     pub time_offset_s: f64,
     pub enabled: bool,
@@ -19,7 +27,13 @@ pub struct RegionalFieldDriveTerm {
 impl RegionalFieldDriveTerm {
     pub fn multiplier_at(&self, absolute_time_s: f64) -> f64 {
         let time = absolute_time_s - self.time_offset_s;
-        match &self.waveform {
+        let waveform = match &self.time {
+            DriveTimeFunction::Expression(program) => {
+                return fullmag_expr::eval_time_program(program, time);
+            }
+            DriveTimeFunction::Waveform(waveform) => waveform,
+        };
+        match waveform {
             TimeDependenceIR::Constant => 1.0,
             TimeDependenceIR::Sinusoidal {
                 frequency_hz,

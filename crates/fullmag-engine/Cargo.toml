@@ -10,6 +10,7 @@ parallel = ["dep:rayon"]
 telemetry = []
 
 [dependencies]
+fullmag-expr = { path = "../fullmag-expr" }
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }
 rustfft = "6.4"

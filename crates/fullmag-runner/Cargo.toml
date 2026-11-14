@@ -17,6 +17,7 @@ fullmag-build-info.workspace = true
 fullmag-session = { path = "../fullmag-session" }
 fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
 fullmag-engine = { path = "../fullmag-engine", features = ["parallel"] }
+fullmag-expr = { path = "../fullmag-expr" }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag", features = ["parallel"] }
 fullmag-fdm-sys = { path = "../fullmag-fdm-sys", optional = true }
 fullmag-fem-sys = { path = "../fullmag-fem-sys", optional = true }

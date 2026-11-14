@@ -50,7 +50,8 @@ struct DeviceVectorField {
 /// not need a second host-side waveform evaluation.
 struct RegionalFieldDriveParams {
     int waveform = FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
-    int reserved = 0;
+    /// Index into RegionalFieldDriveHostMultipliers for HOST_MULTIPLIER drives.
+    int host_multiplier_slot = 0;
     uint64_t point_offset = 0;
     uint64_t point_count = 0;
     double time_offset_s = 0.0;
@@ -62,6 +63,13 @@ struct RegionalFieldDriveParams {
     double cutoff_hz = 0.0;
     double t0_s = 0.0;
     double amplitude = 1.0;
+};
+
+/// Values of the HOST_MULTIPLIER drives at one field-build time, evaluated on
+/// the host and passed to the kernels by value (as mumax3 passes its time
+/// multipliers), so no per-cell time evaluation and no upload per step.
+struct RegionalFieldDriveHostMultipliers {
+    double value[FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES] = {};
 };
 
 // Fixed-size CUDA transfer pool for observable snapshots.  The solver never
@@ -473,6 +481,10 @@ struct Context {
     // True when any uploaded drive has a non-constant waveform.
     bool regional_field_drive_time_dependent = false;
     uint64_t regional_field_drive_point_count = 0;
+    // Host copies for HOST_MULTIPLIER drives, indexed by their slot: the
+    // validated time program and the clock offset of the drive.
+    std::vector<std::vector<double>> regional_field_drive_host_programs;
+    std::vector<double> regional_field_drive_host_time_offsets;
 
     // Execution
     fullmag_fdm_precision precision;
@@ -2915,6 +2927,17 @@ bool context_upload_regional_field_drives(
     Context &ctx,
     const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
+    uint32_t drive_count);
+
+/// Values of the HOST_MULTIPLIER drives at `evaluation_time_s` (the solver
+/// clock of the kernels). A non-finite value records
+/// `mask_expression_non_finite` in ctx.last_error and is passed as 0.
+RegionalFieldDriveHostMultipliers context_regional_field_drive_host_multipliers(
+    Context &ctx,
+    double evaluation_time_s);
 
 /// Upload sparse demag boundary correction tensors.
 bool context_upload_demag_boundary_corr(
