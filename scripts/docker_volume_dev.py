@@ -2475,6 +2475,30 @@ def _run_held_ui_materialization(args, *, controller):
     }
 
 
+def _capture_held_ui_fresh_plan(controller, *, backend_container_id, plan,
+                                source_scope, verify_source_and_state):
+    """Adapt the typed capture tuple to lifecycle's closed six-key boundary."""
+    verify_source_and_state()
+    captured = controller.capture_readonly_preflight(
+        backend_container_id,
+        attempt=plan["attempt"],
+        maintenance_request_id=plan["maintenance_request_id"],
+        run_id=plan["accepted"]["run_id"],
+        source_scope=source_scope,
+    )
+    if not isinstance(captured, tuple) or len(captured) != 3:
+        raise BuildControlError("Held UI read-only capture did not return its accepted/preflight/inventory tuple")
+    accepted, preflight, inventory = captured
+    return {
+        "accepted": accepted,
+        "preflight": preflight,
+        "inventory": inventory,
+        "source_scope": dict(source_scope),
+        "attempt": plan["attempt"],
+        "maintenance_request_id": plan["maintenance_request_id"],
+    }
+
+
 def _capture_held_ui_stop_context(args, plan, *, controller, require_running=True):
     """Bind the stop driver to the exact retained Compose and state roots."""
     from docker_dev import _select_source, _compose_identity
@@ -2641,11 +2665,9 @@ def _capture_held_ui_stop_context(args, plan, *, controller, require_running=Tru
     }
 
     def capture_fresh():
-        verify_source_and_state()
-        return controller.capture_readonly_preflight(
-            ids["backend"], attempt=plan["attempt"],
-            maintenance_request_id=plan["maintenance_request_id"],
-            run_id=accepted["run_id"], source_scope=scope,
+        return _capture_held_ui_fresh_plan(
+            controller, backend_container_id=ids["backend"], plan=plan,
+            source_scope=scope, verify_source_and_state=verify_source_and_state,
         )
 
     def stop_service(name, container_id):

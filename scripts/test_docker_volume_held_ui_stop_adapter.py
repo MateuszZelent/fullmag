@@ -6,9 +6,55 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import docker_volume_dev as subject
+import docker_volume_held_ui_lifecycle as lifecycle
+import docker_volume_held_ui_materialization as controller
+from test_docker_volume_held_ui_materialization import valid_proof_chain
 
 
 class HeldStopAdapter(unittest.TestCase):
+    def test_production_fresh_capture_adapter_feeds_the_real_lifecycle_plan_validator(self):
+        request, proofs = valid_proof_chain()
+        source_scope = request["source_scope"]
+        accepted = request["accepted"]
+        plan, plan_sha256 = controller.build_preview_plan(
+            attempt=request["plan"]["attempt"],
+            maintenance_request_id=request["plan"]["maintenance_request_id"],
+            source_scope=source_scope,
+            accepted=accepted,
+            preflight=proofs["preflight"],
+            inventory=proofs["inventory"],
+        )
+        events = []
+
+        def verify_source_and_state():
+            events.append("source-revalidated")
+
+        def capture(*args, **kwargs):
+            events.append("preflight-captured")
+            self.assertEqual(args, (source_scope["backend_container_id"],))
+            self.assertEqual(kwargs, {
+                "attempt": plan["attempt"],
+                "maintenance_request_id": plan["maintenance_request_id"],
+                "run_id": accepted["run_id"],
+                "source_scope": source_scope,
+            })
+            return accepted, proofs["preflight"], proofs["inventory"]
+
+        with patch.object(controller, "capture_readonly_preflight", side_effect=capture):
+            fresh = subject._capture_held_ui_fresh_plan(
+                controller, backend_container_id=source_scope["backend_container_id"],
+                plan=plan, source_scope=source_scope,
+                verify_source_and_state=verify_source_and_state,
+            )
+        actual = lifecycle._assert_plan(controller, plan, plan_sha256, lambda: fresh)
+
+        self.assertEqual(events, ["source-revalidated", "preflight-captured"])
+        self.assertEqual(set(fresh), {
+            "accepted", "preflight", "inventory", "source_scope", "attempt",
+            "maintenance_request_id",
+        })
+        self.assertEqual(actual, (accepted, proofs["preflight"], proofs["inventory"]))
+
     def test_stale_approved_plan_is_rejected_before_context_or_stop(self):
         args = SimpleNamespace(apply=True, preview=False, expected_plan_sha256="a" * 64)
         controller = SimpleNamespace(_digest=lambda value, _label: value)
