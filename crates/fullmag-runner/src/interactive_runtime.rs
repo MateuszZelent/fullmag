@@ -6402,6 +6402,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
         fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()
@@ -6519,6 +6520,7 @@ fn cuda_execution_provenance(
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
         fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
@@ -6668,6 +6670,7 @@ fn fem_gpu_execution_provenance(
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
         fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
         fem_eigen_execution_resolution: None,
         fem_eigen_native_execution_attestation: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()

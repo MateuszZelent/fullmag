@@ -704,9 +704,63 @@ accepted-refinement endpoint. The managed `fem-demag-poisson` GPU contract,
 including Auto selection, passed at attempt
 `998032a3cef54e568cd0feac015ec813` for source snapshot
 `9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe`.
-One matched SP4 relaxation also passed the retained component-energy, torque,
-and native-residual gates with complete Zarr. Repeated total-time measurements
-and broader workload qualification remain pending; no overall speedup is claimed.
+Three static SP4 relaxations also passed the retained component-energy, torque,
+and native-residual gates with complete Zarr. The selected ProblemIR, mesh and
+authored initial magnetization agree; all 21 saved numeric chunks are bitwise
+equal between these C2 repetitions. Hot-loop PCG work decreased from 7477 to
+6106 iterations and from 1017 to 852 status reads. The observed worker times
+were 44.345637, 39.772995 and 39.002946 seconds; inclusive Poisson median was
+15.031024 seconds versus 18.017044 seconds in the preceding C6/C7 series.
+The first repetition used startup-script execution and the other two used
+public Run This Stage. Its explicit authored input and output-port binding
+differ from the startup Study, while the selected ProblemIR, initial values
+and energy autosave remain equal. Thus the worker median comparison
+43.633727 to 39.772995 seconds is observational, not an isolated causal A/B or
+UI end-to-end speedup. Broader workload qualification remains pending.
+
+Update 2026-11-14 stream-ordered L1-Jacobi copy candidate (C1; managed build,
+native execution and speedup **NOT VERIFIED**): the pinned HYPRE 3.1.0 source
+calls the Relax7Jacobi device helper from relaxation type 18. Its existing
+copy from the local RHS into the temporary vector can use a device-to-device
+`cudaMemcpyAsync` on HYPRE's existing compute stream when both vectors have
+equal positive sizes, one vector, canonical contiguous strides and actual
+DEVICE memory. Identical data pointers remain a no-op. Other layouts and
+memory backends retain the original copy implementation. This preserves all
+arithmetic, stream ownership and Fullmag producer/consumer event ordering;
+it adds no host norm, field transfer, solver option or CPU fallback. A rejected
+copy submission retains HYPRE's sticky error and returns before the following
+Matvec/Divpy, restoring the helper's stream-sync and profiler state.
+
+| Realization | C1 effect and qualification |
+|---|---|
+| FDM CPU | Not applicable; no HYPRE AMG dependency in this solver path. |
+| FDM GPU | Not applicable; its demagnetizing solver is separate. |
+| FEM CPU | Original copy implementation; no CUDA bridge or residency change. |
+| FEM GPU | Narrow CUDA, non-mixed-precision device-vector copy candidate; runtime and performance pending. |
+
+Two private HYPRE getters expose successful copy submissions and submitted
+bytes as process-cumulative host counters. These are not completed GPU events,
+per-context Physical/HotLoop counters, or per-level coverage. Their relaxed
+host atomics add no GPU synchronization. Terminal provenance may retain the
+optional `hypre_relax7_async_copy` observation with
+`scope="process_cumulative_at_terminal_capture"`, `count` (dimensionless) and
+`bytes` (bytes); unavailable symbols in an older HYPRE produce an absent
+observation, never a fabricated zero. A changing count during the bounded
+count/bytes/count read likewise earns no coherent observation. The existing
+480-byte native snapshot and Python/ProblemIR authoring remain unchanged.
+The caller must provide a terminal, inactive process observation: this bounded
+check detects a count change but is not a seqlock for concurrently updated
+relaxed counters, and does not establish quiescence of unrelated contexts.
+
+The native regression brackets an actual production CG/AMG computation and
+requires a positive copy-count/byte delta when the patched dependency is
+present. It also checks failed-submission accounting and the sticky error
+without launching an invalid-address device kernel. An older unpatched
+dependency remains explicitly C1-unverified. Qualification requires the pinned
+patch digest in dependency metadata, actual native hit markers, positive
+terminal SP4 observations, and the unchanged energy, torque, true-residual and
+complete-Zarr gates. Submitted-copy counts alone do not prove a performance
+gain or the removal of every blocking operation in AMG.
 
 The CPU direct-minimizer profile also accumulates linear iterations from each
 sample (current field, rejected/accepted trial and explicit refinement) before
@@ -1152,12 +1206,17 @@ managed-runtime qualification.
 | Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
 | Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L151) |
 | Independent GPU residual regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Corrupts a successfully solved GPU potential and requires independent rejection despite the stale HYPRE success report. | FEM GPU | Managed RED compiled and failed at the intended assertion; GREEN passed with the actual corruption-rejection marker. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711) |
-| gpu-pgbb-accepted-potential-key | `backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp` | `gpu_demag_pgbb_potential_key` | Computes the exact eligibility key for accepted-potential reuse, including endpoint, operator, device, workspace, solution, streams, row count, and setup generations. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
-| gpu-pgbb-accepted-potential-consume | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_consume_pgbb_potential` | Issues a move-only single-use permit and consumes it before the solution buffer can be overwritten. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
-| gpu-pgbb-accepted-potential-trial | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_pgbb_trial` | Applies a qualified initial guess only on the first ordinary trial; subsequent backtracks, refinement, and confirmation use fresh solves. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
-| gpu-pgbb-accepted-potential-publish | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_publish_pgbb_potential` | Publishes a token only when the caller has an ordinary finalized accepted endpoint; the PGBB caller suppresses it after refinement or due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
-| gpu-pgbb-accepted-potential-publication-gate | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | Gates accepted-endpoint publication on no refinement and no due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
-| gpu-pgbb-accepted-potential-regression | `backends/fem/tests/cuda_pgbb_accepted_potential_fixture.hpp` | `gpu_pgbb_accepted_potential_contract` | Covers one-use warm start, Armijo evidence, rollback, rejection/backtracks, key mismatch, and fresh refinement/confirmation. It does not force an accepted-refinement endpoint. | FEM GPU PGBB | Controlled native GPU gate including Auto passed; repeated SP4 timing pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-patch | `scripts/test_bootstrap_docker_toolchain.py` | `test_hypre_l1_patch_is_pinned_applied_and_recorded` | Checks tracked dependency inputs, both immutable content digests and application ordering. The Dockerfile applies the patch before building HYPRE. | FEM GPU dependency | Source regression; managed build pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-bridge | `docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp` | `hypre_BoomerAMGRelax7CopyAsyncDevice` | Owns the stream-ordered CUDA copy and sticky-error handling; CPU and other memory/layout paths retain the original copy. | FEM GPU | Managed execution and speedup pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-native-hit | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `require_hypre_l1_async_copy_production_hit` | Brackets a production CG/AMG computation and requires actual successful copy submissions. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-submission-error | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `hypre_l1_async_copy_submission_error_contract` | Exercises rejected submission and unchanged successful-copy counters while preserving exact HYPRE error handling. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-terminal-observation | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `terminal_hypre_relax7_async_copy` | Optionally observes process-cumulative host counters after solver completion without changing the native snapshot ABI. | FEM GPU | Serialization regressions present; managed runtime pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-key | `backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp` | `gpu_demag_pgbb_potential_key` | Computes the exact eligibility key for accepted-potential reuse, including endpoint, operator, device, workspace, solution, streams, row count, and setup generations. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-consume | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_consume_pgbb_potential` | Issues a move-only single-use permit and consumes it before the solution buffer can be overwritten. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-trial | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_pgbb_trial` | Applies a qualified initial guess only on the first ordinary trial; subsequent backtracks, refinement, and confirmation use fresh solves. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-publish | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_publish_pgbb_potential` | Publishes a token only when the caller has an ordinary finalized accepted endpoint; the PGBB caller suppresses it after refinement or due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-publication-gate | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | Gates accepted-endpoint publication on no refinement and no due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-regression | `backends/fem/tests/cuda_pgbb_accepted_potential_fixture.hpp` | `gpu_pgbb_accepted_potential_contract` | Covers one-use warm start, Armijo evidence, rollback, rejection/backtracks, key mismatch, and fresh refinement/confirmation. It does not force an accepted-refinement endpoint. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
 | gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
 | cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
 | gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |

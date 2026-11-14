@@ -66,6 +66,7 @@
 #include <utility>
 #include <vector>
 #include <cerrno>
+#include "hypre_l1_async_copy_fixture.hpp"
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -3399,10 +3400,16 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               "initialized GPU Poisson AMG must report coarse-cycle relax type 18");
         fullmag::fem::gpu_performance_begin_attempt(ctx.gpu_state.performance_counters,1);
 
+#ifndef _WIN32
+        const auto l1_copy_before = fullmag::fem::test::capture_hypre_l1_async_copies(check);
+#endif
         error.clear();
         check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
                          ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
                      error, "mixed CUDA/Hypre AMG Poisson device step");
+#ifndef _WIN32
+        fullmag::fem::test::require_hypre_l1_async_copy_production_hit(l1_copy_before, check);
+#endif
         auto *fresh_pcg_workspace=fullmag::fem::workspace_ptr(ctx);
         check(fresh_pcg_workspace && fresh_pcg_workspace->device_pcg &&
                   fresh_pcg_workspace->last_amg_apply_calls==
@@ -3423,6 +3430,10 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         check(pcg_workspace && pcg_workspace->device_pcg,"CG/AMG must select the device-scalar engine");
         check(fullmag::fem::demag_poisson_resolved_linear_engine(ctx)==3,
               "initialized AMG context reports actual device-scalar engine");
+#ifndef _WIN32
+        fullmag::fem::test::hypre_l1_async_copy_submission_error_contract(
+            ctx.gpu_state.device.demag_poisson.poisson_solution, check);
+#endif
         const uint32_t valid_max_iterations=ctx.demag.solver.max_iterations;
         ctx.demag.solver.max_iterations=0;
         check(!fullmag::fem::apply_demag_poisson_hypre_device_solver(ctx,*pcg_workspace,error),

@@ -622,6 +622,36 @@
       "path": "crates/fullmag-runner/src/types.rs",
       "symbol": "legacy_execution_provenance_without_performance_snapshot_remains_valid",
       "responsibility": "Confirms that historical ExecutionProvenance JSON without the optional terminal snapshot remains deserializable and does not emit a null field. Managed Rust execution pending."
+    },
+    {
+      "id": "hypre-l1-stream-copy-patch",
+      "path": "scripts/test_bootstrap_docker_toolchain.py",
+      "symbol": "test_hypre_l1_patch_is_pinned_applied_and_recorded",
+      "responsibility": "Checks explicit dependency context inputs, immutable patch/header digests, apply ordering and dependency metadata; source checks alone do not qualify runtime or speedup."
+    },
+    {
+      "id": "hypre-l1-stream-copy-bridge",
+      "path": "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp",
+      "symbol": "hypre_BoomerAMGRelax7CopyAsyncDevice",
+      "responsibility": "Uses the existing HYPRE compute stream for the qualified copy and preserves sticky submission failure before following relaxation work."
+    },
+    {
+      "id": "hypre-l1-stream-copy-native-hit",
+      "path": "backends/fem/tests/hypre_l1_async_copy_fixture.hpp",
+      "symbol": "require_hypre_l1_async_copy_production_hit",
+      "responsibility": "Requires a positive process counter delta around the real production AMG computation when the patched dependency is loaded; older dependencies do not earn C1 qualification."
+    },
+    {
+      "id": "hypre-l1-stream-copy-submission-error",
+      "path": "backends/fem/tests/hypre_l1_async_copy_fixture.hpp",
+      "symbol": "hypre_l1_async_copy_submission_error_contract",
+      "responsibility": "Exercises a rejected copy submission, exact sticky HYPRE error and unchanged successful-copy counters; managed execution pending."
+    },
+    {
+      "id": "hypre-l1-stream-copy-terminal-observation",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "terminal_hypre_relax7_async_copy",
+      "responsibility": "Optionally reads private process-cumulative HYPRE host counters at terminal quiescence, omits missing symbols or detected count changes, and adds no GPU readback or native ABI fields."
     }
   ],
   "public_api": {
@@ -721,6 +751,8 @@
     "fresh_reuse_cupti": "Separate full92-step SP4 with solver_profile+cuda_trace passes science/control/Zarr. CUPTI is accepted as attempt/PID/GPU-bound but partial at512MiB,1021904records,5690drops,limit_flags1; timing qualification not_verified. Counts are incomplete; no full-run GPU timing/utilization or AMG speedup inferred.",
     "paired_residual_readback": "Managed fem-demag-poisson contract passed at attempt c1321d9442c641bd910f25b1b67a4a0e, snapshot49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0 and libraryc078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785; includes zero/nonfinite/extreme-scale/aliasing, true-residual corruption and queue-property fixtures. Full-Zarr SP4 timing and parity NOT VERIFIED.",
     "gpu_terminal_performance_snapshot": "Bounded source contract: complete native v1 fields inline in terminal ExecutionProvenance for native FEM GPU direct minimization only when final accepted step is positive. 480-byte ABI unchanged; Rust tests and managed execution pending. No CPU, LLG, interactive-runtime, or full-SP4 qualification.",
-    "gpu_pgbb_accepted_potential_c2": "Move-only, exact-key, single-use accepted-potential guess for only the first ordinary PGBB trial. Managed fem-demag-poisson GPU contract including requested Auto passed at998032a3cef54e568cd0feac015ec813, source9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe, libraryd0972baf40b81785526e484e8d33ddc3ff1226e7b857717398623930078d393c. One matched full-Zarr SP4 relaxation passes retained component-energy, torque and native-residual gates. Repeated total-time measurements and broader workloads remain pending; no overall speedup claim. The fixture does not force an accepted-refinement endpoint."
+    "gpu_pgbb_accepted_potential_c2": "Move-only, exact-key, single-use accepted-potential guess for only the first ordinary PGBB trial. Managed fem-demag-poisson GPU contract including requested Auto passed at998032a3cef54e568cd0feac015ec813, source9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe, libraryd0972baf40b81785526e484e8d33ddc3ff1226e7b857717398623930078d393c. One matched full-Zarr SP4 relaxation passes retained component-energy, torque and native-residual gates. Repeated total-time measurements and broader workloads remain pending; no overall speedup claim. The fixture does not force an accepted-refinement endpoint.",
+    "accepted_potential_pgbb_reuse": "Native gate998032a3cef54e568cd0feac015ec813 including resolved Auto owner passed. Three full-Zarr static SP4 runs share selected ProblemIR and authored m0; all21 numeric chunks match across C2 runs. Hot-loop PCG7477→6106iterations,1017→852statusreads; worker44.345637/39.772995/39.002946s. Startup versus Run This Stage and output-port differences prevent an isolated causal or UI end-to-end speedup claim.",
+    "hypre_l1_stream_copy": "Source candidate only. Managed dependency build/link, production predicate hit, submission-error regression, terminal SP4 count/bytes, unchanged physics/Zarr and speedup are NOT VERIFIED."
   }
 }

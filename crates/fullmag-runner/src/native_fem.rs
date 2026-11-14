@@ -80,7 +80,8 @@ pub(crate) use plan::{
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    strict_gpu_runtime_build_info, terminal_hypre_relax7_async_copy, DeviceInfo,
+    NativeFemDataResidency, NativeFemGpuRkPlanInfo,
     NativeFemGpuStateInfo,
 };
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]

@@ -19,4 +19,6 @@
 !docker/fem-gpu/nvidia-entrypoint/entrypoint.d/90-deprecated-image.sh
 !docker/fem-gpu/nvidia-entrypoint/nvidia_entrypoint.sh
 !docker/fem-gpu/patches/
+!docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff
+!docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp
 !docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff

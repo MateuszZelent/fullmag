@@ -13,6 +13,53 @@ use crate::types::{
 
 use std::ffi::CStr;
 
+fn read_hypre_relax7_async_copy(
+    count: Option<&dyn Fn() -> u64>,
+    bytes: Option<&dyn Fn() -> u64>,
+) -> Option<crate::types::HypreRelax7AsyncCopyTelemetry> {
+    let (count, bytes) = (count?, bytes?);
+    let before = count();
+    let bytes = bytes();
+    let after = count();
+    // No retry or wait: a detected submission makes this observation unavailable.
+    // The caller still needs terminal process quiescence: separate relaxed
+    // counters and this bounded check are not a seqlock for concurrent writers.
+    (before == after).then(|| crate::types::HypreRelax7AsyncCopyTelemetry {
+        count: after,
+        bytes,
+        scope: "process_cumulative_at_terminal_capture".into(),
+    })
+}
+
+/// Optional host-only observation; callers must finish GPU work before capture.
+/// Old HYPRE libraries need not export either private symbol.
+pub(crate) fn terminal_hypre_relax7_async_copy(
+) -> Option<crate::types::HypreRelax7AsyncCopyTelemetry> {
+    #[cfg(target_os = "linux")]
+    {
+        type Getter = unsafe extern "C" fn() -> libc::c_ulonglong;
+        // SAFETY: lookup only, in already loaded libraries; no new library or GPU work.
+        let (count, bytes) = unsafe {
+            (
+                libc::dlsym(libc::RTLD_DEFAULT, c"hypre_FullmagRelax7AsyncCopyCount".as_ptr()),
+                libc::dlsym(libc::RTLD_DEFAULT, c"hypre_FullmagRelax7AsyncCopyBytes".as_ptr()),
+            )
+        };
+        if count.is_null() || bytes.is_null() {
+            return None;
+        }
+        // SAFETY: the private C1 ABI defines both symbols as no-argument,
+        // unsigned-long-long getters backed by host atomics. HYPRE remains loaded.
+        let (count, bytes): (Getter, Getter) =
+            unsafe { (std::mem::transmute(count), std::mem::transmute(bytes)) };
+        let read_count = || unsafe { count() };
+        let read_bytes = || unsafe { bytes() };
+        read_hypre_relax7_async_copy(Some(&read_count), Some(&read_bytes))
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceInfo {
     pub name: String,
@@ -1532,5 +1579,30 @@ mod tests {
         });
 
         assert!(completion.is_none());
+    }
+}
+
+#[cfg(test)]
+mod hypre_async_copy_tests {
+    use super::read_hypre_relax7_async_copy;
+    use std::cell::Cell;
+
+    #[test]
+    fn optional_symbols_require_both_and_a_stable_count() {
+        let count = || 7;
+        let bytes = || 56;
+        assert!(read_hypre_relax7_async_copy(None, None).is_none());
+        assert!(read_hypre_relax7_async_copy(Some(&count), None).is_none());
+        assert!(read_hypre_relax7_async_copy(None, Some(&bytes)).is_none());
+        let snapshot = read_hypre_relax7_async_copy(Some(&count), Some(&bytes)).unwrap();
+        assert_eq!((snapshot.count, snapshot.bytes), (7, 56));
+        assert_eq!(snapshot.scope, "process_cumulative_at_terminal_capture");
+        let calls = Cell::new(0);
+        let racing_count = || {
+            let value = calls.get();
+            calls.set(value + 1);
+            value
+        };
+        assert!(read_hypre_relax7_async_copy(Some(&racing_count), Some(&bytes)).is_none());
     }
 }

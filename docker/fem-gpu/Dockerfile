@@ -139,8 +139,24 @@ RUN if [ "${FULLMAG_HYPRE_MEMORY_VARIANT}" = "umpire" ]; then \
       cmake --install /tmp/build/umpire/build; \
     fi
 
+# DOC-ANCHOR: hypre-l1-stream-copy-patch
+COPY docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff /tmp/build/hypre-3.1.0-l1-stream-copy.diff
+COPY docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp /tmp/build/hypre-3.1.0-l1-stream-copy.hpp
+
 RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hypre.git /tmp/build/hypre && \
     test "$(git -C /tmp/build/hypre rev-parse HEAD)" = "${HYPRE_SOURCE_COMMIT}" && \
+    actual_patch_sha256="$(sha256sum /tmp/build/hypre-3.1.0-l1-stream-copy.diff | cut -d ' ' -f 1)" && \
+    actual_source_sha256="$(sha256sum /tmp/build/hypre-3.1.0-l1-stream-copy.hpp | cut -d ' ' -f 1)" && \
+    expected_patch_sha256="be3477dbc5506e51005b0b2fa7df2a90924095de00ed0a8a4a6fed1e58ecb8ff" && \
+    expected_source_sha256="7700ea8a2cc70ba5b896a6801bb84268777cb7ae9cdf838c0b04d3e2deeb92a9" && \
+    if [[ "${actual_patch_sha256}" != "${expected_patch_sha256}" || \
+          "${actual_source_sha256}" != "${expected_source_sha256}" ]]; then \
+      echo "pinned HYPRE Relax7 stream-copy patch/source SHA-256 mismatch" >&2; \
+      exit 2; \
+    fi && \
+    git -C /tmp/build/hypre apply --check /tmp/build/hypre-3.1.0-l1-stream-copy.diff && \
+    git -C /tmp/build/hypre apply /tmp/build/hypre-3.1.0-l1-stream-copy.diff && \
+    cp /tmp/build/hypre-3.1.0-l1-stream-copy.hpp /tmp/build/hypre/src/parcsr_ls/fullmag_l1_stream_copy.hpp && \
     cd /tmp/build/hypre/src && \
     base_flags=( \
       --prefix=${INSTALL_PREFIX} \
@@ -176,10 +192,12 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
     make -j"$(nproc)" && \
     make install && \
     mkdir -p ${INSTALL_PREFIX}/share/fullmag && \
+    HYPRE_L1_STREAM_COPY_PATCH_SHA256="${actual_patch_sha256}" \
+    HYPRE_L1_STREAM_COPY_SOURCE_SHA256="${actual_source_sha256}" \
     HYPRE_MEMORY_VARIANT="${FULLMAG_HYPRE_MEMORY_VARIANT}" \
     HYPRE_GPU_ARCHITECTURES="${FULLMAG_HYPRE_GPU_ARCHITECTURES}" \
     HYPRE_CONFIGURE_FLAGS="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${configure_flags[@]}")" \
-    python3 -c 'import hashlib,json,os,re; from pathlib import Path; p=Path(os.environ["INSTALL_PREFIX"])/"include/HYPRE_config.h"; s=p.read_text(); names=("HYPRE_USING_UMPIRE","HYPRE_USING_UMPIRE_DEVICE","HYPRE_USING_DEVICE_MALLOC_ASYNC","HYPRE_USING_THRUST_ASYNC"); macros={n: bool(re.search(r"^#define\s+"+re.escape(n)+r"\s+1(?:\s|$)",s,re.M)) for n in names}; out={"hypre_gpu_architectures":os.environ["HYPRE_GPU_ARCHITECTURES"],"hypre_memory_variant":os.environ["HYPRE_MEMORY_VARIANT"],"hypre_configure_flags":json.loads(os.environ["HYPRE_CONFIGURE_FLAGS"]),"hypre_config_macros":macros,"hypre_config_header_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}; q=Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json"; q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))'
+    python3 -c 'import hashlib,json,os,re; from pathlib import Path; p=Path(os.environ["INSTALL_PREFIX"])/"include/HYPRE_config.h"; s=p.read_text(); names=("HYPRE_USING_UMPIRE","HYPRE_USING_UMPIRE_DEVICE","HYPRE_USING_DEVICE_MALLOC_ASYNC","HYPRE_USING_THRUST_ASYNC"); macros={n: bool(re.search(r"^#define\s+"+re.escape(n)+r"\s+1(?:\s|$)",s,re.M)) for n in names}; out={"hypre_l1_stream_copy_patch_sha256":os.environ["HYPRE_L1_STREAM_COPY_PATCH_SHA256"],"hypre_l1_stream_copy_source_sha256":os.environ["HYPRE_L1_STREAM_COPY_SOURCE_SHA256"],"hypre_gpu_architectures":os.environ["HYPRE_GPU_ARCHITECTURES"],"hypre_memory_variant":os.environ["HYPRE_MEMORY_VARIANT"],"hypre_configure_flags":json.loads(os.environ["HYPRE_CONFIGURE_FLAGS"]),"hypre_config_macros":macros,"hypre_config_header_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}; q=Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json"; q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))'
 
 # Task 9 modal GPU contract: PETSc and SLEPc must use the same CUDA-enabled
 # real/double dependency stack as MFEM and hypre.  Ubuntu's distro packages

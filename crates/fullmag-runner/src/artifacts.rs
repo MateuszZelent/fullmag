@@ -6375,6 +6375,12 @@ mod tests {
             stage_completion_fixture(&root, &autosave_root, "relax", "gpu", None);
         let snapshot = performance_snapshot_provenance_fixture();
         executed.provenance.fem_gpu_performance_snapshot = Some(snapshot.clone());
+        let hypre = crate::types::HypreRelax7AsyncCopyTelemetry {
+            count: 9_007_199_254_740_993,
+            bytes: u64::MAX,
+            scope: "process_cumulative_at_terminal_capture".into(),
+        };
+        executed.provenance.hypre_relax7_async_copy = Some(hypre.clone());
 
         write_artifacts(&output, &problem, &plan, &executed, Some(&summary))
             .expect("publish the final execution provenance to the existing Zarr stage writer");
@@ -6392,6 +6398,15 @@ mod tests {
             .join("fields/m/.zattrs");
         let attrs: serde_json::Value =
             serde_json::from_slice(&fs::read(zarr_attrs_path).unwrap()).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("metadata.json")).unwrap()).unwrap();
+        let expected_hypre = serde_json::to_value(hypre).unwrap();
+        assert_eq!(
+            metadata["execution_provenance"]["hypre_relax7_async_copy"],
+            expected_hypre
+        );
+        assert_eq!(stage["provenance"]["hypre_relax7_async_copy"], expected_hypre);
+        assert_eq!(attrs["provenance"]["hypre_relax7_async_copy"], expected_hypre);
         let expected = serde_json::to_value(snapshot).unwrap();
         assert_eq!(
             stage["provenance"]["fem_gpu_performance_snapshot"],
@@ -12201,6 +12216,7 @@ mod tests {
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
             fem_gpu_performance_snapshot: None,
+            hypre_relax7_async_copy: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -13114,6 +13130,7 @@ mod tests {
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
             fem_gpu_performance_snapshot: None,
+            hypre_relax7_async_copy: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

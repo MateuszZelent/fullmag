@@ -953,7 +953,17 @@ pub(crate) fn finalize_native_fem_relaxation(
         final_provenance.fem_gpu_performance_snapshot =
             Some(snapshot.to_provenance(final_stats.step)?);
     }
-    if final_cpu_fixed_coupling_present || capture_performance_snapshot {
+    // Terminal, process-cumulative host atomics only; no GPU readback or fence.
+    // Never attach these global observations to CPU or per-instance counters.
+    let had_hypre_async_copy = final_provenance.hypre_relax7_async_copy.is_some();
+    final_provenance.hypre_relax7_async_copy = if engine == FemEngine::NativeGpu {
+        crate::native_fem::terminal_hypre_relax7_async_copy()
+    } else {
+        None
+    };
+    let capture_hypre_async_copy =
+        had_hypre_async_copy || final_provenance.hypre_relax7_async_copy.is_some();
+    if final_cpu_fixed_coupling_present || capture_performance_snapshot || capture_hypre_async_copy {
         artifacts.replace_provenance_synchronously(final_provenance)?;
     }
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();

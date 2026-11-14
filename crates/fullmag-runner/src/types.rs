@@ -4478,6 +4478,16 @@ pub struct FdmMultilayerStageTelemetry {
     pub pair_accumulation_count: u64,
 }
 
+/// Optional HYPRE process-global submissions observed after GPU work completes.
+/// These are not per-backend, Physical, or HotLoop counters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HypreRelax7AsyncCopyTelemetry {
+    pub count: u64,
+    pub bytes: u64,
+    pub scope: String,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FemCrossoverDecision {
@@ -4681,6 +4691,9 @@ pub struct ExecutionProvenance {
     /// minimizer finalization rather than repeated in per-step telemetry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_performance_snapshot: Option<FemGpuPerformanceSnapshotProvenance>,
+    /// Optional process-global HYPRE async-copy submissions at terminal capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypre_relax7_async_copy: Option<HypreRelax7AsyncCopyTelemetry>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.
@@ -6208,6 +6221,25 @@ mod tests {
         let provenance: ExecutionProvenance = serde_json::from_value(value).unwrap();
 
         assert!(provenance.executed_physics_module_ids.is_empty());
+    }
+
+    #[test]
+    fn hypre_async_copy_provenance_is_optional_and_preserves_u64() {
+        let legacy = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        assert!(legacy.get("hypre_relax7_async_copy").is_none());
+        let mut provenance: ExecutionProvenance = serde_json::from_value(legacy).unwrap();
+        assert!(provenance.hypre_relax7_async_copy.is_none());
+        provenance.hypre_relax7_async_copy = Some(super::HypreRelax7AsyncCopyTelemetry {
+            count: 9_007_199_254_740_993,
+            bytes: u64::MAX,
+            scope: "process_cumulative_at_terminal_capture".into(),
+        });
+        let encoded = serde_json::to_string(&provenance).unwrap();
+        let decoded: ExecutionProvenance = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.hypre_relax7_async_copy,
+            provenance.hypre_relax7_async_copy
+        );
     }
 
     #[test]
