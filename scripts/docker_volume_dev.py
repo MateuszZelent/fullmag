@@ -2481,6 +2481,364 @@ def _run_held_ui_materialization(args, *, controller):
     }
 
 
+def _capture_held_ui_stop_context(args, plan, *, controller, require_running=True):
+    """Bind the stop driver to the exact retained Compose and state roots."""
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+
+    scope = plan.get("source_scope")
+    accepted = plan.get("accepted")
+    if not isinstance(scope, Mapping) or not isinstance(accepted, Mapping):
+        raise BuildControlError("Held UI stop plan has no exact source or accepted-run pins")
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    if str(selected) != scope.get("source_root"):
+        raise BuildControlError("Held UI stop selected source root differs from the approved plan")
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Held UI stop has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Held UI stop requires the exact existing control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())
+            or control.project != scope.get("compose_project")
+            or control.volume != scope.get("control_volume")
+            or control.namespace != scope.get("namespace")
+            or control.namespace_registry_sha256 != scope.get("namespace_registry_sha256")):
+        raise BuildControlError("Held UI stop control-volume or namespace ownership differs")
+
+    previous_root = "development/attempts/" + plan["attempt"]
+    expected_receipt = control.read(previous_root + "/terminal.json")
+    expected_document = control.read(previous_root + "/compose.json")
+    expected_receipt_sha256 = hashlib.sha256(canonical(expected_receipt)).hexdigest()
+    if (expected_receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or expected_receipt.get("phase") != "development"
+            or expected_receipt.get("state") != "succeeded"
+            or expected_receipt.get("attempt") != plan["attempt"]
+            or expected_receipt.get("compose_project") != control.project
+            or expected_receipt.get("control_volume") != control.volume
+            or expected_receipt.get("control_namespace", "") != control.namespace
+            or expected_receipt.get("namespace_registry_sha256") != control.namespace_registry_sha256
+            or expected_receipt.get("config_sha256") != scope.get("runtime_config_sha256")
+            or expected_receipt.get("inputs", {}).get("source_root") != str(selected)
+            or expected_receipt.get("backend_container") != scope.get("backend_container_id")
+            or expected_receipt.get("frontend_container") != scope.get("frontend_container_id")
+            or expected_receipt.get("backend_started_at") != scope.get("backend_started_at")
+            or expected_receipt.get("frontend_started_at") != scope.get("frontend_started_at")
+            or expected_receipt.get("inputs", {}).get("image_id")
+                != expected_document.get("services", {}).get("backend", {}).get("image")
+            or expected_document.get("name") != control.project
+            or hashlib.sha256(canonical(expected_document)).hexdigest()
+                != scope.get("runtime_config_sha256")):
+        raise BuildControlError("Held UI stop retained DEV receipt or Compose pins differ")
+    if expected_receipt.get("state_root") is None:
+        raise BuildControlError("Held UI stop retained DEV receipt has no state root")
+
+    from docker_dev_network import retained_requested_subnet
+    retained_requested_subnet(expected_document, getattr(args, "network_subnet", None))
+    retained_device_access = _retained_device_access(expected_receipt, expected_document)
+    resolved_device_access = _probe_retained_device_access(
+        retained_device_access, expected_receipt["inputs"]["image_id"], control.project,
+    )
+    if resolved_device_access != retained_device_access:
+        raise BuildControlError("Held UI stop device access differs from the retained profile")
+
+    host = _session_host()
+
+    def verify_source_and_state():
+        selected_now, layout_now = _select_source(repo, args.source_root)
+        identity_now = _compose_identity(layout_now)
+        if (selected_now != selected or identity_now != identity
+                or str(selected_now) != scope["source_root"]):
+            raise BuildControlError("Held UI stop source selection changed after preview")
+        receipt_now = control.read(previous_root + "/terminal.json")
+        document_now = control.read(previous_root + "/compose.json")
+        if (hashlib.sha256(canonical(receipt_now)).hexdigest() != expected_receipt_sha256
+                or hashlib.sha256(canonical(document_now)).hexdigest()
+                    != scope["runtime_config_sha256"]):
+            raise BuildControlError("Held UI stop DEV receipt or Compose changed after preview")
+        state_root = storage.validate_path(
+            Path(receipt_now["state_root"]), layout_now["runtime_root"],
+            "held UI retained session state",
+        )
+        certificate_path = _certificate_path(state_root)
+        _retained_certificate(state_root, document_now)
+        owner_raw = host.read_owned_regular(state_root / host.OWNER_NAME)
+        certificate_raw = host.read_owned_regular(certificate_path)
+        state_root_sha256 = hashlib.sha256(canonical({
+            "schema": "fullmag.held-ui-state-root-binding.v1",
+            "state_root": str(state_root.resolve(strict=True)),
+            "owner_marker_sha256": hashlib.sha256(owner_raw).hexdigest(),
+            "certificate_sha256": hashlib.sha256(certificate_raw).hexdigest(),
+        })).hexdigest()
+        if state_root_sha256 != scope.get("state_root_sha256"):
+            raise BuildControlError("Held UI stop owner/certificate state-root binding changed")
+        retained_requested_subnet(document_now, getattr(args, "network_subnet", None))
+        if _retained_device_access(receipt_now, document_now) != retained_device_access:
+            raise BuildControlError("Held UI stop retained device profile changed")
+        return document_now
+
+    ids = {
+        "backend": scope["backend_container_id"],
+        "frontend": scope["frontend_container_id"],
+    }
+    image_configs = {}
+    for service in ("backend", "frontend"):
+        service_image = expected_document.get("services", {}).get(service, {}).get("image")
+        if not isinstance(service_image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", service_image):
+            raise BuildControlError("Held UI stop retained service image is not pinned: " + service)
+        images = json.loads(docker_text("image", "inspect", service_image))
+        if len(images) != 1 or images[0].get("Id") != service_image:
+            raise BuildControlError("Held UI stop retained service image inspect differs: " + service)
+        image_configs[service] = images[0]["Config"]
+
+    def inspect_services():
+        document = verify_source_and_state()
+        records = json.loads(docker_capture("inspect", ids["backend"], ids["frontend"]).stdout)
+        by_id = {item.get("Id"): item for item in records if isinstance(item, Mapping)}
+        if len(records) != 2 or set(by_id) != set(ids.values()):
+            raise BuildControlError("Held UI stop service inspection differs from the pinned pair")
+        actual = {name: by_id[identifier] for name, identifier in ids.items()}
+        for name, container in actual.items():
+            labels = container.get("Config", {}).get("Labels", {})
+            expected_image = document["services"][name]["image"]
+            if (container.get("Image") != expected_image
+                    or labels.get("com.docker.compose.project") != control.project
+                    or labels.get("com.docker.compose.service") != name
+                    or labels.get("org.fullmag.source.worktree-id") != identity["worktree_id"]):
+                raise BuildControlError("Held UI stop service ownership differs: " + name)
+            _validate_retained_service(
+                document, container, name, image_configs[name],
+                expected_started_at=scope[name + "_started_at"],
+                allow_legacy_frontend=True,
+            )
+        if actual["backend"].get("State", {}).get("Running") is True:
+            _assert_private_restart_network(actual, ids, control.project)
+        return {
+            name: {
+                "id": ids[name], "image_id": actual[name]["Image"],
+                "started_at": actual[name]["State"].get("StartedAt"),
+                "running": actual[name]["State"].get("Running"),
+                "exit_code": actual[name]["State"].get("ExitCode"),
+                "_actual": actual[name],
+            }
+            for name in ("backend", "frontend")
+        }
+
+    initial = inspect_services()
+    if require_running:
+        if (initial["backend"]["running"] is not True
+                or initial["frontend"]["running"] is not True
+                or initial["backend"]["_actual"].get("State", {}).get("Health", {}).get("Status") != "healthy"):
+            raise BuildControlError("Held UI stop requires the exact healthy running service pair")
+    elif initial["backend"]["running"] is not False or initial["frontend"]["running"] is not False:
+        raise BuildControlError("Publish-only resume requires both exact pinned services to remain stopped")
+    expected_services = {
+        name: {key: service[key] for key in ("id", "image_id", "started_at")}
+        for name, service in initial.items()
+    }
+
+    def capture_fresh():
+        verify_source_and_state()
+        return controller.capture_readonly_preflight(
+            ids["backend"], attempt=plan["attempt"],
+            maintenance_request_id=plan["maintenance_request_id"],
+            run_id=accepted["run_id"], source_scope=scope,
+        )
+
+    def stop_service(name, container_id):
+        if name not in ids or container_id != ids[name]:
+            raise BuildControlError("Held UI stop refused an unpinned service stop")
+        docker_capture("stop", "--time", "60", container_id, timeout=90)
+
+    from docker_volume_stop_unadmitted import (
+        _preflight_terminal_process_receipt, _read_terminal_process_receipt,
+    )
+
+    def preflight_drain(service):
+        _preflight_terminal_process_receipt(service["_actual"], control)
+
+    def read_drain(service):
+        return _read_terminal_process_receipt(service["_actual"], control)
+
+    return {
+        "control": control,
+        "controller": controller,
+        "plan": plan,
+        "expected_plan_sha256": hashlib.sha256(canonical(plan)).hexdigest(),
+        "expected_services": expected_services,
+        "capture_fresh": capture_fresh,
+        "inspect_services": inspect_services,
+        "stop_service": stop_service,
+        "preflight_drain": preflight_drain,
+        "read_drain": read_drain,
+    }
+
+
+def _load_held_ui_publish_context(args, expected_plan_sha256, *, controller):
+    """Resolve only an exact spent-claim stop for request publication recovery."""
+    from docker_dev import _select_source, _compose_identity
+    from docker_build_control import toolchain_configuration
+    import uuid
+
+    attempt = getattr(args, "attempt", None)
+    request_id = getattr(args, "request_id", None)
+    run_id = getattr(args, "run_id", None)
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("Publish-only resume requires the exact retained DEV attempt")
+    try:
+        parsed_request_id = uuid.UUID(request_id)
+    except (TypeError, ValueError, AttributeError) as error:
+        raise BuildControlError("Publish-only resume requires a canonical maintenance request UUID") from error
+    if parsed_request_id.int == 0 or str(parsed_request_id) != request_id:
+        raise BuildControlError("Publish-only resume maintenance request UUID is not canonical")
+    if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", run_id) is None:
+        raise BuildControlError("Publish-only resume requires the exact accepted run id")
+
+    require_host()
+    repo = Path(args.repo_root).resolve(strict=True)
+    selected, layout = _select_source(repo, args.source_root)
+    identity = _compose_identity(layout)
+    configured = toolchain_configuration(selected, identity)
+    try:
+        helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
+    except (KeyError, TypeError) as error:
+        raise BuildControlError("Publish-only resume has no immutable control-helper image") from error
+    control = BuildControl(identity, helper_image)
+    volume_result = docker_capture("volume", "inspect", control.volume, allow_failure=True)
+    if volume_result.returncode:
+        raise BuildControlError("Publish-only resume requires the exact existing control volume")
+    volumes = json.loads(volume_result.stdout)
+    if (len(volumes) != 1 or volumes[0].get("Name") != control.volume
+            or volumes[0].get("Driver") != "local" or volumes[0].get("Options")
+            or any((volumes[0].get("Labels") or {}).get(key) != value
+                   for key, value in control.shared_labels.items())):
+        raise BuildControlError("Publish-only resume control volume ownership differs")
+
+    request_relative = controller.request_relative(request_id)
+    claim_relative = controller.quiescence_start_claim_relative(request_id)
+    existing_request = control.read_bytes("runtime-control/" + request_relative, optional=True)
+    claim_raw = control.read_bytes("runtime-control/" + claim_relative, optional=True)
+    if claim_raw is None:
+        if existing_request is not None:
+            raise BuildControlError("Published held UI request has no matching spent API claim")
+        return None
+    claim = controller.decode(claim_raw, "API quiescence start claim", maximum=16 * 1024)
+    if claim_raw != canonical(claim) + b"\n":
+        raise BuildControlError("Publish-only resume claim is not canonical JSON plus LF")
+    required_claim_fields = {
+        "schema", "state", "maintenance_request_id", "plan_sha256", "intent_sha256",
+        "run_id", "run_intent_sha256", "backend_container_id", "operation_attempt",
+    }
+    if (not isinstance(claim, Mapping) or set(claim) != required_claim_fields
+            or claim.get("schema") != "fullmag.held-ui-materialization-api-quiescence-start.v1"
+            or claim.get("state") != "started"
+            or claim.get("maintenance_request_id") != request_id
+            or claim.get("run_id") != run_id
+            or not isinstance(claim.get("operation_attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", claim["operation_attempt"]) is None):
+        raise BuildControlError("Publish-only resume claim does not identify this request and run")
+    if claim.get("plan_sha256") != expected_plan_sha256:
+        raise BuildControlError("Publish-only resume claim differs from the approved plan SHA")
+
+    intent_relative = controller.quiescence_intent_relative(request_id)
+    intent_raw = control.read_bytes("runtime-control/" + intent_relative)
+    if controller.sha(intent_raw) != claim.get("intent_sha256"):
+        raise BuildControlError("Publish-only resume quiescence intent differs from the spent claim")
+    intent = controller.decode(intent_raw, "API quiescence intent", maximum=controller.MAX_PROOF_BYTES)
+    intent = controller.validate_api_quiescence_intent(
+        intent, expected_sha256=claim["intent_sha256"],
+        expected_plan_sha256=expected_plan_sha256,
+    )
+    plan = intent["plan"]
+    if (plan.get("attempt") != attempt
+            or plan.get("maintenance_request_id") != request_id
+            or plan.get("accepted", {}).get("run_id") != run_id
+            or plan.get("source_scope", {}).get("source_root") != str(selected)
+            or plan.get("source_scope", {}).get("runtime_config_sha256") != args.config_sha256
+            or plan.get("source_scope", {}).get("compose_project") != control.project
+            or plan.get("source_scope", {}).get("control_volume") != control.volume
+            or plan.get("source_scope", {}).get("namespace") != control.namespace
+            or plan.get("source_scope", {}).get("namespace_registry_sha256")
+                != control.namespace_registry_sha256):
+        raise BuildControlError("Publish-only resume plan differs from the selected DEV/config scope")
+    if (claim.get("backend_container_id") != plan["source_scope"].get("backend_container_id")
+            or claim.get("run_intent_sha256") != plan["accepted"].get("run_intent_sha256")):
+        raise BuildControlError("Publish-only resume claim differs from the accepted native identity")
+
+    from docker_volume_held_ui_lifecycle import resume_publish_only
+    context = _capture_held_ui_stop_context(
+        args, plan, controller=controller, require_running=False,
+    )
+    stop_attempt = claim["operation_attempt"]
+    terminal_relative = "held-ui-materialization-stop/attempts/" + stop_attempt + "/terminal.json"
+    terminal_raw = control.read_bytes(terminal_relative)
+    terminal = controller.decode(terminal_raw, "held UI stop terminal",
+                                 maximum=controller.MAX_PROOF_BYTES)
+    claim_reference = terminal.get("held_ui_api_quiescence_claim")
+    if (not isinstance(claim_reference, Mapping)
+            or claim_reference.get("path") != claim_relative
+            or claim_reference.get("sha256") != controller.sha(claim_raw)
+            or claim_reference.get("operation_attempt") != stop_attempt
+            or claim_reference.get("state") != "consumed"):
+        raise BuildControlError("Publish-only resume claim is not consumed by its exact stop terminal")
+    proof_refs = terminal.get("held_ui_stop_proofs")
+    if not isinstance(proof_refs, Mapping):
+        raise BuildControlError("Publish-only resume terminal has no completed proof references")
+
+    def read_control_record(relative):
+        prefix = "" if relative.startswith("held-ui-materialization-stop/") else "runtime-control/"
+        return control.read_bytes(prefix + relative, maximum=controller.MAX_PROOF_BYTES)
+
+    return {
+        "control": context["control"],
+        "controller": context["controller"],
+        "plan": plan,
+        "claim": claim,
+        "terminal_raw": terminal_raw,
+        "proof_refs": proof_refs,
+        "expected_plan_sha256": expected_plan_sha256,
+        "expected_services": context["expected_services"],
+        "inspect_services": context["inspect_services"],
+        "read_control_record": read_control_record,
+    }
+
+
+def _stop_held_ui_materialization(args, *, controller):
+    """Run only the typed stop boundary; retained recreate/start is a later phase."""
+    if getattr(args, "apply", False) is not True or getattr(args, "preview", False) is not False:
+        raise BuildControlError("Held UI stop requires the exact --apply action")
+    expected_plan_sha256 = controller._digest(
+        getattr(args, "expected_plan_sha256", None), "approved preview plan digest",
+    )
+    resume = _load_held_ui_publish_context(
+        args, expected_plan_sha256, controller=controller,
+    )
+    if resume is not None:
+        from docker_volume_held_ui_lifecycle import resume_publish_only
+        return resume_publish_only(**resume)
+    from copy import copy as shallow_copy
+    preview_args = shallow_copy(args)
+    preview_args.apply = False
+    preview_args.preview = True
+    preview = _run_held_ui_materialization(preview_args, controller=controller)
+    if preview.get("plan_sha256") != expected_plan_sha256:
+        raise BuildControlError("Fresh held UI preview differs from the approved plan SHA")
+    plan = preview.get("plan")
+    context = _capture_held_ui_stop_context(args, plan, controller=controller)
+    from docker_volume_held_ui_lifecycle import execute_stop_only
+    result = execute_stop_only(**context)
+    return {**result, "plan_sha256": expected_plan_sha256}
+
+
 def _probe_retained_device_access(device_access, image, project):
     """A retained profile cannot gain or lose GPU access during recreation."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access

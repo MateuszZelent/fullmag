@@ -1526,6 +1526,7 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
     accepted = request["accepted"]
     authority = request["stop_authority"]
     proofs = {}
+    proof_raws = {}
     for key in ("preflight", "api_quiescence", "native_drain", "inventory", "terminal"):
         ref = authority[key]
         raw = read_control_record(ref["path"])
@@ -1533,6 +1534,7 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
                  key + " proof exceeds its byte limit")
         _require(sha(raw) == ref["sha256"], key + " proof raw SHA differs")
         proofs[key] = decode(raw, key + " proof")
+        proof_raws[key] = raw
 
     preflight = validate_preflight(proofs["preflight"], accepted)
     source_scope = request["source_scope"]
@@ -1540,11 +1542,16 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
              "preflight selected source or service incarnation differs from the request")
     validate_inventory(proofs["inventory"], accepted)
     quiescence = proofs["api_quiescence"]
+    terminal = proofs["terminal"]
     _exact(quiescence, {"schema", "intent_sha256", "api_pin", "api_closed", "signal",
                         "retained_process", "retained_process_sha256"}, "API quiescence")
     _require(quiescence.get("schema") == "fullmag.native-terminal-api-quiescence.v1"
              and quiescence.get("api_closed") is True and quiescence.get("signal") == "SIGTERM",
              "actual API closure receipt differs")
+    terminal_intent_sha256 = terminal.get("api_quiescence_intent_sha256")
+    _digest(terminal_intent_sha256, "terminal API quiescence intent digest")
+    _require(quiescence.get("intent_sha256") == terminal_intent_sha256,
+             "API closure receipt differs from the intent pinned by the terminal")
     api_pin = quiescence.get("api_pin", {})
     _require(api_pin == preflight["api_pin"]
              and api_pin.get("argv") == ["/opt/fullmag/package/bin/fullmag-api"]
@@ -1575,7 +1582,6 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
              == canonical(preflight["ready_owner_identity"]),
              "native drain owner differs from preflight")
 
-    terminal = proofs["terminal"]
     _require(terminal.get("schema") == "fullmag.docker-build-operation.v1"
              and terminal.get("phase") == "held-ui-materialization-stop"
              and terminal.get("attempt") == authority.get("stop_attempt")
@@ -1587,16 +1593,72 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
              and terminal.get("namespace_registry_sha256") == source_scope["namespace_registry_sha256"]
              and terminal.get("config_sha256") == source_scope["runtime_config_sha256"]
              and terminal.get("inputs", {}).get("source_root") == source_scope["source_root"]
+             and terminal.get("inputs", {}).get("attempt") == request["plan"]["attempt"]
+             and terminal.get("inputs", {}).get("source_scope") == source_scope
              and terminal.get("inputs", {}).get("config_sha256") == source_scope["runtime_config_sha256"]
              and terminal.get("inputs", {}).get("maintenance_request_id")
                  == request["plan"]["maintenance_request_id"]
              and terminal.get("inputs", {}).get("plan_sha256") == request["plan"]["plan_sha256"]
              and terminal.get("inputs", {}).get("run_id") == accepted["run_id"]
+             and terminal.get("inputs", {}).get("accepted_run_id") == accepted["run_id"]
+             and terminal.get("inputs", {}).get("capture_held_ui_materialization") is True
              and terminal.get("backend_container") == source_scope["backend_container_id"]
              and terminal.get("frontend_container") == source_scope["frontend_container_id"]
              and terminal.get("backend_started_at") == source_scope["backend_started_at"]
              and terminal.get("frontend_started_at") == source_scope["frontend_started_at"],
              "outer stop terminal does not prove this completed stop")
+    terminal_proofs = _exact(terminal.get("held_ui_stop_proofs"),
+                             {"preflight", "api_quiescence", "native_drain", "inventory"},
+                             "terminal held UI stop proof references")
+    for key, reference in terminal_proofs.items():
+        _exact(reference, {"path", "sha256"}, "terminal " + key + " proof reference")
+        _require(reference == authority[key],
+                 "outer stop terminal and request proof references differ: " + key)
+
+    claim_reference = _exact(terminal.get("held_ui_api_quiescence_claim"), {
+        "path", "sha256", "operation_attempt", "state", "quiescence_receipt_sha256",
+    }, "terminal API quiescence start-claim reference")
+    claim_path = quiescence_start_claim_relative(request["plan"]["maintenance_request_id"])
+    _require(claim_reference.get("path") == claim_path
+             and claim_reference.get("operation_attempt") == authority["stop_attempt"]
+             and claim_reference.get("state") == "consumed",
+             "outer stop terminal does not bind the spent API quiescence claim")
+    _digest(claim_reference.get("sha256"), "terminal API quiescence claim digest")
+    _digest(claim_reference.get("quiescence_receipt_sha256"),
+            "terminal API quiescence receipt digest")
+    claim_raw = read_control_record(claim_path)
+    _require(isinstance(claim_raw, bytes) and len(claim_raw) <= 16 * 1024
+             and sha(claim_raw) == claim_reference["sha256"],
+             "spent API quiescence claim bytes differ from the stop terminal")
+    claim = _exact(decode(claim_raw, "API quiescence start claim", maximum=16 * 1024), {
+        "schema", "state", "maintenance_request_id", "plan_sha256", "intent_sha256",
+        "run_id", "run_intent_sha256", "backend_container_id", "operation_attempt",
+    }, "API quiescence start claim")
+    _require(claim_raw == canonical(claim) + b"\n"
+             and claim.get("schema") == "fullmag.held-ui-materialization-api-quiescence-start.v1"
+             and claim.get("state") == "started"
+             and claim.get("maintenance_request_id") == request["plan"]["maintenance_request_id"]
+             and claim.get("plan_sha256") == request["plan"]["plan_sha256"]
+             and claim.get("intent_sha256") == terminal.get("api_quiescence_intent_sha256")
+             and claim.get("run_id") == accepted["run_id"]
+             and claim.get("run_intent_sha256") == accepted["run_intent_sha256"]
+             and claim.get("backend_container_id") == source_scope["backend_container_id"]
+             and claim.get("operation_attempt") == authority["stop_attempt"],
+             "spent API quiescence claim differs from the accepted stop scope")
+    intent_path = quiescence_intent_relative(request["plan"]["maintenance_request_id"])
+    intent_raw = read_control_record(intent_path)
+    _require(isinstance(intent_raw, bytes) and len(intent_raw) <= MAX_PROOF_BYTES
+             and sha(intent_raw) == claim.get("intent_sha256") == terminal_intent_sha256,
+             "spent API quiescence claim does not bind its durable intent bytes")
+    intent = decode(intent_raw, "API quiescence intent", maximum=MAX_PROOF_BYTES)
+    validate_api_quiescence_intent(
+        intent, expected_sha256=terminal_intent_sha256,
+        expected_plan_sha256=request["plan"]["plan_sha256"],
+    )
+    quiescence_raw = proof_raws["api_quiescence"]
+    _require(quiescence_raw == canonical(quiescence) + b"\n"
+             and claim_reference["quiescence_receipt_sha256"] == sha(quiescence_raw),
+             "spent API quiescence claim does not bind the exact closure receipt")
     stopped = _exact(terminal.get("held_ui_stop_services"), {"backend", "frontend"},
                      "stopped service incarnation pins")
     for name in ("backend", "frontend"):

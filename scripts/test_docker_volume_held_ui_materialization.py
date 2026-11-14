@@ -279,6 +279,18 @@ def valid_proof_chain():
         "task_attempts": [], "leases": [], "workers": [], "outputs": [], "other_active_runs": [],
     }
     inventory = {"schema": subject.INVENTORY_SCHEMA, "before": side, "after": copy.deepcopy(side)}
+    plan, plan_sha256 = subject.build_preview_plan(
+        attempt=value["plan"]["attempt"],
+        maintenance_request_id=value["plan"]["maintenance_request_id"],
+        source_scope=source, accepted=accepted, preflight=preflight, inventory=inventory,
+    )
+    value["plan"]["plan_sha256"] = plan_sha256
+    intent, intent_raw, intent_sha256 = subject.prepare_api_quiescence_intent(
+        attempt=value["plan"]["attempt"],
+        maintenance_request_id=value["plan"]["maintenance_request_id"],
+        plan_sha256=plan_sha256, source_scope=source,
+        accepted=accepted, preflight=preflight, inventory=inventory,
+    )
     ready_owner = owner()
     retained_process = {"schema": "fullmag.docker-process-tree.v1",
                         "state": "failed_outcome_retained",
@@ -293,23 +305,37 @@ def valid_proof_chain():
                         "service_owner": ready_owner}
     api_pin = copy.deepcopy(preflight["api_pin"])
     quiescence = {"schema": "fullmag.native-terminal-api-quiescence.v1",
-                  "intent_sha256": "e" * 64, "api_pin": api_pin, "api_closed": True,
+                  "intent_sha256": intent_sha256, "api_pin": api_pin, "api_closed": True,
                   "signal": "SIGTERM", "retained_process": retained_process,
                   "retained_process_sha256": hashlib.sha256(
                       canonical(retained_process) + b"\n").hexdigest()}
     terminal_owner = owner("drained", "exited_success")
-    native_drain = {"schema": "fullmag.docker-process-tree.v1", "state": "drained",
-                    "accepted_store": "/state/runs/docker-all/session-store",
-                    "api_exit_code": -15, "api_pid": 200,
-                    "error": "Fullmag API exited unexpectedly (-15)",
-                    "api_diagnostic_only": False,
-                    "service_owner": ready_owner, "terminal_service_owner": terminal_owner}
+    native_drain = {**retained_process, "state": "drained",
+                    "terminal_service_owner": terminal_owner}
     stop_attempt = value["stop_authority"]["stop_attempt"]
     stopped = {
         "backend": {"id": source["backend_container_id"], "image_id": "sha256:" + "5" * 64,
                     "started_at": source["backend_started_at"], "running": False},
         "frontend": {"id": source["frontend_container_id"], "image_id": "sha256:" + "6" * 64,
                      "started_at": source["frontend_started_at"], "running": False},
+    }
+    stop_attempt = value["stop_authority"]["stop_attempt"]
+    claim_path = "held-ui-materialization/" + MAINTENANCE_ID + "/api-quiescence-start.json"
+    claim = {
+        "schema": "fullmag.held-ui-materialization-api-quiescence-start.v1",
+        "state": "started", "maintenance_request_id": MAINTENANCE_ID,
+        "plan_sha256": plan_sha256, "intent_sha256": intent_sha256,
+        "run_id": accepted["run_id"], "run_intent_sha256": accepted["run_intent_sha256"],
+        "backend_container_id": source["backend_container_id"],
+        "operation_attempt": stop_attempt,
+    }
+    proof_map = {"preflight": preflight, "api_quiescence": quiescence,
+                 "native_drain": native_drain, "inventory": inventory,
+                 "intent_raw": intent_raw}
+    proof_refs = {
+        key: {"path": value["stop_authority"][key]["path"],
+              "sha256": hashlib.sha256(encoded_record(proof_map[key])).hexdigest()}
+        for key in ("preflight", "api_quiescence", "native_drain", "inventory")
     }
     terminal = {
         "schema": "fullmag.docker-build-operation.v1",
@@ -319,23 +345,48 @@ def valid_proof_chain():
         "control_namespace": source["namespace"],
         "namespace_registry_sha256": source["namespace_registry_sha256"],
         "config_sha256": source["runtime_config_sha256"],
-        "inputs": {"source_root": source["source_root"],
+        "api_quiescence_intent_sha256": quiescence["intent_sha256"],
+        "inputs": {"attempt": value["plan"]["attempt"],
+                    "source_root": source["source_root"],
+                    "source_scope": source,
                     "config_sha256": source["runtime_config_sha256"],
                     "maintenance_request_id": value["plan"]["maintenance_request_id"],
-                    "plan_sha256": value["plan"]["plan_sha256"], "run_id": accepted["run_id"]},
+                    "plan_sha256": value["plan"]["plan_sha256"], "run_id": accepted["run_id"],
+                    "accepted_run_id": accepted["run_id"],
+                    "capture_held_ui_materialization": True},
         "backend_container": source["backend_container_id"],
         "frontend_container": source["frontend_container_id"],
         "backend_started_at": source["backend_started_at"],
         "frontend_started_at": source["frontend_started_at"],
         "held_ui_stop_services": stopped,
         "held_ui_stop_services_sha256": hashlib.sha256(canonical(stopped) + b"\n").hexdigest(),
+        "held_ui_stop_proofs": proof_refs,
+        "held_ui_api_quiescence_claim": {
+            "path": claim_path, "sha256": hashlib.sha256(encoded_record(claim)).hexdigest(),
+            "operation_attempt": stop_attempt, "state": "consumed",
+            "quiescence_receipt_sha256": hashlib.sha256(encoded_record(quiescence)).hexdigest(),
+        },
     }
-    proof_map = {"preflight": preflight, "api_quiescence": quiescence,
-                 "native_drain": native_drain, "inventory": inventory, "terminal": terminal}
+    proof_map["terminal"] = terminal
+    proof_map["claim"] = claim
     for key, proof in proof_map.items():
+        if key in {"claim", "intent_raw"}:
+            continue
         path = value["stop_authority"][key]["path"]
         value["stop_authority"][key]["sha256"] = hashlib.sha256(encoded_record(proof)).hexdigest()
     return value, proof_map
+
+
+def proof_records(value, proofs):
+    raw = {
+        value["stop_authority"][key]["path"]: encoded_record(proofs[key])
+        for key in ("preflight", "api_quiescence", "native_drain", "inventory", "terminal")
+    }
+    claim_ref = proofs["terminal"]["held_ui_api_quiescence_claim"]
+    raw[claim_ref["path"]] = encoded_record(proofs["claim"])
+    raw["held-ui-materialization/" + value["plan"]["maintenance_request_id"]
+        + "/api-quiescence-intent.json"] = proofs["intent_raw"]
+    return raw
 
 
 class RequestContracts(unittest.TestCase):
@@ -455,8 +506,7 @@ class CompletedProofContracts(unittest.TestCase):
         self.value, self.proofs = valid_proof_chain()
 
     def test_completed_proof_chain_binds_scope_api_owner_intent_and_drain(self):
-        raw = {self.value["stop_authority"][key]["path"]: encoded_record(proof)
-               for key, proof in self.proofs.items()}
+        raw = proof_records(self.value, self.proofs)
         result = subject.validate_stop_proofs(self.value, raw.__getitem__)
         self.assertEqual(result["terminal"]["phase"], "held-ui-materialization-stop")
 
@@ -468,8 +518,7 @@ class CompletedProofContracts(unittest.TestCase):
         ):
             value, proofs = valid_proof_chain()
             mutate(proofs["preflight"])
-            raw = {value["stop_authority"][key]["path"]: encoded_record(proof)
-                   for key, proof in proofs.items()}
+            raw = proof_records(value, proofs)
             with self.assertRaises(BuildControlError):
                 subject.validate_stop_proofs(value, raw.__getitem__)
 
@@ -481,8 +530,7 @@ class CompletedProofContracts(unittest.TestCase):
             value, proofs = valid_proof_chain()
             change(proofs["inventory"]["before"])
             change(proofs["inventory"]["after"])
-            raw = {value["stop_authority"][key]["path"]: encoded_record(proof)
-                   for key, proof in proofs.items()}
+            raw = proof_records(value, proofs)
             with self.subTest(field=field), self.assertRaises(BuildControlError):
                 subject.validate_stop_proofs(value, raw.__getitem__)
 
@@ -498,8 +546,7 @@ class CompletedProofContracts(unittest.TestCase):
             mutate(process)
             proofs["api_quiescence"]["retained_process_sha256"] = hashlib.sha256(
                 canonical(process) + b"\n").hexdigest()
-            raw = {value["stop_authority"][key]["path"]: encoded_record(proof)
-                   for key, proof in proofs.items()}
+            raw = proof_records(value, proofs)
             with self.subTest(label=label), self.assertRaises(BuildControlError):
                 subject.validate_stop_proofs(value, raw.__getitem__)
 
@@ -508,9 +555,17 @@ class CompletedProofContracts(unittest.TestCase):
         proofs["terminal"]["held_ui_stop_services"]["frontend"]["started_at"] = "changed"
         proofs["terminal"]["held_ui_stop_services_sha256"] = hashlib.sha256(
             canonical(proofs["terminal"]["held_ui_stop_services"]) + b"\n").hexdigest()
-        raw = {value["stop_authority"][key]["path"]: encoded_record(proof)
-               for key, proof in proofs.items()}
+        raw = proof_records(value, proofs)
         with self.assertRaises(BuildControlError):
+            subject.validate_stop_proofs(value, raw.__getitem__)
+
+    def test_terminal_proof_reference_cannot_drift_from_request(self):
+        value, proofs = valid_proof_chain()
+        proofs["terminal"]["held_ui_stop_proofs"]["inventory"]["sha256"] = "f" * 64
+        value["stop_authority"]["terminal"]["sha256"] = hashlib.sha256(
+            encoded_record(proofs["terminal"])).hexdigest()
+        raw = proof_records(value, proofs)
+        with self.assertRaisesRegex(BuildControlError, "proof references differ"):
             subject.validate_stop_proofs(value, raw.__getitem__)
 
 
