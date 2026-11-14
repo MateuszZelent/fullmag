@@ -134,15 +134,14 @@ function SavedFolderPlayback({ source }: { source: SavedFolderPlaybackSelection 
   const error=metadata.error?.message ?? geometryResult.error ?? mesh.error?.message ?? frame.error?.message ?? (!stage && manifest ? "This saved stage is unavailable." : null);
   const currentReady=frame.status==="ready" && !error && Boolean(presentation);
   return <section className="fm-saved-playback-viewport" aria-label="Saved simulation 3D"
-    style={{height:"100%",minHeight:320,position:"relative",display:"flex",flexDirection:"column"}}
     data-saved-frame-index={index} data-saved-frame-state={currentReady ? "ready" : error ? "error" : "loading"}>
-    <div className="fm-saved-playback-caption" role="status" style={{padding:"8px 12px",color:"var(--fm-text-primary)",background:"var(--fm-bg-panel)"}}>
+    <div className="fm-saved-playback-caption" role="status">
       {source?.name} · m_{["x","y","z"][source?.component ?? 2]} · {stage ? ((stage.times_s[index] ?? 0)*1e9).toFixed(3) : "—"} ns · {index+1}/{stage?.frame_count ?? "—"}
       {error ? <span role="alert"> · {error}</span> : !currentReady ? " · Loading selected frame…" : null}
     </div>
     {geometry ? <SavedPlaybackCanvas geometry={geometry} frameIndex={index} colors={currentReady ? presentation?.colors ?? null : null} /> : null}
-    {presentation && currentReady ? <div className="fm-saved-playback-legend" aria-label="Magnetization color scale" style={{padding:"8px 12px",color:"var(--fm-text-primary)"}}>
-      −{presentation.limit.toExponential(3)} <span className="fm-saved-playback-gradient" style={{display:"inline-block",width:180,height:12,background:scalarColorPaletteGradientCss("coolwarm")}}/> +{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm
+    {presentation && currentReady ? <div className="fm-saved-playback-legend" role="group" aria-label="Magnetization color scale">
+      −{presentation.limit.toExponential(3)} <span aria-hidden="true" className="fm-saved-playback-gradient" style={{background:scalarColorPaletteGradientCss("coolwarm")}}/> +{presentation.limit.toExponential(3)} · m_{["x","y","z"][source?.component ?? 2]} [1] · {source?.colorLimit === null ? "automatic per frame" : "fixed scale"} · dimensions in µm
     </div> : null}
   </section>;
 }
@@ -187,9 +186,9 @@ function StudyResultPlayback({ source }: { source: SavedStudyPlaybackSelection }
         <SavedPlaybackCanvas geometry={rendered.geometry} frameIndex={0} colors={presentation?.colors ?? null} />
       ) : null}
       {presentation && ready ? (
-        <div aria-label="Magnetization color scale" className="px-3 py-2">
+        <div aria-label="Magnetization color scale" className="fm-saved-playback-legend" role="group">
           −{presentation.limit.toExponential(3)}{" "}
-          <span className="fm-saved-playback-gradient" style={{ display: "inline-block", width: 180, height: 12, background: scalarColorPaletteGradientCss("coolwarm") }} />
+          <span aria-hidden="true" className="fm-saved-playback-gradient" style={{ background: scalarColorPaletteGradientCss("coolwarm") }} />
           {" "}+{presentation.limit.toExponential(3)} · m_{["x", "y", "z"][source.component]} [1] · dimensions in µm
         </div>
       ) : null}
