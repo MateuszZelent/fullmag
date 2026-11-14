@@ -97,7 +97,9 @@ position $\mathbf r_0$ of the support,
 \mathbf B_i(\mathbf r)=\boldsymbol\beta_i(\mathbf r)\quad(\text{world}),
 ```
 
-where $\boldsymbol\beta_i$ is the authored function.
+where $\boldsymbol\beta_i$ is the authored function. $\mathbf r_0$ is the authored
+`position` in the target's object frame (translation only in v1); a global target
+has no object, and its frame is the world frame.
 
 (symbols-and-si-units)=
 ## 3. Symbols and SI units
@@ -189,8 +191,8 @@ def antenna_time(t, frequency, t0):
     return sin(2 * pi * frequency * (t - t0))
 
 
-antenna = study.add_simpleantenna.mask(
-    target=film, shape=fm.Box(2000 * nm, 500 * nm, 10 * nm), position=(0.0, 0.0, -5 * nm),
+antenna = film.add_simpleantenna.arbitrary_mask(
+    shape=fm.Box(2000 * nm, 500 * nm, 10 * nm), position=(0.0, 0.0, -5 * nm),
     frame="world", time_origin="stage_local", name="Antenna",
 )
 antenna.add(
@@ -221,19 +223,20 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `study.add_simpleantenna.mask.target` | magnet handle | required | $1$ | must be a magnet of the study | target object | FDM CPU/GPU; FEM rejected | `mask_field_drives[].target_object_id` |
+| `study.add_simpleantenna.arbitrary_mask(target, …)`, `magnet.add_simpleantenna.arbitrary_mask(…)`, `region.add_simpleantenna.arbitrary_mask(…)` | magnet, region of a magnet, or `"global"` | required (bound by a scoped factory) | $1$ | an existing magnet or region; `target=` on a scoped factory raises `scoped_target_override_not_allowed` | cells the drive may act on | FDM CPU/GPU; FEM rejected | `mask_field_drives[].target` (`global`, `object`, `region`) |
 | `…mask.shape` | `fm.Box`, `fm.Cylinder`, sphere | required | $\mathrm{m}$ | positive sizes | support shape $G$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].shape` |
 | `…mask.position` | 3 floats | `(0, 0, 0)` | $\mathrm{m}$ | finite | $\mathbf r_0$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].position_m` |
 | `…mask.frame` | `"local"`, `"world"` | `"local"` | $1$ | one of the two | frame of $\mathbf r_0$ and of mask coordinates, {eq}`mask-local-frame` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].frame` |
 | `…mask.time_origin` | `"stage_local"`, `"absolute"` | `"stage_local"` | $1$ | one of the two | clock of {eq}`mask-clock` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].time_origin` |
 | `…mask.name`, `…mask.id` | `str` | derived | $1$ | non-empty, unique id | display name, stable id | all | `mask_field_drives[].name`, `.id` |
-| `antenna.add(mask, time)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected | one term of {eq}`mask-field` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].terms[]` |
+| `antenna.add(mask, time, name=None)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None`; `str` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected; names unique within the antenna | one term of {eq}`mask-field` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].terms[]` (`name`) |
 | `fm.mask(function, **values)` | restricted function + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1`; every parameter needs a value | function mask $\boldsymbol\beta_i$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: function`) |
 | `fm.time(function, **values)` | restricted function + numbers | required | $1$ | rules of `mask-function-v1` | time function $f_i$ | FDM CPU/GPU; FEM rejected | `terms[].time` |
 | `study.new_vector_mask(size, cell, origin)` | 3 ints, 3 floats, 3 floats | the FDM grid of the study | $\mathrm{m}$ | positive size and cell; a lattice is required when the study has no FDM cell | array mask $\mathbf A_{ijk}$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: sampled`) |
 | `VectorMask.set_vector(i, j, k, value)` | ints, 3 floats | — | $\mathrm{T}$ | indices in range, finite values | one lattice value | FDM CPU/GPU; FEM rejected | array file |
 | `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive from this pipeline point on | FDM CPU/GPU; FEM rejected | stage action `add_mask_field_drive` |
 | `study.field_drives.add(antenna)` | `MaskAntenna` | — | $1$ | unique id | adds the drive for the whole study | FDM CPU/GPU; FEM rejected | `mask_field_drives[]` |
+| `study.stages.update_field_drive(antenna, mask_parameters, time_parameters, term, stage_id)` | `MaskAntenna` or id; `{name: float}`; term name or index | generated id | units of the parameters | the id is active; known names; finite values; `term` required for several terms (`mask_update_invalid`) | replaces parameter values of the active instance from this point on; the antenna's definition is unchanged | FDM CPU/GPU; FEM rejected | stage action `update_mask_field_drive` |
 | `study.stages.remove_field_drive(id, stage_id)` | `str`, `str` | generated id | $1$ | the id is active | removes the drive from this point on | all lanes | stage action `remove_field_drive` |
 
 (problem-ir)=
@@ -245,7 +248,7 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
   "id": "antenna",
   "name": "Antenna",
   "enabled": true,
-  "target_object_id": "film",
+  "target": {"kind": "object", "object_id": "film"},
   "shape": {"kind": "box", "size": [2e-06, 5e-07, 1e-08], "center": [0.0, 0.0, 0.0]},
   "position_m": [0.0, 0.0, -5e-09],
   "frame": "world",
@@ -308,7 +311,11 @@ a float32 `.npy` of shape `(nz, ny, nx, 3)` in tesla.
 ### 8.1 Support and maps on FDM (CPU and CUDA)
 
 A cell $c$ with centre $\mathbf r_c$ belongs to the support when it is an active
-cell of the target and $\mathbf r_c\in G$. For a function mask the stored basis is
+cell of the target and $\mathbf r_c\in G$. The cells of a global target are all
+magnetic cells; of an object target, the cells of that magnet; of a region target,
+the cells whose exclusive region marker is that region. Regions overlap by
+priority, so a region covered by a region of higher priority has no cells and
+planning fails with `mask_support_empty`. For a function mask the stored basis is
 
 ```{math}
 :label: mask-fdm-basis

@@ -41,12 +41,12 @@ fn antenna_drive() -> Value {
         "id": "antenna",
         "name": "Antenna",
         "enabled": true,
-        "target_object_id": "strip",
+        "target": {"kind": "object", "object_id": "strip"},
         "shape": {"kind": "box", "size": [6e-6, 1e-6, 4.5e-8], "center": [0.0, 0.0, 0.0]},
         "position_m": [0.0, 0.0, -1.5e-8],
         "frame": "world",
         "terms": [
-            {"mask": antenna_mask(), "time": antenna_time()},
+            {"name": "carrier", "mask": antenna_mask(), "time": antenna_time()},
             {"mask": {
                 "kind": "function",
                 "function": {"expression_version": "field_expr.v1", "outputs": ["0", "0", "1e-4"]}
@@ -162,11 +162,58 @@ fn rejects_time_using_x() {
 #[test]
 fn rejects_unknown_target() {
     let mut drive = antenna_drive();
-    drive["target_object_id"] = json!("nope");
+    drive["target"] = json!({"kind": "object", "object_id": "nope"});
     assert_error(
         &errors_of(problem_with(json!([drive]))),
         "mask_target_unknown",
         "'nope'",
+    );
+}
+
+#[test]
+fn accepts_global_and_region_targets() {
+    let mut value = problem_with(json!([antenna_drive()]));
+    value["object_regions"] = json!([{
+        "region_id": "strip:left",
+        "owner_object": "strip",
+        "name": "left",
+        "shape": {"kind": "box", "size": [1e-6, 1e-6, 1e-8], "center": [0.0, 0.0, 0.0]}
+    }]);
+    let errors_for = |target: Value| {
+        let mut value = value.clone();
+        value["mask_field_drives"][0]["target"] = target;
+        errors_of(value)
+            .into_iter()
+            .filter(|error| error.starts_with("mask_"))
+            .collect::<Vec<_>>()
+    };
+    assert!(errors_for(json!({"kind": "global"})).is_empty());
+    assert!(
+        errors_for(json!({"kind": "region", "object_id": "strip", "region_id": "strip:left"}))
+            .is_empty()
+    );
+    assert_error(
+        &errors_for(json!({"kind": "region", "object_id": "strip", "region_id": "strip:missing"})),
+        "mask_target_unknown",
+        "'strip/strip:missing'",
+    );
+}
+
+#[test]
+fn rejects_duplicate_and_malformed_term_names() {
+    let mut drive = antenna_drive();
+    drive["terms"][1]["name"] = json!("carrier");
+    drive["terms"][2]["name"] = json!("2nd");
+    let errors = errors_of(problem_with(json!([drive])));
+    assert_error(
+        &errors,
+        "mask_field_drive_invalid",
+        "'carrier' is used by another term",
+    );
+    assert_error(
+        &errors,
+        "mask_field_drive_invalid",
+        "'2nd' must use letters",
     );
 }
 

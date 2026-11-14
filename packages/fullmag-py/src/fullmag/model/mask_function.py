@@ -47,6 +47,7 @@ _FUNCTIONS_2 = frozenset({"atan2", "min", "max"})
 _MATH_ALIASES = {"fabs": "abs"}
 _VARIABLES = {"mask": ("x", "y", "z"), "time": ("t",)}
 _RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
+_AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "^"}
 
 
 class MaskFunctionError(ValueError):
@@ -261,15 +262,20 @@ class _Transpiler:
         self.variables = _VARIABLES[kind]
         self.parameters: list[str] = []
         self.locals: list[tuple[str, str]] = []
+        # Python name -> name of its current version in the equations. A name
+        # assigned again gets a new version (g, g_2, ...), as in SSA form.
+        self.current: dict[str, str] = {}
         self.captured: dict[str, float] = {}
         self.closure = _closure_values(function)
-        self.assigned: set[str] = {
-            target.id
-            for statement in definition.body
-            if isinstance(statement, ast.Assign)
-            for target in statement.targets
-            if isinstance(target, ast.Name)
-        }
+        self.assigned: set[str] = set()
+        for statement in definition.body:
+            if isinstance(statement, ast.Assign):
+                targets = statement.targets
+            elif isinstance(statement, ast.AugAssign):
+                targets = [statement.target]
+            else:
+                continue
+            self.assigned.update(target.id for target in targets if isinstance(target, ast.Name))
 
     def line(self, node: ast.AST) -> int:
         return self.first_line + getattr(node, "lineno", 1) - 1
@@ -332,23 +338,25 @@ class _Transpiler:
                 body[-1] if body else definition,
                 f"{definition.name} must end with a return statement",
             )
-        assigned: set[str] = set()
+        self.current = {name: name for name in (*self.variables, *self.parameters)}
+        used = set(names) | {
+            node.id for node in ast.walk(definition) if isinstance(node, ast.Name)
+        }
+        versions: dict[str, int] = {}
         for statement in body[:-1]:
-            if not isinstance(statement, ast.Assign):
-                raise self.fail(
-                    statement,
-                    f"only 'name = expression' lines and one final return are allowed, "
-                    f"not {type(statement).__name__}; use an array mask for other code",
-                )
-            if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
-                raise self.fail(statement, "assign to exactly one plain name")
-            name = statement.targets[0].id
-            if name in _RESERVED:
-                raise self.fail(statement, f"name {name!r} is reserved")
-            if name in assigned or name in self.parameters:
-                raise self.fail(statement, f"name {name!r} is assigned twice")
-            self.locals.append((name, self.expression(statement.value)))
-            assigned.add(name)
+            name, expression = self.assignment(statement)
+            if name in self.current:
+                version = versions.get(name, 1) + 1
+                versioned = f"{name}_{version}"
+                while versioned in used:
+                    version += 1
+                    versioned = f"{name}_{version}"
+                versions[name] = version
+                used.add(versioned)
+            else:
+                versioned = name
+            self.locals.append((versioned, expression))
+            self.current[name] = versioned
 
         returned = body[-1].value
         if returned is None:
@@ -373,6 +381,39 @@ class _Transpiler:
             outputs=outputs,
         )
 
+    def assignment(self, statement: ast.stmt) -> tuple[str, str]:
+        """Name and equation of one ``name = ...`` or ``name op= ...`` line."""
+        if isinstance(statement, ast.Assign):
+            if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+                raise self.fail(statement, "assign to exactly one plain name")
+            name = statement.targets[0].id
+            self.check_target(statement, name)
+            return name, self.expression(statement.value)
+        if isinstance(statement, ast.AugAssign):
+            if not isinstance(statement.target, ast.Name):
+                raise self.fail(statement, "assign to exactly one plain name")
+            name = statement.target.id
+            self.check_target(statement, name)
+            operator = _AUGMENTED_OPERATORS.get(type(statement.op))
+            if operator is None:
+                raise self.fail(
+                    statement,
+                    f"operator {type(statement.op).__name__} is not allowed; "
+                    "use += -= *= /= **=",
+                )
+            if name not in self.current:
+                raise self.fail(statement, f"local {name!r} is used before it is assigned")
+            return name, f"{self.current[name]} {operator} ({self.expression(statement.value)})"
+        raise self.fail(
+            statement,
+            "only 'name = expression' lines (also += -= *= /= **=) and one final return "
+            f"are allowed, not {type(statement).__name__}; use an array mask for other code",
+        )
+
+    def check_target(self, statement: ast.stmt, name: str) -> None:
+        if name in _RESERVED and name not in self.variables:
+            raise self.fail(statement, f"name {name!r} is reserved")
+
     # -- expressions -----------------------------------------------------
 
     def expression(self, node: ast.expr) -> str:
@@ -380,7 +421,8 @@ class _Transpiler:
         text = ast.get_source_segment(self.source, node)
         if text is None:
             raise self.fail(node, "cannot read the source of this expression")
-        return _to_field_expr(text)
+        renames = {name: version for name, version in self.current.items() if name != version}
+        return _to_field_expr(text, renames)
 
     def check(self, node: ast.AST) -> None:
         if isinstance(node, ast.Constant):
@@ -450,9 +492,7 @@ class _Transpiler:
 
     def check_name(self, node: ast.Name) -> None:
         name = node.id
-        if name in self.variables or name in self.parameters:
-            return
-        if any(local == name for local, _ in self.locals):
+        if name in self.current:
             return
         if name == "pi":
             return
@@ -492,14 +532,16 @@ def _closure_values(function: Callable[..., object]) -> dict[str, object]:
     return values
 
 
-def _to_field_expr(text: str) -> str:
+def _to_field_expr(text: str, renames: Mapping[str, str] | None = None) -> str:
     """Rewrite a checked Python expression as ``field_expr.v1`` text.
 
     Formatting and parentheses are kept; ``**`` becomes ``^``, ``math.`` is
     dropped, ``math.fabs`` becomes ``abs``, comments and line breaks become
-    spaces, and numbers that ``field_expr.v1`` cannot read (``1_000``) are
-    written with ``repr``.
+    spaces, numbers that ``field_expr.v1`` cannot read (``1_000``) are
+    written with ``repr``, and names in ``renames`` are replaced by their
+    current version.
     """
+    renames = renames or {}
     # Parentheses make line breaks inside the expression plain NL tokens.
     tokens = list(tokenize.generate_tokens(io.StringIO("(" + text.strip() + ")").readline))
     parts: list[str] = []
@@ -536,6 +578,12 @@ def _to_field_expr(text: str) -> str:
             parts.append(_MATH_ALIASES[token.string])
         elif token.type == tokenize.NUMBER:
             parts.append(_number_text(token.string))
+        elif (
+            token.type == tokenize.NAME
+            and token.string in renames
+            and tokens[index - 1].string != "."
+        ):
+            parts.append(renames[token.string])
         else:
             parts.append(token.string)
         index += 1

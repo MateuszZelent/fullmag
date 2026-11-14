@@ -35,8 +35,13 @@ The solver never calls Python. A mask equation is evaluated by the planner only.
 
 - A parameter without a value and without a default in the `def` is an error; a
   value for an unknown name is an error; a value overrides a default.
-- Body: a sequence of assignments `name = expression` with a single plain name
-  on the left, followed by one `return`. A name is assigned at most once.
+- Body: a sequence of assignments `name = expression` or `name op= expression`
+  (`op` one of `+ - * / **`) with a single plain name on the left, followed by
+  one `return`. A name may be assigned again, also a parameter or the function's
+  own variable (`x = x - x0`); the transpiler gives each new value a new local
+  (`g`, then `g_2`, `g_3`, skipping names used in the function), so later lines
+  and the return read the latest value, as in Python. Augmented assignment of a
+  name without a value is an error.
 - Expressions: numeric literals; parameters; earlier locals; the leading
   variables; `pi`; binary `+ - * / **`; unary `-` and `+`; calls to
   `sin cos tan asin acos atan atan2 sinh cosh tanh exp log sqrt abs min max`
@@ -46,7 +51,8 @@ The solver never calls Python. A mask equation is evaluated by the planner only.
 - Rejected with `MaskFunctionError("line N: …")`: `if`, `for`, `while`, `with`,
   `try`, comprehensions, lambdas, conditional expressions, comparisons, boolean
   operators, attribute access other than `math.<function>`, subscripts, calls to
-  any other function, augmented assignment, tuple assignment, starred arguments,
+  any other function, augmented operators other than `+= -= *= /= **=`, tuple
+  assignment, starred arguments,
   keyword-only and positional-only parameters, `*args`, `**kwargs`.
 - A function without retrievable source (built-in, lambda, interactive input) is
   rejected.
@@ -134,8 +140,10 @@ value stack of at most 64 entries and one input, `t`.
 
 | Code | Raised by | Meaning |
 |---|---|---|
-| `mask_field_drive_invalid` | IR validation | wrong schema or expression version, empty or duplicate id or name, a non-finite parameter value, a bad ready-antenna origin, or a time-dependent term active in a relaxation stage |
-| `mask_target_unknown` | IR validation | `target_object_id` is not a magnet |
+| `mask_field_drive_invalid` | IR validation | wrong schema or expression version, empty or duplicate id or name, an invalid or duplicate term name, a non-finite parameter value, a bad ready-antenna origin, or a time-dependent term active in a relaxation stage |
+| `mask_target_unknown` | IR validation, planner | the target object is not a magnet or the target region does not exist; in the planner, the target is not on the resolved grid or its region has no marker |
+| `scoped_target_override_not_allowed` | Python authoring | `target=` given to `magnet.add_simpleantenna` or `region.add_simpleantenna` |
+| `mask_update_invalid` | Python authoring, stage materialization | Update of an inactive id or of a non-mask drive, an unknown parameter, a missing or unknown term selector, an empty patch, a non-finite value, or time parameters for a static term |
 | `mask_shape_invalid` | IR validation | a non-positive or non-finite shape size, a non-finite position, a zero cylinder axis, or a CSG shape (not part of v1) |
 | `mask_too_many_terms` | IR validation, runner | zero terms, or more than 8 terms on one drive, or more than 8 time-dependent mask terms active in one stage |
 | `mask_array_invalid` | IR validation, planner | array mask with a bad lattice, missing file, wrong sha256, dtype or shape |

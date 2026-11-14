@@ -3,8 +3,8 @@
 //! Contract: `docs/specs/mask-function-v1.md`, physics note
 //! `docs/physics/0922-masks-for-field-excitation.md`, ADR 0081. A drive is a
 //! list of terms `mask_i(r) * time_i(t)` on a support shape placed in a target
-//! magnet. Functions are stored as equations (`field_expr.v1`); the solver never
-//! calls Python.
+//! (global, a magnet or a region of a magnet). Functions are stored as equations
+//! (`field_expr.v1`); the solver never calls Python.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +15,9 @@ use fullmag_expr::{
 use serde::{Deserialize, Serialize};
 
 use crate::field_drive_validation::validate_drive_activation;
-use crate::{DriveActivationIR, FieldTimeOriginIR, ProblemIR, RegionShapeIR, StudyIR};
+use crate::{
+    DriveActivationIR, FieldTargetIR, FieldTimeOriginIR, ProblemIR, RegionShapeIR, StudyIR,
+};
 
 pub const MASK_FIELD_DRIVE_SCHEMA_VERSION: &str = "mask_field_drive.v1";
 
@@ -120,6 +122,9 @@ pub struct LibraryCallIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MaskTermIR {
+    /// Unique within the drive; addresses the term in `update_mask_field_drive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub mask: MaskSourceIR,
     /// Absent: a static term (time factor 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,7 +141,8 @@ pub struct MaskFieldDriveIR {
     pub name: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub target_object_id: String,
+    /// Cells the drive may act on; intersected with the support shape.
+    pub target: FieldTargetIR,
     /// Support shape; its own center is relative to `position_m`.
     pub shape: RegionShapeIR,
     pub position_m: [f64; 3],
@@ -158,6 +164,16 @@ impl MaskFieldDriveIR {
             })
         })
     }
+}
+
+/// Letters, digits and `_`, not starting with a digit, at most 64 bytes.
+fn valid_term_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 fn finite3(value: &[f64; 3]) -> bool {
@@ -266,10 +282,15 @@ pub(crate) fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<S
     if problem.mask_field_drives.is_empty() {
         return;
     }
-    let magnet_names: BTreeSet<&str> = problem
+    let magnet_aliases: BTreeSet<&str> = problem
         .magnets
         .iter()
-        .map(|magnet| magnet.name.as_str())
+        .flat_map(|magnet| std::iter::once(magnet.name.as_str()).chain(magnet.object_id.as_deref()))
+        .collect();
+    let region_ids: BTreeSet<(&str, &str)> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
         .collect();
     let declared_stage_ids =
         crate::validation::declared_pipeline_stage_ids(&problem.problem_meta.runtime_metadata);
@@ -301,11 +322,25 @@ pub(crate) fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<S
                 drive.id
             ));
         }
-        if !magnet_names.contains(drive.target_object_id.as_str()) {
-            errors.push(format!(
-                "mask_target_unknown: {label}.target_object_id '{}' is not a magnet",
-                drive.target_object_id
-            ));
+        match &drive.target {
+            FieldTargetIR::Global {} => {}
+            FieldTargetIR::Object { object_id } => {
+                if !magnet_aliases.contains(object_id.as_str()) {
+                    errors.push(format!(
+                        "mask_target_unknown: {label}.target object '{object_id}' is not a magnet"
+                    ));
+                }
+            }
+            FieldTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
+                    errors.push(format!(
+                        "mask_target_unknown: {label}.target region '{object_id}/{region_id}' does not exist"
+                    ));
+                }
+            }
         }
         validate_shape(&label, &drive.shape, errors);
         if !finite3(&drive.position_m) {
@@ -320,8 +355,20 @@ pub(crate) fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<S
             ));
         }
         let mut time_dependent = false;
+        let mut term_names = BTreeSet::new();
         for (term_index, term) in drive.terms.iter().enumerate() {
             let term_label = format!("{label}.terms[{term_index}]");
+            if let Some(name) = &term.name {
+                if !valid_term_name(name) {
+                    errors.push(format!(
+                        "mask_field_drive_invalid: {term_label}.name '{name}' must use letters, digits and '_', start with a letter or '_' and have at most 64 characters"
+                    ));
+                } else if !term_names.insert(name.as_str()) {
+                    errors.push(format!(
+                        "mask_field_drive_invalid: {term_label}.name '{name}' is used by another term of the drive"
+                    ));
+                }
+            }
             match &term.mask {
                 MaskSourceIR::Function { function } => {
                     validate_function(

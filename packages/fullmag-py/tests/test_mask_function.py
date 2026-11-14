@@ -42,6 +42,25 @@ def module_with_closure(wavelength, B0):
     return fm.mask(inner)
 
 
+def evaluate(ir: dict, **variables: float) -> tuple[float, ...]:
+    """Evaluate transpiled equations with Python's math (an independent check)."""
+    scope: dict[str, object] = {
+        name: getattr(math, name)
+        for name in (
+            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+            "sinh", "cosh", "tanh", "exp", "log", "sqrt",
+        )
+    }
+    scope.update(abs=abs, min=min, max=max, pi=math.pi)
+    scope.update({item["name"]: item["value"] for item in ir.get("parameters", [])})
+    scope.update(variables)
+    for local in ir.get("locals", []):
+        scope[local["name"]] = eval(local["expression"].replace("^", "**"), {"__builtins__": {}}, scope)
+    return tuple(
+        eval(output.replace("^", "**"), {"__builtins__": {}}, scope) for output in ir["outputs"]
+    )
+
+
 def compile_source(source: str, name: str = "f", **namespace: object):
     filename = f"<test-mask-function-{abs(hash(source))}>"
     source = textwrap.dedent(source)
@@ -153,8 +172,12 @@ class MaskFunctionTests(unittest.TestCase):
             "time_in_mask": ("def f(x, y, z):\n    return (t, 0, 0)\n", 2),
             "pair": ("def f(x, y, z):\n    return (x, 0)\n", 2),
             "compare": ("def f(x, y, z):\n    return (x > 0, 0, 0)\n", 2),
-            "augmented": ("def f(x, y, z):\n    a = x\n    a += 1\n    return (a, 0, 0)\n", 3),
-            "twice": ("def f(x, y, z):\n    a = x\n    a = 1\n    return (a, 0, 0)\n", 3),
+            "augmented_modulo": ("def f(x, y, z):\n    a = x\n    a %= 2\n    return (a, 0, 0)\n", 3),
+            "augmented_unbound": ("def f(x, y, z):\n    a += 1\n    return (a, 0, 0)\n", 2),
+            "augmented_global": ("def f(x, y, z):\n    b += 1\n    return (b, 0, 0)\n", 2),
+            "reserved_function": ("def f(x, y, z):\n    sin = x\n    return (sin, 0, 0)\n", 2),
+            "other_variable": ("def f(x, y, z):\n    t = x\n    return (t, 0, 0)\n", 2),
+            "tuple_target": ("def f(x, y, z):\n    a, b = x, y\n    return (a, b, 0)\n", 2),
             "wrong_leading": ("def f(a, y, z):\n    return (a, 0, 0)\n", 1),
             "string": ("def f(x, y, z):\n    return ('x', 0, 0)\n", 2),
             "modulo": ("def f(x, y, z):\n    return (x % 2, 0, 0)\n", 2),
@@ -164,6 +187,50 @@ class MaskFunctionTests(unittest.TestCase):
                 f = compile_source(source, np=None, b=5.0, g=abs, t=3.0)
                 with self.assertRaisesRegex(fm.MaskFunctionError, f"^line {line}:"):
                     fm.mask(f)
+
+    def test_reassignment_gets_new_versions(self) -> None:
+        f = compile_source(
+            """
+            def f(x, y, z, a, g_2):
+                g = a * x
+                g = g * 2
+                g *= g_2
+                x = x - a
+                return (g, x, a)
+            """
+        )
+        ir = fm.mask(f, a=2.0, g_2=3.0).to_ir()
+        self.assertEqual(
+            [(local["name"], local["expression"]) for local in ir["locals"]],
+            [("g", "a * x"), ("g_3", "g * 2"), ("g_4", "g_3 * (g_2)"), ("x_2", "x - a")],
+        )
+        self.assertEqual(ir["outputs"], ["g_4", "x_2", "a"])
+
+    def test_reassigned_functions_match_python(self) -> None:
+        def mateusz_style(x, y, z, B01, wavelength, fwhm_y, xs):
+            k = 2 * pi / wavelength
+            sigma_y = fwhm_y / (2 * sqrt(2 * log(2)))
+            g = exp(-(x + xs) ** 2 / (2 * wavelength**2))
+            g = g * exp(-y**2 / (2 * sigma_y**2))
+            g *= B01
+            return (g * sin(k * x - pi / 2), 0.0, g * sin(k * x))
+
+        def chirp(t, frequency, t0):
+            t = t - t0
+            phase = 2 * pi * frequency * t
+            phase += 0.5 * frequency * t
+            return sin(phase)
+
+        values = dict(B01=0.2 * mT, wavelength=279 * nm, fwhm_y=240 * nm, xs=6000 * nm / 2.3)
+        mask_ir = fm.mask(mateusz_style, **values).to_ir()
+        for point in ((-2.6e-6, 1e-7, 0.0), (-2.4e-6, -3e-8, 5e-9), (0.0, 0.0, 0.0)):
+            expected = mateusz_style(*point, **values)
+            got = evaluate(mask_ir, x=point[0], y=point[1], z=point[2])
+            for a, b in zip(got, expected):
+                self.assertAlmostEqual(a, b, delta=1e-12 * max(1.0, abs(b)))
+        time_ir = fm.time(chirp, frequency=3.6 * GHz, t0=0.1e-9).to_ir()
+        for t in (0.0, 0.37e-9, 2e-9):
+            self.assertAlmostEqual(evaluate(time_ir, t=t)[0], chirp(t, 3.6 * GHz, 0.1e-9), delta=1e-12)
 
     def test_time_function_rules(self) -> None:
         f = compile_source("def f(t):\n    return sin(x)\n", sin=math.sin, x=1.0)

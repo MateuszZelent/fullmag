@@ -182,7 +182,7 @@ Common rules:
   is independent of regions.
   `frame="world"`: `x, y, z` and `position` are world coordinates.
   `frame="local"`: `x, y, z` of mask functions are measured from `position`, given
-  in the target's object frame (translation only in v1). Array masks are always in
+  in the target's object frame (translation only in v1; a global target's frame is the world frame). Array masks are always in
   the world frame.
 - `t` follows the stage clock of regional field drives (ADR 0019, note 0920 §4),
   chosen per antenna with `time_origin`: `"stage_local"` (default) — `t = 0` at the

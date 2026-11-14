@@ -59,6 +59,8 @@ from fullmag.model.antenna import (
     AntennaTargetProjection,
     AntennaPortMode,
     AntennaSpectrumRequest,
+    DriveActivation,
+    FieldTarget,
     RegionalFieldDrive,
     RfDrive,
     SolvedAntennaDrive,
@@ -638,6 +640,12 @@ class MagnetHandle:
         return self._object_id
 
     @property
+    def add_simpleantenna(self) -> "ScopedSimpleAntennaFactory":
+        """Antennas that act on this magnet: ``magnet.add_simpleantenna.arbitrary_mask(...)``."""
+        self._assert_active_context()
+        return ScopedSimpleAntennaFactory(_mask_antenna_target(self))
+
+    @property
     def m(self) -> "MagnetizationHandle":
         self._assert_active_context()
         return self._m_proxy
@@ -783,6 +791,9 @@ class MagnetHandle:
         )
         region._context_guard = self._assert_active_context
         region._delete_callback = lambda region_id=region.region_id: self.remove_region(region_id)
+        region._simpleantenna_factory = lambda region=region: ScopedSimpleAntennaFactory(
+            _mask_antenna_target(region)
+        )
         region._texture_assignment_callback = _record_region_texture_assignment
         self._object_regions.append(region)
         return region
@@ -792,6 +803,7 @@ class MagnetHandle:
         index, resolved = self._resolve_region_index(region)
         removed = self._object_regions.pop(index)
         removed._delete_callback = None
+        removed._simpleantenna_factory = None
         removed._texture_assignment_callback = None
         self._material_parameter_assignments = [
             assignment
@@ -2649,7 +2661,7 @@ class _WorldState:
     )
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _mask_field_drives: list[MaskAntenna] = field(default_factory=list)
-    # Antennas created with study.add_simpleantenna.mask(...), and the ids that
+    # Antennas created with add_simpleantenna.arbitrary_mask(...), and the ids that
     # were added to the physics; the difference is reported at capture end.
     _created_mask_antennas: list[MaskAntenna] = field(default_factory=list)
     _added_mask_antenna_ids: set[str] = field(default_factory=set)
@@ -4090,7 +4102,7 @@ def _warn_unused_mask_antennas() -> None:
     for antenna in _state._created_mask_antennas:
         if antenna.id not in _state._added_mask_antenna_ids:
             warnings.warn(
-                f"antenna {antenna.id!r} was created with study.add_simpleantenna.mask(...) "
+                f"antenna {antenna.id!r} was created with add_simpleantenna.arbitrary_mask(...) "
                 "but never added; use study.stages.add_field_drive(antenna) or "
                 "study.field_drives.add(antenna)",
                 UserWarning,
@@ -4651,6 +4663,78 @@ class StudyStagesBuilder:
                 entrypoint_kind="flat_remove_field_drive",
                 default_until_seconds=None,
                 action={"kind": "remove_field_drive", "drive_id": drive_id},
+                stage_id=resolved_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
+
+    def update_field_drive(
+        self,
+        drive: MaskAntenna | str,
+        *,
+        mask_parameters: Mapping[str, float] | None = None,
+        time_parameters: Mapping[str, float] | None = None,
+        term: str | int | None = None,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Change parameter values of an active mask antenna for subsequent stages.
+
+        ``term`` (a name given in ``antenna.add(..., name=...)`` or an index)
+        selects the term; it may be omitted for an antenna with one term. The
+        antenna's own definition is not changed: after ``remove_field_drive``,
+        ``add_field_drive(antenna)`` installs its base values again.
+        """
+        if isinstance(drive, MaskAntenna):
+            drive_id = drive.id
+        elif isinstance(drive, str) and drive.strip():
+            drive_id = drive
+        else:
+            raise TypeError("update_field_drive() needs a mask antenna or its id")
+        index = next(
+            (
+                position
+                for position, active in enumerate(_state._mask_field_drives)
+                if active.id == drive_id
+            ),
+            None,
+        )
+        if index is None:
+            if any(existing.id == drive_id for existing in _state._field_drives):
+                raise ValueError(
+                    f"mask_update_invalid: field drive {drive_id!r} is not a mask antenna; "
+                    "update_field_drive() changes mask antennas only"
+                )
+            raise ValueError(
+                f"mask_update_invalid: antenna {drive_id!r} is not active at this point; "
+                "add it with study.stages.add_field_drive(antenna) first"
+            )
+        patched = _state._mask_field_drives[index].with_parameters(
+            term=term,
+            mask_parameters=mask_parameters,
+            time_parameters=time_parameters,
+        )
+        resolved_id = self._allocate_stage_id("update-field-drive", stage_id)
+        problem_before_action = _build_problem()
+        _state._mask_field_drives[index] = patched
+        action: dict[str, object] = {"kind": "update_mask_field_drive", "drive_id": drive_id}
+        if term is not None:
+            action["term"] = term
+        if mask_parameters:
+            action["mask_parameters"] = {
+                name: float(value) for name, value in mask_parameters.items()
+            }
+        if time_parameters:
+            action["time_parameters"] = {
+                name: float(value) for name, value in time_parameters.items()
+            }
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_update_mask_field_drive",
+                default_until_seconds=None,
+                action=action,
                 stage_id=resolved_id,
             )
         )
@@ -5979,10 +6063,68 @@ class StudyFieldDriveRegistry:
         return tuple(_state._field_drives)
 
 
+_SCOPED_TARGET_UNSET = object()
+
+
+def _mask_antenna_target(target: object) -> FieldTarget:
+    """FieldTarget of a magnet, a region of a magnet, ``"global"`` or a magnet name."""
+    if isinstance(target, FieldTarget):
+        return target
+    if isinstance(target, MagnetHandle):
+        return FieldTarget.object(
+            target._object_id if target._object_id is not None else target._name
+        )
+    if isinstance(target, ObjectRegion):
+        return FieldTarget.region(target.owner_object, str(target.region_id))
+    if isinstance(target, str):
+        text = require_non_empty(target, "target")
+        return FieldTarget.global_domain() if text == "global" else FieldTarget.object(text)
+    raise TypeError(
+        "target must be a magnet returned by study.geometry(...), a region from "
+        "magnet.add_region(...), 'global' or a magnet name"
+    )
+
+
+def _create_mask_antenna(
+    target: FieldTarget,
+    shape: object,
+    position: Sequence[float],
+    *,
+    frame: str,
+    time_origin: str,
+    activation: DriveActivation | None,
+    name: str | None,
+    id: str | None,
+) -> MaskAntenna:
+    used = {antenna.id for antenna in _state._created_mask_antennas}
+    used |= {drive.id for drive in _state._field_drives}
+    if id is None:
+        base = "antenna" if name is None else "_".join(name.lower().split()) or "antenna"
+        id = base
+        suffix = 2
+        while id in used:
+            id = f"{base}_{suffix}"
+            suffix += 1
+    elif id in used:
+        raise ValueError(f"duplicate antenna id {id!r}")
+    antenna = MaskAntenna(
+        id=id,
+        target=target,
+        shape=shape,
+        position=position,
+        frame=frame,
+        time_origin=time_origin,
+        activation=activation,
+        name=name,
+    )
+    _state._created_mask_antennas.append(antenna)
+    return antenna
+
+
 class StudySimpleAntennaFactory:
     """``study.add_simpleantenna``: prescribed antennas written by hand."""
 
-    def mask(
+    def arbitrary_mask(
         self,
         target: object,
         shape: object,
@@ -5996,39 +6138,58 @@ class StudySimpleAntennaFactory:
     ) -> MaskAntenna:
         """Create a mask antenna on ``target``; add terms with ``antenna.add(...)``.
 
-        Creating the antenna only authors it. It acts from the pipeline point of
+        ``target`` is a magnet, a region of a magnet or ``"global"``. Creating
+        the antenna only authors it. It acts from the pipeline point of
         ``study.stages.add_field_drive(antenna)`` or, for the whole study, after
         ``study.field_drives.add(antenna)``.
         """
-        if isinstance(target, MagnetHandle):
-            target_name = target._name
-        elif isinstance(target, str):
-            target_name = require_non_empty(target, "target")
-        else:
-            raise TypeError("target must be a magnet returned by study.geometry(...) or its name")
-        used = {antenna.id for antenna in _state._created_mask_antennas}
-        used |= {drive.id for drive in _state._field_drives}
-        if id is None:
-            base = "antenna" if name is None else "_".join(name.lower().split()) or "antenna"
-            id = base
-            suffix = 2
-            while id in used:
-                id = f"{base}_{suffix}"
-                suffix += 1
-        elif id in used:
-            raise ValueError(f"duplicate antenna id {id!r}")
-        antenna = MaskAntenna(
-            id=id,
-            target_object_id=target_name,
-            shape=shape,
-            position=position,
+        return _create_mask_antenna(
+            _mask_antenna_target(target),
+            shape,
+            position,
             frame=frame,
             time_origin=time_origin,
             activation=activation,
             name=name,
+            id=id,
         )
-        _state._created_mask_antennas.append(antenna)
-        return antenna
+
+
+class ScopedSimpleAntennaFactory:
+    """``magnet.add_simpleantenna`` and ``region.add_simpleantenna``: the target is bound."""
+
+    def __init__(self, target: FieldTarget) -> None:
+        self._target = target
+
+    def arbitrary_mask(
+        self,
+        shape: object,
+        position: Sequence[float] = (0.0, 0.0, 0.0),
+        *,
+        frame: str = "local",
+        time_origin: str = "stage_local",
+        activation: DriveActivation | None = None,
+        name: str | None = None,
+        id: str | None = None,
+        target: object = _SCOPED_TARGET_UNSET,
+    ) -> MaskAntenna:
+        """Create a mask antenna on the bound magnet or region."""
+        if target is not _SCOPED_TARGET_UNSET:
+            raise ValueError(
+                "scoped_target_override_not_allowed: this factory already acts on "
+                f"{self._target.to_ir()}; use study.add_simpleantenna.arbitrary_mask(target, ...) "
+                "for another target"
+            )
+        return _create_mask_antenna(
+            self._target,
+            shape,
+            position,
+            frame=frame,
+            time_origin=time_origin,
+            activation=activation,
+            name=name,
+            id=id,
+        )
 
 
 class StudyEnergyTermRegistry:

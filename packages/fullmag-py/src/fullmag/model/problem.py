@@ -2987,11 +2987,20 @@ class Problem:
         geometry_ids = {
             getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
         }
+        magnet_aliases = magnetic_object_ids | {
+            magnet.object_id for magnet in self.magnets if magnet.object_id is not None
+        }
         for antenna in self.mask_field_drives:
-            if antenna.target_object_id not in magnetic_object_ids:
+            target = antenna.target
+            if target.kind == "object" and target.object_id not in magnet_aliases:
                 raise ValueError(
                     f"mask_target_unknown: antenna {antenna.id!r} target "
-                    f"{antenna.target_object_id!r} is not a magnet"
+                    f"{target.object_id!r} is not a magnet"
+                )
+            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target region "
+                    f"{target.object_id!r}/{target.region_id!r} does not exist"
                 )
         for drive in self.field_drives:
             target = drive.target
