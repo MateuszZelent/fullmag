@@ -37,6 +37,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import { ChevronLeft, ChevronRight, Pause, Play, ZoomOut } from "lucide-react";
 
 interface HysteresisChartProps {
@@ -1081,6 +1082,7 @@ function useHysteresisChartView({
   const [xAxisUnit, setXAxisUnit] = useState<XAxisUnit>("mT");
   const [viewMode, setViewMode] = useState<ViewMode>("full");
   const [isPlaying, setIsPlaying] = useState(false);
+  const playerToolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [isPlaying] });
 
   const elementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
@@ -1399,6 +1401,7 @@ function useHysteresisChartView({
       ]);
 
       const option: EChartsOption = {
+        aria: { enabled: true, decal: { show: false } },
         backgroundColor: "transparent",
         tooltip: {
           trigger: "axis",
@@ -1582,7 +1585,13 @@ function useHysteresisChartView({
           </div>
         ) : null}
 
-        <div className="fm-hysteresis-player-controls">
+        <div
+          ref={playerToolbar.ref}
+          className="fm-hysteresis-player-controls"
+          role="toolbar"
+          aria-label="Hysteresis playback"
+          onKeyDown={playerToolbar.onKeyDown}
+        >
           <Button
             size="sm"
             variant="secondary"
@@ -1597,8 +1606,10 @@ function useHysteresisChartView({
               )
             }
             disabled={navigationIndex <= 0}
+            aria-label="Previous hysteresis point"
+            title="Previous hysteresis point"
           >
-            <ChevronLeft size={16} />
+            <ChevronLeft aria-hidden="true" size={16} />
           </Button>
           <Button
             size="sm"
@@ -1606,7 +1617,7 @@ function useHysteresisChartView({
             onClick={() => setIsPlaying(!isPlaying)}
             className="fm-hysteresis-play-button"
           >
-            {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+            {isPlaying ? <Pause aria-hidden="true" size={14} /> : <Play aria-hidden="true" size={14} />}
             {isPlaying ? "Pause" : "Play Loop"}
           </Button>
           <Button
@@ -1623,8 +1634,10 @@ function useHysteresisChartView({
               )
             }
             disabled={points.length === 0 || navigationIndex >= points.length - 1}
+            aria-label="Next hysteresis point"
+            title="Next hysteresis point"
           >
-            <ChevronRight size={16} />
+            <ChevronRight aria-hidden="true" size={16} />
           </Button>
           <Button
             size="sm"
@@ -1651,7 +1664,7 @@ function useHysteresisChartView({
             disabled={points.length === 0}
             title="Reset local chart zoom"
           >
-            <ZoomOut size={14} />
+            <ZoomOut aria-hidden="true" size={14} />
             Reset zoom
           </Button>
           <Button
@@ -1668,6 +1681,8 @@ function useHysteresisChartView({
       <div
         ref={elementRef}
         className="fm-hysteresis-chart-canvas"
+        role="img"
+        aria-label={`Hysteresis loop chart, ${points.length} points`}
       />
 
       {(points.length > 0 || liveFieldValue != null) && (
