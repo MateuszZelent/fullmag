@@ -20,6 +20,11 @@ use crate::{
 };
 
 pub const MASK_FIELD_DRIVE_SCHEMA_VERSION: &str = "mask_field_drive.v1";
+/// Encoding of a sampled (array) mask: little-endian float32 values in
+/// (z, y, x, component) order, zlib-compressed, then base64.
+pub const SAMPLED_MASK_ENCODING: &str = "f32le-zlib-base64";
+/// Largest lattice of a sampled mask (cells).
+pub const MAX_SAMPLED_MASK_CELLS: u64 = 1 << 28;
 
 fn default_enabled() -> bool {
     true
@@ -101,10 +106,14 @@ impl FunctionIR {
 pub enum MaskSourceIR {
     /// Equations of `x, y, z`, evaluated by the planner once per cell or node.
     Function { function: FunctionIR },
-    /// A float32 `.npy` array of shape `(nz, ny, nx, 3)` in tesla on a regular
-    /// lattice; `origin_m` is the lower corner of the lattice, world frame.
+    /// A float32 array of 3-vectors in tesla on a regular lattice (the loop
+    /// style, mumax3 `VectorMask`), stored in the IR (`SAMPLED_MASK_ENCODING`).
+    /// `size` is `[nx, ny, nz]`; `origin_m` is the lower corner of the lattice in
+    /// the world frame; outside the lattice the mask is zero. `sha256` is the
+    /// hash of the raw little-endian bytes.
     Sampled {
-        path: String,
+        encoding: String,
+        data: String,
         sha256: String,
         size: [u32; 3],
         cell_m: [f64; 3],
@@ -356,7 +365,8 @@ fn validate_function(
 
 fn validate_sampled(label: &str, source: &MaskSourceIR, errors: &mut Vec<String>) {
     let MaskSourceIR::Sampled {
-        path,
+        encoding,
+        data,
         sha256,
         size,
         cell_m,
@@ -366,14 +376,17 @@ fn validate_sampled(label: &str, source: &MaskSourceIR, errors: &mut Vec<String>
         return;
     };
     let digest_ok = sha256.len() == 64 && sha256.bytes().all(|byte| byte.is_ascii_hexdigit());
-    if path.trim().is_empty()
+    let cells = size.iter().map(|value| u64::from(*value)).product::<u64>();
+    if encoding != SAMPLED_MASK_ENCODING
+        || data.trim().is_empty()
         || !digest_ok
         || size.contains(&0)
+        || cells > MAX_SAMPLED_MASK_CELLS
         || !cell_m.iter().all(|value| positive(*value))
         || !finite3(origin_m)
     {
         errors.push(format!(
-            "mask_array_invalid: {label}: a sampled mask needs a path, a sha256 of 64 hex digits, a non-zero size, positive cells and a finite origin"
+            "mask_array_invalid: {label}: a sampled mask needs encoding '{SAMPLED_MASK_ENCODING}', data, a sha256 of 64 hex digits, a non-zero size of at most {MAX_SAMPLED_MASK_CELLS} cells, positive cells and a finite origin"
         ));
     }
 }

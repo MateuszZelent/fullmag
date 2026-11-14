@@ -286,9 +286,12 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 ```
 
 This block states the contract. It is replaced by the serialized output of the
-example once the lowering exists (plan Task 4). An array mask is stored as
-`{"kind": "sampled", "path", "sha256", "size", "cell_m", "origin_m"}`; the file is
-a float32 `.npy` of shape `(nz, ny, nx, 3)` in tesla.
+example once the lowering exists (plan Task 4). An array mask is stored in the IR
+as `{"kind": "sampled", "encoding": "f32le-zlib-base64", "data", "sha256", "size",
+"cell_m", "origin_m"}`: little-endian float32 values in tesla in (z, y, x,
+component) order, zlib-compressed and base64-encoded, cropped to the cells that
+hold a non-zero value; `sha256` hashes the raw bytes. The IR stays self-contained,
+also through the Control Room and the API.
 
 (round-trip-and-failure-semantics)=
 ## 7. Round trip and failure semantics
@@ -445,10 +448,11 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   as 0 hold |B| < 7e-46 T (float32 underflow). The drive stage starts at 2 ns on
   the absolute clock and the time factor equals mumax3's `B_ext` to 5.4e-8; Ms,
   Aex and m0 are identical (report `~/git/simulations/compare_racetrack_antenna.md`).
+  Written as the mumax3 loop (`study.new_vector_mask()` + `set_vector`, float32), the
+  same antenna has the dump's support exactly and equals it to 2.7e-20 T.
 
 Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
-(untouched cells, energy closed form), the loop-style mask and the trajectory of
-item 4 are open.
+(untouched cells, energy closed form) and the trajectory of item 4 are open.
 
 (limitations)=
 ## 11. Limitations and deferred work

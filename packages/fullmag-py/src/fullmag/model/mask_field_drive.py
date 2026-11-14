@@ -19,6 +19,7 @@ from fullmag._validation import as_vector3, require_non_empty
 from fullmag.model.antenna import FIELD_TIME_ORIGINS, DriveActivation, FieldTarget
 from fullmag.model.mask_function import MaskFunction, MaskFunctionError, TimeFunction
 from fullmag.model.structure import _region_shape_to_ir
+from fullmag.model.vector_mask import VectorMask
 
 MASK_FIELD_DRIVE_SCHEMA_VERSION = "mask_field_drive.v1"
 MAX_MASK_TERMS = 8
@@ -30,7 +31,7 @@ _TERM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 class MaskTerm:
     """One term ``mask(x, y, z) * time(t)``; ``time=None`` is static."""
 
-    mask: MaskFunction
+    mask: MaskFunction | VectorMask
     time: TimeFunction | None = None
     name: str | None = None
 
@@ -38,7 +39,10 @@ class MaskTerm:
         payload: dict[str, object] = {}
         if self.name is not None:
             payload["name"] = self.name
-        payload["mask"] = {"kind": "function", "function": self.mask.to_ir()}
+        if isinstance(self.mask, VectorMask):
+            payload["mask"] = self.mask.to_ir()
+        else:
+            payload["mask"] = {"kind": "function", "function": self.mask.to_ir()}
         if self.time is not None:
             payload["time"] = self.time.to_ir()
         return payload
@@ -104,7 +108,7 @@ class MaskAntenna:
 
     def add(
         self,
-        mask: MaskFunction,
+        mask: MaskFunction | VectorMask,
         time: TimeFunction | None = None,
         *,
         name: str | None = None,
@@ -124,8 +128,11 @@ class MaskAntenna:
                 "wrap the function: antenna.add(fm.mask(f, name=value, ...), "
                 "fm.time(g, name=value, ...))"
             )
-        if not isinstance(mask, MaskFunction):
-            raise TypeError("antenna.add() needs a mask made with fm.mask(...)")
+        if not isinstance(mask, (MaskFunction, VectorMask)):
+            raise TypeError(
+                "antenna.add() needs a mask made with fm.mask(...) or a vector mask "
+                "from study.new_vector_mask()"
+            )
         if time is not None and not isinstance(time, TimeFunction):
             if callable(time):
                 raise TypeError("wrap the time function: fm.time(g, name=value, ...)")
@@ -196,6 +203,10 @@ class MaskAntenna:
         mask = selected.mask
         time = selected.time
         try:
+            if mask_parameters and isinstance(mask, VectorMask):
+                raise MaskFunctionError(
+                    f"term {index} of antenna {self.id!r} is an array mask without parameters"
+                )
             for parameter, value in mask_parameters.items():
                 mask = mask.with_parameter(parameter, value)
             if time_parameters and time is None:

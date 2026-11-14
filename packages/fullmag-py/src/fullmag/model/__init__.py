@@ -2,6 +2,7 @@ from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, Fe
 from .absorbing_boundary import AbsorbingBoundaryLayer
 from .mask_function import FunctionParameter, MaskFunction, MaskFunctionError, TimeFunction
 from .mask_field_drive import MaskAntenna
+from .vector_mask import VectorMask
 from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
@@ -227,6 +228,7 @@ from .eigen import (
 __all__ = [
     "FunctionParameter",
     "MaskAntenna",
+    "VectorMask",
     "MaskFunction",
     "MaskFunctionError",
     "TimeFunction",

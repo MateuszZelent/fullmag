@@ -7,6 +7,8 @@ publish.workspace = true
 [dependencies]
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-expr = { path = "../fullmag-expr" }
+base64 = "0.22"
+flate2 = "1"
 fullmag-ir = { path = "../fullmag-ir" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-fdm-demag = { path = "../fullmag-fdm-demag" }

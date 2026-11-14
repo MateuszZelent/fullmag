@@ -84,10 +84,30 @@ def delayed_sine(t, frequency, t0):
 
 def log_time(t):
     return log(t)
+
+
+def formula_loop(field, B, L):
+    nx, ny, nz = field.size
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                x, y, z = field.index2coord(i, j, k)
+                field.set_vector(i, j, k, formula(x, y, z, B, L))
+    return field
+
+
+def formula_on_10nm_lattice(x, y, z, B, L):
+    # Expected value of formula_loop on the 4 x 4 x 2 lattice of 10 nm cells
+    # with lower corner (-40, -20, -10) nm: the lattice cell holding the point.
+    if not (-40e-9 <= x < 0.0 and -20e-9 <= y < 20e-9 and -10e-9 <= z < 10e-9):
+        return (0.0, 0.0, 0.0)
+    def snap(value, low):
+        return low + (floor((value - low) / 10e-9) + 0.5) * 10e-9
+    return formula(snap(x, -40e-9), snap(y, -20e-9), snap(z, -10e-9), B, L)
 '''
 
 HEADER = """\
-from math import pi, sin, cos, exp, log, sqrt
+from math import pi, sin, cos, exp, floor, log, sqrt
 import fullmag as fm
 
 study = fm.study("mask_plan_{name}")
@@ -133,6 +153,7 @@ class Case:
     universe_size: str = "(80e-9, 40e-9, 20e-9)"
     universe_cz: str = "0.0"
     regional_only: bool = False
+    rtol: float = FIELD_RTOL
 
 
 def inside_box(centre, size, point) -> bool:
@@ -273,8 +294,8 @@ def check_case(case: Case, binary: str, workdir: Path, oracle, functions: dict) 
             failures.append(f"term {index}: wrong drive_id/term_index {basis['drive_id']}/{basis['term_index']}")
         error = field_error(basis["field_xyz"], expected_field(plan, case, term, functions))
         nonzero = sum(1 for row in basis["field_xyz"] if any(row))
-        if error > FIELD_RTOL:
-            failures.append(f"term {index}: field error {error:.3e} > {FIELD_RTOL:g}")
+        if error > case.rtol:
+            failures.append(f"term {index}: field error {error:.3e} > {case.rtol:g}")
         if case.count is not None and nonzero != case.count:
             failures.append(f"term {index}: {nonzero} non-zero cells, expected {case.count}")
         time_ir = drive_ir["terms"][index].get("time")
@@ -333,6 +354,15 @@ def cases() -> list[Case]:
              f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world')\n"
              "antenna.add(fm.mask(formula, B=1e-3, L=80e-9))",
              (Term("formula", {"B": 1e-3, "L": 80e-9}),), whole),
+        Case("loop_mask",
+             f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world')\n"
+             "antenna.add(formula_loop(study.new_vector_mask(), B=1e-3, L=80e-9))",
+             (Term("formula", {"B": 1e-3, "L": 80e-9}),), whole, rtol=1e-6),
+        Case("loop_mask_resampled",
+             f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world')\n"
+             "antenna.add(formula_loop(study.new_vector_mask(size=(4, 4, 2), cell=(10e-9, 10e-9, 10e-9), "
+             "origin=(-40e-9, -20e-9, -10e-9)), B=1e-3, L=80e-9))",
+             (Term("formula_on_10nm_lattice", {"B": 1e-3, "L": 80e-9}),), whole, count=256, rtol=1e-6),
         Case("two_terms",
              f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world')\n"
              "antenna.add(fm.mask(mask_sin_kx, B=1e-3, k=2 * pi / 40e-9), fm.time(cos_wt, f=3.6e9), name='c')\n"
@@ -406,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", action="append", help="run only these cases")
     args = parser.parse_args(argv)
     oracle = load_oracle()
-    functions: dict = {name: getattr(math, name) for name in ("sin", "cos", "exp", "log", "sqrt")}
+    functions: dict = {name: getattr(math, name) for name in ("sin", "cos", "exp", "floor", "log", "sqrt")}
     functions["pi"] = math.pi
     exec(FUNCTIONS, functions)
     selected = [case for case in cases() if not args.case or case.name in args.case]

@@ -6457,11 +6457,8 @@ def _mask_functions(payload: Mapping[str, object]) -> list[tuple[str, Mapping[st
     functions: list[tuple[str, Mapping[str, object]]] = []
     for term in payload.get("terms") or []:
         mask = _normalize_mapping(_normalize_mapping(term).get("mask"))
-        if mask.get("kind") != "function":
-            raise ValueError(
-                f"mask antenna {payload.get('id')!r}: array masks cannot be exported to a script yet"
-            )
-        functions.append(("mask", _normalize_mapping(mask.get("function"))))
+        if mask.get("kind") == "function":
+            functions.append(("mask", _normalize_mapping(mask.get("function"))))
         time = _normalize_mapping(term).get("time")
         if time is not None:
             functions.append(("time", _normalize_mapping(time)))
@@ -6518,6 +6515,21 @@ def _render_mask_function_call(kind: str, name: str, function: Mapping[str, obje
         for item in function.get("parameters") or []
     ]
     return f"fm.{kind}({', '.join([name, *values])})"
+
+
+def _render_vector_mask_expr(mask: Mapping[str, object]) -> str:
+    """An array mask written by a loop: the script carries its data (sha256 checked)."""
+    def triple(key: str) -> str:
+        return "(" + ", ".join(_py_float_roundtrip(float(value)) for value in mask[key]) + ")"
+
+    size = ", ".join(str(int(value)) for value in mask["size"])
+    return (
+        "fm.VectorMask.from_data("
+        f"encoding={_py_repr(str(mask['encoding']))}, "
+        f"sha256={_py_repr(str(mask['sha256']))}, "
+        f"size=({size}), cell={triple('cell_m')}, origin={triple('origin_m')}, "
+        f"data={_py_repr(str(mask['data']))})"
+    )
 
 
 def _render_mask_activation_expr(value: object) -> str:
@@ -6584,7 +6596,11 @@ class _MaskAntennaRenderer:
             calls = []
             for kind in ("mask", "time"):
                 if kind == "mask":
-                    function = _normalize_mapping(_normalize_mapping(term.get("mask")).get("function"))
+                    mask = _normalize_mapping(term.get("mask"))
+                    if mask.get("kind") == "sampled":
+                        calls.append(_render_vector_mask_expr(mask))
+                        continue
+                    function = _normalize_mapping(mask.get("function"))
                 elif term.get("time") is None:
                     continue
                 else:

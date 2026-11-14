@@ -146,7 +146,7 @@ value stack of at most 64 entries and one input, `t`.
 | `mask_update_invalid` | Python authoring, stage materialization | Update of an inactive id or of a non-mask drive, an unknown parameter, a missing or unknown term selector, an empty patch, a non-finite value, or time parameters for a static term |
 | `mask_shape_invalid` | IR validation | a non-positive or non-finite shape size, a non-finite position, a zero cylinder axis, or a CSG shape (not part of v1) |
 | `mask_too_many_terms` | IR validation, runner | zero terms, or more than 8 terms on one drive, or more than 8 time-dependent mask terms active in one stage |
-| `mask_array_invalid` | IR validation, planner | array mask with a bad lattice, missing file, wrong sha256, dtype or shape |
+| `mask_array_invalid` | IR validation, planner | array mask with a bad lattice, an unknown encoding, data that is not base64 or zlib, a wrong sha256 or a byte count that does not match the lattice |
 | `mask_support_empty` | planner | no active cell of the target lies inside the shape |
 | `mask_expression_non_finite` | planner | a mask value at a supported cell, or a time value on the stage horizon, is not finite |
 | `mask_field_drive_unsupported_lane` | planner | the resolved lane does not realize mask field drives (`fem`, `fdm_multilayer`) |

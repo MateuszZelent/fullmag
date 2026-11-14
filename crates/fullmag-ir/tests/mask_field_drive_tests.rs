@@ -53,7 +53,8 @@ fn antenna_drive() -> Value {
             }},
             {"mask": {
                 "kind": "sampled",
-                "path": "antenna_term2.npy",
+                "encoding": "f32le-zlib-base64",
+                "data": "eJxjYAAAAAQAAQ==",
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 "size": [1200, 200, 15],
                 "cell_m": [5e-9, 5e-9, 5e-9],
@@ -279,6 +280,13 @@ fn rejects_bad_shape_and_sampled_lattice() {
         &errors_of(problem_with(json!([drive]))),
         "mask_array_invalid",
         "mask_field_drives[0].terms[2].mask",
+    );
+    let mut drive = antenna_drive();
+    drive["terms"][2]["mask"]["encoding"] = json!("npy");
+    assert_error(
+        &errors_of(problem_with(json!([drive]))),
+        "mask_array_invalid",
+        "f32le-zlib-base64",
     );
 }
 

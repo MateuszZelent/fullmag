@@ -68,6 +68,7 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
 from fullmag.model.mask_field_drive import MaskAntenna
+from fullmag.model.vector_mask import VectorMask
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.constraints import FrozenSpins, merge_constraint_stage_ids
@@ -6331,6 +6332,52 @@ class StudyBuilder:
     def name(self, problem_name: str) -> "StudyBuilder":
         name(problem_name)
         return self
+
+    def new_vector_mask(
+        self,
+        size: Sequence[int] | None = None,
+        cell: Sequence[float] | None = None,
+        origin: Sequence[float] | None = None,
+    ) -> VectorMask:
+        """An empty array mask (mumax3 ``newVectorMask``), by default on the FDM grid.
+
+        The default lattice is the manual study universe divided into
+        ``study.cell(...)`` cells; give ``size``, ``cell`` and ``origin`` for any
+        other lattice (for example on FEM studies without a cell size).
+        """
+        if size is not None and cell is not None and origin is not None:
+            return VectorMask(size, cell, origin)
+        universe = _state._study_universe
+        cell_size = cell if cell is not None else _state._cell
+        if (
+            cell_size is None
+            or universe is None
+            or universe.mode != "manual"
+            or universe.size is None
+            or any(value != 0.0 for value in universe.padding)
+        ):
+            raise ValueError(
+                "new_vector_mask() takes its default lattice from study.cell(...) and a "
+                "manual study.universe(...) without padding; otherwise give size, cell "
+                "and origin"
+            )
+        counts = []
+        for axis in range(3):
+            ratio = universe.size[axis] / float(cell_size[axis])
+            if abs(ratio - round(ratio)) > 1e-6 * max(1.0, ratio):
+                raise ValueError(
+                    "new_vector_mask(): the universe is not a whole number of cells; "
+                    "give size, cell and origin"
+                )
+            counts.append(int(round(ratio)))
+        lattice_origin = tuple(
+            universe.center[axis] - 0.5 * universe.size[axis] for axis in range(3)
+        )
+        return VectorMask(
+            size if size is not None else counts,
+            cell_size,
+            origin if origin is not None else lattice_origin,
+        )
 
     def add_antenna_port_mode(self, *, port_mode: AntennaPortMode) -> AntennaPortMode:
         """Register one authored, signed antenna current-port mode."""

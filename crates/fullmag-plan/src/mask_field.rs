@@ -6,10 +6,13 @@
 //! the centre of each supported cell (as mumax3 fills a `VectorMask`); each time
 //! function is compiled to `fullmag_time_expr.v1` for the solver.
 
+use std::io::Read;
+
+use base64::Engine;
 use fullmag_expr::{CompiledFunction, FunctionKind};
 use fullmag_ir::{
     FdmRegionLegendEntryIR, FieldTargetIR, FieldTimeOriginIR, MaskFieldDriveIR, MaskFrameIR,
-    MaskSourceIR, ProblemIR, ResolvedMaskFieldTermBasisIR,
+    MaskSourceIR, ProblemIR, ResolvedMaskFieldTermBasisIR, SAMPLED_MASK_ENCODING,
 };
 use sha2::{Digest, Sha256};
 
@@ -204,6 +207,101 @@ fn support_mask(
     Ok(support)
 }
 
+/// A decoded sampled mask: values in tesla, (z, y, x, component) order.
+struct SampledMask {
+    values: Vec<f32>,
+    size: [usize; 3],
+    cell_m: [f64; 3],
+    origin_m: [f64; 3],
+}
+
+impl SampledMask {
+    /// Value at a world point: the lattice cell that contains it, else zero
+    /// (mumax3 also resamples a VectorMask to the cell centres).
+    fn value_at(&self, point: [f64; 3]) -> [f64; 3] {
+        let mut index = [0usize; 3];
+        for axis in 0..3 {
+            let coordinate = ((point[axis] - self.origin_m[axis]) / self.cell_m[axis]).floor();
+            if !(0.0..self.size[axis] as f64).contains(&coordinate) {
+                return [0.0; 3];
+            }
+            index[axis] = coordinate as usize;
+        }
+        let [nx, ny, _] = self.size;
+        let offset = 3 * ((index[2] * ny + index[1]) * nx + index[0]);
+        [
+            f64::from(self.values[offset]),
+            f64::from(self.values[offset + 1]),
+            f64::from(self.values[offset + 2]),
+        ]
+    }
+}
+
+fn decode_sampled_mask(
+    drive: &MaskFieldDriveIR,
+    term_index: usize,
+    source: &MaskSourceIR,
+) -> Result<SampledMask, PlanError> {
+    let MaskSourceIR::Sampled {
+        encoding,
+        data,
+        sha256,
+        size,
+        cell_m,
+        origin_m,
+    } = source
+    else {
+        unreachable!("only sampled masks are decoded");
+    };
+    let invalid = |reason: String| {
+        plan_error(format!(
+            "mask_array_invalid: mask drive '{}' terms[{term_index}]: {reason}",
+            drive.id
+        ))
+    };
+    if encoding != SAMPLED_MASK_ENCODING {
+        return Err(invalid(format!("unknown encoding '{encoding}'")));
+    }
+    let compressed = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|error| invalid(format!("data is not base64: {error}")))?;
+    let mut raw = Vec::new();
+    flate2::read::ZlibDecoder::new(compressed.as_slice())
+        .read_to_end(&mut raw)
+        .map_err(|error| invalid(format!("data is not zlib: {error}")))?;
+    let size = size.map(|value| value as usize);
+    let expected = size[0] * size[1] * size[2] * 3 * 4;
+    if raw.len() != expected {
+        return Err(invalid(format!(
+            "{} bytes for a {}x{}x{} lattice of 3-vectors (expected {expected})",
+            raw.len(),
+            size[0],
+            size[1],
+            size[2]
+        )));
+    }
+    let digest = format!("{:x}", Sha256::digest(&raw));
+    if !digest.eq_ignore_ascii_case(sha256) {
+        return Err(invalid(format!("sha256 {digest} differs from {sha256}")));
+    }
+    let values: Vec<f32> = raw
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        .collect();
+    if let Some(position) = values.iter().position(|value| !value.is_finite()) {
+        return Err(plan_error(format!(
+            "mask_expression_non_finite: mask drive '{}' terms[{term_index}] array value {position} is not finite",
+            drive.id
+        )));
+    }
+    Ok(SampledMask {
+        values,
+        size,
+        cell_m: *cell_m,
+        origin_m: *origin_m,
+    })
+}
+
 /// Resolve every term of every active mask drive on the single FDM grid.
 pub(crate) fn resolve_fdm_mask_field_terms(
     problem: &ProblemIR,
@@ -241,11 +339,16 @@ pub(crate) fn resolve_fdm_mask_field_terms(
                     }
                     field_xyz
                 }
-                MaskSourceIR::Sampled { .. } => {
-                    return Err(plan_error(format!(
-                        "mask_array_invalid: mask drive '{}' terms[{term_index}]: array masks are not realized by the FDM planner yet",
-                        drive.id
-                    )));
+                sampled @ MaskSourceIR::Sampled { .. } => {
+                    let mask = decode_sampled_mask(drive, term_index, sampled)?;
+                    let mut field_xyz = vec![[0.0; 3]; domain.cell_centres_m.len()];
+                    for (index, point) in domain.cell_centres_m.iter().enumerate() {
+                        if support[index] {
+                            let value = mask.value_at(*point);
+                            field_xyz[index] = [value[0] / MU0, value[1] / MU0, value[2] / MU0];
+                        }
+                    }
+                    field_xyz
                 }
             };
             let (time_expression, time_program, time_dependent) = match &term.time {

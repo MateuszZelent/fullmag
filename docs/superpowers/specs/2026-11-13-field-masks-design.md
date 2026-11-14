@@ -163,9 +163,10 @@ Rules for **array** masks (loop style):
   3-vectors in tesla on a regular lattice. Default lattice = the FDM grid of the
   study (universe size and cell). `field.size`, `field.index2coord(i, j, k)`
   (cell centre, metres, world frame), `field.set_vector(i, j, k, (bx, by, bz))`,
-  `field.array` (numpy view for vectorized code), `fm.VectorMask.load(path)`.
-- The array is saved as a `.npy` file beside the script's other assets and
-  referenced from the IR by path and sha256.
+  `field.array` (numpy view for vectorized code), `fm.VectorMask.from_data(...)`.
+- The array travels inside the IR (float32, zlib, base64, sha256), cropped to its
+  non-zero cells, so no file has to follow the script through the API; an exported
+  script carries the same data in `fm.VectorMask.from_data(...)`.
 - The planner resamples it to the lane: identical lattice → copied; otherwise
   nearest lattice point at each cell centre (mumax3 also resamples); outside the
   lattice → 0. The antenna's `shape` still limits the support.
@@ -216,8 +217,8 @@ LibraryCallIR { function: String,                          # e.g. "fullmag.anten
                 arguments: BTreeMap<String, f64>, call_index: u32, output_index: u32 }
 MaskSourceIR =
     function { function: FunctionIR }
-  | sampled  { path: String, sha256: String, size: [u32; 3], cell_m: [f64; 3],
-               origin_m: [f64; 3] }                       # float32 .npy, shape (nz, ny, nx, 3), tesla
+  | sampled  { encoding: "f32le-zlib-base64", data: String, sha256: String,
+               size: [u32; 3], cell_m: [f64; 3], origin_m: [f64; 3] }   # float32 (z, y, x, 3), tesla
 FunctionIR {
   expression_version: "field_expr.v1",
   parameters: Vec<{ name, value: f64, source: Option<String> }>,

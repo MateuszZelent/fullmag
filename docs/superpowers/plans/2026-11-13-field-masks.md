@@ -136,7 +136,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 - [ ] **Step 3: Check** `just check-api-source` and `just check-cli-source` in the worktree backend — exit 0.
 - [ ] **Step 4: Commit** `feat(ir): add mask field drives to ProblemIR`.
 
-### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna — PARTIAL (`0e53f8a2a`: units, transpiler, `fm.mask`/`fm.time`, `MaskAntenna`, stage action; open: `VectorMask`/`study.new_vector_mask`, `fullmag.antennas.gaussian_k_source`)
+### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna — PARTIAL (`0e53f8a2a`: units, transpiler, `fm.mask`/`fm.time`, `MaskAntenna`, stage action; 2026-11-14: `VectorMask`/`study.new_vector_mask` with the array inside the IR (float32, zlib, base64, sha256); open: `fullmag.antennas.gaussian_k_source`)
 
 **Files:**
 - Create: `packages/fullmag-py/src/fullmag/units.py` (`nm, um, mT, T, GHz, MHz, ns, ps` as floats)
@@ -365,7 +365,7 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 - [ ] **Step 3:** Run in the worktree backend: `python3 scripts/benchmarks/run_fdm_mask_parity.py --output /tmp/mask-parity --with-overhead` — 12 parity rows `PASS`, overhead criterion met, exit 0.
 - [ ] **Step 4:** Copy evidence to `~/git/simulations/fullmag/field_masks/parity/`; commit `test(fdm): qualify hand-written masks on CPU and CUDA`.
 
-### Task 10: Antenna milestone — inputs equal to mumax3 — PARTIAL (2026-11-14, function style: every criterion met, report `~/git/simulations/compare_racetrack_antenna.md`; open: loop style with `VectorMask`, the 240 ABC regions; findings: `export-run-config` fails for action stages when `study.storage(...)` is set, also on master; the FDM grid follows the geometry extent, so the YIG box is placed on cell faces)
+### Task 10: Antenna milestone — inputs equal to mumax3 — PARTIAL (2026-11-14, function and loop style: every criterion met, the loop style equals the dump to 2.7e-20 T; report `~/git/simulations/compare_racetrack_antenna.md`; open: the 240 ABC regions; findings: `export-run-config` fails for action stages when `study.storage(...)` is set, also on master; the FDM grid follows the geometry extent, so the YIG box is placed on cell faces)
 
 **Files:**
 - Create: `~/git/simulations/fullmag/racetrack_3.6GHz.py`, `~/git/simulations/compare_racetrack_antenna.py`, output `compare_racetrack_antenna.md`
