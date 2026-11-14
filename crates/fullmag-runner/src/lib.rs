@@ -7300,7 +7300,7 @@ mod tests {
         )
         .is_err());
 
-        let fem = BackendPlanIR::Fem(dispatch::test_tiny_fem_plan());
+        let fem = BackendPlanIR::Fem(fullmag_ir::FemPlanIR::default());
         assert!(validate_initial_observation_request(
             policy, &fem, fullmag_ir::BackendTarget::Fdm, false, 1
         )
