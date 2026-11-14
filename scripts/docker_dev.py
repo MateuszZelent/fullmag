@@ -3050,6 +3050,24 @@ def _parser() -> argparse.ArgumentParser:
         include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
     )
 
+    held_retry = subparsers.add_parser(
+        "retry-held-ui-start-volume",
+        help="retry one pinned pre-materialization diagnostic held start without replaying Compute",
+    )
+    for flag in ("attempt", "config-sha256", "run-id", "request-id",
+                 "expected-plan-sha256", "failed-held-start-attempt", "failed-held-start-sha256"):
+        held_retry.add_argument("--" + flag, required=True)
+    held_retry.add_argument("--source-root", type=Path, required=True)
+    held_retry.add_argument("--port", type=int, required=True)
+    held_retry_mode = held_retry.add_mutually_exclusive_group(required=True)
+    held_retry_mode.add_argument("--preview", action="store_true")
+    held_retry_mode.add_argument("--apply", action="store_true")
+    held_retry.add_argument("--retry-plan-sha256", help="exact retry preview SHA; required for apply")
+    held_retry.set_defaults(
+        profile="dev", image=None, toolchain_image=None, source_manifest=None,
+        include_untracked=None, script=None, fresh_state=False, migrate_host_capacity=False,
+    )
+
     failed_resume = subparsers.add_parser(
         "resume-failed-run-volume",
         help="resume the pinned existing accepted run after a diagnostic stop; never cancel or replay a script",
@@ -3361,6 +3379,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "continue-held-ui-volume":
             from docker_volume_held_ui_materialization import run as continue_held_ui
             print(json.dumps(continue_held_ui(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "retry-held-ui-start-volume":
+            if args.apply:
+                if (not isinstance(args.retry_plan_sha256, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", args.retry_plan_sha256) is None):
+                    raise _fail("Held start retry apply requires the exact reviewed retry plan SHA-256")
+            elif args.retry_plan_sha256 is not None:
+                raise _fail("Held start retry preview cannot carry an apply plan SHA-256")
+            from docker_volume_held_ui_start_retry import run as retry_held_ui_start
+            print(json.dumps(retry_held_ui_start(args), ensure_ascii=False, sort_keys=True))
         elif args.action == "resume-failed-run-volume":
             from docker_volume_failed_run_resume import run as resume_failed_run
             print(json.dumps(resume_failed_run(args), ensure_ascii=False, sort_keys=True))

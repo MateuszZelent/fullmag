@@ -6049,6 +6049,14 @@ def check(handle: RuntimeHandle, *, full_api_probe: bool = True) -> None:
 HELD_UI_REQUEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST"
 HELD_UI_DIGEST_ENV = "FULLMAG_HELD_UI_MATERIALIZATION_REQUEST_SHA256"
 HELD_UI_STDIN_ENV = "FULLMAG_DEVELOPMENT_HELD_UI_MATERIALIZATION_STDIN"
+HELD_UI_RETRY_SOURCE_COMMIT_ENV = "FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT"
+HELD_UI_RETRY_SOURCE_DIGEST_ENV = "FULLMAG_HELD_UI_RETRY_SOURCE_SHA256"
+HELD_UI_RETRY_SOURCE_SNAPSHOT_ENV = "FULLMAG_HELD_UI_RETRY_SOURCE_SNAPSHOT_SHA256"
+_HELD_UI_RETRY_SOURCE_ENV = (
+    HELD_UI_RETRY_SOURCE_COMMIT_ENV,
+    HELD_UI_RETRY_SOURCE_DIGEST_ENV,
+    HELD_UI_RETRY_SOURCE_SNAPSHOT_ENV,
+)
 HELD_UI_REQUEST_SCHEMA = "fullmag.held-ui-materialization-request.v1"
 HELD_UI_INPUT_SCHEMA = "fullmag.development-held-ui-materialization-restore.v1"
 HELD_UI_LAUNCH_SCHEMA = "fullmag.held-ui-materialization-launch.v1"
@@ -6091,6 +6099,25 @@ def _held_ui_read(path, name, maximum):
         os.close(descriptor)
 
 
+def _held_ui_retry_source_pin(environment, *, held_request_enabled):
+    present = tuple(name in environment for name in _HELD_UI_RETRY_SOURCE_ENV)
+    if not any(present):
+        return None
+    if not held_request_enabled:
+        _fail("held UI retry source pins require a held UI request")
+    if not all(present):
+        _fail("held UI retry source pins must be supplied as a complete set")
+    commit = environment[HELD_UI_RETRY_SOURCE_COMMIT_ENV]
+    source_digest = environment[HELD_UI_RETRY_SOURCE_DIGEST_ENV]
+    snapshot = environment[HELD_UI_RETRY_SOURCE_SNAPSHOT_ENV]
+    if (not isinstance(commit, str) or HEX40.fullmatch(commit) is None
+            or not isinstance(source_digest, str) or HEX64.fullmatch(source_digest) is None
+            or not isinstance(snapshot, str) or HEX64.fullmatch(snapshot) is None):
+        _fail("held UI retry source pins are malformed")
+    return {"commit": commit, "source_digest": source_digest,
+            "source_snapshot_sha256": snapshot}
+
+
 def _held_ui_json(raw, name):
     def reject_constant(value):
         _fail(name + " contains a non-standard JSON number: " + value)
@@ -6110,6 +6137,9 @@ def held_ui_materialization_preflight(paths):
     digest = environment.get(HELD_UI_DIGEST_ENV)
     if HELD_UI_STDIN_ENV in environment:
         _fail("held UI stdin switch is owned by PID 1")
+    retry_source = _held_ui_retry_source_pin(
+        environment, held_request_enabled=relative is not None or digest is not None,
+    )
     if relative is None and digest is None:
         return None
     if (not isinstance(relative, str)
@@ -6224,6 +6254,17 @@ def held_ui_materialization_api_input(
             or environment.get("FULLMAG_RUNTIME_IMAGE_ID") != image
             or not isinstance(store_binding, str) or HEX64.fullmatch(store_binding) is None):
         _fail("held UI target build or accepted-store binding is invalid")
+    target_runtime = {
+        "build_id": commit, "source_sha256": snapshot, "image_id": image,
+    }
+    retry_source = _held_ui_retry_source_pin(environment, held_request_enabled=True)
+    if retry_source is not None:
+        provenance_digest = provenance.get("source_digest")
+        if (not isinstance(provenance_digest, str) or HEX64.fullmatch(provenance_digest) is None
+                or retry_source["commit"] != target_runtime["build_id"]
+                or retry_source["source_digest"] != provenance_digest
+                or retry_source["source_snapshot_sha256"] != target_runtime["source_sha256"]):
+            _fail("held UI retry source pins differ from the built source identities")
     configuration = _held_ui_read(paths.config, "held UI target config", 64 * 1024)
     config = _held_ui_json(configuration, "held UI target config")
     if config.get("store_root") != str(paths.store):
@@ -6246,8 +6287,7 @@ def held_ui_materialization_api_input(
             raise RuntimeServiceUnknown("held UI API launch already recorded; reconcile its exact outcome before another launch")
         launch_id = str(uuid.uuid4())
         payload = dict(request, schema=HELD_UI_INPUT_SCHEMA, launch_id=launch_id,
-                       target_runtime={"build_id": commit, "source_sha256": snapshot,
-                                       "image_id": image, "config_sha256": _sha256_bytes(configuration),
+                       target_runtime={**target_runtime, "config_sha256": _sha256_bytes(configuration),
                                        "accepted_store_binding": store_binding})
         raw = _held_ui_json_bytes(payload)
         if len(raw) > 64 * 1024:

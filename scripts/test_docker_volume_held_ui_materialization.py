@@ -508,6 +508,9 @@ class RequestContracts(unittest.TestCase):
             subject.REQUEST_ENV: subject.request_relative(MAINTENANCE_ID),
             subject.REQUEST_DIGEST_ENV: "a" * 64,
             subject.STDIN_ENV: "1",
+            "FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT": "b" * 40,
+            "FULLMAG_HELD_UI_RETRY_SOURCE_SHA256": "c" * 64,
+            "FULLMAG_HELD_UI_RETRY_SOURCE_SNAPSHOT_SHA256": "d" * 64,
             "KEEP": "pinned",
         }
         self.assertIs(subject.clear_start_environment(target), target)

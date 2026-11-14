@@ -2321,6 +2321,17 @@ def _retained_device_access(previous, document):
     return access
 
 
+def _run_failed_held_ui_start_retry(args, *, controller):
+    from docker_volume_held_ui_start_retry_lifecycle import run
+    return run(args, controller=controller)
+
+
+def resume_failed_held_ui_start(args, retry_context):
+    return _retained_operation(
+        args, recreate_services=True, failed_held_ui_start_context=retry_context,
+    )
+
+
 def _run_held_ui_materialization(args, *, controller):
     """Preview or continue one retained manual HTTP Compute through its typed handoff."""
     if getattr(args, "apply", False):
@@ -4099,7 +4110,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
           cold_budget_restore=None, prepared_recovery_constraints=None, failed_run_resume_context=None,
-          held_ui_materialization=None, held_ui_control=None):
+          held_ui_materialization=None, held_ui_control=None, failed_held_ui_start_context=None):
     from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
@@ -4150,6 +4161,26 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             raise BuildControlError("Held UI start is not pinned to its exact completed recreation")
         _held_ui_recreate_terminal(validated_held_ui, args)
         held_ui_start_input = _held_ui_start_input(validated_held_ui)
+    validated_failed_held_ui = None
+    runtime_held_ui = validated_held_ui
+    if failed_held_ui_start_context is not None:
+        if (held_ui_materialization is not None or held_ui_control is not None
+                or provided_control is not None or provided_operation is not None
+                or reuse_state is None or args.script is not None or getattr(args, "fresh_state", False)
+                or any(value is not None for value in (
+                    recovery_environment, recovery_metadata, native_restart_metadata,
+                    accepted_reattach_environment, accepted_reattach_metadata, recreation_resume_proof,
+                    post_build_generation, maintenance, startup_diagnostic_restart,
+                    terminal_observation, cold_budget_restore, prepared_recovery_constraints,
+                    failed_run_resume_context,
+                ))):
+            raise BuildControlError("Failed held start retry requires only its typed retained authority")
+        import docker_volume_held_ui_start_retry_lifecycle as held_retry
+        validated_failed_held_ui = held_retry.validate_start_context(
+            args, failed_held_ui_start_context, reuse_state,
+        )
+        runtime_held_ui = validated_failed_held_ui["original_request_context"]
+        held_ui_start_input = _held_ui_start_input(runtime_held_ui)
     native_contracts = _native_contracts(getattr(args, "native_contract", None))
     if retained_device_access is not None and retained_device_access not in ("cpu", "gpu"):
         raise BuildControlError("Retained device access must be cpu or gpu")
@@ -4383,6 +4414,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         **operator_probe_record}
     if held_ui_start_input is not None:
         operation_inputs["held_ui_materialization"] = held_ui_start_input
+    if validated_failed_held_ui is not None:
+        operation_inputs["failed_held_ui_start"] = held_retry.start_input(validated_failed_held_ui)
     frontend_handoff = reuse_state.get("frontend_start_handoff") if reuse_state is not None else None
     if frontend_handoff is not None:
         _validate_frontend_start_handoff(control, frontend_handoff, selected, reuse_state["state"])
@@ -4441,6 +4474,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        if validated_failed_held_ui is not None:
+            held_retry.before_start(args, validated_failed_held_ui, control, operation, reuse_state)
         if validated_held_ui is not None:
             _validate_held_ui_start_fence(
                 args, validated_held_ui, control, operation, before_start=True,
@@ -4639,7 +4674,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             reuse_certificate = runtime._reuse_host_certificate if os.name == "nt" else host.reuse_certificate
             certificate = reuse_certificate(reuse_state, provisional, engine_id,
                                                          development_build=delegation)
-        if validated_held_ui is not None:
+        if runtime_held_ui is not None:
             _record_held_ui_rotated_certificate(
                 host, state, certificate_path, certificate, control, operation,
             )
@@ -4705,9 +4740,12 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         # A normal retained start must never inherit a prior held restore from
         # the operator shell. PID 1 owns the private stdin switch exclusively.
         clear_held_ui_start_environment(environment)
-        if validated_held_ui is not None:
+        if runtime_held_ui is not None:
             sanitize_held_ui_backend_environment(environment, enabled=True)
-            environment.update(validated_held_ui["start_environment"])
+            environment.update(runtime_held_ui["start_environment"])
+        if validated_failed_held_ui is not None:
+            from docker_volume_held_ui_retry_source import environment as retry_source_environment
+            environment.update(retry_source_environment(validated_failed_held_ui["plan"]["new_source"]))
         # Compose interpolation cannot inherit an operator's unrelated host
         # value; only the explicit CLI list is pinned into the backend below.
         environment.pop(INCLUDE_UNTRACKED_ENV, None)
@@ -4777,10 +4815,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         backend["environment"].update(cache["environment"])
         backend["environment"].update(ledger_backend["environment"])
         clear_held_ui_start_environment(backend["environment"])
-        if validated_held_ui is not None:
+        if runtime_held_ui is not None:
             sanitize_held_ui_backend_environment(backend["environment"], enabled=True)
             backend["environment"].update(held_ui_start_environment(
-                validated_held_ui["request_path"], validated_held_ui["request_sha256"],
+                runtime_held_ui["request_path"], runtime_held_ui["request_sha256"],
             ))
             if (HELD_UI_STDIN_ENV in backend["environment"]
                     or any(name in backend["environment"] for name in (
@@ -4793,6 +4831,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                         "FULLMAG_DEVELOPMENT_RESTORE_STDIN",
                     ))):
                 raise BuildControlError("Held UI backend Compose environment combines another restore mode")
+        if validated_failed_held_ui is not None:
+            backend["environment"].update(retry_source_environment(
+                validated_failed_held_ui["plan"]["new_source"],
+            ))
         if control_namespace:
             backend["environment"]["FULLMAG_CONTROL_NAMESPACE"] = control_namespace
         else:
@@ -4945,6 +4987,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             )
         if failed_run_resume_context is not None:
             _revalidate_failed_run_handoff(control, args, failed_run_resume_context, phase="before-start")
+        if validated_failed_held_ui is not None:
+            held_retry.before_compose(args, validated_failed_held_ui, control, operation, reuse_state)
         backend_id, frontend_id = _start_compose_services(
             control, operation, document, headless=headless,
         )
@@ -10546,9 +10590,16 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
-    failed_run_resume=False, held_ui_materialization=None,
+    failed_run_resume=False, held_ui_materialization=None, failed_held_ui_start_context=None,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    if failed_held_ui_start_context is not None:
+        if (not recreate_services or restart_idle_service or stop_after_drain
+                or resume_recreation_id is not None or refresh_frontend_service or retire_only
+                or failed_run_resume or held_ui_materialization is not None):
+            raise BuildControlError("Failed held start retry cannot combine other retained operations")
+        from docker_volume_held_ui_start_retry_lifecycle import apply as apply_held_retry
+        return apply_held_retry(args, failed_held_ui_start_context)
     held_ui_context = None
     if held_ui_materialization is not None:
         if (not recreate_services or restart_idle_service or stop_after_drain

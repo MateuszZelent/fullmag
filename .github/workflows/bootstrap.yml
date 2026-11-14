@@ -1241,6 +1241,11 @@ jobs:
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
           python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
           python -B scripts/test_docker_held_ui_materialization_cli.py -v
+          python -B scripts/test_docker_held_ui_start_retry_cli.py -v
+          python -B scripts/test_docker_volume_held_ui_start_retry.py -v
+          python -B scripts/test_docker_volume_held_ui_retry_source.py -v
+          python -B scripts/test_docker_volume_held_ui_start_retry_lifecycle.py -v
+          python -B scripts/test_docker_volume_held_ui_retry_probe.py -v
           python -B scripts/test_runtime_service_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_lifecycle.py -v

@@ -614,7 +614,9 @@ def start_environment(relative_path: str, request_sha256: str) -> dict[str, str]
 def clear_start_environment(environment: dict) -> dict:
     """Remove held-restore controls from every ordinary retained start render."""
     _require(isinstance(environment, dict), "held UI start environment must be mutable")
-    for name in (REQUEST_ENV, REQUEST_DIGEST_ENV, STDIN_ENV):
+    for name in (REQUEST_ENV, REQUEST_DIGEST_ENV, STDIN_ENV,
+                 "FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT", "FULLMAG_HELD_UI_RETRY_SOURCE_SHA256",
+                 "FULLMAG_HELD_UI_RETRY_SOURCE_SNAPSHOT_SHA256"):
         environment.pop(name, None)
     return environment
 

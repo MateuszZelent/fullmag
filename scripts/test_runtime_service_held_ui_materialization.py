@@ -61,7 +61,8 @@ class HeldUiLaunchTests(unittest.TestCase):
         terminal.write_bytes(terminal_raw)
         self.request["stop_authority"]["terminal"] = {"path": terminal_relative, "sha256": sha(terminal_raw)}
         self.provenance = {"schema": "fullmag.docker-all-image.v1", "state": "succeeded", "commit": "1"*40,
-                           "source_snapshot_sha256": "2"*64, "image_id": "sha256:"+"3"*64}
+                           "source_digest": "4"*64, "source_snapshot_sha256": "2"*64,
+                           "image_id": "sha256:"+"3"*64}
         self.environment = {"FULLMAG_HELD_UI_MATERIALIZATION_REQUEST": str((self.parent / "request.json").relative_to(control)),
                             "FULLMAG_RUNTIME_PROVENANCE": str(service.ACCEPTED_REATTACH_PROVENANCE),
                             "FULLMAG_RUNTIME_IMAGE_ID": self.provenance["image_id"]}
@@ -202,6 +203,62 @@ class HeldUiLaunchTests(unittest.TestCase):
             path.write_bytes(raw(changed))
             with self.subTest(key=key), self.assertRaises(service.RuntimeServiceError):
                 service.held_ui_materialization_runtime_receipt(self.paths, preflight=preflight, launch=launch, handle=handle)
+
+    def _set_retry_source(self, *, commit="1"*40, source_digest="4"*64,
+                          source_snapshot_sha256="2"*64):
+        self.environment.update({
+            "FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT": commit,
+            "FULLMAG_HELD_UI_RETRY_SOURCE_SHA256": source_digest,
+            "FULLMAG_HELD_UI_RETRY_SOURCE_SNAPSHOT_SHA256": source_snapshot_sha256,
+        })
+
+    def test_retry_source_roles_are_checked_before_launch_publication(self):
+        preflight = service.held_ui_materialization_preflight(self.paths)
+        mismatches = (
+            {"FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT": "9"*40},
+            {"FULLMAG_HELD_UI_RETRY_SOURCE_SHA256": "9"*64},
+            {"FULLMAG_HELD_UI_RETRY_SOURCE_SNAPSHOT_SHA256": "9"*64},
+        )
+        for mismatch in mismatches:
+            self._set_retry_source()
+            self.environment.update(mismatch)
+            with self.subTest(mismatch=next(iter(mismatch))), \
+                 patch.object(service, "_read_json", return_value=self.provenance), \
+                 self.assertRaises(service.RuntimeServiceError):
+                with self.launch(preflight):
+                    self.fail("a mismatched managed source pin must not publish a launch")
+            self.assertFalse((self.parent / "launch.json").exists())
+            self.assertFalse((self.parent / "launch.lock").exists())
+            for key in tuple(self.environment):
+                if key.startswith("FULLMAG_HELD_UI_RETRY_SOURCE_"):
+                    del self.environment[key]
+
+    def test_retry_source_pair_must_be_complete_well_formed_and_scoped_to_held_request(self):
+        self.environment["FULLMAG_HELD_UI_RETRY_SOURCE_COMMIT"] = "1"*40
+        with self.assertRaises(service.RuntimeServiceError):
+            service.held_ui_materialization_preflight(self.paths)
+        self.assertFalse((self.parent / "launch.json").exists())
+        self.assertFalse((self.parent / "launch.lock").exists())
+        self._set_retry_source(commit="A"*40)
+        with self.assertRaises(service.RuntimeServiceError):
+            service.held_ui_materialization_preflight(self.paths)
+        self.assertFalse((self.parent / "launch.json").exists())
+        self.assertFalse((self.parent / "launch.lock").exists())
+        self.environment.clear()
+        self._set_retry_source()
+        with self.assertRaises(service.RuntimeServiceError):
+            service.held_ui_materialization_preflight(self.paths)
+
+    def test_matching_retry_source_is_bound_to_both_built_source_identities(self):
+        self._set_retry_source()
+        preflight = service.held_ui_materialization_preflight(self.paths)
+        with patch.object(service, "_read_json", return_value=self.provenance):
+            with self.launch(preflight) as (_, stream, launch):
+                payload = json.loads(stream.read())
+        self.assertEqual(payload["target_runtime"]["build_id"], "1"*40)
+        self.assertEqual(payload["target_runtime"]["source_sha256"], "2"*64)
+        self.assertEqual(launch["input"]["target_runtime"], payload["target_runtime"])
+        self.assertTrue((self.parent / "launch.json").is_file())
 
     def test_changed_request_after_preflight_never_writes_launch(self):
         preflight = service.held_ui_materialization_preflight(self.paths)
