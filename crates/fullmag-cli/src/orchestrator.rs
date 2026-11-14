@@ -19027,6 +19027,7 @@ mod tests {
     fn tiny_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "tiny".to_string(),
             mesh_source: None,
             mesh: MeshIR {
@@ -19147,6 +19148,7 @@ mod tests {
     fn tiny_shared_domain_fem_plan() -> BackendPlanIR {
         BackendPlanIR::Fem(FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "shared".to_string(),
             mesh_source: None,
             mesh: MeshIR {

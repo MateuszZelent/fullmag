@@ -13,6 +13,80 @@ use crate::types::{
 
 use std::ffi::CStr;
 
+pub(crate) fn gpu_pcg_control_experiment_from_ffi(
+    info: ffi::fullmag_fem_gpu_pcg_control_info_v1,
+    requested_stride: u32,
+) -> Result<crate::types::FemGpuPcgControlExperimentProvenance, RunError> {
+    if info.abi_version != 1
+        || info.struct_size as usize != std::mem::size_of::<ffi::fullmag_fem_gpu_pcg_control_info_v1>()
+        || !matches!(requested_stride, 4 | 8)
+        || info.requested_status_batch_stride != requested_stride
+        || info.resolved_status_batch_stride != requested_stride
+        || info.hot_loop_solve_attempts > info.solve_attempts
+        || info.hot_loop_enqueued_iterations > info.enqueued_iterations
+        || info.hot_loop_amg_apply_calls > info.amg_apply_calls
+    {
+        return Err(RunError { message: "FEM GPU PCG control experiment native identity/counters mismatch".into() });
+    }
+    Ok(crate::types::FemGpuPcgControlExperimentProvenance {
+        schema_version: fullmag_ir::FemGpuPcgControlExperimentIR::SCHEMA_VERSION.into(),
+        requested_status_batch_stride: info.requested_status_batch_stride,
+        resolved_status_batch_stride: info.resolved_status_batch_stride,
+        counter_scope: "raw_context_lifetime_api_submissions_including_failed_and_rejected".into(),
+        solve_attempts: info.solve_attempts,
+        enqueued_iterations: info.enqueued_iterations,
+        amg_apply_calls: info.amg_apply_calls,
+        hot_loop_solve_attempts: info.hot_loop_solve_attempts,
+        hot_loop_enqueued_iterations: info.hot_loop_enqueued_iterations,
+        hot_loop_amg_apply_calls: info.hot_loop_amg_apply_calls,
+    })
+}
+
+#[cfg(test)]
+mod pcg_control_experiment_tests {
+    use super::*;
+
+    fn info() -> ffi::fullmag_fem_gpu_pcg_control_info_v1 {
+        ffi::fullmag_fem_gpu_pcg_control_info_v1 {
+            abi_version: 1, struct_size: 64,
+            requested_status_batch_stride: 4, resolved_status_batch_stride: 4,
+            solve_attempts: 3, enqueued_iterations: 24, amg_apply_calls: 29,
+            hot_loop_solve_attempts: 2, hot_loop_enqueued_iterations: 16, hot_loop_amg_apply_calls: 20,
+        }
+    }
+
+    #[test]
+    fn pcg_control_terminal_provenance_preserves_raw_scope_and_legacy_absence() {
+        let actual = gpu_pcg_control_experiment_from_ffi(info(), 4).unwrap();
+        assert_eq!(actual.amg_apply_calls, 29);
+        assert_eq!(actual.hot_loop_amg_apply_calls, 20);
+        assert!(actual.counter_scope.contains("including_failed_and_rejected"));
+        let raw = serde_json::to_value(&actual).unwrap();
+        let restored: crate::types::FemGpuPcgControlExperimentProvenance = serde_json::from_value(raw).unwrap();
+        assert_eq!(actual, restored);
+        let legacy = serde_json::to_value(crate::types::ExecutionProvenance::default()).unwrap();
+        assert!(legacy.get("fem_gpu_pcg_control_experiment").is_none());
+        let restored: crate::types::ExecutionProvenance = serde_json::from_value(legacy).unwrap();
+        assert!(restored.fem_gpu_pcg_control_experiment.is_none());
+    }
+
+    #[test]
+    fn pcg_control_terminal_rejects_native_identity_and_counter_mismatch() {
+        for invalid in [
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { abi_version: 2, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { struct_size: 63, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { requested_status_batch_stride: 0, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { resolved_status_batch_stride: 8, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { hot_loop_solve_attempts: 4, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { hot_loop_enqueued_iterations: 25, ..info() },
+            ffi::fullmag_fem_gpu_pcg_control_info_v1 { hot_loop_amg_apply_calls: 30, ..info() },
+        ] {
+            assert!(gpu_pcg_control_experiment_from_ffi(invalid, 4).is_err());
+        }
+        assert!(gpu_pcg_control_experiment_from_ffi(info(), 5).is_err());
+    }
+}
+
 fn read_hypre_relax7_async_copy(
     count: Option<&dyn Fn() -> u64>,
     bytes: Option<&dyn Fn() -> u64>,

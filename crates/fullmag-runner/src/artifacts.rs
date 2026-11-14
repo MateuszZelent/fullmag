@@ -8551,6 +8551,7 @@ mod tests {
             },
             backend_plan: BackendPlanIR::Fem(FemPlanIR {
                 gpu_bb_preconditioner: None,
+                gpu_pcg_control_experiment: None,
                 mesh_name: "unit_tet".to_string(),
                 mesh_source: Some("meshes/unit_tet.msh".to_string()),
                 mesh: MeshIR {
@@ -12217,6 +12218,7 @@ mod tests {
             fem_gpu_minimizer_execution_receipt: None,
             fem_gpu_performance_snapshot: None,
             hypre_relax7_async_copy: None,
+            fem_gpu_pcg_control_experiment: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -13131,6 +13133,7 @@ mod tests {
             fem_gpu_minimizer_execution_receipt: None,
             fem_gpu_performance_snapshot: None,
             hypre_relax7_async_copy: None,
+            fem_gpu_pcg_control_experiment: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

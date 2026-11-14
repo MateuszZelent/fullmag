@@ -3566,6 +3566,14 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         policy: u32,
     ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_pcg_control_v1(
+        handle: *mut fullmag_fem_backend,
+        config: *const fullmag_fem_gpu_pcg_control_config_v1,
+    ) -> i32;
+    pub fn fullmag_fem_backend_get_gpu_pcg_control_info_v1(
+        handle: *mut fullmag_fem_backend,
+        info: *mut fullmag_fem_gpu_pcg_control_info_v1,
+    ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
         request: fullmag_fem_gpu_execution_request_v1,
@@ -7391,6 +7399,37 @@ pub struct fullmag_fem_poisson_device_pcg_counters_v1 {
     pub solves: u64,
     pub active_iterations: u64,
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_pcg_control_config_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub status_batch_stride: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_pcg_control_info_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub requested_status_batch_stride: u32,
+    pub resolved_status_batch_stride: u32,
+    pub solve_attempts: u64,
+    pub enqueued_iterations: u64,
+    pub amg_apply_calls: u64,
+    pub hot_loop_solve_attempts: u64,
+    pub hot_loop_enqueued_iterations: u64,
+    pub hot_loop_amg_apply_calls: u64,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_config_v1>() == 16);
+    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_info_v1>() == 64);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, solve_attempts) == 16);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, hot_loop_amg_apply_calls) == 56);
+};
 
 #[cfg(test)]
 #[test]

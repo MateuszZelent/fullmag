@@ -26,6 +26,7 @@
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/demag_poisson/control_state.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
@@ -110,6 +111,7 @@ struct Context {
     TransferAuditRuntimeState transfer_audit{};
     RepresentationAuditRuntimeState representation_audit{};
     GpuStateRuntimeState gpu_state{};
+    GpuPcgControlRuntimeState gpu_pcg_control{};
 
     // ── Unified RK stepper runtime workspace ──
     RkStepperRuntimeState stepper{};

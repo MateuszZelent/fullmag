@@ -877,6 +877,8 @@ pub struct SceneStudyState {
     pub fem_bb_preconditioner: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_pcg_control_experiment: Option<fullmag_ir::FemGpuPcgControlExperimentIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]

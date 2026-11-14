@@ -4843,6 +4843,7 @@ mod tests {
     pub(crate) fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: None,
             mesh: MeshIR {

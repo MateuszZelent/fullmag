@@ -1684,6 +1684,7 @@ mod tests {
         };
         let plan = BackendPlanIR::Fem(FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh: mesh.clone(),

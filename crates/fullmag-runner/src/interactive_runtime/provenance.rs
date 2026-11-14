@@ -88,6 +88,7 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
         fem_bem_demag: None,
         fem_gpu_performance_snapshot: None,
         hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     })
 }
 
@@ -191,6 +192,7 @@ pub(crate) fn cuda_execution_provenance(
         fem_bem_demag: None,
         fem_gpu_performance_snapshot: None,
         hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     })
 }
 
@@ -342,6 +344,7 @@ pub(crate) fn fem_gpu_execution_provenance(
         fem_bem_demag: None,
         fem_gpu_performance_snapshot: None,
         hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     Ok(provenance)

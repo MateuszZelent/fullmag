@@ -38,6 +38,19 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. For `Relaxation(*)`, this label additionally requires an exact source-bound managed receipt. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. For `Relaxation(*)`, this additionally requires an exact source-bound managed receipt. |
 
+### Eksperyment sterowania PCG FEM GPU
+
+Opcjonalny `fem_gpu_pcg_control_experiment` (schema
+`fullmag.fem.gpu.pcg_control_experiment.v1`) ma status `source_visible`;
+nowe wykonanie i przyspieszenie pozostają **NOT VERIFIED**. Zakres v1 to
+jawne FEM/GPU/double time-domain, aktywny Poisson Robin/Dirichlet, jawne
+CG/AMG, brak PBC, stride 4 albo 8. FEM CPU, oba FDM, FEM-BEM, eigensolve
+i automatyczny wybór realizacji odmawiają eksperymentu przed compute.
+Istniejąca legalność trybów strict/extended pozostaje nadrzędna; eksperyment
+nie nadaje nowych uprawnień żadnemu trybowi. Brak metadata zachowuje obecne
+plany i politykę. Szczegóły: [nota 0914](../physics/0914-fem-gpu-pcg-control-experiment.md),
+[ADR 0082](../adr/0082-fem-gpu-pcg-control-experiment.md).
+
 ### Docker accepted Workspace GPU
 
 [ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md) opisuje

@@ -1,0 +1,170 @@
+{
+  "document": {
+    "path": "docs/physics/0914-fem-gpu-pcg-control-experiment.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unsupported",
+      "reason": "Different PCG controller."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "No HYPRE Poisson."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "No HYPRE Poisson."
+    }
+  ],
+  "sources": [
+    {
+      "id": "pcg-policy",
+      "path": "backends/fem/gpu/cuda/demag_poisson/pcg_device_scalar_kernels.hpp",
+      "symbol": "demag_pcg_next_batch_iterations",
+      "responsibility": "Schedule bounded status batches without changing the active recurrence.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "pcg-apply",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "apply_demag_poisson_device_pcg",
+      "responsibility": "Apply retained AMG and count raw submissions at their call sites.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "request",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemGpuPcgControlExperimentIR",
+      "responsibility": "Typed closed diagnostic request and schema/domain validation.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "lowering",
+      "path": "crates/fullmag-plan/src/pcg_control_experiment.rs",
+      "symbol": "request",
+      "responsibility": "Reject unsupported lanes before planning.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "terminal",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "gpu_pcg_control_experiment_from_ffi",
+      "responsibility": "Validate actual native identity and terminal raw counters.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "K",
+      "latex": "K",
+      "meaning": "Macierz Poissona",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "Potencjał skalarny",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "rhs",
+      "latex": "b,r",
+      "meaning": "RHS i prawdziwe residuum",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "Długość kolejnej paczki",
+      "si_unit": "1"
+    },
+    {
+      "id": "s",
+      "latex": "s",
+      "meaning": "Zadany limit paczki: 4 lub 8",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "Limit iteracji solvera",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "Liczba już zleconych iteracji",
+      "si_unit": "1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-pcg-control-system",
+      "symbols": [
+        "K",
+        "phi",
+        "rhs"
+      ],
+      "sources": [
+        "pcg-apply"
+      ]
+    },
+    {
+      "id": "eq-pcg-control-batch",
+      "symbols": [
+        "q",
+        "s",
+        "N",
+        "j"
+      ],
+      "sources": [
+        "pcg-policy"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.runtime_metadata(key, value)",
+        "type": "str, dict",
+        "default": "brak wpisu",
+        "si_unit": "1",
+        "validation": "Zamknięty obiekt, oba pola wymagane",
+        "meaning": "Klucz i konfiguracja diagnostyczna",
+        "backend_support": "FEM GPU",
+        "problem_ir": "problem_meta.runtime_metadata.fem_gpu_pcg_control_experiment"
+      },
+      {
+        "python": "schema_version",
+        "type": "str",
+        "default": "wymagany",
+        "si_unit": "1",
+        "validation": "Dokładnie fullmag.fem.gpu.pcg_control_experiment.v1",
+        "meaning": "Identyfikacja kontraktu",
+        "backend_support": "FEM GPU",
+        "problem_ir": "problem_meta.runtime_metadata.fem_gpu_pcg_control_experiment.schema_version"
+      },
+      {
+        "python": "status_batch_stride",
+        "type": "int",
+        "default": "wymagany",
+        "si_unit": "1",
+        "validation": "Wyłącznie 4 lub 8; bool/float/null są błędem",
+        "meaning": "Maksymalna długość paczki",
+        "backend_support": "FEM GPU",
+        "problem_ir": "problem_meta.runtime_metadata.fem_gpu_pcg_control_experiment.status_batch_stride"
+      }
+    ]
+  }
+}

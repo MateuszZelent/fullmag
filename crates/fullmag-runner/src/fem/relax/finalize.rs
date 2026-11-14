@@ -953,6 +953,11 @@ pub(crate) fn finalize_native_fem_relaxation(
         final_provenance.fem_gpu_performance_snapshot =
             Some(snapshot.to_provenance(final_stats.step)?);
     }
+    let capture_pcg_control_experiment = plan.gpu_pcg_control_experiment.is_some();
+    if let Some(request) = &plan.gpu_pcg_control_experiment {
+        final_provenance.fem_gpu_pcg_control_experiment =
+            Some(backend.gpu_pcg_control_experiment(request.status_batch_stride)?);
+    }
     // Terminal, process-cumulative host atomics only; no GPU readback or fence.
     // Never attach these global observations to CPU or per-instance counters.
     let had_hypre_async_copy = final_provenance.hypre_relax7_async_copy.is_some();
@@ -963,7 +968,8 @@ pub(crate) fn finalize_native_fem_relaxation(
     };
     let capture_hypre_async_copy =
         had_hypre_async_copy || final_provenance.hypre_relax7_async_copy.is_some();
-    if final_cpu_fixed_coupling_present || capture_performance_snapshot || capture_hypre_async_copy {
+    if final_cpu_fixed_coupling_present || capture_performance_snapshot
+        || capture_hypre_async_copy || capture_pcg_control_experiment {
         artifacts.replace_provenance_synchronously(final_provenance)?;
     }
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();

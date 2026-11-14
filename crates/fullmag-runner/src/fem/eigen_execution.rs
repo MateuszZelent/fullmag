@@ -656,6 +656,7 @@ pub(crate) fn decode_bias_field_relaxation_artifact_with_bytes<T: serde::de::Des
 fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
     fullmag_ir::FemPlanIR {
         gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),
         mesh: plan.mesh.clone(),

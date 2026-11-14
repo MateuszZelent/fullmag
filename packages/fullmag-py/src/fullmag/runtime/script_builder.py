@@ -111,6 +111,10 @@ from fullmag.runtime.fem_demag_accuracy import (
     validate_authored_fem_demag_accuracy_contract,
     validate_fem_demag_accuracy_contract,
 )
+from fullmag.runtime.fem_gpu_pcg_control import (
+    validate_authored_fem_gpu_pcg_control_experiment,
+    validate_fem_gpu_pcg_control_experiment,
+)
 from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 
 
@@ -301,6 +305,10 @@ def export_builder_draft(
     else:
         pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
+    gpu_pcg_control_experiment = validate_authored_fem_gpu_pcg_control_experiment(
+        base_problem.runtime_metadata,
+        context="runtime_metadata.fem_gpu_pcg_control_experiment",
+    )
     draft = {
         "revision": 1,
         "study_name": base_problem.name,
@@ -443,6 +451,8 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    if gpu_pcg_control_experiment is not None:
+        draft["fem_gpu_pcg_control_experiment"] = gpu_pcg_control_experiment
     fem_domain_mesh = _export_fem_domain_mesh_reference(
         base_problem,
         source_root=source_root,
@@ -3839,6 +3849,17 @@ def _render_runtime(
             f"{_py_literal(demag_accuracy_contract)})"
         )
 
+    gpu_pcg_control_experiment = _fem_gpu_pcg_control_experiment_with_overrides(
+        problem,
+        overrides=overrides,
+        runtime_override=runtime_override,
+    )
+    if gpu_pcg_control_experiment is not None:
+        lines.append(
+            "fm.runtime_metadata('fem_gpu_pcg_control_experiment', "
+            f"{_py_literal(gpu_pcg_control_experiment)})"
+        )
+
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
         # ``study.objects.mesh.defaults(cell_size=...)`` cannot be combined with
@@ -4117,6 +4138,29 @@ def _fem_demag_accuracy_contract_with_overrides(
             context="runtime_metadata.fem_demag_accuracy_contract",
         )
     return validate_fem_demag_accuracy_contract(value, context=context)
+
+
+def _fem_gpu_pcg_control_experiment_with_overrides(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    runtime_override: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the explicit Scene override, else the loaded runtime experiment."""
+
+    key = "fem_gpu_pcg_control_experiment"
+    if key in runtime_override:
+        value = runtime_override[key]
+        context = f"overrides.runtime_selection.{key}"
+    elif key in overrides:
+        value = overrides[key]
+        context = f"overrides.{key}"
+    else:
+        return validate_authored_fem_gpu_pcg_control_experiment(
+            problem.runtime_metadata,
+            context=f"runtime_metadata.{key}",
+        )
+    return validate_fem_gpu_pcg_control_experiment(value, context=context)
 
 
 def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str) -> str:

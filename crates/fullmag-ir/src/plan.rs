@@ -1420,10 +1420,35 @@ pub struct FemMixedTopologyProvenanceIR {
     pub capability_status: FemMixedTopologyCapabilityStatusIR,
 }
 
+/// Explicit diagnostic control, not a change to the default Poisson policy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuPcgControlExperimentIR {
+    pub schema_version: String,
+    pub status_batch_stride: u32,
+}
+
+impl FemGpuPcgControlExperimentIR {
+    pub const METADATA_KEY: &'static str = "fem_gpu_pcg_control_experiment";
+    pub const SCHEMA_VERSION: &'static str = "fullmag.fem.gpu.pcg_control_experiment.v1";
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != Self::SCHEMA_VERSION || !matches!(self.status_batch_stride, 4 | 8) {
+            return Err(format!(
+                "{} requires schema_version '{}' and integer status_batch_stride 4 or 8",
+                Self::METADATA_KEY, Self::SCHEMA_VERSION,
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_bb_preconditioner: Option<crate::FemGpuBbPreconditionerIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_pcg_control_experiment: Option<FemGpuPcgControlExperimentIR>,
     pub mesh_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<String>,
@@ -1620,6 +1645,7 @@ impl Default for FemPlanIR {
     fn default() -> Self {
         Self {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: String::new(),
             mesh_source: None,
             mesh: MeshIR::default(),

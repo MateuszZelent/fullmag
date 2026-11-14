@@ -13,6 +13,20 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
+#[test]
+fn scene_resource_preserves_explicit_pcg_experiment_in_existing_study_map() {
+    let request = serde_json::json!({
+        "schema_version": fullmag_ir::FemGpuPcgControlExperimentIR::SCHEMA_VERSION,
+        "status_batch_stride": 4
+    });
+    let mut study = fullmag_authoring::SceneStudyState::default();
+    study.fem_gpu_pcg_control_experiment = Some(serde_json::from_value(request.clone()).unwrap());
+    let resource: crate::schemas::authoring::SceneResource = serde_json::from_value(
+        serde_json::json!({"study": serde_json::to_value(&study).unwrap()}),
+    ).unwrap();
+    assert_eq!(serde_json::to_value(resource).unwrap()["study"]["fem_gpu_pcg_control_experiment"], request);
+}
+
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
@@ -69,6 +83,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         fem_demag_solver_policy: None,
         fem_bb_preconditioner: None,
         fem_demag_accuracy_contract: None,
+        fem_gpu_pcg_control_experiment: None,
         fem_domain_mesh: None,
         exchange_enabled: true,
         demag_enabled: true,

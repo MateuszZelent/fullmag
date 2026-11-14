@@ -4324,6 +4324,40 @@ enum fullmag_fem_poisson_pcg_counter_scope {
 FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
     fullmag_fem_backend *handle, uint32_t scope, fullmag_fem_poisson_device_pcg_counters_v1 *out_counters);
 
+/* Additive control for status-batch reads in the native FEM GPU device-scalar
+ * PCG/AMG Poisson solver. The policy is immutable after its first solve attempt. */
+typedef struct fullmag_fem_gpu_pcg_control_config_v1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t status_batch_stride;
+    uint32_t reserved;
+} fullmag_fem_gpu_pcg_control_config_v1;
+
+typedef struct fullmag_fem_gpu_pcg_control_info_v1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t requested_status_batch_stride;
+    uint32_t resolved_status_batch_stride;
+    uint64_t solve_attempts;
+    uint64_t enqueued_iterations;
+    uint64_t amg_apply_calls;
+    uint64_t hot_loop_solve_attempts;
+    uint64_t hot_loop_enqueued_iterations;
+    uint64_t hot_loop_amg_apply_calls;
+} fullmag_fem_gpu_pcg_control_info_v1;
+
+FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_pcg_control_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_gpu_pcg_control_config_v1 *config
+);
+
+/* Caller must initialize abi_version=1 and struct_size=64 before this
+ * host-only snapshot getter. No device work or synchronization is performed. */
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_pcg_control_info_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_pcg_control_info_v1 *out_info
+);
+
 FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_linear_engine_v1(
     fullmag_fem_backend *handle, uint32_t *out_engine);
 

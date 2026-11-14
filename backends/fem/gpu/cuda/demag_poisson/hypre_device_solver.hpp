@@ -18,6 +18,7 @@
 namespace fullmag::fem {
 
 uint32_t demag_poisson_resolved_linear_engine(const Context&);
+bool demag_poisson_device_scalar_pcg_amg_ready(const Context&);
 fullmag_fem_poisson_device_pcg_counters_v1 demag_poisson_device_pcg_counters(const Context&, uint32_t scope = 0);
 
 bool apply_demag_poisson_hypre_device_solver(Context&, GpuDemagPoissonWorkspace&, std::string&);

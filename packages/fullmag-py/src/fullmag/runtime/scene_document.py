@@ -12,6 +12,9 @@ from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
 from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
+from fullmag.runtime.fem_gpu_pcg_control import (
+    validate_fem_gpu_pcg_control_experiment,
+)
 from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
@@ -1914,6 +1917,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    if "fem_gpu_pcg_control_experiment" in builder:
+        document["study"]["fem_gpu_pcg_control_experiment"] = (
+            validate_fem_gpu_pcg_control_experiment(
+                builder["fem_gpu_pcg_control_experiment"],
+                context="builder.fem_gpu_pcg_control_experiment",
+            )
+        )
     if rotated_dmi_object_ids is not None:
         document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
     if builder.get("fem_domain_mesh") is not None:
@@ -2364,6 +2374,13 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
                 for stage in builder[collection]:
                     if isinstance(stage, dict) and stage.get("conservative_current_view_ref") is None:
                         stage.pop("conservative_current_view_ref", None)
+    if "fem_gpu_pcg_control_experiment" in study:
+        builder["fem_gpu_pcg_control_experiment"] = (
+            validate_fem_gpu_pcg_control_experiment(
+                study["fem_gpu_pcg_control_experiment"],
+                context="SceneDocument.study.fem_gpu_pcg_control_experiment",
+            )
+        )
     return builder
 
 
@@ -2646,6 +2663,13 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    if "fem_gpu_pcg_control_experiment" in builder:
+        overrides["fem_gpu_pcg_control_experiment"] = (
+            validate_fem_gpu_pcg_control_experiment(
+                builder["fem_gpu_pcg_control_experiment"],
+                context="builder.fem_gpu_pcg_control_experiment",
+            )
+        )
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")

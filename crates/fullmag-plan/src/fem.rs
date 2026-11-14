@@ -5083,6 +5083,7 @@ pub(crate) fn plan_fem(
 
     let mut fem_plan = FemPlanIR {
         gpu_bb_preconditioner: fem_hints.gpu_bb_preconditioner,
+        gpu_pcg_control_experiment: crate::pcg_control_experiment::request(problem)?,
         mesh_name: mesh_name.clone(),
         mesh_source,
         mesh,

@@ -271,12 +271,19 @@ void destroy_demag_poisson_device_pcg(GpuDemagPoissonWorkspace &workspace) {
 }
 
 bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &workspace, std::string &error) {
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const bool hot_loop_at_start=ctx.transfer_audit.audit.hot_loop_depth>0;
+    ctx.gpu_pcg_control.record_solve_attempt(hot_loop_at_start);
     workspace.last_enqueued_iterations = 0;
     workspace.last_amg_apply_calls = 0;
-#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     auto &pcg = *workspace.device_pcg;
     pcg.stream = workspace.stream_interop.hypre_stream;
     pcg.report_valid = false; pcg.enqueued_iterations = 0; pcg.batch_readbacks = 0;
+    const uint32_t status_batch_stride = ctx.gpu_pcg_control.resolved_status_batch_stride();
+    if (!gpu_pcg_control_status_batch_stride_valid(status_batch_stride)) {
+        error="GPU Poisson device PCG has an invalid status batch stride";
+        return false;
+    }
     if (!workspace.stream_interop.ready || !pcg.stream) { error="GPU Poisson PCG requires HYPRE stream interop"; return false; }
     const int n = workspace.b_par->Size();
     const double requested_rt=ctx.demag.solver.relative_tolerance;
@@ -334,6 +341,7 @@ bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &work
         if (!cuda_check(demag_pcg_gate(input,w,n,pcg.state,pcg.stream)) ||
             !cuda_check(cudaMemsetAsync(z,0,static_cast<size_t>(n)*sizeof(double),pcg.stream))) return false;
         return hypre_check("HYPRE_BoomerAMGSolve",[&]() {
+            ctx.gpu_pcg_control.record_amg_apply(hot_loop_at_start);
             ++workspace.last_amg_apply_calls;
             return HYPRE_BoomerAMGSolve(amg_handle,*workspace.A_par,*pcg.gated,*pcg.z);
         });
@@ -341,7 +349,6 @@ bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &work
     const auto dot = [&](const double *a,const double *v,double *out) {
         return cuda_check(demag_pcg_dot(a,v,n,pcg.partials,pcg.temporary,pcg.temporary_bytes,out,pcg.state,pcg.stream));
     };
-    const bool hot_loop_at_start=ctx.transfer_audit.audit.hot_loop_depth>0;
     record_device_pcg_solve_started(ctx.transfer_audit.audit,sizeof(DemagPcgState));
     GpuPerformanceCounterDelta started{};
     started.device_pcg_solves=1;
@@ -376,10 +383,12 @@ bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &work
         // the first batch of five keeps post-latch calls at seven without a
         // separate terminal-status D2H readback.
         const uint32_t batch=demag_pcg_next_batch_iterations(
-            queued,ctx.demag.solver.max_iterations);
+            queued,ctx.demag.solver.max_iterations,status_batch_stride);
+        if (batch==0u) return fail("GPU Poisson device PCG refused an empty or invalid status batch");
         for (uint32_t index=0; index<batch; ++index) {
             pcg.p->HypreRead(); pcg.q->HypreWrite();
             if (!hypre_check("HYPRE_ParCSRMatrixMatvec",[&]() {
+                    ctx.gpu_pcg_control.record_enqueued_iteration(hot_loop_at_start);
                     ++workspace.last_enqueued_iterations;
                     return HYPRE_ParCSRMatrixMatvec(1.0,*workspace.A_par,*pcg.p,0.0,*pcg.q);
                 }) ||
@@ -412,6 +421,8 @@ bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &work
         return fail("GPU Poisson device PCG numerical breakdown; no fallback");
     return true;
 #else
+    workspace.last_enqueued_iterations = 0;
+    workspace.last_amg_apply_calls = 0;
     (void)ctx; (void)workspace; error="GPU Poisson device PCG requires CUDA/MFEM/HYPRE"; return false;
 #endif
 }
@@ -450,6 +461,27 @@ uint32_t demag_poisson_resolved_linear_engine(const Context &ctx) {
     (void)ctx;
 #endif
     return 0;
+}
+
+bool demag_poisson_device_scalar_pcg_amg_ready(const Context &ctx) {
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        ctx.demag.solver.solver != FULLMAG_FEM_LINEAR_SOLVER_CG ||
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG ||
+        !ctx.poisson_demag.gpu_workspace_ready) return false;
+    const auto *workspace=workspace_ptr(ctx);
+    return workspace != nullptr && workspace->ready && workspace->solver_setup_complete &&
+        workspace->A_par != nullptr && workspace->preconditioner != nullptr &&
+        workspace->solver != nullptr &&
+        workspace->device_pcg != nullptr &&
+        demag_poisson_resolved_linear_engine(ctx)==
+            FULLMAG_FEM_POISSON_ENGINE_DEVICE_SCALAR_PCG_AMG &&
+        dynamic_cast<const mfem::HypreBoomerAMG*>(workspace->preconditioner.get()) != nullptr;
+#else
+    (void)ctx;
+    return false;
+#endif
 }
 
 bool read_device_demag_amg_coarse_relax_type(

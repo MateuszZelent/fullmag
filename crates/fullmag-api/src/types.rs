@@ -2272,6 +2272,7 @@ mod tests {
             fem_demag_solver_policy: None,
             fem_bb_preconditioner: None,
             fem_demag_accuracy_contract: None,
+            fem_gpu_pcg_control_experiment: None,
             fem_domain_mesh: None,
             exchange_enabled: true,
             demag_enabled: true,

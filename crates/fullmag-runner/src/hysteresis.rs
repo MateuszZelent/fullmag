@@ -6563,6 +6563,7 @@ mod tests {
     fn hysteresis_fem_average_uses_p1_lumped_ms_volume_weights() {
         let plan = fullmag_ir::FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {

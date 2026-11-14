@@ -2372,6 +2372,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
 
     FemPlanIR {
         gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         frozen_spins: None,
         mesh_name: "unit_tet".to_string(),
         mesh_source: Some("meshes/unit_tet.msh".to_string()),
@@ -3485,6 +3486,21 @@ impl NativeFemBackend {
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        if let Some(request) = &plan.gpu_pcg_control_experiment {
+            request.validate().map_err(|message| RunError { message })?;
+            let policy = resolved_native_fem_demag_solver_policy(plan);
+            if !native_fem_plan_requests_gpu_mfem_device(plan)
+                || !plan.enable_demag
+                || !plan.demag_realization.is_some_and(|model| model.is_poisson())
+                || plan.precision != fullmag_ir::ExecutionPrecision::Double
+                || !policy.solver.eq_ignore_ascii_case("CG")
+                || !policy.preconditioner.eq_ignore_ascii_case("AMG")
+                || !plan.mesh.periodic_node_pairs.is_empty()
+                || !plan.mesh.periodic_boundary_pairs.is_empty()
+            {
+                return Err(RunError { message: "fem_gpu_pcg_control_experiment requires nonperiodic FEM GPU/double Poisson CG/AMG; fallback=none".into() });
+            }
+        }
         if plan.gpu_bb_preconditioner.is_some()
             && (!native_fem_plan_requests_gpu_mfem_device(plan)
                 || !plan.relaxation.as_ref().is_some_and(|control| {
@@ -4329,6 +4345,20 @@ impl NativeFemBackend {
                 && plan.dbulk_field.is_none(),
             local_node_map_identity: std::sync::Mutex::new(None),
         };
+        if let Some(request) = &plan.gpu_pcg_control_experiment {
+            // GPU create_v5 performs Setup but no physical PCG solve. Install
+            // the explicit policy before initial field/snapshot evaluation.
+            let config = ffi::fullmag_fem_gpu_pcg_control_config_v1 {
+                abi_version: 1,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_pcg_control_config_v1>() as u32,
+                status_batch_stride: request.status_batch_stride,
+                reserved: 0,
+            };
+            let rc = unsafe { ffi::fullmag_fem_backend_set_gpu_pcg_control_v1(backend.handle, &config) };
+            if rc != ffi::FULLMAG_FEM_OK {
+                return Err(backend.last_error_or("setting FEM GPU PCG control experiment failed"));
+            }
+        }
         if native_fem_plan_requests_gpu_mfem_device(plan)
             && plan.relaxation.as_ref().is_some_and(|control| {
                 control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
@@ -4620,6 +4650,22 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU performance snapshot read failed"));
         }
         runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
+    }
+
+    pub(crate) fn gpu_pcg_control_experiment(
+        &self,
+        requested_stride: u32,
+    ) -> Result<crate::types::FemGpuPcgControlExperimentProvenance, RunError> {
+        let mut info = ffi::fullmag_fem_gpu_pcg_control_info_v1 {
+            abi_version: 1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_pcg_control_info_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_pcg_control_info_v1(self.handle, &mut info) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU PCG control experiment read failed"));
+        }
+        runtime_info::gpu_pcg_control_experiment_from_ffi(info, requested_stride)
     }
 
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
@@ -9119,6 +9165,7 @@ mod tests {
     fn make_exchange_only_plan() -> FemPlanIR {
         FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             frozen_spins: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: Some("meshes/two_tets.msh".to_string()),

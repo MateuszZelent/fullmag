@@ -34,6 +34,7 @@ mod material_transition;
 mod mesh;
 mod oersted;
 mod physics_graph;
+mod pcg_control_experiment;
 pub mod preparation;
 pub mod quantities;
 mod region_conflict;
@@ -173,6 +174,9 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
     execution_profile_guard::validate_bound_intent(problem).map_err(|reason| PlanError {
         reasons: vec![reason],
     })?;
+    // Validate diagnostic intent even for paths which return before FEM dispatch.
+    // Unsupported lanes must not silently discard an explicit experiment.
+    pcg_control_experiment::request(problem)?;
     if matches!(problem.study, fullmag_ir::StudyIR::FieldOnly { .. }) {
         let stage_id = util::active_stage_id(problem).ok_or_else(|| PlanError {
             reasons: vec!["field_only requires an explicitly selected antenna stage; drafts are not executable".into()],

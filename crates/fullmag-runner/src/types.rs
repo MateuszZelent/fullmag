@@ -4488,6 +4488,22 @@ pub struct HypreRelax7AsyncCopyTelemetry {
     pub scope: String,
 }
 
+/// Raw Context-lifetime API submissions, captured at terminal quiescence.
+/// These include rejected/failed attempts and do not count executed GPU cycles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuPcgControlExperimentProvenance {
+    pub schema_version: String,
+    pub requested_status_batch_stride: u32,
+    pub resolved_status_batch_stride: u32,
+    pub counter_scope: String,
+    pub solve_attempts: u64,
+    pub enqueued_iterations: u64,
+    pub amg_apply_calls: u64,
+    pub hot_loop_solve_attempts: u64,
+    pub hot_loop_enqueued_iterations: u64,
+    pub hot_loop_amg_apply_calls: u64,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FemCrossoverDecision {
@@ -4691,6 +4707,10 @@ pub struct ExecutionProvenance {
     /// minimizer finalization rather than repeated in per-step telemetry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_performance_snapshot: Option<FemGpuPerformanceSnapshotProvenance>,
+    /// Explicit PCG control experiment, captured once at terminal quiescence.
+    /// Counts attempted API submissions, including failed/rejected work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_pcg_control_experiment: Option<FemGpuPcgControlExperimentProvenance>,
     /// Optional process-global HYPRE async-copy submissions at terminal capture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hypre_relax7_async_copy: Option<HypreRelax7AsyncCopyTelemetry>,
@@ -5500,6 +5520,7 @@ mod tests {
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
             gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("test".to_string()),
             mesh: MeshIR {

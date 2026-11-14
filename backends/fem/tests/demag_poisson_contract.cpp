@@ -120,6 +120,62 @@ void check_result(bool condition, const char *error, const char *msg) {
     check_result(condition, std::string(error != nullptr ? error : ""), msg);
 }
 
+void gpu_pcg_control_abi_validation_contract() {
+    fullmag_fem_backend unsupported_cpu{};
+    fullmag_fem_gpu_pcg_control_config_v1 config{
+        fullmag::fem::kGpuPcgControlConfigAbiVersion,
+        fullmag::fem::kGpuPcgControlConfigStructSize,
+        4u,
+        0u};
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(nullptr, &config) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects a null backend");
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, nullptr) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects a null config");
+
+    config.abi_version += 1u;
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, &config) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects an unknown config ABI version");
+    config.abi_version = fullmag::fem::kGpuPcgControlConfigAbiVersion;
+    config.struct_size -= 1u;
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, &config) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects a wrong config size");
+    config.struct_size = fullmag::fem::kGpuPcgControlConfigStructSize;
+    config.status_batch_stride = 5u;
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, &config) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects unsupported stride");
+    config.status_batch_stride = 4u;
+    config.reserved = 1u;
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, &config) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control setter rejects nonzero reserved data");
+    config.reserved = 0u;
+    check(fullmag_fem_backend_set_gpu_pcg_control_v1(&unsupported_cpu, &config) == FULLMAG_FEM_ERR_UNAVAILABLE,
+          "GPU PCG control setter rejects a CPU or uninitialized owner as unavailable");
+
+    fullmag_fem_gpu_pcg_control_info_v1 info{};
+    info.abi_version = fullmag::fem::kGpuPcgControlInfoAbiVersion;
+    info.struct_size = fullmag::fem::kGpuPcgControlInfoStructSize - 1u;
+    info.requested_status_batch_stride = 0x12345678u;
+    info.amg_apply_calls = 0x123456789abcdef0ull;
+    check(fullmag_fem_backend_get_gpu_pcg_control_info_v1(nullptr, &info) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control info getter rejects a null backend");
+    check(fullmag_fem_backend_get_gpu_pcg_control_info_v1(&unsupported_cpu, nullptr) == FULLMAG_FEM_ERR_INVALID,
+          "GPU PCG control info getter rejects a null output");
+    check(fullmag_fem_backend_get_gpu_pcg_control_info_v1(&unsupported_cpu, &info) == FULLMAG_FEM_ERR_INVALID &&
+              info.requested_status_batch_stride == 0x12345678u &&
+              info.amg_apply_calls == 0x123456789abcdef0ull,
+          "GPU PCG control info getter validates caller header before writing");
+    info.struct_size = fullmag::fem::kGpuPcgControlInfoStructSize;
+    check(fullmag_fem_backend_get_gpu_pcg_control_info_v1(&unsupported_cpu, &info) == FULLMAG_FEM_ERR_UNAVAILABLE &&
+              info.requested_status_batch_stride == 0x12345678u &&
+              info.amg_apply_calls == 0x123456789abcdef0ull,
+          "GPU PCG control info getter leaves an unsupported owner's output untouched");
+}
+
+void gpu_pcg_control_runtime_state_contract() {
+    check(fullmag::fem::test::gpu_pcg_control_runtime_state_contract(),
+          "GPU PCG control preserves ABI layouts, closed config, Context latch and raw host counters");
+}
+
 void check_result_accepts_nullable_c_api_errors() {
     check_result(true, nullptr, "successful C ABI calls may have a null last error");
     check_result(true, "", "successful C ABI calls may have an empty last error");
@@ -3504,6 +3560,11 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         check(pcg_workspace->last_enqueued_iterations==5 && pcg_workspace->last_amg_apply_calls==7 &&
                   pcg_workspace->last_amg_apply_calls==pcg_workspace->last_enqueued_iterations+2u,
               "exact warm terminal latch queues five iterations with two initial AMG applications");
+        check(cudaMemcpy(guess.data(),ctx.gpu_state.device.demag_poisson.poisson_solution,
+                         guess.size()*sizeof(double),cudaMemcpyDeviceToHost)==cudaSuccess,
+              "PCG exact warm frozen potential readback");
+        check(guess==solved_potential,
+              "stride-8 inactive batch preserves the exact nonzero warm iterate");
         const double poisoned_rhs=std::numeric_limits<double>::quiet_NaN();
         check(cudaMemcpy(ctx.gpu_state.device.demag_poisson.poisson_rhs,&poisoned_rhs,sizeof(double),
                          cudaMemcpyHostToDevice)==cudaSuccess,"PCG nonfinite RHS injection");
@@ -3571,6 +3632,16 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         check(aggregate.physical_control_fences>=pcg_physical.status_readbacks &&
                   aggregate.physical_control_d2h_bytes>=pcg_physical.control_d2h_bytes,
               "PCG status transfers remain included in aggregate control accounting");
+        const auto &default_control=ctx.gpu_pcg_control;
+        check(default_control.first_attempt_started &&
+                  default_control.requested_status_batch_stride==0u &&
+                  default_control.resolved_status_batch_stride()==8u &&
+                  default_control.solve_attempts==11u &&
+                  default_control.amg_apply_calls>=default_control.enqueued_iterations+8u &&
+                  default_control.hot_loop_solve_attempts==0u &&
+                  default_control.hot_loop_enqueued_iterations==0u &&
+                  default_control.hot_loop_amg_apply_calls==0u,
+              "default stride-8 Context counters retain the baseline policy and count failed attempts");
         uint64_t pcg_readback_bound=0;
         check(fullmag::fem::test::device_pcg_cumulative_readback_upper_bound(
                   pcg_physical.solves,pcg_physical.active_iterations,pcg_readback_bound) &&
@@ -3687,6 +3758,170 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         std::printf(
             "gpu_independent_residual_corruption_rejected rows=%d residual=%.17g\n",
             validation_rows, independently_checked_residual);
+    }
+    if (index==1u) {
+        // Keep the existing Robin/stride-8 path above as the exact baseline.
+        // A separate Dirichlet Context exercises stride 4 so the irreversible
+        // per-Context first-attempt latch is never reset between policies.
+        fullmag::fem::gpu_demag_poisson_destroy(ctx);
+        ctx.demag.solver.preconditioner=FULLMAG_FEM_PRECONDITIONER_AMG;
+        ctx.demag.amg_policy=fullmag::fem::resolve_demag_amg_policy_from_environment();
+        ctx.demag.solver.print_level=0;
+        error.clear();
+        check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx,error),error,
+                     "stride-4 Dirichlet GPU Poisson AMG setup");
+        check(fullmag::fem::demag_poisson_device_scalar_pcg_amg_ready(ctx),
+              "stride-4 config requires an allocated device-scalar PCG/AMG owner");
+        check(ctx.gpu_pcg_control.try_set_status_batch_stride(4u),
+              "stride-4 policy is accepted before this Context's first PCG attempt");
+        auto *stride4_workspace=fullmag::fem::workspace_ptr(ctx);
+        check(stride4_workspace && stride4_workspace->device_pcg,
+              "stride-4 Dirichlet test retains the device-scalar PCG workspace");
+
+        const uint32_t valid_stride4_max_iterations=ctx.demag.solver.max_iterations;
+        ctx.demag.solver.max_iterations=0u;
+        error.clear();
+        check(!fullmag::fem::apply_demag_poisson_hypre_device_solver(
+                  ctx,*stride4_workspace,error),
+              "stride-4 attempt validates before enqueue and rejects a zero iteration limit");
+        check(ctx.gpu_pcg_control.first_attempt_started &&
+                  ctx.gpu_pcg_control.solve_attempts==1u &&
+                  ctx.gpu_pcg_control.enqueued_iterations==0u &&
+                  ctx.gpu_pcg_control.amg_apply_calls==0u,
+              "failed-before-enqueue attempt irreversibly latches policy and raw solve count");
+        check(!ctx.gpu_pcg_control.try_set_status_batch_stride(8u),
+              "a failed-before-enqueue attempt prevents later policy mutation");
+        ctx.demag.solver.max_iterations=valid_stride4_max_iterations;
+
+        error.clear();
+        {
+            fullmag::fem::TransferAuditScope hot_loop(
+                ctx.transfer_audit.audit,
+                fullmag::fem::TransferAuditScopeKind::HotLoop);
+            check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
+                             ctx,ctx.gpu_state.device.magnetization.m,nullptr,error),
+                         error,"stride-4 cold Dirichlet solve and certificate");
+        }
+        check(stride4_workspace->last_enqueued_iterations>0u &&
+                  stride4_workspace->last_amg_apply_calls==
+                      stride4_workspace->last_enqueued_iterations+1u,
+              "stride-4 cold solve preserves its single initial AMG application");
+        int stride4_iterations=0;
+        double stride4_residual=0.0;
+        check_result(fullmag::fem::validate_demag_poisson_hypre_device_solve(
+                         ctx,*stride4_workspace,stride4_iterations,stride4_residual,error),
+                     error,"stride-4 cold independent true-residual certificate");
+        const int stride4_rows=stride4_workspace->x_par->Size();
+        std::vector<double> stride4_potential(static_cast<size_t>(stride4_rows));
+        check(cudaMemcpy(stride4_potential.data(),
+                         ctx.gpu_state.device.demag_poisson.poisson_solution,
+                         stride4_potential.size()*sizeof(double),cudaMemcpyDeviceToHost)==cudaSuccess,
+              "stride-4 cold solved potential readback");
+
+        // An exact nonzero warm start latches convergence before the loop. The
+        // stride-4 first batch still consumes at most four queued API calls;
+        // inactive kernels must preserve the accepted iterate bit-for-bit.
+        check(cudaMemcpy(ctx.gpu_state.device.demag_poisson.poisson_solution,
+                         stride4_potential.data(),stride4_potential.size()*sizeof(double),
+                         cudaMemcpyHostToDevice)==cudaSuccess,
+              "stride-4 exact warm potential upload");
+        stride4_workspace->x_par->HypreWrite();
+        stride4_workspace->b_par->HypreWrite();
+        check(HYPRE_ParCSRMatrixMatvec(1.0,*stride4_workspace->A_par,
+                  *stride4_workspace->x_par,0.0,*stride4_workspace->b_par)==0,
+              "stride-4 exact warm RHS uses the retained Dirichlet matrix");
+        error.clear();
+        check_result(fullmag::fem::prepare_demag_poisson_hypre_device_solver_apply(
+                         ctx,*stride4_workspace,false,error),error,"stride-4 warm preparation");
+        check_result(fullmag::fem::apply_demag_poisson_hypre_device_solver(
+                         ctx,*stride4_workspace,error),error,"stride-4 exact warm solve");
+        check_result(fullmag::fem::validate_demag_poisson_hypre_device_solve(
+                         ctx,*stride4_workspace,stride4_iterations,stride4_residual,error),
+                     error,"stride-4 warm independent true-residual certificate");
+        check(stride4_iterations==0 && stride4_residual<=ctx.demag.solver.relative_tolerance &&
+                  stride4_workspace->last_enqueued_iterations==4u &&
+                  stride4_workspace->last_amg_apply_calls==6u,
+              "stride-4 terminal warm solve keeps zero active iterations and bounds the first batch");
+        std::vector<double> stride4_frozen(stride4_potential.size());
+        check(cudaMemcpy(stride4_frozen.data(),
+                         ctx.gpu_state.device.demag_poisson.poisson_solution,
+                         stride4_frozen.size()*sizeof(double),cudaMemcpyDeviceToHost)==cudaSuccess,
+              "stride-4 frozen potential readback");
+        check(stride4_frozen==stride4_potential,
+              "stride-4 inactive batched iterations preserve the frozen potential exactly");
+
+        const double stride4_nan=std::numeric_limits<double>::quiet_NaN();
+        check(cudaMemcpy(ctx.gpu_state.device.demag_poisson.poisson_rhs,&stride4_nan,
+                         sizeof(stride4_nan),cudaMemcpyHostToDevice)==cudaSuccess,
+              "stride-4 warm failure RHS injection");
+        stride4_workspace->b_par->HypreWrite();
+        error.clear();
+        check_result(fullmag::fem::prepare_demag_poisson_hypre_device_solver_apply(
+                         ctx,*stride4_workspace,false,error),error,"stride-4 warm failure preparation");
+        check(!fullmag::fem::apply_demag_poisson_hypre_device_solver(
+                  ctx,*stride4_workspace,error),
+              "stride-4 warm nonfinite RHS fails without a solver fallback");
+        check(stride4_workspace->last_enqueued_iterations==4u &&
+                  stride4_workspace->last_amg_apply_calls==6u,
+              "stride-4 warm failure counts the full first batch and both pre-loop AMG invocations");
+
+        check(cudaMemset(ctx.gpu_state.device.demag_poisson.poisson_rhs,0,
+                         stride4_potential.size()*sizeof(double))==cudaSuccess,
+              "stride-4 zero RHS initialization");
+        stride4_workspace->b_par->HypreWrite();
+        error.clear();
+        check_result(fullmag::fem::prepare_demag_poisson_hypre_device_solver_apply(
+                         ctx,*stride4_workspace,true,error),error,"stride-4 zero preparation");
+        check_result(fullmag::fem::apply_demag_poisson_hypre_device_solver(
+                         ctx,*stride4_workspace,error),error,"stride-4 zero solve");
+        check_result(fullmag::fem::validate_demag_poisson_hypre_device_solve(
+                         ctx,*stride4_workspace,stride4_iterations,stride4_residual,error),
+                     error,"stride-4 zero independent true-residual certificate");
+        check(stride4_iterations==0 && stride4_residual==0.0 &&
+                  stride4_workspace->last_enqueued_iterations==4u &&
+                  stride4_workspace->last_amg_apply_calls==5u,
+              "stride-4 zero RHS keeps its certificate and first-batch policy");
+
+        check(cudaMemcpy(ctx.gpu_state.device.demag_poisson.poisson_rhs,&stride4_nan,
+                         sizeof(stride4_nan),cudaMemcpyHostToDevice)==cudaSuccess,
+              "stride-4 fresh failure RHS injection");
+        stride4_workspace->b_par->HypreWrite();
+        error.clear();
+        check_result(fullmag::fem::prepare_demag_poisson_hypre_device_solver_apply(
+                         ctx,*stride4_workspace,true,error),error,"stride-4 fresh failure preparation");
+        check(!fullmag::fem::apply_demag_poisson_hypre_device_solver(
+                  ctx,*stride4_workspace,error),
+              "stride-4 fresh nonfinite RHS fails without a solver fallback");
+        check(stride4_workspace->last_enqueued_iterations==4u &&
+                  stride4_workspace->last_amg_apply_calls==5u,
+              "stride-4 fresh failure counts its first batch and one pre-loop AMG invocation");
+
+        const auto &stride4_control=ctx.gpu_pcg_control;
+        check(stride4_control.requested_status_batch_stride==4u &&
+                  stride4_control.resolved_status_batch_stride()==4u &&
+                  stride4_control.solve_attempts==6u &&
+                  stride4_control.enqueued_iterations>=
+                      stride4_workspace->last_enqueued_iterations+12u &&
+                  stride4_control.amg_apply_calls>=stride4_control.enqueued_iterations &&
+                  stride4_control.hot_loop_solve_attempts==1u &&
+                  stride4_control.hot_loop_enqueued_iterations>0u &&
+                  stride4_control.hot_loop_amg_apply_calls>0u,
+              "stride-4 Context counters include failed, warm, zero, and captured hot-loop calls");
+
+        // A workspace reset is independent from the Context-owned policy and
+        // raw counters. Re-setup is safe because no physical RHS is solved.
+        const auto saved_attempts=stride4_control.solve_attempts;
+        const auto saved_enqueued=stride4_control.enqueued_iterations;
+        const auto saved_amg=stride4_control.amg_apply_calls;
+        fullmag::fem::gpu_demag_poisson_destroy(ctx);
+        check(!ctx.gpu_pcg_control.try_set_status_batch_stride(8u) &&
+                  ctx.gpu_pcg_control.solve_attempts==saved_attempts &&
+                  ctx.gpu_pcg_control.enqueued_iterations==saved_enqueued &&
+                  ctx.gpu_pcg_control.amg_apply_calls==saved_amg,
+              "GPU Poisson workspace destruction preserves Context PCG policy and counters");
+        error.clear();
+        check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx,error),error,
+                     "stride-4 AMG workspace re-setup after terminal checks");
     }
     fullmag::fem::gpu_demag_poisson_destroy(ctx);
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
@@ -5374,6 +5609,8 @@ int main(int argc, char **argv) {
     if (argc != 1) return 1;
     regional_transport_failures += regional_contract_process(argv[0], "--regional-cpu");
     run_contract_case("check_result_accepts_nullable_c_api_errors", check_result_accepts_nullable_c_api_errors);
+    run_contract_case("gpu_pcg_control_abi_validation_contract", gpu_pcg_control_abi_validation_contract);
+    run_contract_case("gpu_pcg_control_runtime_state_contract", gpu_pcg_control_runtime_state_contract);
     run_contract_case("demag_amg_policy_resolves_defaults_overrides_and_invalid_values", demag_amg_policy_resolves_defaults_overrides_and_invalid_values);
     run_contract_case("demag_linear_solve_validation_rejects_invalid_results", demag_linear_solve_validation_rejects_invalid_results);
     run_contract_case("poisson_runtime_wrappers_are_owned_by_separate_modules", poisson_runtime_wrappers_are_owned_by_separate_modules);
