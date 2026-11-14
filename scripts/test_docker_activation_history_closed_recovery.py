@@ -71,6 +71,38 @@ class ClosedRecoveryTests(unittest.TestCase):
         self.validate()
         self.assertEqual(self.files, before)
 
+    def test_legacy_overflow_proof_without_variant_remains_authenticated(self):
+        from docker_dev_reconcile_helper_output_failure import FAILURE
+        files = dict(self.files)
+        receipt = json.loads(files['receipt.json'])
+        response = {'code': 'internal_error', 'message': FAILURE, 'error': FAILURE}
+        receipt['error'] = 'startup activation returned HTTP 500: ' + json.dumps(response)
+        files['receipt.json'] = raw(receipt)
+        intent = json.loads(files['terminal-history-output-intent.json'])
+        intent['plan']['response'] = response
+        intent['plan']['receipt_sha256'] = digest(files['receipt.json'])
+        intent['plan_sha256'] = digest(canonical(intent['plan']))
+        files['terminal-history-output-intent.json'] = raw(intent)
+        proof = json.loads(files['terminal-history-output-proof.json'])
+        proof.update(intent)
+        proof.pop('failure_variant')
+        files['terminal-history-output-proof.json'] = raw(proof)
+        terminal = json.loads(files['terminal.json'])
+        terminal['error'] = receipt['error']
+        terminal['release_proof_sha256'] = digest(canonical(proof))
+        files['terminal.json'] = raw(terminal)
+        before = copy.deepcopy(files)
+        self.validate(files)
+        self.assertEqual(files, before)
+
+    def test_missing_variant_cannot_authenticate_new_scene_failure(self):
+        files = dict(self.files)
+        proof = json.loads(files['terminal-history-output-proof.json'])
+        proof.pop('failure_variant')
+        files['terminal-history-output-proof.json'] = raw(proof)
+        with self.assertRaises(HistoryError):
+            self.validate(files)
+
     def test_variant_release_overlay_intent_and_receipt_tampering_reject(self):
         for kind in ("variant", "release", "overlay", "missing_intent", "intent", "receipt", "accepted"):
             with self.subTest(kind=kind):
@@ -113,9 +145,10 @@ class ClosedRecoveryTests(unittest.TestCase):
             "source_sha256": SOURCE, "request_id": "another-request"})}
         self.validate(records=records, paths=sorted(records))
 
-    def own_retirement(self):
+    def own_retirement(self, extra_documents=None):
         prefix = "retirements/" + TOKEN
         documents = {"ui_state.json": b"{}", "workspace_metadata.json": b"{}", "main.py": b"# preserved predecessor"}
+        documents.update(extra_documents or {})
         manifest = {"schema": "fullmag.live-workspace-retirement-proof.v2", "state": "retired",
                     "operation_id": TOKEN, "session_id": "docker-startup-predecessor", "run_id": "run-predecessor",
                     "request_scope_epoch": "old-scope:1", "session_epoch": 1, "scene_revision": 2,
@@ -155,6 +188,18 @@ class ClosedRecoveryTests(unittest.TestCase):
     def test_authenticated_own_predecessor_retirement_is_not_failed_request_admission(self):
         self.own_retirement()
         self.validate()
+
+    def test_producer_script_builder_retirement_is_pinned(self):
+        prefix, _ = self.own_retirement({'script_builder.json': b'{"version":1}'})
+        self.validate()
+        self.records[prefix + '/project/script_builder.json'] = b'changed'
+        with self.assertRaises(HistoryError):
+            self.validate()
+
+    def test_unknown_retirement_document_still_rejects(self):
+        self.own_retirement({'unknown.json': b'{}'})
+        with self.assertRaises(HistoryError):
+            self.validate()
 
     def test_foreign_mutated_missing_and_unbound_retirement_manifest_refuse(self):
         for kind in ("foreign", "mutated", "missing", "document", "unbound", "session", "catalog"):

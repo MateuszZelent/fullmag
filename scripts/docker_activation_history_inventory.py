@@ -213,7 +213,9 @@ def _authenticate_own_predecessor_retirement(attempt, receipt, records, paths):
             or not isinstance(workspace, dict) or workspace.get("session_id") != proof.get("session_id")):
         raise HistoryError("Closed recovery predecessor run/session inventory binding differs")
     documents = proof.get("documents")
-    allowed = {"main.py", "scene_document.json", "ui_state.json", "workspace_metadata.json"}
+    # Match live_retirement::validate_document_name; every optional document
+    # still requires its exact archived bytes and immutable object/hash pin.
+    allowed = {"main.py", "scene_document.json", "script_builder.json", "ui_state.json", "workspace_metadata.json"}
     if (not isinstance(documents, dict) or not {"ui_state.json", "workspace_metadata.json"} <= set(documents)
             or not set(documents) <= allowed or proof.get("script_available") != ("main.py" in documents)):
         raise HistoryError("Closed recovery predecessor document set is invalid")
@@ -293,8 +295,12 @@ def validate_closed_pre_admission_recovery(attempt, files, *, marker_raw, identi
         response = failure_response(receipt.get("error"))
         variant = failure_variant(response)
         validate_terminal_proof_variant(proof, variant)
-        if (set(proof) != {"schema", "plan", "plan_sha256", "failure_variant", "process_tree_sha256",
-                          "preserved_store", "outcome", "old_request_replay"}
+        # The producer authenticates an absent variant only for its original
+        # overflow format. Preserve that closed legacy shape without rewriting
+        # its pinned proof bytes; newer failure variants still require the tag.
+        proof_fields = {"schema", "plan", "plan_sha256", "process_tree_sha256",
+                        "preserved_store", "outcome", "old_request_replay"}
+        if (set(proof) not in (proof_fields, proof_fields | {"failure_variant"})
                 or proof.get("schema") != SCHEMA or proof.get("outcome") != "not-admitted"
                 or proof.get("old_request_replay") != "forbidden"
                 or re.fullmatch(r"[0-9a-f]{64}", str(proof.get("process_tree_sha256"))) is None):
