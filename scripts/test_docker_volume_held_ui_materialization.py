@@ -1348,5 +1348,20 @@ class PreviewPlanLifecycleContracts(unittest.TestCase):
         self.assertEqual(docker_calls, [("volume", "inspect", "control-p22")])
 
 
+class SharedPreflightTransportContract(unittest.TestCase):
+    def test_python_producer_matches_fixture_consumed_by_rust(self):
+        request_value, proofs = valid_proof_chain()
+        expected = {
+            "schema": "fullmag.held-ui-preflight-transport-fixture.v1",
+            "accepted": request_value["accepted"],
+            "preflight": proofs["preflight"],
+        }
+        path = (Path(__file__).resolve().parents[1] / "crates/fullmag-api/tests/fixtures"
+                / "held_ui_preflight_transport.v1.json")
+        actual = json.loads(path.read_bytes())
+        self.assertEqual(actual, expected)
+        subject.validate_preflight(actual["preflight"], actual["accepted"])
+
+
 if __name__ == "__main__":
     unittest.main()

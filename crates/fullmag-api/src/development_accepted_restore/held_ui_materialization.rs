@@ -140,6 +140,7 @@ struct RestoreAck {
     project_id: String,
     request_receipt_sha256: String,
     run_id: String,
+    run_intent_sha256: String,
     scene_revision: u64,
     session_created_at_unix_ms: u64,
     schema: String,
@@ -184,6 +185,7 @@ struct CommandDetailProof {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PreflightProof {
+    accepted_store_binding: String,
     api_pin: Value,
     api_response: ApiResponseProof,
     commands: CommandProof,
@@ -897,7 +899,10 @@ fn validate_store(input: &Input, store_root: &Path, inventory: &InventoryProof, 
     let store = fullmag_session::SessionStore::open_existing(store_root).context("open held UI accepted store")?;
     let binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
         .context("resolve held UI accepted-store binding")?;
-    if binding != input.target_runtime.accepted_store_binding { bail!("held UI private input targets another accepted store"); }
+    if binding != input.target_runtime.accepted_store_binding
+        || binding != preflight.accepted_store_binding {
+        bail!("held UI private input or preflight targets another accepted store");
+    }
     let store_id = fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store_root)
         .context("resolve held UI accepted-store identity")?;
     if inventory.before.store_id != store_id {
@@ -1187,6 +1192,7 @@ fn validate_preflight_scope(proof: &PreflightProof, input: &Input) -> Result<()>
         bail!("held UI preflight native/source scope differs from its stop request");
     }
     for (digest, label) in [
+        (&proof.accepted_store_binding, "held UI preflight accepted-store binding"),
         (&proof.native_config_sha256, "held UI old native configuration"),
         (&proof.ready_owner_sha256, "held UI old Ready owner"),
         (&proof.process_sha256, "held UI old process receipt"),
@@ -1194,6 +1200,9 @@ fn validate_preflight_scope(proof: &PreflightProof, input: &Input) -> Result<()>
         (&proof.execution_input_sha256, "held UI preflight execution input"),
     ] {
         super::validate_digest(digest, label)?;
+    }
+    if proof.accepted_store_binding != input.target_runtime.accepted_store_binding {
+        bail!("held UI preflight accepted-store binding differs from the target runtime");
     }
     if fullmag_session::canonical_json_sha256(&proof.ready_owner_identity) != proof.ready_owner_sha256 {
         bail!("held UI Ready owner identity differs from its preflight hash");
@@ -1470,6 +1479,10 @@ fn validate_stop_authority(
     }
     let store_binding = fullmag_runtime_control::accepted_store::store_binding(store_root)
         .context("resolve held UI process accepted-store binding")?;
+    if store_binding != preflight.accepted_store_binding
+        || store_binding != input.target_runtime.accepted_store_binding {
+        bail!("held UI preflight binding differs from the target bootstrap store");
+    }
     validate_retained_closed_process(
         retained,
         api_pin,
@@ -1963,6 +1976,7 @@ fn publish_held_restore_ack(
         project_id: input.accepted.project_id.clone(),
         request_receipt_sha256: input.accepted.request_receipt_sha256.clone(),
         run_id: input.accepted.run_id.clone(),
+        run_intent_sha256: input.accepted.run_intent_sha256.clone(),
         scene_revision: input.accepted.scene_revision,
         session_created_at_unix_ms: input.accepted.session_created_at_unix_ms,
         schema: ACK_SCHEMA.into(),
@@ -2230,6 +2244,7 @@ mod tests {
             "children": [["compute", 102], ["preparation", 103]],
         });
         let proof = PreflightProof {
+            accepted_store_binding: input.target_runtime.accepted_store_binding.clone(),
             api_pin: json!({
                 "pid": 101,
                 "start_token": "1000",
@@ -2263,6 +2278,44 @@ mod tests {
         let mut drifted = proof;
         drifted.source_scope.runtime_config_sha256 = "a".repeat(64);
         assert!(validate_preflight_scope(&drifted, &input).is_err());
+    }
+
+    #[test]
+    fn python_valid_transport_fixture_decodes_strict_rust_shapes_and_store_binding() {
+        let fixture_value: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/held_ui_preflight_transport.v1.json",
+        )).unwrap();
+        assert_eq!(fixture_value["schema"], "fullmag.held-ui-preflight-transport-fixture.v1");
+
+        let accepted: AcceptedPins = serde_json::from_value(fixture_value["accepted"].clone()).unwrap();
+        let preflight_value = fixture_value["preflight"].clone();
+        let preflight: PreflightProof = serde_json::from_value(preflight_value.clone()).unwrap();
+        let mut input = fixture();
+        input.accepted = accepted;
+        input.source_scope = preflight.source_scope.clone();
+        input.target_runtime.accepted_store_binding = preflight.accepted_store_binding.clone();
+
+        assert_eq!(
+            preflight.accepted_store_binding,
+            fixture_value["preflight"]["accepted_store_binding"].as_str().unwrap(),
+        );
+        assert_eq!(input.target_runtime.accepted_store_binding, preflight.accepted_store_binding);
+        assert_eq!(input.source_scope, preflight.source_scope);
+        validate_preflight_scope(&preflight, &input).unwrap();
+
+        let mut missing_binding = preflight_value.clone();
+        missing_binding.as_object_mut().unwrap().remove("accepted_store_binding");
+        assert!(serde_json::from_value::<PreflightProof>(missing_binding).is_err());
+
+        let mut invalid_binding = preflight_value.clone();
+        invalid_binding["accepted_store_binding"] = json!("g".repeat(64));
+        let invalid_binding: PreflightProof = serde_json::from_value(invalid_binding).unwrap();
+        assert!(validate_preflight_scope(&invalid_binding, &input).is_err());
+
+        let mut mismatched_binding = preflight_value;
+        mismatched_binding["accepted_store_binding"] = json!("f".repeat(64));
+        let mismatched_binding: PreflightProof = serde_json::from_value(mismatched_binding).unwrap();
+        assert!(validate_preflight_scope(&mismatched_binding, &input).is_err());
     }
 
     #[test]
@@ -2318,6 +2371,7 @@ mod tests {
         let raw = br#"{"revision":2,"objects":[{"id":"magnet","name":"magnet","geometry":{"geometry_kind":"Box","geometry_params":{"size":[8e-09,4e-09,2e-09]},"bounds_min":[-4e-09,-2e-09,-1e-09],"bounds_max":[4e-09,2e-09,1e-09]},"material_ref":"CoFeB"}],"materials":[{"id":"CoFeB","name":"CoFeB","properties":{"Ms":600000.0,"Aex":1e-11,"alpha":0.5}}],"study":{"stages":[{"kind":"relax","entrypoint_kind":"relax","id":"relax-a"},{"kind":"relax","entrypoint_kind":"relax","id":"relax-b"},{"kind":"relax","entrypoint_kind":"relax","id":"relax-c"}]}}"#;
         input.accepted.accepted_scene_sha256 = sha256(raw);
         let proof = PreflightProof {
+            accepted_store_binding: input.target_runtime.accepted_store_binding.clone(),
             api_pin: Value::Null,
             api_response: ApiResponseProof {
                 responses: std::collections::BTreeMap::from([(
@@ -2905,6 +2959,20 @@ mod tests {
         let ack_raw = std::fs::read(&ack_path).unwrap();
         assert_eq!(sha256(&ack_raw), ack_sha);
         let ack: Value = serde_json::from_slice(&ack_raw).unwrap();
+        let expected_ack_fields = [
+            "accepted_store_binding", "api_instance_id", "catalog_sha256", "command_id",
+            "config_sha256", "gate_action", "input_sha256", "launch_id", "project_id",
+            "request_receipt_sha256", "run_id", "run_intent_sha256", "scene_revision",
+            "session_created_at_unix_ms", "schema", "session_epoch", "session_id",
+            "start_release_sha256", "state",
+        ].into_iter().collect::<std::collections::BTreeSet<_>>();
+        let actual_ack_fields = ack.as_object().unwrap().keys().map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual_ack_fields, expected_ack_fields);
+        assert_eq!(
+            ack.get("run_intent_sha256").and_then(Value::as_str),
+            Some(authority.input.accepted.run_intent_sha256.as_str()),
+        );
         assert_eq!(ack["schema"], ACK_SCHEMA);
         assert_eq!(ack["state"], "restored");
         assert_eq!(ack["gate_action"], "already_released_exact");

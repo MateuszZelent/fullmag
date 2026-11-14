@@ -1,0 +1,209 @@
+{
+  "accepted": {
+    "accepted_scene_sha256": "458685b4662fed46b34e4271638440b7c8caded5327b7a4bc14cfe3c87684c25",
+    "client_intent_id": "study:relax:1794584570782:eddae8c0-f2ae-46fe-9f57-d676e0eba121",
+    "command_id": "fm-5886f18f-96bd-481b-a064-726f49b22d07",
+    "command_kind": "relax",
+    "definition_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "execution_input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "old_api_instance_id": "75c6d4d1-00a9-416d-b27e-6fda461ad85d",
+    "old_request_scope_epoch": "75c6d4d1-00a9-416d-b27e-6fda461ad85d:1",
+    "project_id": "project-live-4100b4f4843786fb095305286d66ea1d5b3cf4f23d17abc62e384f6cf7c303e1",
+    "request_id": "09126e13-8dce-4a7b-9093-350188eb660a",
+    "request_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "request_receipt_sha256": "8d6ca234cf13aae7df9b77a18cfab4aeb9fb0f8e5dc187af7f7216fde5e23493",
+    "request_sha256": "2e15919733f30bc66a0eaf316b1051236eb3997d20d3a2a45157a1d31c7621d4",
+    "run_id": "run-live-6b6552a649f3cd4a87309ab4b48a1f0c83c0a884636a180dea580f83e0bf8cd0",
+    "run_intent_payload_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "run_intent_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "scene_revision": 2,
+    "session_created_at_unix_ms": 1794582150656,
+    "session_epoch": 1,
+    "session_id": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00",
+    "study_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "preflight": {
+    "accepted_store_binding": "0d68a6bc4fcfc7e892f948de50821e1de9d237596a74bda3d44a014010848dda",
+    "api_pin": {
+      "argv": [
+        "/opt/fullmag/package/bin/fullmag-api"
+      ],
+      "exe": "/opt/fullmag/package/bin/fullmag-api",
+      "pid": 200,
+      "ppid": 1,
+      "start_token": "12345"
+    },
+    "api_response": {
+      "responses": {
+        "commands": {
+          "raw_base64": "eyJhY2NlcHRlZF9jb3VudCI6MCwiY29tbWFuZHMiOltdLCJjb21wbGV0ZWRfY291bnQiOjAsImRpc3BhdGNoZWRfY291bnQiOjAsImZhaWxlZF9jb3VudCI6MCwicGVuZGluZ19jb3VudCI6MCwicmVqZWN0ZWRfY291bnQiOjAsInJldmlzaW9uIjowLCJydW5uaW5nX2NvdW50IjowfQ==",
+          "sha256": "0753a1d183cb9edb194a366b49149f6c1545eefed9e57cd4725cdc9d5bf16ad0"
+        },
+        "health": {
+          "raw_base64": "eyJhY3RpdmVfc2Vzc2lvbiI6dHJ1ZSwic3RhdHVzIjoib2sifQ==",
+          "sha256": "f62fe4c3ac8f299bb31638aa8fa048f8e4ddb35b2cf2b9ae46537787eb642fd6"
+        },
+        "queue": {
+          "raw_base64": "eyJpdGVtcyI6W3sicHJvamVjdF9pZCI6InByb2plY3QtbGl2ZS00MTAwYjRmNDg0Mzc4NmZiMDk1MzA1Mjg2ZDY2ZWExZDViM2NmNGYyM2QxN2FiYzYyZTM4NGY2Y2Y3YzMwM2UxIiwicnVuX2lkIjoicnVuLWxpdmUtNmI2NTUyYTY0OWYzY2Q0YTg3MzA5YWI0YjQ4YTFmMGM4M2MwYTg4NDYzNmExODBkZWE1ODBmODNlMGJmOGNkMCIsInN0YXRlIjoicGVuZGluZ19tYXRlcmlhbGl6YXRpb24iLCJ0YXNrX2lkIjpudWxsfV0sIm5leHRfY3Vyc29yIjpudWxsLCJyZXZpc2lvbiI6InNoYTI1NjoxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwic2NoZW1hX3ZlcnNpb24iOiJjb21wdXRlX3F1ZXVlLnYxIn0=",
+          "sha256": "57e738dad88f1ee583d50b4f9d31dd955c1523bbafe447b9ba64c4bc705e88a2"
+        },
+        "run": {
+          "raw_base64": "eyJyZXNvbHZlZF9iYWNrZW5kIjoiZmRtIiwicnVuX2lkIjoicnVuLWxpdmUtNmI2NTUyYTY0OWYzY2Q0YTg3MzA5YWI0YjQ4YTFmMGM4M2MwYTg4NDYzNmExODBkZWE1ODBmODNlMGJmOGNkMCIsInNlc3Npb25faWQiOiJkb2NrZXItc3RhcnR1cC1iZjRiM2YzZjdkMTQ2Mjg5NDJkNGI5MGRkNDU5ZjE3M2UwMTNmMTE1OTljMDQ2ZDM3ZmY0MDJkYjVmYmQyZjAwIiwic3RhdHVzIjoid2FpdGluZ19mb3JfY29tcHV0ZSJ9",
+          "sha256": "13e5e42b1db567a987feaa8163ecc6bf5354a0a43f0af336222489c49eda9fb1"
+        },
+        "runtime": {
+          "raw_base64": "eyJjb25maWd1cmVkIjp0cnVlLCJzdGF0ZSI6InJlYWR5In0=",
+          "sha256": "d8c3c3b2caef2c87e1e5f4a9c7720424b878058b9d6570fddcbc04ba562a5fc2"
+        },
+        "scene": {
+          "raw_base64": "eyJvYmplY3RzIjpbXSwicmV2aXNpb24iOjJ9",
+          "sha256": "458685b4662fed46b34e4271638440b7c8caded5327b7a4bc14cfe3c87684c25"
+        },
+        "status": {
+          "raw_base64": "eyJyZXNvdXJjZXMiOnsic2NlbmVfcmV2aXNpb24iOjJ9LCJzZXNzaW9uIjp7ImNyZWF0ZWRfYXQiOiIxNzk0NTgyMTUwNjU2IiwicmVxdWVzdF9zY29wZV9lcG9jaCI6Ijc1YzZkNGQxLTAwYTktNDE2ZC1iMjdlLTZmZGE0NjFhZDg1ZDoxIiwic2Vzc2lvbl9lcG9jaCI6ImRvY2tlci1zdGFydHVwLWJmNGIzZjNmN2QxNDYyODk0MmQ0YjkwZGQ0NTlmMTczZTAxM2YxMTU5OWMwNDZkMzdmZjQwMmRiNWZiZDJmMDBAMTc5NDU4MjE1MDY1NiIsInNlc3Npb25faWQiOiJkb2NrZXItc3RhcnR1cC1iZjRiM2YzZjdkMTQ2Mjg5NDJkNGI5MGRkNDU5ZjE3M2UwMTNmMTE1OTljMDQ2ZDM3ZmY0MDJkYjVmYmQyZjAwIn19",
+          "sha256": "bddf99d7d702867231a4a0cc197e69616ff924c859eb746c56cc61febe296103"
+        }
+      },
+      "snapshot": {
+        "api_instance_id": "75c6d4d1-00a9-416d-b27e-6fda461ad85d",
+        "commands": {
+          "accepted_count": 0,
+          "commands": [],
+          "completed_count": 0,
+          "dispatched_count": 0,
+          "failed_count": 0,
+          "pending_count": 0,
+          "rejected_count": 0,
+          "revision": 0,
+          "running_count": 0
+        },
+        "health": {
+          "active_session": true,
+          "status": "ok"
+        },
+        "queue": {
+          "items": [
+            {
+              "project_id": "project-live-4100b4f4843786fb095305286d66ea1d5b3cf4f23d17abc62e384f6cf7c303e1",
+              "run_id": "run-live-6b6552a649f3cd4a87309ab4b48a1f0c83c0a884636a180dea580f83e0bf8cd0",
+              "state": "pending_materialization",
+              "task_id": null
+            }
+          ],
+          "next_cursor": null,
+          "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "schema_version": "compute_queue.v1"
+        },
+        "run": {
+          "resolved_backend": "fdm",
+          "run_id": "run-live-6b6552a649f3cd4a87309ab4b48a1f0c83c0a884636a180dea580f83e0bf8cd0",
+          "session_id": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00",
+          "status": "waiting_for_compute"
+        },
+        "runtime": {
+          "configured": true,
+          "state": "ready"
+        },
+        "scene": {
+          "objects": [],
+          "revision": 2
+        },
+        "status": {
+          "resources": {
+            "scene_revision": 2
+          },
+          "session": {
+            "created_at": "1794582150656",
+            "request_scope_epoch": "75c6d4d1-00a9-416d-b27e-6fda461ad85d:1",
+            "session_epoch": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00@1794582150656",
+            "session_id": "docker-startup-bf4b3f3f7d14628942d4b90dd459f173e013f11599c046d37ff402db5fbd2f00"
+          }
+        }
+      }
+    },
+    "commands": {
+      "command": {
+        "client_intent_id": "study:relax:1794584570782:eddae8c0-f2ae-46fe-9f57-d676e0eba121",
+        "command_id": "fm-5886f18f-96bd-481b-a064-726f49b22d07",
+        "kind": "relax",
+        "seq": 0,
+        "target": {
+          "kind": "study"
+        }
+      },
+      "detail": {
+        "http_status": 404,
+        "raw_base64": "e30=",
+        "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+      },
+      "ledger": {
+        "accepted_count": 0,
+        "commands": [],
+        "completed_count": 0,
+        "dispatched_count": 0,
+        "failed_count": 0,
+        "pending_count": 0,
+        "rejected_count": 0,
+        "revision": 0,
+        "running_count": 0
+      },
+      "request_receipt": {
+        "client_intent_id": "study:relax:1794584570782:eddae8c0-f2ae-46fe-9f57-d676e0eba121",
+        "command_id": "fm-5886f18f-96bd-481b-a064-726f49b22d07",
+        "command_kind": "relax",
+        "key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "request_id": "09126e13-8dce-4a7b-9093-350188eb660a",
+        "request_sha256": "2e15919733f30bc66a0eaf316b1051236eb3997d20d3a2a45157a1d31c7621d4",
+        "requested_target": {
+          "kind": "study"
+        }
+      },
+      "request_receipt_sha256": "8d6ca234cf13aae7df9b77a18cfab4aeb9fb0f8e5dc187af7f7216fde5e23493"
+    },
+    "execution_input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "native_config_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "process_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ready_owner_identity": {
+      "build_commit": "3333333333333333333333333333333333333333",
+      "build_snapshot": "4444444444444444444444444444444444444444444444444444444444444444",
+      "children": [
+        [
+          "compute",
+          101
+        ],
+        [
+          "preparation",
+          102
+        ]
+      ],
+      "compute_pool_generation": 1,
+      "compute_pool_id": "compute-pool-p22",
+      "control_address": "127.0.0.1:50051",
+      "host": "host-p22",
+      "owner_token": "11111111111111111111111111111111",
+      "pid": 100,
+      "preparation_pool_generation": 1,
+      "preparation_pool_id": "preparation-pool-p22",
+      "process_start_token": "2222222222222222",
+      "protocol": "tcp",
+      "target_id": "target-dev"
+    },
+    "ready_owner_sha256": "aa6970ea66bf73770fdc3ac61909386f9b4b15cb574067d55e734ed1138d6850",
+    "run_intent_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "schema": "fullmag.held-ui-materialization-preflight.v1",
+    "source_scope": {
+      "backend_container_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "backend_started_at": "2026-11-13T14:55:00.000000000Z",
+      "compose_project": "fullmag-interactive-study",
+      "control_volume": "fullmag-control",
+      "frontend_container_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "frontend_started_at": "2026-11-13T14:56:00.000000000Z",
+      "namespace": "",
+      "namespace_registry_sha256": null,
+      "runtime_config_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "source_root": "/workspace/fullmag",
+      "state_root_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  },
+  "schema": "fullmag.held-ui-preflight-transport-fixture.v1"
+}
