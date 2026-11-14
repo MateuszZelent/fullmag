@@ -22,6 +22,7 @@ import math
 import textwrap
 import tokenize
 from dataclasses import dataclass, replace
+from dataclasses import field as _dataclass_field
 from typing import Callable, Mapping
 
 FIELD_EXPR_VERSION = "field_expr.v1"
@@ -84,6 +85,16 @@ class _TranspiledFunction:
 
 
 @dataclass(frozen=True, slots=True)
+class LibraryCall:
+    """The call of a ready antenna (``fullmag.antennas``) that produced a term."""
+
+    function: str
+    arguments: tuple[tuple[str, float], ...]
+    call_token: int
+    output_index: int
+
+
+@dataclass(frozen=True, slots=True)
 class _Function:
     """Equations of one function with its parameter values."""
 
@@ -92,6 +103,12 @@ class _Function:
     parameters: tuple[FunctionParameter, ...]
     locals: tuple[tuple[str, str], ...]
     outputs: tuple[str, ...]
+    # Set on masks returned by a ready antenna (``fullmag.antennas``); recorded as the
+    # term's ``origin``, not part of the function's IR and not part of equality.
+    library_call: LibraryCall | None = _dataclass_field(default=None, compare=False)
+
+    def with_library_call(self, call: LibraryCall | None):
+        return replace(self, library_call=call)
 
     def with_parameter(self, name: str, value: float):
         names = [parameter.name for parameter in self.parameters]
@@ -615,6 +632,7 @@ def register_script_source(filename: str, source: str) -> None:
 __all__ = [
     "FIELD_EXPR_VERSION",
     "FunctionParameter",
+    "LibraryCall",
     "MaskFunction",
     "MaskFunctionError",
     "TimeFunction",

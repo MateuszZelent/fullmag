@@ -136,7 +136,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 - [ ] **Step 3: Check** `just check-api-source` and `just check-cli-source` in the worktree backend — exit 0.
 - [ ] **Step 4: Commit** `feat(ir): add mask field drives to ProblemIR`.
 
-### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna — PARTIAL (`0e53f8a2a`: units, transpiler, `fm.mask`/`fm.time`, `MaskAntenna`, stage action; 2026-11-14: `VectorMask`/`study.new_vector_mask` with the array inside the IR (float32, zlib, base64, sha256); open: `fullmag.antennas.gaussian_k_source`)
+### Task 4: Python API — units, transpiler, `add_simpleantenna.mask`, ready antenna — DONE 2026-11-14 (`0e53f8a2a`: units, transpiler, `fm.mask`/`fm.time`, `MaskAntenna`, stage action; `VectorMask`/`study.new_vector_mask` with the array inside the IR (float32, zlib, base64, sha256); `fullmag.antennas.gaussian_k_source` (function and loop style), `READY_ANTENNAS`, `rebuild`, origin contract in `docs/specs/mask-function-v1.md` section 6; probe case `ready_antenna`: basis and time program identical to the hand-written pair)
 
 **Files:**
 - Create: `packages/fullmag-py/src/fullmag/units.py` (`nm, um, mT, T, GHz, MHz, ns, ps` as floats)
@@ -263,7 +263,7 @@ Support = active cell ∧ target cells (global: all; object: the magnet; region:
 - [ ] **Step 2: Implement** the support compiler (reuse `prepare_expression_realization`/`evaluate_expression`; reject state-dependent input), term resolution (evaluate the function mask at supported cell centres, or read the `.npy` file — verify sha256, size and dtype, else `mask_array_invalid` — and copy/resample it; divide by μ0; compile the time program; signature = sha256 of the serde JSON of (drive, term_index, field_xyz)), the time sampling check (4097 uniform samples over the stage horizon), lane rejections.
 Deferred to the tasks that add the features: `ready_antenna` (`gaussian_k_source` vs the hand-written pair: identical `field_xyz` and `time_program`), `loop_mask` (`formula` as a loop filling `study.new_vector_mask()`: within 1e-6 relative) and `loop_mask_resampled` (8×4×2 lattice of 10 nm: nearest lattice point, 0 outside) — with `VectorMask` and `fullmag.antennas` of Task 4.
 
-- [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `15/15 cases passed`, exit 0.
+- [ ] **Step 3: Rebuild** the worktree backend; run `docker exec <backend> python3 /opt/fullmag/source/scripts/benchmarks/fdm_mask_plan_checks.py` — `15/15 cases passed`, exit 0 (18/18 with the deferred cases, 2026-11-14).
 - [ ] **Step 4: Commit** `feat(plan): resolve hand-written masks into FDM bases`.
 
 ### Task 6: Runtime — host multiplier on CUDA, Rust interpreter on CPU — PARTIAL (`2f35afe73`: descriptor v3 and HOST_MULTIPLIER on CUDA, `DriveTimeFunction::Expression` on CPU, horizon check, E_drive; verified through the API, see Task 7; open: Step 0 `H_drive` readback)

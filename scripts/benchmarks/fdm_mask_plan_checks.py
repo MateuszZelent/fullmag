@@ -86,6 +86,18 @@ def log_time(t):
     return log(t)
 
 
+def hand_k_source(x, y, z, B01, wavelength, fwhm_y, xs):
+    # The mask of the user's racetrack script, as written there.
+    k = 2 * pi / wavelength
+    sigma_y = fwhm_y / (2 * sqrt(2 * log(2)))
+    g = exp(-(x + xs) ** 2 / (2 * wavelength ** 2)) * exp(-y ** 2 / (2 * sigma_y ** 2))
+    return (B01 * g * sin(k * x - pi / 2), 0.0, B01 * g * sin(k * x))
+
+
+def antenna_time(t, frequency, t0):
+    return sin(2 * pi * frequency * (t - t0))
+
+
 def formula_loop(field, B, L):
     nx, ny, nz = field.size
     for i in range(nx):
@@ -154,6 +166,8 @@ class Case:
     universe_cz: str = "0.0"
     regional_only: bool = False
     rtol: float = FIELD_RTOL
+    # Two terms whose planned basis and time program must be equal bit for bit.
+    identical_terms: tuple[int, int] | None = None
 
 
 def inside_box(centre, size, point) -> bool:
@@ -326,6 +340,11 @@ def check_case(case: Case, binary: str, workdir: Path, oracle, functions: dict) 
             failures.append(f"term {index}: projection_signature missing")
         report_terms.append({"term_index": index, "field_relative_error": error,
                              "nonzero_cells": nonzero, "time": time_report})
+    if case.identical_terms is not None and len(bases) == len(case.terms):
+        first, second = case.identical_terms
+        for key in ("field_xyz", "time_program", "time_expression"):
+            if bases[first][key] != bases[second][key]:
+                failures.append(f"terms {first} and {second}: {key} differ")
     return {"case": case.name, "passed": not failures, "failures": failures, "terms": report_terms}
 
 
@@ -333,6 +352,8 @@ def cases() -> list[Case]:
     whole = lambda point, index, plan: True  # noqa: E731
     one_ms = {"b": 1e-3}
     k = 2 * math.pi / 40e-9
+    k_source = Term("hand_k_source", {"B01": 0.2e-3, "wavelength": 40e-9, "fwhm_y": 30e-9, "xs": 10e-9},
+                    "antenna_time", {"frequency": 3.6e9, "t0": 0.1e-9})
     return [
         Case("uniform_static",
              f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE})\n"
@@ -375,6 +396,15 @@ def cases() -> list[Case]:
              "fm.time(delayed_sine, frequency=3.6e9, t0=0.1e-9))",
              (Term("reassigned", {"B01": 0.2e-3, "wavelength": 40e-9, "fwhm_y": 30e-9, "xs": 10e-9},
                    "delayed_sine", {"frequency": 3.6e9, "t0": 0.1e-9}),), whole),
+        Case("ready_antenna",
+             "from fullmag.antennas import gaussian_k_source\n"
+             f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world', time_origin='absolute')\n"
+             "for field, drive in gaussian_k_source(amplitude=0.2e-3, wavelength=40e-9, frequency=3.6e9, "
+             "fwhm_y=30e-9, center_x=-10e-9, t0=0.1e-9):\n"
+             "    antenna.add(field, drive)\n"
+             "antenna.add(fm.mask(hand_k_source, B01=0.2e-3, wavelength=40e-9, fwhm_y=30e-9, xs=10e-9), "
+             "fm.time(antenna_time, frequency=3.6e9, t0=0.1e-9))",
+             (k_source, k_source), whole, identical_terms=(0, 1)),
         Case("region_overlap",
              REGION_A.format(priority=1) + "\n" + REGION_B + "\n"
              "antenna = film.add_simpleantenna.arbitrary_mask(fm.Box(40e-9, 40e-9, 20e-9), "

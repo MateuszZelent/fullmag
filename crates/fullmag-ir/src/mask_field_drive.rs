@@ -188,9 +188,7 @@ fn set_parameters(
             .parameters
             .iter_mut()
             .find(|parameter| parameter.name == *name)
-            .ok_or_else(|| {
-                format!("mask_update_invalid: {label} has no parameter '{name}'")
-            })?;
+            .ok_or_else(|| format!("mask_update_invalid: {label} has no parameter '{name}'"))?;
         parameter.value = *value;
         parameter.source = None;
     }
@@ -261,6 +259,8 @@ impl MaskFieldDriveIR {
             };
             set_parameters(&format!("{label} time"), function, time_parameters)?;
         }
+        // The term no longer equals the output of the ready-antenna call.
+        term.origin = None;
         Ok(updated)
     }
 

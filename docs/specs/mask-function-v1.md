@@ -151,3 +151,22 @@ value stack of at most 64 entries and one input, `t`.
 | `mask_expression_non_finite` | planner | a mask value at a supported cell, or a time value on the stage horizon, is not finite |
 | `mask_field_drive_unsupported_lane` | planner | the resolved lane does not realize mask field drives (`fem`, `fdm_multilayer`) |
 | `mask_not_separable` | separation (single-function form) | the function is not a finite sum of space × time factors |
+
+(mask-function-v1-origin)=
+## 6. Ready-antenna origin
+
+A term returned by a function-style ready antenna of `fullmag.antennas` carries
+`origin = {function, arguments, call_index, output_index}`: the qualified function
+name (a key of `fullmag.antennas.READY_ANTENNAS`), the numeric arguments as
+written in the call (omitted optional arguments are absent), the order of the
+call among the drive's calls, and the position of the term among the call's
+outputs. The planner and the solvers ignore it.
+
+- An Update of a term (stage action or `MaskAntenna.with_parameters`) removes
+  its origin: the term no longer equals the output of the call.
+- A script exporter writes the import and the call for a block of consecutive
+  terms with one `call_index` and output indices `0..n-1` only when
+  `fullmag.antennas.rebuild(function, arguments)` returns the same equations
+  and values for every term; otherwise it writes the terms as functions.
+- A loop-style ready antenna (`style="loop"`) returns an array mask without an
+  origin; it is exported as data like any array mask.

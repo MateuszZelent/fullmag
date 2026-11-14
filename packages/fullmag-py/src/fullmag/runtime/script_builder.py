@@ -566,6 +566,7 @@ def render_loaded_problem_as_script(
     lines.extend(_render_header(loaded.source_path, loaded.entrypoint_kind))
     lines.append("")
     lines.append("import fullmag as fm")
+    lines.extend(_mask_library_imports([*mask_payloads, *staged_mask_payloads]))
     math_names = _mask_math_names([*mask_payloads, *staged_mask_payloads])
     if math_names:
         lines.append(f"from math import {', '.join(math_names)}")
@@ -1263,6 +1264,7 @@ def _render_scene_document_bootstrap(
     math_names = _mask_math_names(staged_mask_payloads)
     lines = [
         "import fullmag as fm",
+        *_mask_library_imports(staged_mask_payloads),
         *([f"from math import {', '.join(math_names)}"] if math_names else []),
         "",
         f"study = fm.study({_python_literal(str(builder.get('study_name') or 'scene_document'))})",
@@ -6453,9 +6455,99 @@ def _mask_field_drive_payloads(
     return [antenna.to_ir() for antenna in problem.mask_field_drives]
 
 
+def _canonical_function_ir(value: object) -> tuple[object, ...] | None:
+    """Equations and values of a ``FunctionIR``, independent of how its JSON was written."""
+    function = _normalize_mapping(value)
+    if not function:
+        return None
+    return (
+        str(function.get("expression_version") or ""),
+        str(function.get("name") or ""),
+        tuple((str(item["name"]), float(item["value"])) for item in function.get("parameters") or []),
+        tuple((str(item["name"]), str(item["expression"])) for item in function.get("locals") or []),
+        tuple(str(output) for output in function.get("outputs") or []),
+    )
+
+
+def _library_call_reproduces(origin: Mapping[str, object], run: Sequence[Mapping[str, object]]) -> bool:
+    """Calling the ready antenna again with the stored arguments gives exactly these terms."""
+    from fullmag.antennas import rebuild
+    from fullmag.model.mask_function import MaskFunction
+
+    arguments = _normalize_mapping(origin.get("arguments"))
+    for position, term in enumerate(run):
+        other = _normalize_mapping(term.get("origin"))
+        if (
+            other.get("function") != origin.get("function")
+            or _normalize_mapping(other.get("arguments")) != arguments
+            or other.get("output_index") != position
+        ):
+            return False
+    try:
+        pairs = rebuild(str(origin.get("function")), arguments)
+    except (TypeError, ValueError):
+        return False
+    if len(pairs) != len(run):
+        return False
+    for (field, drive), term in zip(pairs, run):
+        mask = _normalize_mapping(term.get("mask"))
+        if not isinstance(field, MaskFunction) or mask.get("kind") != "function":
+            return False
+        if _canonical_function_ir(field.to_ir()) != _canonical_function_ir(mask.get("function")):
+            return False
+        expected_time = None if drive is None else _canonical_function_ir(drive.to_ir())
+        if expected_time != _canonical_function_ir(term.get("time")):
+            return False
+    return True
+
+
+def _library_call_runs(payload: Mapping[str, object]) -> dict[int, tuple[int, dict[str, object]]]:
+    """Terms exported as one ready-antenna call: first term index -> (term count, origin).
+
+    A run is a block of consecutive terms of one call (``origin.call_index``) with
+    output indices 0..n-1. It is exported as the call only when the call rebuilds
+    the same equations and values; otherwise (for example after an Update) its
+    terms are exported as functions, so the exported script never changes a term.
+    """
+    terms = [_normalize_mapping(term) for term in payload.get("terms") or []]
+    runs: dict[int, tuple[int, dict[str, object]]] = {}
+    index = 0
+    while index < len(terms):
+        origin = _normalize_mapping(terms[index].get("origin"))
+        if not origin:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(terms) and (
+            _normalize_mapping(terms[end].get("origin")).get("call_index") == origin.get("call_index")
+        ):
+            end += 1
+        if _library_call_reproduces(origin, terms[index:end]):
+            runs[index] = (end - index, origin)
+        index = end
+    return runs
+
+
+def _mask_library_imports(payloads: Sequence[Mapping[str, object]]) -> list[str]:
+    """``from <module> import <ready antenna>`` lines for the calls the script repeats."""
+    modules: dict[str, set[str]] = {}
+    for payload in payloads:
+        for _, origin in _library_call_runs(payload).values():
+            module, name = str(origin["function"]).rsplit(".", 1)
+            modules.setdefault(module, set()).add(name)
+    return [f"from {module} import {', '.join(sorted(names))}" for module, names in sorted(modules.items())]
+
+
 def _mask_functions(payload: Mapping[str, object]) -> list[tuple[str, Mapping[str, object]]]:
     functions: list[tuple[str, Mapping[str, object]]] = []
-    for term in payload.get("terms") or []:
+    library_terms = {
+        position
+        for start, (count, _) in _library_call_runs(payload).items()
+        for position in range(start, start + count)
+    }
+    for index, term in enumerate(payload.get("terms") or []):
+        if index in library_terms:
+            continue
         mask = _normalize_mapping(_normalize_mapping(term).get("mask"))
         if mask.get("kind") == "function":
             functions.append(("mask", _normalize_mapping(mask.get("function"))))
@@ -6550,9 +6642,13 @@ class _MaskAntennaRenderer:
             | set(_MASK_MATH_NAMES)
             | {"abs", "min", "max", "x", "y", "z", "t"}
         )
+        from fullmag.antennas import READY_ANTENNAS
+
+        self._taken |= {name.rsplit(".", 1)[-1] for name in READY_ANTENNAS}
         self._defs: dict[tuple[str, str], str] = {}
         self._antennas: dict[str, tuple[str, str]] = {}
         self._source_root = source_root
+        self._loop_names: tuple[str, str, str] | None = None
 
     def variable(self, drive_id: str) -> str | None:
         known = self._antennas.get(drive_id)
@@ -6591,8 +6687,15 @@ class _MaskAntennaRenderer:
         lines = [f"{variable} = study.add_simpleantenna.arbitrary_mask("]
         lines.extend(f"    {argument}," for argument in arguments)
         lines.append(")")
-        for index, term in enumerate(payload.get("terms") or []):
-            term = _normalize_mapping(term)
+        terms = [_normalize_mapping(term) for term in payload.get("terms") or []]
+        runs = _library_call_runs(payload)
+        for index, term in enumerate(terms):
+            if index in runs:
+                count, origin = runs[index]
+                names = [terms[position].get("name") for position in range(index, index + count)]
+                lines.extend(self._library_call_lines(variable, origin, names))
+            if any(start <= index < start + count for start, (count, _) in runs.items()):
+                continue
             calls = []
             for kind in ("mask", "time"):
                 if kind == "mask":
@@ -6613,6 +6716,50 @@ class _MaskAntennaRenderer:
         if payload.get("enabled") is False:
             lines.append(f"{variable}.enabled = False")
         return variable, [*def_lines, *lines]
+
+    def _library_call_lines(
+        self,
+        variable: str,
+        origin: Mapping[str, object],
+        names: Sequence[object],
+    ) -> list[str]:
+        """``for field, drive in <ready antenna>(...): antenna.add(field, drive)``."""
+        from fullmag.antennas import READY_ANTENNAS
+
+        if self._loop_names is None:
+            self._loop_names = (
+                _unique_identifier("field", self._taken),
+                _unique_identifier("drive", self._taken),
+                _unique_identifier("term_name", self._taken),
+            )
+        field, drive, term_name = self._loop_names
+        function = str(origin["function"])
+        order = [argument.name for argument in READY_ANTENNAS[function].arguments]
+        arguments = _normalize_mapping(origin.get("arguments"))
+        call = [
+            f"{function.rsplit('.', 1)[-1]}(",
+            *(
+                f"    {name}={_py_float_roundtrip(float(arguments[name]))},"
+                for name in sorted(arguments, key=order.index)
+            ),
+            ")",
+        ]
+        if len(names) == 1 or all(name is None for name in names):
+            named = "" if names[0] is None or len(names) != 1 else f", name={_py_repr(str(names[0]))}"
+            return [
+                f"for {field}, {drive} in {call[0]}",
+                *call[1:-1],
+                "):",
+                f"    {variable}.add({field}, {drive}{named})",
+            ]
+        literal = ", ".join("None" if name is None else _py_repr(str(name)) for name in names)
+        return [
+            f"for ({field}, {drive}), {term_name} in zip(",
+            *(f"    {line}" for line in call),
+            f"    ({literal}),",
+            "):",
+            f"    {variable}.add({field}, {drive}, name={term_name})",
+        ]
 
     def _function_name(
         self,

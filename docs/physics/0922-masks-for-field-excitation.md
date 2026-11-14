@@ -303,10 +303,12 @@ also through the Control Room and the API.
   order of locals and terms, the function names and the stage actions (Add,
   Update, Remove). A function used by several terms is exported once; values are
   exported as exact literals at the call. Comments, formatting and the display
-  text of parameter values (`source`) are not kept. An array mask is exported as
-  a file load (not yet realized).
+  text of parameter values (`source`) are not kept. An array mask is exported
+  with its data (`fm.VectorMask.from_data`).
 - Terms produced by a ready antenna of `fullmag.antennas` carry the call (name
-  and arguments) so the Control Room can change the arguments and rebuild them.
+  and arguments) so the Control Room can change the arguments and rebuild them;
+  the call is exported only when calling it again rebuilds the same terms, and an
+  Update removes it (`docs/specs/mask-function-v1.md` section 6).
 - Failures are explicit and happen before a solver is allocated: the codes of
   `docs/specs/mask-function-v1.md` sections 3 and 5. An unsupported lane is an
   error; there is no fallback to another lane and no run without the mask.
@@ -427,10 +429,13 @@ every regional drive.
 
 Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
 
-- Planner probe `scripts/benchmarks/fdm_mask_plan_checks.py`: 15/15 cases; maps
+- Planner probe `scripts/benchmarks/fdm_mask_plan_checks.py`: 18/18 cases; maps
   equal the authored Python functions at every cell centre bit for bit; time
   programs equal the independent oracle; a plan without masks is byte-identical
-  to the base binary.
+  to the base binary; array masks written in a loop equal the function within
+  float32 rounding; the ready antenna `fullmag.antennas.gaussian_k_source` plans
+  to the same basis, time expression and time program as the hand-written
+  mumax3 pair, bit for bit.
 - Host interpreter: `native/include/fullmag_time_expression.h` reproduces the
   time-program golden file (67 checks in C99, C11 and C++17).
 - Runtime through the managed API, 16 × 8 × 4 cells, 1 ns: a mask term

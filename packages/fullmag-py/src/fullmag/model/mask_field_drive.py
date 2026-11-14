@@ -217,6 +217,9 @@ class MaskAntenna:
                 time = time.with_parameter(parameter, value)
         except MaskFunctionError as error:
             raise ValueError(f"mask_update_invalid: antenna {self.id!r}: {error}") from None
+        if getattr(mask, "library_call", None) is not None:
+            # The term no longer equals the output of the ready-antenna call.
+            mask = mask.with_library_call(None)
         copy = MaskAntenna(
             id=self.id,
             target=self.target,
@@ -236,6 +239,18 @@ class MaskAntenna:
     def to_ir(self) -> dict[str, object]:
         if not self._terms:
             raise MaskFunctionError(f"antenna {self.id!r} has no terms; call antenna.add(...)")
+        terms = [term.to_ir() for term in self._terms]
+        # Terms of one ready-antenna call share a call index (order of appearance).
+        tokens: dict[int, int] = {}
+        for term, payload in zip(self._terms, terms):
+            call = getattr(term.mask, "library_call", None)
+            if call is not None:
+                payload["origin"] = {
+                    "function": call.function,
+                    "arguments": dict(call.arguments),
+                    "call_index": tokens.setdefault(call.call_token, len(tokens)),
+                    "output_index": call.output_index,
+                }
         return {
             "schema_version": MASK_FIELD_DRIVE_SCHEMA_VERSION,
             "id": self.id,
@@ -245,7 +260,7 @@ class MaskAntenna:
             "shape": _region_shape_to_ir(self.shape),
             "position_m": list(self.position_m),
             "frame": self.frame,
-            "terms": [term.to_ir() for term in self._terms],
+            "terms": terms,
             "time_origin": self.time_origin,
             "activation": self.activation.to_ir(),
         }

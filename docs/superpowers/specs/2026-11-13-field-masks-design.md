@@ -119,17 +119,21 @@ called with values:
 ```python
 from fullmag.antennas import gaussian_k_source
 
-for field, drive in gaussian_k_source(study, amplitude=0.2 * mT, wavelength=279 * nm,
+for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=279 * nm,
                                       frequency=3.6 * GHz, fwhm_y=240 * nm,
-                                      center_x=-6000 * nm / 2.3, n_layers=9):
+                                      center_x=-6000 * nm / 2.3, t0=2e-9):
     antenna.add(field, drive)
 ```
 
 A ready antenna is known to fullmag by name, so the scene stores the call (name
 and argument values) next to the terms it produced. The Control Room lists the
 ready antennas, edits their arguments, and the backend calls the function again
-to rebuild the terms. This holds for loop-style ready antennas too. A script
-exported from the UI contains the import and the call.
+(`fullmag.antennas.rebuild`) to rebuild the terms. A script exported from the UI
+contains the import and the call. `style="loop"` (`gaussian_k_source(study, ...,
+n_layers=9, style="loop")`) fills `study.new_vector_mask()` in the mumax3 loop;
+its term is stored and exported as data, without the call, because the call
+depends on the study grid. A function mask has no layers: the antenna's shape
+limits it (contract: `docs/specs/mask-function-v1.md` section 6).
 
 Scoped factories (one implementation owner): `study.add_simpleantenna.arbitrary_mask(target=..., ...)`
 needs an explicit target (a magnet, a region of a magnet, or `"global"`);
@@ -172,8 +176,8 @@ Rules for **array** masks (loop style):
   lattice → 0. The antenna's `shape` still limits the support.
 - An array mask written by the user's own loop comes from arbitrary code, so the
   Control Room shows it read-only and a script exported from the UI loads the file
-  instead of repeating the loop. A loop inside a ready antenna of `fullmag.antennas`
-  is editable through the antenna's arguments (see L1 ready antennas).
+  instead of repeating the loop. A loop-style ready antenna is stored the same way;
+  its function style is the editable form (see L1 ready antennas).
 
 Common rules:
 

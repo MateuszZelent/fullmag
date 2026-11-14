@@ -60,7 +60,7 @@ class ProbeHelperTests(unittest.TestCase):
             else:
                 self.assertTrue(case.terms)
                 self.assertIsNotNone(case.support)
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 18)
 
     def test_probe_functions_match_their_closed_forms(self):
         functions = {name: getattr(math, name) for name in ("sin", "cos", "exp", "floor", "log", "sqrt")}
