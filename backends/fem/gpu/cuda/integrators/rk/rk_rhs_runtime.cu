@@ -11,6 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/rk_demag_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk_direct_torques.hpp"
@@ -109,7 +110,8 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     double evaluation_time_s,
     const char *label,
     std::string &reason,
-    bool fresh_demag_initial_guess = false)
+    bool fresh_demag_initial_guess = false,
+    FemGpuPgbbPotentialPermit *permit = nullptr)
 {
     gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
     auto &timings = ctx.gpu_state.rk_phase_timings;
@@ -163,7 +165,9 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     if (!gpu_rk_compute_dmi_field_contributions(ctx, m, stream, n, reason)) {
         return false;
     }
-    const bool demag_ok = fresh_demag_initial_guess
+    const bool demag_ok = permit != nullptr
+        ? gpu_rk_compute_demag_for_pgbb_trial(ctx, m, stream, *permit, reason)
+        : fresh_demag_initial_guess
         ? gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)
         : gpu_rk_compute_demag_for_device_stage(ctx, m, stream, reason);
     if (!demag_ok) {
@@ -193,6 +197,15 @@ bool gpu_rk_compute_effective_field_for_magnetization(
 {
     return gpu_rk_accumulate_effective_field_for_magnetization(
         ctx, m, stream, n, evaluation_time_s, label, reason);
+}
+
+bool gpu_rk_compute_effective_field_for_pgbb_trial(
+    Context &ctx, const FemGpuComponentField &m, cudaStream_t stream, int n,
+    double time, const char *label, std::string &reason)
+{
+    auto permit = gpu_demag_consume_pgbb_potential(ctx, stream);
+    return gpu_rk_accumulate_effective_field_for_magnetization(
+        ctx, m, stream, n, time, label, reason, true, &permit);
 }
 
 bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(

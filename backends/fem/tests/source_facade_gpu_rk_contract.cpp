@@ -1945,11 +1945,13 @@ void gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds() {
     const auto validation = hypre_solver.find("if (validation_needs.rhs_norm) {");
     const auto cuda_guard = hypre_solver.find("#if FULLMAG_HAS_CUDA_RUNTIME", validation);
     const auto device_norm = hypre_solver.find("fullmag_cuda_demag_validation_norm(", cuda_guard);
+    const auto paired_norm = hypre_solver.find("fullmag_cuda_demag_validation_norm_pair(", cuda_guard);
     const auto cpu_path = hypre_solver.find("#else", cuda_guard);
     const auto guard_end = hypre_solver.find("#endif", cpu_path);
     const auto cpu_rejection = hypre_solver.find("requires CUDA stream interop", cpu_path);
     check(
-        validation < cuda_guard && cuda_guard < device_norm && device_norm < cpu_path &&
+        validation < cuda_guard && cuda_guard < device_norm && device_norm < paired_norm &&
+            paired_norm < cpu_path &&
             cpu_path < cpu_rejection && cpu_rejection < guard_end &&
             guard_end != std::string::npos,
         "GPU HYPRE residual validation must guard CUDA calls and reject certification in CPU-only builds");

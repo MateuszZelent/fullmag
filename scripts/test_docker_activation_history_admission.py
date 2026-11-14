@@ -1,9 +1,12 @@
 """Read-only admission, historical mount identity and native writer barriers."""
 import copy
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -14,6 +17,14 @@ from docker_activation_history_admission import (
 )
 from docker_activation_history_policy import HistoryError, canonical, digest
 from docker_build_control import BuildControlError
+
+
+def _hold_exclusive_writer_lock(path, acquired, release):
+    import fcntl
+    with open(path, "rb") as writer:
+        fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquired.set()
+        release.wait(10)
 
 
 class AdmissionTests(unittest.TestCase):
@@ -178,6 +189,30 @@ class AdmissionTests(unittest.TestCase):
             (Path("/storage/runtime"), Path("/storage/results")))
         self.assertEqual(control.read_pins, {p: digest(raw) for p, raw in records.items()})
 
+    def test_early_failed_start_missing_config_still_requires_pinned_recovery(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        del terminal["config_sha256"]
+        original = copy.deepcopy(terminal)
+        self.assertEqual(historical_mounts(control, receipt, terminal, compose, source,
+            runtime_witness=(path, digest(records[path]))),
+            (Path("/storage/runtime"), Path("/storage/results")))
+        self.assertEqual(terminal, original)
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source)
+        for value in (None, "0" * 64):
+            with self.subTest(declared=value):
+                changed = {**terminal, "config_sha256": value}
+                with self.assertRaises(HistoryError):
+                    historical_mounts(control, receipt, changed, compose, source,
+                        runtime_witness=(path, digest(records[path])))
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, {**terminal, "state": "succeeded"}, compose, source)
+        wrong_compose = copy.deepcopy(compose)
+        wrong_compose["services"]["backend"]["volumes"][2]["source"] = "/storage/copied-results"
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, wrong_compose, source,
+                runtime_witness=(path, digest(records[path])))
+
     def test_historical_recovery_witness_rejects_identity_timing_and_receipt_changes(self):
         mutations = ("state", "phase", "original-attempt", "backend", "activation-backend",
             "config", "source", "image", "volume", "namespace", "state-root", "stop-only",
@@ -251,9 +286,11 @@ class WriterBarrierTests(unittest.TestCase):
         for path in self.locks:
             with path.open("rb") as writer:
                 fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                with self.subTest(path=path), self.assertRaisesRegex(HistoryError, "writer is active"):
-                    with writer_barriers(self.store, self.ledger):
-                        self.fail("must not admit writer")
+                with mock.patch("docker_activation_history_admission.WRITER_BARRIER_WAIT_SECONDS",
+                                0.02, create=True):
+                    with self.subTest(path=path), self.assertRaisesRegex(HistoryError, "writer is active"):
+                        with writer_barriers(self.store, self.ledger):
+                            self.fail("must not admit writer")
         self.locks[0].unlink()
         with self.assertRaises(FileNotFoundError):
             with writer_barriers(self.store, self.ledger): pass
@@ -306,6 +343,63 @@ class WriterBarrierTests(unittest.TestCase):
                 self.registry_lock.rename(old_lock)
                 self.registry_lock.touch()
                 check()
+
+    def test_waits_for_another_process_to_release_writer_lock(self):
+        context = multiprocessing.get_context("fork")
+        acquired, release = context.Event(), context.Event()
+        writer = context.Process(
+            target=_hold_exclusive_writer_lock,
+            args=(str(self.locks[1]), acquired, release),
+        )
+        writer.start()
+        self.assertTrue(acquired.wait(5), "writer process did not acquire its lock")
+        releaser = threading.Thread(target=lambda: (time.sleep(0.15), release.set()), daemon=True)
+        releaser.start()
+        started = time.monotonic()
+        try:
+            with writer_barriers(self.store, self.ledger, self.registry) as check:
+                check()
+            elapsed = time.monotonic() - started
+            self.assertGreaterEqual(elapsed, 0.10)
+            self.assertLess(elapsed, 2.0)
+        finally:
+            release.set()
+            writer.join(timeout=5)
+            if writer.is_alive():
+                writer.terminate()
+                writer.join(timeout=5)
+        self.assertEqual(writer.exitcode, 0)
+
+    def test_continuous_writer_times_out_and_releases_earlier_barriers(self):
+        import fcntl
+        context = multiprocessing.get_context("fork")
+        acquired, release = context.Event(), context.Event()
+        writer = context.Process(
+            target=_hold_exclusive_writer_lock,
+            args=(str(self.locks[0]), acquired, release),
+        )
+        writer.start()
+        self.assertTrue(acquired.wait(5), "writer process did not acquire its lock")
+        try:
+            with mock.patch("docker_activation_history_admission.WRITER_BARRIER_WAIT_SECONDS",
+                            0.15, create=True):
+                started = time.monotonic()
+                with self.assertRaisesRegex(HistoryError, "writer is active"):
+                    with writer_barriers(self.store, self.ledger, self.registry):
+                        self.fail("must not admit a continuously blocked writer")
+                elapsed = time.monotonic() - started
+                self.assertGreaterEqual(elapsed, 0.12)
+                self.assertLess(elapsed, 1.0)
+            for path in (self.registry_lock, self.locks[1]):
+                with path.open("rb") as owner:
+                    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            release.set()
+            writer.join(timeout=5)
+            if writer.is_alive():
+                writer.terminate()
+                writer.join(timeout=5)
+        self.assertEqual(writer.exitcode, 0)
 
     def test_healthy_inventory_owner_lifetime_fence_does_not_block_archival(self):
         import fcntl

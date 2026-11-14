@@ -221,6 +221,8 @@ pub(crate) fn apply_native_fem_runtime_contract(
     gpu_state: Option<&NativeFemGpuStateInfo>,
     gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
 ) {
+    provenance.gpu_mandatory_controls_physical=stats.and_then(|entry| entry.gpu_mandatory_controls_physical);
+    provenance.gpu_mandatory_controls_hot_loop=stats.and_then(|entry| entry.gpu_mandatory_controls_hot_loop);
     provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
     provenance.fem_gpu_qualification_status =
         Some(native_fem_gpu_qualification_status(plan, stats, gpu_rk_plan).to_string());
@@ -246,6 +248,10 @@ pub(crate) fn apply_native_fem_runtime_contract(
         provenance.hot_loop_compute_h2d_bytes = Some(entry.hot_loop_compute_h2d_bytes);
         provenance.hot_loop_compute_d2h_bytes = Some(entry.hot_loop_compute_d2h_bytes);
         provenance.hot_loop_compute_host_sync_count = Some(entry.hot_loop_compute_host_sync_count);
+        provenance.hot_loop_control_scalar_d2h_bytes =
+            Some(entry.hot_loop_control_scalar_d2h_bytes);
+        provenance.hot_loop_control_scalar_host_sync_count =
+            Some(entry.hot_loop_control_scalar_host_sync_count);
     }
     if let Some(state) = gpu_state {
         provenance.fem_gpu_state_allocated = Some(state.allocated);
@@ -294,6 +300,9 @@ pub(crate) fn fem_poisson_demag_provenance(
     });
 
     Some(FemPoissonDemagProvenance {
+        device_pcg_physical: stats.and_then(|entry| entry.demag_device_pcg_physical),
+        device_pcg_hot_loop: stats.and_then(|entry| entry.demag_device_pcg_hot_loop),
+        resolved_linear_engine: stats.and_then(|entry| entry.demag_resolved_linear_engine.clone()),
         linear_solver: policy.solver,
         preconditioner: policy.preconditioner,
         rtol: policy.rtol,
@@ -346,6 +355,8 @@ mod tests {
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: None,
             mesh: MeshIR {
@@ -503,6 +514,15 @@ mod tests {
             boundary_marker_source: Some("mesh_marker_99".to_string()),
         });
         let stats = StepStats {
+            demag_device_pcg_physical: Some(crate::types::FemPoissonDevicePcgCounters {
+                status_readbacks:2,status_record_bytes:104,control_d2h_bytes:208,
+                solves:1,active_iterations:9,
+            }),
+            demag_device_pcg_hot_loop: Some(crate::types::FemPoissonDevicePcgCounters {
+                status_readbacks:1,status_record_bytes:104,control_d2h_bytes:104,
+                solves:1,active_iterations:0,
+            }),
+            demag_resolved_linear_engine: Some("hypre_gmres".to_string()),
             poisson_iterations: 13,
             poisson_final_residual: 4.0e-9,
             demag_potential_order: 2,
@@ -515,6 +535,9 @@ mod tests {
         let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
             .expect("poisson demag provenance should be present");
 
+        assert_eq!(provenance.resolved_linear_engine.as_deref(),Some("hypre_gmres"));
+        assert_eq!(provenance.device_pcg_physical,stats.demag_device_pcg_physical);
+        assert_eq!(provenance.device_pcg_hot_loop,stats.demag_device_pcg_hot_loop);
         assert_eq!(provenance.linear_solver, "GMRES");
         assert_eq!(provenance.preconditioner, "Jacobi");
         assert_eq!(provenance.rtol, 1e-6);
@@ -855,4 +878,29 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
         }
     }
+    #[cfg(feature="fem-gpu")]
+    #[test]
+    fn mandatory_controls_runtime_mapping_does_not_require_demag() {
+        let mut plan=tiny_fem_plan();plan.enable_demag=false;
+        let stats=StepStats {
+            hot_loop_control_scalar_d2h_bytes:712,
+            hot_loop_control_scalar_host_sync_count:8,
+            gpu_mandatory_controls_physical:Some(crate::types::GpuMandatoryControlCounters {
+                bb_certificate_record_bytes:96,bb_certificate_readbacks:2,bb_certificate_bytes:192,
+                ..Default::default()
+            }),
+            gpu_mandatory_controls_hot_loop:Some(crate::types::GpuMandatoryControlCounters {
+                bb_certificate_record_bytes:96,bb_certificate_readbacks:1,bb_certificate_bytes:96,
+                ..Default::default()
+            }),..Default::default()
+        };
+        let mut provenance=ExecutionProvenance::default();
+        apply_native_fem_runtime_contract(&mut provenance,&plan,Some(&stats),None,None);
+        assert!(provenance.fem_poisson_demag.is_none());
+        assert_eq!(provenance.gpu_mandatory_controls_physical,stats.gpu_mandatory_controls_physical);
+        assert_eq!(provenance.gpu_mandatory_controls_hot_loop,stats.gpu_mandatory_controls_hot_loop);
+        assert_eq!(provenance.hot_loop_control_scalar_d2h_bytes,Some(712));
+        assert_eq!(provenance.hot_loop_control_scalar_host_sync_count,Some(8));
+    }
+
 }

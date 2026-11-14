@@ -109,7 +109,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
             pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
+            fem_bb_preconditioner: builder.fem_bb_preconditioner,
             fem_demag_accuracy_contract: builder.fem_demag_accuracy_contract.clone(),
+            fem_gpu_pcg_control_experiment: builder.fem_gpu_pcg_control_experiment.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
             demag_realization: builder.demag_realization.clone(),
@@ -257,7 +259,12 @@ pub fn scene_document_to_script_builder(
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
         pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
+        fem_bb_preconditioner: normalized_scene.study.fem_bb_preconditioner,
         fem_demag_accuracy_contract: normalized_scene.study.fem_demag_accuracy_contract.clone(),
+        fem_gpu_pcg_control_experiment: normalized_scene
+            .study
+            .fem_gpu_pcg_control_experiment
+            .clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
         demag_realization: normalized_scene.study.demag_realization.clone(),
@@ -519,7 +526,9 @@ pub fn scene_document_to_script_builder_overrides(
             "cpu_threads": scene.study.requested_cpu_threads,
             "parallel_execution": scene.study.parallel_execution,
             "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
+            "fem_bb_preconditioner": scene.study.fem_bb_preconditioner,
             "fem_demag_accuracy_contract": scene.study.fem_demag_accuracy_contract,
+            "fem_gpu_pcg_control_experiment": scene.study.fem_gpu_pcg_control_experiment,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
                 || scene.study.requested_precision != "double"
@@ -2645,7 +2654,9 @@ mod tests {
             parallel_execution: None,
             pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
+            fem_bb_preconditioner: None,
             fem_demag_accuracy_contract: None,
+            fem_gpu_pcg_control_experiment: None,
             fem_domain_mesh: None,
             exchange_enabled: true,
             demag_enabled: true,
@@ -3652,6 +3663,35 @@ mod tests {
         assert_eq!(restored.fem_demag_accuracy_contract, builder.fem_demag_accuracy_contract);
         let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
         assert_eq!(overrides["runtime_selection"]["fem_demag_accuracy_contract"], raw);
+    }
+
+    #[test]
+    fn gpu_pcg_control_experiment_survives_builder_scene_and_overrides() {
+        let raw = serde_json::json!({
+            "schema_version": "fullmag.fem.gpu.pcg_control_experiment.v1",
+            "status_batch_stride": 4,
+        });
+        let mut builder = sample_builder();
+        builder.fem_gpu_pcg_control_experiment =
+            Some(serde_json::from_value(raw.clone()).unwrap());
+
+        let scene = scene_document_from_script_builder(&builder);
+        let serialized_scene = serde_json::to_value(&scene).unwrap();
+        assert_eq!(
+            serialized_scene["study"]["fem_gpu_pcg_control_experiment"],
+            raw
+        );
+
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(
+            restored.fem_gpu_pcg_control_experiment,
+            builder.fem_gpu_pcg_control_experiment
+        );
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(
+            overrides["runtime_selection"]["fem_gpu_pcg_control_experiment"],
+            raw
+        );
     }
 
     #[test]

@@ -410,6 +410,64 @@ class RejectedHistoryTests(unittest.TestCase):
         return history.qualify_rejected_activation(TOKEN, files, project=PROJECT,
             volume=VOLUME, namespace="", store_records=records or {}, inventory_paths=paths or [])
 
+    def retired_predecessor(self):
+        prefix = "retirements/" + TOKEN
+        documents = {
+            "ui_state.json": b"{\"selection\":null}",
+            "workspace_metadata.json": b"{\"revision\":7}",
+            "main.py": b"# preserved predecessor workspace\n",
+        }
+        manifest = {
+            "schema": "fullmag.live-workspace-retirement-proof.v2",
+            "state": "retired",
+            "operation_id": TOKEN,
+            "session_id": "predecessor-session",
+            "run_id": "predecessor-run",
+            "request_scope_epoch": "api:1",
+            "session_epoch": 1,
+            "scene_revision": 2,
+            "state_version": 3,
+            "terminal_outcome": "completed",
+            "terminal_catalog_revision": 1,
+            "ui_state_scope": "backend_typed_workspace",
+            "script_available": True,
+            "terminal_evidence_sha256": "7" * 64,
+            "documents": {
+                name: {"object_ref": history.digest(content), "sha256": history.digest(content),
+                       "byte_length": len(content)}
+                for name, content in documents.items()
+            },
+        }
+        manifest_path = prefix + "/project/retirement-manifest.json"
+        response = {key: manifest[key] for key in (
+            "operation_id", "session_id", "run_id", "request_scope_epoch", "session_epoch",
+            "scene_revision", "state_version", "terminal_outcome", "ui_state_scope",
+            "script_available", "terminal_evidence_sha256")}
+        response.update(
+            schema="fullmag.live-workspace-retirement-response.v1",
+            state="retired",
+            api_request_scope_epoch="api:1",
+            archive_manifest_path=manifest_path,
+            archive_sha256=history.digest(raw(manifest)),
+        )
+        files = self.evidence()
+        receipt = json.loads(files["receipt.json"])
+        receipt.update(retirement=response,
+                       retirement_result={"state": "retirement-only", "retirement": response})
+        files["receipt.json"] = files["terminal.json"] = raw(receipt)
+        records = {
+            "WRITER.owner.json": raw({"schema": "fullmag.writer.v1", "released": True}),
+            "runs/predecessor-run/run_catalog.json": raw({
+                "schema_version": "run_catalog.v1", "run_id": "predecessor-run", "revision": 1}),
+            "runs/predecessor-run/run_intent.json": raw({
+                "schema_version": "run_intent.v1", "run_id": "predecessor-run",
+                "specification": {"parameters": {"live_workspace": {"session_id": "predecessor-session"}}}}),
+            manifest_path: raw(manifest),
+        }
+        records.update({prefix + "/project/" + name: content for name, content in documents.items()})
+        paths = sorted({prefix, prefix + "/project", *records})
+        return files, records, paths, prefix, manifest_path
+
     def test_confirmed_rejection_has_explicit_no_run_kind(self):
         result = self.check(self.evidence())
         self.assertEqual(result["qualification_kind"], "rejected-no-run-v1")
@@ -455,6 +513,75 @@ class RejectedHistoryTests(unittest.TestCase):
     def test_any_related_retirement_path_or_unknown_blob_is_refused(self):
         for path in ["retirements/"+TOKEN,"retirements/"+TOKEN+"/project/extra.json","objects/"+SOURCE]:
             with self.subTest(path=path),self.assertRaises(history.HistoryError):self.check(self.evidence(),{},[path])
+
+    def test_confirmed_rejection_with_authenticated_own_retirement_qualifies(self):
+        files, records, paths, prefix, manifest_path = self.retired_predecessor()
+        qualified = self.check(files, records, paths)
+        self.assertEqual(qualified["qualification_kind"], "rejected-no-run-v1")
+        self.assertEqual(set(qualified["store_record_hashes"]), set(records))
+        self.assertEqual(qualified["store_record_hashes"][manifest_path], history.digest(records[manifest_path]))
+        self.assertIsNone(qualified["run_id"])
+        self.assertIsNone(qualified["session_id"])
+        self.assertTrue(prefix in paths)
+
+    def test_retired_predecessor_requires_complete_authenticated_metadata(self):
+        for mutation in ("missing-record", "missing-path", "manifest-bytes", "manifest-operation",
+                         "document", "catalog", "intent", "receipt-response", "caller-omits-all"):
+            with self.subTest(mutation=mutation):
+                files, records, paths, prefix, manifest_path = self.retired_predecessor()
+                if mutation == "missing-record":
+                    records.pop(manifest_path)
+                elif mutation == "missing-path":
+                    paths.remove(manifest_path)
+                elif mutation == "manifest-bytes":
+                    records[manifest_path] += b" "
+                elif mutation == "manifest-operation":
+                    proof = json.loads(records[manifest_path])
+                    proof["operation_id"] = "f" * 32
+                    records[manifest_path] = raw(proof)
+                elif mutation == "document":
+                    records[prefix + "/project/main.py"] = b"changed predecessor bytes"
+                elif mutation == "catalog":
+                    records.pop("runs/predecessor-run/run_catalog.json")
+                    paths.remove("runs/predecessor-run/run_catalog.json")
+                elif mutation == "intent":
+                    records["runs/predecessor-run/run_intent.json"] = raw({
+                        "schema_version": "run_intent.v1", "run_id": "predecessor-run"})
+                elif mutation == "receipt-response":
+                    receipt = json.loads(files["receipt.json"])
+                    receipt["retirement"]["archive_sha256"] = "0" * 64
+                    receipt["retirement_result"]["retirement"] = receipt["retirement"]
+                    files["receipt.json"] = files["terminal.json"] = raw(receipt)
+                elif mutation == "caller-omits-all":
+                    records = {"WRITER.owner.json": records["WRITER.owner.json"]}
+                    paths = ["WRITER.owner.json"]
+                with self.assertRaises(history.HistoryError):
+                    self.check(files, records, paths)
+
+    def test_references_outside_authenticated_retirement_namespace_still_block(self):
+        for path, value in (
+            ("runs/new/run_intent.json", {"request_id": REQUEST}),
+            ("retirements/foreign/project/retirement-manifest.json", {"operation_id": TOKEN}),
+            ("admission/repeated-attempt.json", {"attempt": TOKEN}),
+            ("admission/source-reference.json", {"source_sha256": SOURCE}),
+            ("runs/new/resource_leases/gpu/lease.json", {"request_id": REQUEST}),
+        ):
+            with self.subTest(path=path):
+                files, records, paths, _prefix, _manifest_path = self.retired_predecessor()
+                records[path] = raw(value)
+                paths.append(path)
+                with self.assertRaises(history.HistoryError):
+                    self.check(files, records, paths)
+
+    def test_unretired_rejection_preserves_legacy_result_shape_and_unrelated_store(self):
+        path = "runs/other/run_intent.json"
+        records = {path: raw({"request_id": "another-request"})}
+        qualified = self.check(self.evidence(), records, [path])
+        self.assertEqual(qualified["qualification_kind"], "rejected-no-run-v1")
+        self.assertEqual(set(qualified), {"attempt", "qualification_kind", "run_id", "session_id",
+                                         "request_id", "source_sha256", "finished_at", "files",
+                                         "rejection", "store_record_hashes"})
+        self.assertEqual(qualified["store_record_hashes"], {path: history.digest(records[path])})
 
 
 if __name__ == "__main__":

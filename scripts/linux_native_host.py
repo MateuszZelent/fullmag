@@ -240,6 +240,10 @@ def complete_preflight(docker_client, container_id, state, certificate_path, cer
             or not CHECKS.issubset(probe.get("checks", {}))
             or any(value is not True for value in probe["checks"].values())):
         raise ValueError("Linux storage operational checks failed")
+    if (probe.get("root_inode") != certificate["host_inode"]
+            or probe.get("host_attestation_sha256") !=
+            hashlib.sha256(read_owned_regular(certificate_path)).hexdigest()):
+        raise ValueError("Linux storage namespace identity differs from current admission")
     if hashlib.sha256(read_owned_regular(state / ".linux-native-restart")).hexdigest() != certificate["restart_expected_sha256"]:
         raise ValueError("Linux guest restart readback differs")
     if any(certificate.get(key) != value for key, value in local_volume(state).items()):

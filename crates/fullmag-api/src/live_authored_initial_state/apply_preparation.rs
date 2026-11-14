@@ -196,7 +196,7 @@ fn prepare_preview(
     };
     let source = Path::new(&snapshot.session.script_path);
     let asset_root = source.is_absolute().then(|| source.parent()).flatten();
-    let mut problem = crate::script::scene_document_to_authored_problem_ir_with_asset_root(
+    let mut problem = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
         repo, workspace, asset_root, scene, &execution,
     )?;
     if let Some(geometry) = geometry {

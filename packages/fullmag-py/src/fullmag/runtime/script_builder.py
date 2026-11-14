@@ -111,6 +111,10 @@ from fullmag.runtime.fem_demag_accuracy import (
     validate_authored_fem_demag_accuracy_contract,
     validate_fem_demag_accuracy_contract,
 )
+from fullmag.runtime.fem_gpu_pcg_control import (
+    validate_authored_fem_gpu_pcg_control_experiment,
+    validate_fem_gpu_pcg_control_experiment,
+)
 from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 
 
@@ -301,6 +305,10 @@ def export_builder_draft(
     else:
         pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
+    gpu_pcg_control_experiment = validate_authored_fem_gpu_pcg_control_experiment(
+        base_problem.runtime_metadata,
+        context="runtime_metadata.fem_gpu_pcg_control_experiment",
+    )
     draft = {
         "revision": 1,
         "study_name": base_problem.name,
@@ -313,6 +321,7 @@ def export_builder_draft(
         "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
         "pbc": pbc_ir,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
+        "fem_bb_preconditioner": _export_fem_bb_preconditioner(base_problem),
         "fem_demag_accuracy_contract": validate_authored_fem_demag_accuracy_contract(
             base_problem.runtime_metadata,
             context="runtime_metadata.fem_demag_accuracy_contract",
@@ -442,6 +451,8 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    if gpu_pcg_control_experiment is not None:
+        draft["fem_gpu_pcg_control_experiment"] = gpu_pcg_control_experiment
     fem_domain_mesh = _export_fem_domain_mesh_reference(
         base_problem,
         source_root=source_root,
@@ -1270,6 +1281,9 @@ def _render_scene_document_bootstrap(
     )
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface="study"))
+    bb_policy = _validate_fem_bb_preconditioner(builder.get("fem_bb_preconditioner"))
+    if bb_policy is not None:
+        lines.append(f"study.fem_bb_preconditioner({bb_policy!r})")
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
@@ -3819,6 +3833,11 @@ def _render_runtime(
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface=surface))
 
+    bb_policy = _validate_fem_bb_preconditioner(
+        runtime_override.get("fem_bb_preconditioner", overrides.get("fem_bb_preconditioner", _export_fem_bb_preconditioner(problem))))
+    if bb_policy is not None:
+        lines.append(f"{_surface_call(surface, 'fem_bb_preconditioner')}({bb_policy!r})")
+
     demag_accuracy_contract = _fem_demag_accuracy_contract_with_overrides(
         problem,
         overrides=overrides,
@@ -3828,6 +3847,17 @@ def _render_runtime(
         lines.append(
             "fm.runtime_metadata('fem_demag_accuracy_contract', "
             f"{_py_literal(demag_accuracy_contract)})"
+        )
+
+    gpu_pcg_control_experiment = _fem_gpu_pcg_control_experiment_with_overrides(
+        problem,
+        overrides=overrides,
+        runtime_override=runtime_override,
+    )
+    if gpu_pcg_control_experiment is not None:
+        lines.append(
+            "fm.runtime_metadata('fem_gpu_pcg_control_experiment', "
+            f"{_py_literal(gpu_pcg_control_experiment)})"
         )
 
     fdm = _fdm_from_overrides(problem, overrides)
@@ -4110,6 +4140,29 @@ def _fem_demag_accuracy_contract_with_overrides(
     return validate_fem_demag_accuracy_contract(value, context=context)
 
 
+def _fem_gpu_pcg_control_experiment_with_overrides(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    runtime_override: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the explicit Scene override, else the loaded runtime experiment."""
+
+    key = "fem_gpu_pcg_control_experiment"
+    if key in runtime_override:
+        value = runtime_override[key]
+        context = f"overrides.runtime_selection.{key}"
+    elif key in overrides:
+        value = overrides[key]
+        context = f"overrides.{key}"
+    else:
+        return validate_authored_fem_gpu_pcg_control_experiment(
+            problem.runtime_metadata,
+            context=f"runtime_metadata.{key}",
+        )
+    return validate_fem_gpu_pcg_control_experiment(value, context=context)
+
+
 def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str) -> str:
     return (
         f"{_surface_call(surface, 'fem_demag_solver')}("
@@ -4120,6 +4173,17 @@ def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str
         f"max_iterations={policy.max_iterations}, "
         f"print_level={policy.print_level})"
     )
+
+
+def _validate_fem_bb_preconditioner(value: object) -> str | None:
+    if value is not None and (not isinstance(value, str) or value not in ("auto", "none", "exchange_mass")):
+        raise ValueError("fem_bb_preconditioner must be auto, none, or exchange_mass")
+    return value
+
+
+def _export_fem_bb_preconditioner(problem: Problem) -> str | None:
+    fem = problem.discretization.fem if problem.discretization is not None else None
+    return fem.gpu_bb_preconditioner if isinstance(fem, FEM) else None
 
 
 def _export_fem_demag_solver_policy(problem: Problem) -> dict[str, object] | None:

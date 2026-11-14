@@ -12,6 +12,7 @@
 #endif
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
+#include <HYPRE_utilities.h>
 #include <cuda_runtime.h>
 
 #include <array>
@@ -26,6 +27,8 @@ inline void check_gpu_hypre_demag_residual(
     void (*check)(bool, const char *),
     void (*check_stream_interop)(HypreStreamInterop &, std::string &) = nullptr)
 {
+    check(HYPRE_GetError() == 0,
+          "strict GPU residual fixture requires a clean incoming HYPRE status");
     fullmag::fem::Context ctx;
     ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
     ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
@@ -69,15 +72,19 @@ inline void check_gpu_hypre_demag_residual(
     workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
     check(fullmag::fem::fullmag_wait_for_hypre(workspace.stream_interop, nullptr, error),
           "strict GPU fixture orders the solve before residual certification");
+    check(HYPRE_GetError() == HYPRE_ERROR_CONV,
+          "controlled one-iteration solve produces only the expected HYPRE convergence error");
 
     int iterations = -1;
     double residual = -1.0;
     auto &performance = ctx.gpu_state.performance_counters;
     auto &transfer = ctx.transfer_audit.audit;
     uint64_t step = 0;
-    auto validate_candidate = [&](uint64_t expected_readbacks) {
+    auto validate_candidate = [&](uint64_t expected_readbacks, uint64_t expected_bytes = 2 * sizeof(double)) {
         const auto perf_before = gpu_performance_snapshot(performance);
         const auto audit_before = transfer_audit_snapshot(transfer);
+        const auto mandatory_before = gpu_performance_mandatory_controls_snapshot(performance);
+        const auto mandatory_audit_before = transfer.mandatory_controls_hot_loop;
         gpu_performance_begin_attempt(performance, ++step);
         error.clear();
         bool accepted;
@@ -93,7 +100,7 @@ inline void check_gpu_hypre_demag_residual(
         }
         const auto perf_after = gpu_performance_snapshot(performance);
         const auto audit_after = transfer_audit_snapshot(transfer);
-        const uint64_t bytes = expected_readbacks * sizeof(double);
+        const uint64_t bytes = expected_bytes;
         check(perf_after.physical_control_d2h_bytes -
                   perf_before.physical_control_d2h_bytes == bytes &&
                   perf_after.physical_control_fences -
@@ -104,9 +111,17 @@ inline void check_gpu_hypre_demag_residual(
                   audit_after.hot_loop_control_scalar_host_sync_count -
                       audit_before.hot_loop_control_scalar_host_sync_count == expected_readbacks,
               "strict GPU certification classifies readbacks as hot-loop control transfers");
+        const auto mandatory_after = gpu_performance_mandatory_controls_snapshot(performance);
+        check(mandatory_after.poisson_certificate_readbacks - mandatory_before.poisson_certificate_readbacks == expected_readbacks &&
+              mandatory_after.poisson_certificate_bytes - mandatory_before.poisson_certificate_bytes == bytes &&
+              transfer.mandatory_controls_hot_loop.poisson_certificate_readbacks -
+                  mandatory_audit_before.poisson_certificate_readbacks == expected_readbacks &&
+              transfer.mandatory_controls_hot_loop.poisson_certificate_bytes -
+                  mandatory_audit_before.poisson_certificate_bytes == bytes,
+              "strict GPU certificate attributes the actual readbacks and bytes to mandatory control telemetry");
         return accepted;
     };
-    const bool ok = validate_candidate(2);
+    const bool ok = validate_candidate(1);
     check(!ok, "strict GPU Hypre demag must reject a nonconverged one-iteration solve");
     check(error.find("solver_kind=gpu_poisson_hypre/cg") != std::string::npos,
           "strict GPU failure includes solver kind");
@@ -140,7 +155,7 @@ inline void check_gpu_hypre_demag_residual(
     // A * ones for the tridiagonal fixture above.
     const FixtureVector b{2.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 9.0};
     set_candidate(x, b);
-    check(validate_candidate(2) && residual == 0.0,
+    check(validate_candidate(1) && residual == 0.0,
           "strict GPU independent residual accepts the exact finite candidate");
 
     const double relative_offset = std::ldexp(1.0, -48);
@@ -153,7 +168,7 @@ inline void check_gpu_hypre_demag_residual(
             scaled_b[i] = b[i] * scale * (1.0 + relative_offset);
         }
         set_candidate(scaled_x, scaled_b);
-        check(validate_candidate(2) && std::abs(residual - relative_offset) < 1.0e-28,
+        check(validate_candidate(1) && std::abs(residual - relative_offset) < 1.0e-28,
               "strict GPU scaled certification preserves a finite nonzero relative residual");
     }
 
@@ -163,11 +178,14 @@ inline void check_gpu_hypre_demag_residual(
     auto *raw_residual = static_cast<hypre_ParVector *>(*workspace.residual);
     const auto original_global_size = hypre_ParVectorGlobalSize(raw_residual);
     hypre_ParVectorGlobalSize(raw_residual) = original_global_size + 1;
-    const bool invalid_matvec_accepted = validate_candidate(1);
+    // No certificate readback precedes this error; rejection still drains
+    // queued HYPRE work. Zero readbacks does not mean zero synchronization.
+    const bool invalid_matvec_accepted = validate_candidate(0, 0);
     hypre_ParVectorGlobalSize(raw_residual) = original_global_size;
     const bool invalid_matvec_rejected =
         !invalid_matvec_accepted && error.find("residual matvec") != std::string::npos &&
-        error.find("HYPRE status 12") != std::string::npos;
+        error.find("HYPRE status 12") != std::string::npos &&
+        cudaStreamQuery(workspace.stream_interop.hypre_stream) == cudaSuccess;
     if (!invalid_matvec_rejected) {
         std::fprintf(stderr, "FAIL: certification accepted or misdiagnosed matvec status 12: %s\n",
                      error.c_str());
@@ -177,7 +195,7 @@ inline void check_gpu_hypre_demag_residual(
     nonfinite.fill(std::numeric_limits<double>::quiet_NaN());
     set_candidate(nonfinite, b);
     const bool invalid_residual_rejected =
-        !validate_candidate(2) && error.find("residual norm is nonfinite") != std::string::npos;
+        !validate_candidate(1) && error.find("residual norm is nonfinite") != std::string::npos;
     if (!invalid_residual_rejected) {
         std::fprintf(stderr, "FAIL: certification accepted or misdiagnosed a NaN residual: %s\n",
                      error.c_str());
@@ -214,6 +232,51 @@ inline void check_gpu_hypre_demag_residual(
               strided_device, strided_norm, stream) == cudaSuccess &&
               std::abs(strided_norm - expected_norm) <= tolerance,
           "strict GPU norm reduces a second stride when the result aliases the first input");
+    double *second_device = nullptr;
+    check(cudaMalloc(reinterpret_cast<void **>(&second_device), strided_bytes) == cudaSuccess,
+          "paired norm fixture allocates a second strided vector");
+    for (const int exponent : std::array{-665, 665}) {
+        const double pair_scale = std::ldexp(1.0, exponent);
+        for (int alias = 0; alias < 2; ++alias) {
+            for (int invalid = 0; invalid < 5; ++invalid) {
+                std::array<double, 257> first{}, second{};
+                first[0] = 3 * pair_scale; first[1] = 12 * pair_scale; first[256] = 4 * pair_scale;
+                second[0] = 6 * pair_scale; second[1] = 9 * pair_scale; second[256] = 2 * pair_scale;
+                if (invalid == 1) first[256] = std::numeric_limits<double>::quiet_NaN();
+                if (invalid == 2) second[256] = std::numeric_limits<double>::quiet_NaN();
+                if (invalid == 3) first[256] = std::numeric_limits<double>::infinity();
+                if (invalid == 4) second[256] = std::numeric_limits<double>::infinity();
+                check(cudaMemcpyAsync(strided_device, first.data(), strided_bytes,
+                                      cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                      cudaMemcpyAsync(second_device, second.data(), strided_bytes,
+                                      cudaMemcpyHostToDevice, stream) == cudaSuccess,
+                      "paired norm fixture uploads both inputs");
+                double norms[2]{};
+                check(fullmag_cuda_demag_validation_norm_pair(
+                          strided_device, second_device, 257,
+                          alias == 0 ? strided_device : second_device, norms, stream) == cudaSuccess,
+                      "paired norm reads once with both output slots aliasing either input");
+                const double tolerance_factor = 8 * std::numeric_limits<double>::epsilon();
+                check((invalid == 1 || invalid == 3) ? !std::isfinite(norms[0]) :
+                          std::abs(norms[0] - 13 * pair_scale) <= tolerance_factor * 13 * pair_scale,
+                      "paired RHS norm is scaled, strided, and independently nonfinite");
+                check((invalid == 2 || invalid == 4) ? !std::isfinite(norms[1]) :
+                          std::abs(norms[1] - 11 * pair_scale) <= tolerance_factor * 11 * pair_scale,
+                      "paired residual norm is scaled, strided, and independently nonfinite");
+            }
+        }
+    }
+    const double singleton = std::ldexp(1.0, -665);
+    check(cudaMemcpyAsync(strided_device, &singleton, sizeof(singleton),
+                          cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+          fullmag_cuda_demag_validation_norm(strided_device, 1, strided_device, strided_norm, stream) == cudaSuccess &&
+          strided_norm == singleton,
+          "one-row validation retains its safe single-output norm wrapper");
+    double invalid_pair[2]{};
+    check(fullmag_cuda_demag_validation_norm_pair(strided_device, second_device, 1,
+              strided_device, invalid_pair, stream) == cudaErrorInvalidValue,
+          "paired wrapper rejects one-row scratch rather than writing a second slot");
+    check(cudaFree(second_device) == cudaSuccess, "paired norm fixture frees its second vector");
     check(cudaFree(strided_device) == cudaSuccess, "strict GPU norm fixture frees the strided vector");
 
     if (check_stream_interop != nullptr) {
@@ -233,6 +296,14 @@ inline void check_gpu_hypre_demag_residual(
     ctx.gpu_state.device.demag_poisson.poisson_solution = nullptr;
     ctx.gpu_state.device.demag_poisson.poisson_rhs = nullptr;
     ctx.poisson_demag.poisson_bc_op = nullptr;
+    // Keep the expected sticky bit throughout independent certification, then
+    // consume only this fixture's error. Unexpected bits must fail before clear.
+    check(HYPRE_GetError() == HYPRE_ERROR_CONV,
+          "strict GPU residual fixture preserves only its expected convergence error through teardown");
+    check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0,
+          "strict GPU residual fixture consumes its expected convergence error");
+    check(HYPRE_GetError() == 0,
+          "strict GPU residual fixture leaves a clean HYPRE status for later owners");
 }
 
 } // namespace fullmag::fem::test

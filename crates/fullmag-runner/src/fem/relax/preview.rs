@@ -5,7 +5,7 @@
 
 use fullmag_ir::FemPlanIR;
 
-use crate::dispatch::{flatten_vectors, FemEngine};
+use crate::dispatch::FemEngine;
 use crate::interactive_runtime::display_is_global_scalar;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
@@ -314,17 +314,19 @@ fn materialize_magnetization(
     deferred: DeferredLiveMagnetization,
 ) -> Result<FemLiveMagnetizationPayload, RunError> {
     let copy_start = std::time::Instant::now();
-    let magnetization = snapshot.into_vector_field()?;
-    if magnetization.len() != deferred.node_count {
+    let payload = snapshot.into_flat_vector_field()?;
+    let expected_value_count = deferred.node_count.checked_mul(3).ok_or_else(|| RunError {
+        message: "native FEM magnetization payload node count overflowed".to_string(),
+    })?;
+    if payload.len() != expected_value_count {
         return Err(RunError {
             message: format!(
-                "native FEM magnetization payload returned {} nodes, expected {}",
-                magnetization.len(),
-                deferred.node_count
+                "native FEM magnetization payload returned {} values, expected {}",
+                payload.len(),
+                expected_value_count
             ),
         });
     }
-    let payload = flatten_vectors(&magnetization);
     let field_copy_wall_time_ns = elapsed_ns(copy_start);
     let field_copy_bytes = (payload.len() as u64).saturating_mul(std::mem::size_of::<f64>() as u64);
     Ok(FemLiveMagnetizationPayload {
@@ -1775,6 +1777,50 @@ pub(crate) fn capture_native_fem_observables(
     mesh_generation_id: Option<&str>,
     update: &mut crate::types::StepUpdate,
 ) -> Result<(), RunError> {
+    let quantities = crate::live_demand::retain_demanded_live_quantities(
+        active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids()),
+    );
+    capture_native_fem_observables_for_quantities(
+        backend, engine, plan, mesh_generation_id, update, quantities,
+    )
+}
+
+/// Publish the initial state once, from this admitted GPU context. Legacy
+/// callers retain the scalar-only callback and their existing preview policy.
+pub(crate) fn publish_initial_native_fem_observation(
+    backend: &NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    mesh_generation_id: &Option<String>,
+    live: Option<&mut crate::types::LiveStepConsumer<'_>>,
+    stats: &crate::types::StepStats,
+) -> Result<Option<crate::types::StepAction>, RunError> {
+    if live.as_ref().is_some_and(|consumer| consumer.initial_native_gpu_fields)
+        && engine != FemEngine::NativeGpu
+    {
+        return Err(RunError { message: "initial native GPU fields require the admitted GPU engine".into() });
+    }
+    super::initial_observation::publish_initial_fem_observation_with_capture(live, stats, mesh_generation_id, |update| {
+        // Initial fields replace the preparer's physical evaluation. They are
+        // complete independently of display demand, and copied without a new
+        // field evaluation or a new backend. Sampled live updates stay filtered.
+        let quantities = active_fem_preview_quantities(
+            engine, plan, &field_materialization_quantity_ids(),
+        );
+        capture_native_fem_observables_for_quantities(
+            backend, engine, plan, mesh_generation_id.as_deref(), update, quantities,
+        )
+    })
+}
+
+fn capture_native_fem_observables_for_quantities(
+    backend: &NativeFemBackend,
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    mesh_generation_id: Option<&str>,
+    update: &mut crate::types::StepUpdate,
+    quantities: Vec<&'static str>,
+) -> Result<(), RunError> {
     let node_count = plan.mesh.nodes.len();
     let map = native_local_node_map_identity(backend, mesh_generation_id, node_count)
         .ok_or_else(|| RunError { message: "native live observations require the actual local-node map".into() })?;
@@ -1783,9 +1829,6 @@ pub(crate) fn capture_native_fem_observables(
         dt_seconds: (update.stats.dt > 0.0).then_some(update.stats.dt),
     };
     clock.validate().map_err(|error| RunError { message: error.to_string() })?;
-    let quantities = crate::live_demand::retain_demanded_live_quantities(
-        active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids()),
-    );
     let started = std::time::Instant::now();
     let mut native_requests = Vec::with_capacity(quantities.len());
     let mut prepared_fields = Vec::with_capacity(quantities.len());

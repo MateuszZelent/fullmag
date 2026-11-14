@@ -47,6 +47,17 @@ pub(crate) enum AcceptedFemExecutionOutcome {
     },
 }
 
+fn initial_observation_policy(resolved_device: &str, field_every_n: u64) -> fullmag_runner::InitialObservationPolicy {
+    // Cadence one is the observation writer's existing full-generation
+    // budget/domain gate. Larger/sentinel cadences retain its bounded path;
+    // they never authorize CPU physical evaluation of a GPU task.
+    if resolved_device == "gpu" && field_every_n == 1 {
+        fullmag_runner::InitialObservationPolicy::NativeGpuInitialFields
+    } else {
+        fullmag_runner::InitialObservationPolicy::None
+    }
+}
+
 /// Immutable FEM execution input prepared before an attempt directory or
 /// started receipt is created. Once the common worker has crossed that durable
 /// boundary, the solver consumes this value instead of rereading accepted
@@ -179,7 +190,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     );
     let field_sampling_interval = live_observation.field_sampling_interval();
     let mut cuda_trace = start_cuda_trace()?;
-    let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+    let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_observation_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
         Some(&prepared.stage_mesh.identity),
@@ -189,7 +200,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         field_sampling_interval,
         &display_selection,
         interrupt_requested,
-        false,
+        initial_observation_policy(&prepared.resolved_device, field_sampling_interval),
         |update| {
             profile.observe(&update.stats);
             live_observation.observe(&update);
@@ -680,6 +691,18 @@ mod source_contract_tests {
     };
     use fullmag_ir::RelaxationAlgorithmIR;
     use serde_json::json;
+
+    #[test]
+    fn initial_gpu_observation_requires_the_actual_gpu_lane_and_full_live_budget() {
+        use fullmag_runner::InitialObservationPolicy;
+        assert_eq!(super::initial_observation_policy("gpu", 1), InitialObservationPolicy::NativeGpuInitialFields);
+        for device in ["cpu", "auto"] {
+            assert_eq!(super::initial_observation_policy(device, 1), InitialObservationPolicy::None);
+        }
+        for cadence in [0, 2, 100, u64::MAX] {
+            assert_eq!(super::initial_observation_policy("gpu", cadence), InitialObservationPolicy::None);
+        }
+    }
 
     #[test]
     fn accepted_gpu_scope_admits_pgbb_and_rejects_unqualified_direct_minimizers() {

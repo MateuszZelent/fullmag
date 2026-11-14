@@ -23,6 +23,9 @@ enum class TransferAuditScopeKind {
 
 struct TransferAudit {
     fullmag_fem_transfer_audit counters{};
+    fullmag_fem_gpu_mandatory_control_counters_v1 mandatory_controls_hot_loop{};
+    // Same owner/copy/reset/rollback as the existing hot-loop audit counters.
+    fullmag_fem_poisson_device_pcg_counters_v1 device_pcg_hot_loop{};
     bool assert_no_hot_loop_host_sync = false;
     bool assert_no_hot_loop_compute_sync = false;
     bool hot_loop_violation = false;
@@ -61,6 +64,10 @@ private:
 void record_host_to_device(TransferAudit &audit, uint64_t bytes);
 void record_device_to_host(TransferAudit &audit, uint64_t bytes);
 void record_device_control_scalar_to_host(TransferAudit &audit, uint64_t bytes);
+void note_hot_loop_mandatory_controls(TransferAudit &audit,
+    const fullmag_fem_gpu_mandatory_control_counters_v1 &delta);
+void record_device_pcg_solve_started(TransferAudit &audit, uint64_t record_bytes);
+void record_device_pcg_status_to_host(TransferAudit &audit, uint64_t bytes, uint64_t iteration_delta);
 void record_mfem_host_read(uint64_t bytes);
 void record_mfem_host_write(uint64_t bytes);
 void record_mfem_host_read_write(uint64_t bytes);

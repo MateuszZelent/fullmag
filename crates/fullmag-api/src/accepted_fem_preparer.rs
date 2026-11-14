@@ -5,8 +5,10 @@ use fullmag_application::{AcceptedPreparationReceipt, ClosedLoopPreparationRecei
 use fullmag_ir::{BackendPlanIR, BackendTarget};
 use fullmag_plan::StudyStepLoweringStatus;
 use fullmag_session::{
-    FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt, FmsTaskReadiness,
+    FmsPreparationPhaseTimings, FmsResourceLeaseState, FmsTaskLifecycle, FmsTaskPreparationReceipt,
+    FmsTaskReadiness,
     PreparationReceiptCommitDisposition, SessionStore,
+    FMS_PREPARATION_PHASE_TIMINGS_SCHEMA, FMS_PREPARATION_PHASE_TIMINGS_SCOPE,
 };
 
 #[derive(Debug)]
@@ -17,6 +19,39 @@ pub(crate) struct AcceptedFemPreparationResult {
     pub(crate) preparation_id: String,
     pub(crate) plan_fingerprint: String,
     pub(crate) replayed: bool,
+    pub(crate) phase_timings: FmsPreparationPhaseTimings,
+}
+
+#[derive(Debug, Default)]
+struct PreparationPhaseTimingAccumulator {
+    load_accepted_snapshot_ns: Option<u64>,
+    replay_validation_ns: Option<u64>,
+    native_mesh_space_ns: Option<u64>,
+    prepared_fields_evaluation_ns: Option<u64>,
+    prepared_bundle_publication_ns: Option<u64>,
+    prepared_observation_commit_ns: Option<u64>,
+    task_preparation_commit_ns: Option<u64>,
+}
+
+impl PreparationPhaseTimingAccumulator {
+    fn finish(self, body_started: std::time::Instant) -> FmsPreparationPhaseTimings {
+        FmsPreparationPhaseTimings {
+            schema_version: FMS_PREPARATION_PHASE_TIMINGS_SCHEMA.into(),
+            scope: FMS_PREPARATION_PHASE_TIMINGS_SCOPE.into(),
+            total_body_ns: elapsed_ns(body_started),
+            load_accepted_snapshot_ns: self.load_accepted_snapshot_ns,
+            replay_validation_ns: self.replay_validation_ns,
+            native_mesh_space_ns: self.native_mesh_space_ns,
+            prepared_fields_evaluation_ns: self.prepared_fields_evaluation_ns,
+            prepared_bundle_publication_ns: self.prepared_bundle_publication_ns,
+            prepared_observation_commit_ns: self.prepared_observation_commit_ns,
+            task_preparation_commit_ns: self.task_preparation_commit_ns,
+        }
+    }
+}
+
+fn elapsed_ns(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// Build native FEM mesh/space evidence for one accepted task and publish its
@@ -30,6 +65,8 @@ pub(crate) fn prepare_accepted_fem_task(
     preparation_attempt_id: &str,
     lease_token: &str,
 ) -> Result<AcceptedFemPreparationResult> {
+    let body_started = std::time::Instant::now();
+    let mut phase_timings = PreparationPhaseTimingAccumulator::default();
     fullmag_session::repository_path::validate_store_id(run_id)
         .context("accepted FEM preparer run id is invalid")?;
     fullmag_session::repository_path::validate_store_id(task_id)
@@ -57,6 +94,7 @@ pub(crate) fn prepare_accepted_fem_task(
         &specification.snapshot.project_id,
     )
     .context("load immutable accepted study for FEM preparation")?;
+    phase_timings.load_accepted_snapshot_ns = Some(elapsed_ns(accepted_study_load_started));
     eprintln!(
         "accepted-fem-preparer: phase=load_accepted_study_snapshot elapsed_ms={:.3}",
         accepted_study_load_started.elapsed().as_secs_f64() * 1_000.0
@@ -143,10 +181,12 @@ pub(crate) fn prepare_accepted_fem_task(
     };
 
     let replay_validation_started = std::time::Instant::now();
-    if let Some(existing) = store.read_task_preparation_receipt(run_id.as_str(), task_id)? {
+    let existing = store.read_task_preparation_receipt(run_id.as_str(), task_id)?;
+    if let Some(existing) = existing {
         let receipt = accepted
             .read_task_preparation(store, task_id)
             .context("validate replayed accepted FEM preparation receipt")?;
+        phase_timings.replay_validation_ns = Some(elapsed_ns(replay_validation_started));
         eprintln!(
             "accepted-fem-preparer: phase=replay_validation result=hit elapsed_ms={:.3}",
             replay_validation_started.elapsed().as_secs_f64() * 1_000.0
@@ -158,8 +198,10 @@ pub(crate) fn prepare_accepted_fem_task(
             preparation_id: receipt.preparation_id().to_owned(),
             plan_fingerprint: receipt.plan_fingerprint().to_owned(),
             replayed: true,
+            phase_timings: phase_timings.finish(body_started),
         });
     }
+    phase_timings.replay_validation_ns = Some(elapsed_ns(replay_validation_started));
     eprintln!(
         "accepted-fem-preparer: phase=replay_validation result=miss elapsed_ms={:.3}",
         replay_validation_started.elapsed().as_secs_f64() * 1_000.0
@@ -182,6 +224,7 @@ pub(crate) fn prepare_accepted_fem_task(
 
     let native_preparation_started = std::time::Instant::now();
     let native = produce_native_fem_evidence(&mesh, fe_order)?;
+    phase_timings.native_mesh_space_ns = Some(elapsed_ns(native_preparation_started));
     eprintln!(
         "accepted-fem-preparer: phase=native_prepare_fem_mesh_space elapsed_ms={:.3}",
         native_preparation_started.elapsed().as_secs_f64() * 1_000.0
@@ -216,7 +259,7 @@ pub(crate) fn prepare_accepted_fem_task(
             memory_bytes: preparation_lease.budget.memory_bytes,
         };
         if let Err(error) =
-            publish_prepared_observation(store, entry.problem(), execution_plan, &target)
+            publish_prepared_observation(store, entry.problem(), execution_plan, &target, &mut phase_timings)
         {
             // Observation never changes the preparation outcome; the fields
             // simply remain available only after a run.
@@ -233,16 +276,17 @@ pub(crate) fn prepare_accepted_fem_task(
         payload,
     )?;
     let receipt_commit_started = std::time::Instant::now();
+    let commit_result = retry_preparation_store_writer_busy(|| {
+        store.commit_task_preparation_receipt_with_preparation_lease(
+            &durable,
+            resource_id,
+            preparation_attempt_id,
+            lease_token,
+        )
+    });
+    phase_timings.task_preparation_commit_ns = Some(elapsed_ns(receipt_commit_started));
     let replayed = matches!(
-        retry_preparation_store_writer_busy(|| {
-            store.commit_task_preparation_receipt_with_preparation_lease(
-                &durable,
-                resource_id,
-                preparation_attempt_id,
-                lease_token,
-            )
-        })
-        .context("publish accepted FEM preparation receipt")?,
+        commit_result.context("publish accepted FEM preparation receipt")?,
         PreparationReceiptCommitDisposition::Replayed
     );
     eprintln!(
@@ -252,6 +296,7 @@ pub(crate) fn prepare_accepted_fem_task(
     let verified = accepted
         .read_task_preparation(store, task_id)
         .context("verify published accepted FEM preparation receipt")?;
+    let phase_timings = phase_timings.finish(body_started);
     Ok(AcceptedFemPreparationResult {
         run_id: run_id.as_str().to_owned(),
         task_id: task_id.to_owned(),
@@ -259,12 +304,51 @@ pub(crate) fn prepare_accepted_fem_task(
         preparation_id: verified.preparation_id().to_owned(),
         plan_fingerprint: verified.plan_fingerprint().to_owned(),
         replayed,
+        phase_timings,
     })
 }
 
 /// Upper bound for the field values of one prepared-state observation.
 const MAX_PREPARED_OBSERVATION_BYTES: u64 = 1 << 30;
 const MAX_UNAVAILABLE_REASON_CHARS: usize = 1024;
+const GPU_INITIAL_FIELDS_DEFERRED: &str = "native_gpu_initial_fields_deferred_to_compute_lease";
+
+fn prepared_physical_evaluation_lane(device: &str) -> Result<&'static str> {
+    match device {
+        "cpu" => Ok("fem_cpu"),
+        "gpu" => Ok("fem_gpu"),
+        _ => bail!("prepared FEM physics requires an explicit device request"),
+    }
+}
+
+fn prepared_observation_outcome<T>(
+    requested_device: &str,
+    timings: &mut PreparationPhaseTimingAccumulator,
+    evaluate: impl FnOnce() -> std::result::Result<T, String>,
+    publish: impl FnOnce(T) -> Result<fullmag_session::FmsTaskPreparedObservationOutcome>,
+) -> Result<fullmag_session::FmsTaskPreparedObservationOutcome> {
+    if prepared_physical_evaluation_lane(requested_device)? == "fem_gpu" {
+        // Neither phase ran. In particular, a preparation CPU lease must not
+        // create a physical GPU or CPU evaluator for this requested GPU task.
+        return Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: GPU_INITIAL_FIELDS_DEFERRED.into(),
+        });
+    }
+    let evaluation_started = std::time::Instant::now();
+    let evaluated = evaluate();
+    timings.prepared_fields_evaluation_ns = Some(elapsed_ns(evaluation_started));
+    match evaluated {
+        Ok(batch) => {
+            let publication_started = std::time::Instant::now();
+            let published = publish(batch);
+            timings.prepared_bundle_publication_ns = Some(elapsed_ns(publication_started));
+            published
+        }
+        Err(reason) => Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: reason.chars().take(MAX_UNAVAILABLE_REASON_CHARS).collect(),
+        }),
+    }
+}
 
 struct PreparedObservationTarget<'a> {
     run_id: &'a str,
@@ -278,15 +362,15 @@ struct PreparedObservationTarget<'a> {
     memory_bytes: u64,
 }
 
-/// Evaluate the prepared initial state's fields on the FEM CPU lane under this
-/// preparation lease and publish an immutable observation record (ADR 0071
-/// v1). An evaluator failure or exhausted budget is recorded as unavailable;
-/// only a store failure returns an error.
+/// CPU tasks evaluate under the preparation lease. GPU tasks explicitly defer
+/// fields to the already admitted compute worker, without creating a second
+/// physical backend (ADR 0071). An unavailable outcome is not execution proof.
 fn publish_prepared_observation(
     store: &SessionStore,
     problem: &fullmag_ir::ProblemIR,
     execution_plan: &fullmag_ir::ExecutionPlanIR,
     target: &PreparedObservationTarget<'_>,
+    timings: &mut PreparationPhaseTimingAccumulator,
 ) -> Result<()> {
     let BackendPlanIR::Fem(fem) = &execution_plan.backend_plan else {
         return Ok(());
@@ -296,6 +380,7 @@ fn publish_prepared_observation(
     else {
         return Ok(());
     };
+    let evaluation_lane = prepared_physical_evaluation_lane(target.requested_device)?;
     let values = &fem.initial_magnetization;
     let flattened = values.iter().flatten().copied().collect::<Vec<_>>();
     let identity = fullmag_runner::PreparedStateIdentity {
@@ -307,43 +392,49 @@ fn publish_prepared_observation(
         magnetization_values_sha256: fullmag_runner::live_preview_values_sha256(&flattened),
     };
     let byte_budget = (target.memory_bytes / 4).min(MAX_PREPARED_OBSERVATION_BYTES);
-    let outcome = match evaluate_prepared_fem_fields(problem, execution_plan, &identity, values, byte_budget) {
-        Ok(batch) => store_prepared_bundle(store, batch, requested_lane)?,
-        Err(reason) => fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
-            reason: reason.chars().take(MAX_UNAVAILABLE_REASON_CHARS).collect(),
-        },
-    };
+    let outcome = prepared_observation_outcome(
+        target.requested_device,
+        timings,
+        || evaluate_prepared_fem_fields(problem, execution_plan, &identity, values, byte_budget, target.requested_device),
+        |batch| store_prepared_bundle(store, batch, requested_lane),
+    )?;
     let record = fullmag_session::FmsTaskPreparedObservation::new(
         target.run_id,
         target.step_id,
         target.preparation_id,
         target.plan_fingerprint,
         identity.magnetization_values_sha256.clone(),
-        "fem_cpu",
+        evaluation_lane,
         requested_lane,
         outcome,
     )?;
-    retry_preparation_store_writer_busy(|| {
+    let commit_started = std::time::Instant::now();
+    let commit_result = retry_preparation_store_writer_busy(|| {
         store.commit_task_prepared_observation_with_preparation_lease(
             &record,
             target.resource_id,
             target.preparation_attempt_id,
             target.lease_token,
         )
-    })
-    .context("publish prepared-state observation record")?;
+    });
+    timings.prepared_observation_commit_ns = Some(elapsed_ns(commit_started));
+    commit_result.context("publish prepared-state observation record")?;
     Ok(())
 }
 
-/// Observation-only evaluation on the CPU lane. A GPU task is evaluated on
-/// the CPU here and the record names both lanes; the solver lane is unchanged.
+/// Observation-only CPU evaluation. Reject GPU plans before any materializer,
+/// including callers other than the preparation publication path.
 fn evaluate_prepared_fem_fields(
     problem: &fullmag_ir::ProblemIR,
     execution_plan: &fullmag_ir::ExecutionPlanIR,
     identity: &fullmag_runner::PreparedStateIdentity,
     values: &[[f64; 3]],
     byte_budget: u64,
+    requested_device: &str,
 ) -> std::result::Result<fullmag_runner::PreparedMaterializationBatch, String> {
+    if prepared_physical_evaluation_lane(requested_device).map_err(|error| error.to_string())? != "fem_cpu" {
+        return Err(GPU_INITIAL_FIELDS_DEFERRED.into());
+    }
     let lane = fullmag_runner::AcceptedMaterializationLane::FemCpu;
     let active = fullmag_runner::accepted_observation_quantity_ids(execution_plan, lane)?;
     let components = active
@@ -538,6 +629,68 @@ fn produce_native_fem_evidence(
 mod tests {
     use super::*;
     use anyhow::Error;
+
+    #[test]
+    fn gpu_preparation_never_invokes_a_physical_evaluator_or_bundle_publisher() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let outcome = prepared_observation_outcome::<()>(
+            "gpu", &mut timings,
+            || panic!("GPU task invoked a physical evaluator under the CPU preparation lease"),
+            |_| panic!("GPU task published a prepared field bundle"),
+        ).unwrap();
+        assert_eq!(outcome, fullmag_session::FmsTaskPreparedObservationOutcome::Unavailable {
+            reason: GPU_INITIAL_FIELDS_DEFERRED.into(),
+        });
+        assert_eq!(timings.prepared_fields_evaluation_ns, None);
+        assert_eq!(timings.prepared_bundle_publication_ns, None);
+    }
+
+    #[test]
+    fn cpu_preparation_evaluates_and_publishes_its_exact_result() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let outcome = prepared_observation_outcome(
+            "cpu", &mut timings,
+            || Ok(vec![1.0, 2.0, 3.0]),
+            |values| {
+                assert_eq!(values, [1.0, 2.0, 3.0]);
+                Ok(fullmag_session::FmsTaskPreparedObservationOutcome::Published {
+                    bundle_object_ref: "a".repeat(64), object_refs: vec!["a".repeat(64)],
+                })
+            },
+        ).unwrap();
+        assert!(matches!(outcome, fullmag_session::FmsTaskPreparedObservationOutcome::Published { .. }));
+        assert!(timings.prepared_fields_evaluation_ns.is_some());
+        assert!(timings.prepared_bundle_publication_ns.is_some());
+    }
+
+    #[test]
+    fn unresolved_preparation_never_chooses_a_cpu_physical_evaluator() {
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        let error = prepared_observation_outcome::<()>(
+            "auto", &mut timings,
+            || panic!("unresolved task evaluated physics"),
+            |_| panic!("unresolved task published fields"),
+        ).unwrap_err();
+        assert!(error.to_string().contains("explicit device request"));
+        assert_eq!(timings.prepared_fields_evaluation_ns, None);
+    }
+
+    #[test]
+    fn timing_accumulator_preserves_unmeasured_phases_as_absent() {
+        let started = std::time::Instant::now();
+        let mut timings = PreparationPhaseTimingAccumulator::default();
+        timings.load_accepted_snapshot_ns = Some(0);
+        timings.replay_validation_ns = Some(0);
+        let result = timings.finish(started);
+        result.validate().unwrap();
+        assert_eq!(result.load_accepted_snapshot_ns, Some(0));
+        assert_eq!(result.replay_validation_ns, Some(0));
+        assert_eq!(result.native_mesh_space_ns, None);
+        assert_eq!(result.prepared_fields_evaluation_ns, None);
+        assert_eq!(result.prepared_bundle_publication_ns, None);
+        assert_eq!(result.prepared_observation_commit_ns, None);
+        assert_eq!(result.task_preparation_commit_ns, None);
+    }
 
     #[test]
     fn preparation_launch_wait_revalidates_until_the_same_permit_is_current() {

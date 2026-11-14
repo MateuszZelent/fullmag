@@ -2676,6 +2676,7 @@ fn execute_settle_step_at_field(
                 grid,
                 field_every_n,
                 initial_snapshot,
+                initial_native_gpu_fields: false,
                 display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut live_on_step,
@@ -2732,6 +2733,7 @@ fn execute_settle_step_at_field(
                 grid,
                 field_every_n,
                 initial_snapshot,
+                initial_native_gpu_fields: false,
                 display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut live_on_step,
@@ -6560,6 +6562,8 @@ mod tests {
     #[test]
     fn hysteresis_fem_average_uses_p1_lumped_ms_volume_weights() {
         let plan = fullmag_ir::FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {

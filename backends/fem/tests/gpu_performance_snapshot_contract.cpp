@@ -1,12 +1,15 @@
 #include "gpu/cuda/runtime/performance_counters.hpp"
+#include "poisson_device_pcg_counter_fixture.hpp"
 
 #include <cassert>
 #include <cstdint>
 
 using namespace fullmag::fem;
 
+
 int main()
 {
+    assert(fullmag::fem::test::device_pcg_physical_subaccounting_survives_rollback());
     GpuPerformanceCounterState state;
     auto initial = gpu_performance_snapshot(state);
     assert(initial.abi_version == FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION);

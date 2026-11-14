@@ -9,7 +9,7 @@ import re
 import sys
 import subprocess
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import Mock, patch
 from contextlib import nullcontext, redirect_stdout
 
@@ -126,6 +126,7 @@ def _run_binary_digest_script(script, arguments):
 
 
 class DockerRuntimeContract(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest UID and hardlink contract")
     def test_shared_package_binary_digest_accepts_readonly_group_hardlinks(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -163,6 +164,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 observed[binary.name], hashlib.sha256(binary.read_bytes()).hexdigest()
             )
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest UID and hardlink contract")
     def test_binary_digest_keeps_private_link_and_shared_path_checks_strict(self):
         cases = (
             ("private-hardlink", "hardlink", False, "--private"),
@@ -187,6 +189,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 with self.assertRaises((RuntimeError, OSError)):
                     _run_binary_digest_script(script, arguments)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest UID and file identity contract")
     def test_shared_package_binary_digest_rejects_mutation_while_hashing(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -300,7 +303,7 @@ class DockerRuntimeContract(unittest.TestCase):
 
     def test_runtime_run_root_is_validated_under_user_storage_not_build_storage(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             storage_root = root / "storage"
             build_storage_root = root / "builds"
             storage_root.mkdir()
@@ -344,7 +347,7 @@ class DockerRuntimeContract(unittest.TestCase):
 
     def test_volume_reuse_preserves_only_recovery_evidence_on_host(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "run"
+            root = Path(directory).resolve() / "run"
             root.mkdir()
             host_certificate = root / "windows-folder-host.json"
             host_certificate.write_text('{"schema":"certificate"}\n', encoding="utf-8")
@@ -392,10 +395,11 @@ class DockerRuntimeContract(unittest.TestCase):
                 {item["relative"] for item in manifest["files"]},
                 {"windows-folder-host.json", "host-ledger/host-ledger-adapter-receipt.json"},
             )
-            self.assertTrue(any(
-                path.endswith("/receipt-history/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/receipt.json")
-                for path in writes
-            ))
+            expected_receipt_path = (
+                Path("docker-runtime") / "runs" / root.name / "receipt-history"
+                / ("a" * 32) / "receipt.json"
+            )
+            self.assertIn(expected_receipt_path, {Path(path) for path in writes})
             self.assertNotIn("compose.json", writes)
 
     def test_prepare_ready_profile_passes_runtime_cache_validator(self):
@@ -468,7 +472,7 @@ class DockerRuntimeContract(unittest.TestCase):
 
     def test_backend_start_v2_does_not_apply_v1_child_path_rule(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             cache = _v2_cache_fixture(root)
             provenance = root / "provenance.json"
             receipt = root / "backend-start-receipt.json"
@@ -491,8 +495,8 @@ class DockerRuntimeContract(unittest.TestCase):
                 "source_project_id": "project-test",
                 "source_worktree_id": "worktree-test",
                 "source_checkout_kind": "worktree",
-                "source_root": "/checkout",
-                "git_common_dir": "/git-common",
+                "source_root": str(root / "checkout"),
+                "git_common_dir": str(root / "git-common"),
                 "provenance_path": runtime.BACKEND_PROVENANCE_PATH,
                 "helper_context": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + "-helpers.json",
                 "backend_start_receipt": "/opt/fullmag/control/docker-dev/backend-start/" + "e" * 32 + ".json",
@@ -513,16 +517,18 @@ class DockerRuntimeContract(unittest.TestCase):
                 runtime._validate_backend_volume_cache(cache)
 
     def test_live_compose_rejects_non_mapping_start_inputs_before_docker(self):
-        with patch.object(runtime, "docker") as docker_call:
-            with self.assertRaisesRegex(ValueError, "Backend start inputs must be an object"):
-                runtime.compose_spec(
-                    "sha256:" + "a" * 64, Path("/state-host"), 3197,
-                    host_certificate=Path("/host-certificate.json"),
-                    workspace_state_root=Path("/user-data"),
-                    package="/mnt/cache/package", provenance=Path("/provenance.json"),
-                    inputs_path=Path("/inputs.json"), backend_start=[],
-                )
-            docker_call.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.object(runtime, "docker") as docker_call:
+                with self.assertRaisesRegex(ValueError, "Backend start inputs must be an object"):
+                    runtime.compose_spec(
+                        "sha256:" + "a" * 64, root / "state", 3197,
+                        host_certificate=root / "host-certificate.json",
+                        workspace_state_root=root / "user-data",
+                        package=root / "package", provenance=root / "provenance.json",
+                        inputs_path=root / "inputs.json", backend_start=[],
+                    )
+                docker_call.assert_not_called()
 
     def test_development_backend_package_does_not_require_static_frontend(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -765,9 +771,10 @@ class DockerRuntimeContract(unittest.TestCase):
 
     def test_workspace_user_data_is_stable_and_scoped_to_compose_group(self):
         with tempfile.TemporaryDirectory() as directory:
-            layout = {"storage_root": directory}
+            storage_root = Path(directory).resolve()
+            layout = {"storage_root": str(storage_root)}
             path = runtime._workspace_user_data_root(layout, "fullmag-worktree-alpha")
-            self.assertEqual(path, Path(directory) / "user-data" / "fullmag-worktree-alpha")
+            self.assertEqual(path, storage_root / "user-data" / "fullmag-worktree-alpha")
             self.assertTrue(path.is_dir())
             again = runtime._workspace_user_data_root(layout, "fullmag-worktree-alpha")
             self.assertEqual(again, path)
@@ -1269,11 +1276,12 @@ class DockerRuntimeContract(unittest.TestCase):
     def test_source_selection_accepts_main_or_registered_worktree_and_rejects_foreign(self):
         from docker_development_inputs import select_checkout
         with tempfile.TemporaryDirectory() as directory:
-            main, task, foreign = [Path(directory) / name for name in ("main", "task", "foreign")]
+            root = Path(directory).resolve()
+            main, task, foreign = [root / name for name in ("main", "task", "foreign")]
             for path in (main, task, foreign):
                 path.mkdir()
-            records = [{"worktree": str(main)}, {"worktree": str(task)}]
-            with patch("docker_development_inputs.main_checkout", return_value=main), \
+            records = [{"worktree": str(main.resolve())}, {"worktree": str(task.resolve())}]
+            with patch("docker_development_inputs.main_checkout", return_value=main.resolve()), \
                     patch.object(runtime.storage, "worktree_records", return_value=records), \
                     patch("docker_development_inputs.local_volume"), \
                     patch.dict(os.environ, {"FULLMAG_SOURCE_ROOT": ""}):
@@ -1431,6 +1439,7 @@ class DockerRuntimeContract(unittest.TestCase):
         self.assertIs(wait.call_args.kwargs["api_process_poll"], poll)
         self.assertNotIn("api_process_poll", liveness.call_args.kwargs)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest immutable publication and directory fsync contract")
     def test_accepted_reattach_immutable_publication_never_overwrites_competing_writer(self):
         from concurrent.futures import ThreadPoolExecutor
         from threading import Barrier
@@ -1462,6 +1471,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 service._publish_accepted_reattach_raw(path, b"different", "test immutable record")
             self.assertEqual(path.read_bytes(), retained)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest immutable publication and directory fsync contract")
     def test_accepted_reattach_ack_binds_raw_request_and_successor_generation(self):
         service = self.load_service()
         request = {
@@ -1905,6 +1915,7 @@ class DockerRuntimeContract(unittest.TestCase):
                 with self.assertRaises(service.RuntimeServiceError):
                     service.accepted_reattach_preflight(paths)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest immutable publication and directory fsync contract")
     def test_accepted_reattach_held_generations_replay_raw_drains_before_terminal_ack(self):
         """Exercise three held successors before the native terminal decision.
 
@@ -2201,6 +2212,7 @@ class DockerRuntimeContract(unittest.TestCase):
                     terminal_metadata["previous_ack_sha256"], previous_ack
                 )
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux-container fixed-root environment contract")
     def test_process_environment_pins_optional_package_root_without_rewriting_source_root(self):
         service = self.load_service()
         paths = service.RuntimePaths()
@@ -2233,6 +2245,7 @@ class DockerRuntimeContract(unittest.TestCase):
         self.assertEqual(legacy_environment["FULLMAG_RUNTIME_ROOT"], str(paths.package))
         self.assertEqual(legacy_environment["FULLMAG_REPO_ROOT"], str(paths.source))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux-container fixed-root path contract")
     def test_linux_session_profile_is_preserved_at_api_boundary(self):
         service = self.load_service()
         with patch.dict(os.environ, {"FULLMAG_SESSION_STORAGE_PROFILE": "linux-native-v1"}, clear=True):
@@ -2243,6 +2256,7 @@ class DockerRuntimeContract(unittest.TestCase):
             with self.assertRaises(service.RuntimeServiceError):
                 service.storage_profile()
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux guest runtime storage ownership contract")
     def test_prepare_storage_creates_current_live_workspace(self):
         from dataclasses import replace
 
@@ -3603,26 +3617,29 @@ class DockerRuntimeContract(unittest.TestCase):
 
     def test_service_stop_delegates_terminal_proof_to_canonical_rust(self):
         service = self.load_service()
+        technical_owner_path = PurePosixPath(
+            "/opt/fullmag/runtime-control/runtime-services/pinned-owner.json"
+        )
+        accepted_owner_path = PurePosixPath(
+            "/state/runs/docker-all/session-store/runtime-services/pinned-owner.json"
+        )
         owner = {"owner_token": "known", "children": [{"role": "compute", "pid": 3},
                                                         {"role": "preparation", "pid": 4}]}
         terminal = {**owner, "children": [{**child, "status": "exited_success"} for child in owner["children"]]}
         handle = service.RuntimeHandle(service.RuntimePaths(), {}, owner, 8081)
         with patch.object(service, "_wait_api_closed"), \
                 patch.object(service, "_read_ready_owner", return_value=owner), \
-                patch.object(service, "_pin_owner", return_value=Path("/opt/fullmag/runtime-control/runtime-services/pinned-owner.json")), \
-                patch.object(service, "_accepted_store_owner_pin_path", return_value=Path("/state/runs/docker-all/session-store/runtime-services/pinned-owner.json")) as alias, \
+                patch.object(service, "_pin_owner", return_value=technical_owner_path), \
+                patch.object(service, "_accepted_store_owner_pin_path", return_value=accepted_owner_path) as alias, \
                 patch.object(service, "_run_cli", return_value={"schema_version": "runtime_service_discovery.v1",
                              "status": "drained", "owner": terminal}) as cli:
             self.assertEqual(service.stop(handle), terminal)
             self.assertIn("service-drain-confirmed", cli.call_args.args[1])
-            self.assertEqual(
-                cli.call_args.args[1][cli.call_args.args[1].index("--expected-owner") + 1],
-                "/state/runs/docker-all/session-store/runtime-services/pinned-owner.json",
-            )
-            alias.assert_called_once_with(
-                handle.paths,
-                Path("/opt/fullmag/runtime-control/runtime-services/pinned-owner.json"),
-            )
+            observed_owner_path = cli.call_args.args[1][
+                cli.call_args.args[1].index("--expected-owner") + 1
+            ]
+            self.assertEqual(PurePosixPath(observed_owner_path), accepted_owner_path)
+            alias.assert_called_once_with(handle.paths, technical_owner_path)
             cli.side_effect = service.RuntimeServiceUnknown("unconfirmed outcome")
             with self.assertRaises(service.RuntimeServiceUnknown):
                 service.stop(handle)
@@ -4018,7 +4035,10 @@ class DockerRuntimeContract(unittest.TestCase):
                 patch.object(service, "_service_status") as status:
             service.check(handle, full_api_probe=False)
         self.assertGreaterEqual(read.call_count, 1)
-        self.assertTrue(str(read.call_args.args[0]).endswith("runtime-services/OWNER.json"))
+        self.assertEqual(
+            Path(read.call_args.args[0]),
+            service.runtime_services_root(handle.paths) / "OWNER.json",
+        )
         liveness.assert_called_once_with(
             8081,
             identity,

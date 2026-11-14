@@ -1,5 +1,7 @@
 """Keep CI automatic only where it adds distinct coverage."""
 from pathlib import Path
+import shlex
+import subprocess
 import unittest
 
 import yaml
@@ -65,6 +67,44 @@ class WorkflowPolicyTests(unittest.TestCase):
             "test_frequency_domain_generation.py",
         ):
             self.assertIn(test, runs)
+
+    def test_terminal_attestation_fails_on_first_or_intermediate_native_error(self):
+        job = load(WORKFLOWS / "dispersion-artifact-consumers.yml")["jobs"]["terminal-artifact-attestation"]
+        self.assertEqual(job["strategy"]["matrix"]["os"], ["ubuntu-latest", "windows-latest"])
+        # GitHub's explicit bash shell runs with -eo pipefail on both OSes.
+        # Its default pwsh wrapper can otherwise report only the final exit code.
+        shell = job.get("defaults", {}).get("run", {}).get("shell")
+        self.assertEqual(shell, "bash")
+        for step in job["steps"]:
+            if "run" in step:
+                self.assertEqual(step.get("shell", shell), "bash")
+                self.assertNotIn(step.get("continue-on-error"), (True, "true"))
+        for failing_index in (0, 1):
+            with self.subTest(failing_index=failing_index):
+                commands = ["bash -c " + shlex.quote("exit " + str(37 if i == failing_index else 0))
+                            for i in range(3)]
+                commands.append("printf terminal_attestation_must_not_reach_success")
+                result = subprocess.run(
+                    [shell, "--noprofile", "--norc", "-eo", "pipefail", "-c", "\n".join(commands)],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 37, result.stderr)
+                self.assertNotIn("must_not_reach_success", result.stdout)
+
+    def test_terminal_attestation_keeps_host_gates_on_both_operating_systems(self):
+        job = load(WORKFLOWS / "dispersion-artifact-consumers.yml")["jobs"]["terminal-artifact-attestation"]
+        common = "\n".join(step.get("run", "") for step in job["steps"] if "if" not in step)
+        for name in (
+            "test_managed_runtime_artifact_root", "test_fullmag_docker_runtime",
+            "test_docker_startup_script", "test_docker_frontend_dev",
+            "test_verify_docker_all_runtime", "test_docker_host_ledger",
+            "test_bootstrap_docker_toolchain",
+        ):
+            with self.subTest(suite=name):
+                self.assertIn("scripts/" + name + ".py", common)
+        entrypoint, = [step for step in job["steps"]
+                       if "scripts/test_docker_entrypoint_device_access.py" in step.get("run", "")]
+        self.assertEqual(entrypoint.get("if"), "runner.os == 'Linux'")
 
 
 if __name__ == "__main__":

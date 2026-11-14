@@ -389,6 +389,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             args,
             lightweight_assets=getattr(args, "skip_geometry_assets", False),
         )
+        if args.command == "export-run-config" and args.runtime_flags_only:
+            # Startup needs authoring flags, before any solver-specific IR or
+            # geometry realization. A pipeline base is not an executed stage.
+            runtime_metadata = getattr(loaded.pipeline_base_problem(), "runtime_metadata", None)
+            workspace_metadata = getattr(getattr(loaded, "workspace_problem", None), "runtime_metadata", None)
+            # Workspace capture forces interactive=True for incomplete models,
+            # so its synthetic interactive flag must not override the authored
+            # stage snapshot. wait_for_solve can be declared after that stage.
+            if isinstance(runtime_metadata, dict) and isinstance(workspace_metadata, dict) and "wait_for_solve" in workspace_metadata:
+                runtime_metadata = {**runtime_metadata, "wait_for_solve": workspace_metadata["wait_for_solve"]}
+            runtime_flags = {
+                key: runtime_metadata[key]
+                for key in ("interactive_session_requested", "wait_for_solve")
+                if key in runtime_metadata
+            } if isinstance(runtime_metadata, dict) else runtime_metadata
+            _write_json({"ir": {"problem_meta": {"runtime_metadata": runtime_flags}}})
+            emit_progress("Runtime flags exported")
+            return 0
         runtime_device_override = getattr(args, "runtime_device", None)
         if loaded.has_declared_execution_profile():
             # A global FEM-first/FDM-first device hint can contradict a
@@ -414,25 +432,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_executed_problem_ir_identity(_benchmark_problem_ir_identity(ir))
         if args.command == "export-ir":
             _write_json(ir)
-            return 0
-        if args.runtime_flags_only:
-            problem_meta = ir.get("problem_meta")
-            runtime_metadata = (
-                problem_meta.get("runtime_metadata")
-                if isinstance(problem_meta, dict)
-                else None
-            )
-            runtime_flags: object = runtime_metadata
-            if isinstance(runtime_metadata, dict):
-                runtime_flags = {
-                    key: runtime_metadata[key]
-                    for key in ("interactive_session_requested", "wait_for_solve")
-                    if key in runtime_metadata
-                }
-            _write_json(
-                {"ir": {"problem_meta": {"runtime_metadata": runtime_flags}}}
-            )
-            emit_progress("Runtime flags exported")
             return 0
         _write_json(
             export_run_config(

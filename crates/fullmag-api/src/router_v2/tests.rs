@@ -13,6 +13,20 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
+#[test]
+fn scene_resource_preserves_explicit_pcg_experiment_in_existing_study_map() {
+    let request = serde_json::json!({
+        "schema_version": fullmag_ir::FemGpuPcgControlExperimentIR::SCHEMA_VERSION,
+        "status_batch_stride": 4
+    });
+    let mut study = fullmag_authoring::SceneStudyState::default();
+    study.fem_gpu_pcg_control_experiment = Some(serde_json::from_value(request.clone()).unwrap());
+    let resource: crate::schemas::authoring::SceneResource = serde_json::from_value(
+        serde_json::json!({"study": serde_json::to_value(&study).unwrap()}),
+    ).unwrap();
+    assert_eq!(serde_json::to_value(resource).unwrap()["study"]["fem_gpu_pcg_control_experiment"], request);
+}
+
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs;
@@ -67,7 +81,9 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         parallel_execution: None,
         pbc: None,
         fem_demag_solver_policy: None,
+        fem_bb_preconditioner: None,
         fem_demag_accuracy_contract: None,
+        fem_gpu_pcg_control_experiment: None,
         fem_domain_mesh: None,
         exchange_enabled: true,
         demag_enabled: true,
@@ -22599,6 +22615,76 @@ async fn scoped_equal_magnetization_apply_replays_the_receipt_and_retires_live_f
     assert_eq!(snapshot.mesh_revision, previous_mesh);
     assert_eq!(snapshot.region_realization_revisions.initial_state, previous_revisions.initial_state + 1);
     assert!(snapshot.latest_fields.get("m").is_none());
+}
+
+#[tokio::test]
+async fn typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for policy in ["auto", "none", "exchange_mass"] {
+        for constructor in [false, true] {
+            let source = workspace.path().join(format!("bb-{policy}-{constructor}.py"));
+            let script = if constructor {
+                format!(r#"import fullmag as fm
+problem = fm.Problem(
+    name="gpu-bb-constructor",
+    magnets=[fm.Ferromagnet(name="body", geometry=fm.Box(20e-9, 20e-9, 20e-9),
+        material=fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.1),
+        m0=fm.init.UniformMagnetization((1.0, 0.0, 0.0)))],
+    energy=[fm.Exchange()],
+    study=fm.Relaxation(outputs=[], algorithm="projected_gradient_bb", max_steps=2),
+    discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=20e-9, gpu_bb_preconditioner="{policy}")),
+    runtime=fm.RuntimeSelection(backend_target="fem", device_target="gpu", gpu_count=1))
+"#)
+            } else {
+                format!(r#"import fullmag as fm
+study = fm.study("gpu-bb-builder")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.fem_bb_preconditioner("{policy}")
+body = study.geometry(fm.Box(20e-9, 20e-9, 20e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh(maximum_element_size=20e-9, order=1)
+study.relax(algorithm="projected_gradient_bb", max_steps=2, tolA=1e-6)
+"#)
+            };
+            fs::write(&source, script).unwrap();
+            let scene = crate::script::load_scene_document_state(&repo_root, workspace.path(), &source).unwrap();
+            assert_eq!(scene.study.fem_bb_preconditioner.unwrap().as_str(), policy);
+            let builder = fullmag_authoring::scene_document_to_script_builder(&scene).unwrap();
+            let restored = fullmag_authoring::scene_document_from_script_builder(&builder);
+            assert_eq!(restored.study.fem_bb_preconditioner, scene.study.fem_bb_preconditioner);
+            let rendered = workspace.path().join(format!("rendered-{policy}-{constructor}.py"));
+            crate::script::render_scene_document_via_python_helper(&repo_root, workspace.path(), &rendered, &restored).unwrap();
+            assert!(fs::read_to_string(&rendered).unwrap().contains("fem_bb_preconditioner("));
+            let reloaded = crate::script::load_scene_document_state(&repo_root, workspace.path(), &rendered).unwrap();
+            assert_eq!(reloaded.study.fem_bb_preconditioner, scene.study.fem_bb_preconditioner);
+            let requested = fullmag_application::RequestedExecution {
+                backend: "fem".into(), device: "gpu".into(), precision: "double".into(), mode: "strict".into(), minimum_resources: None,
+            };
+            let problem = crate::script::scene_document_to_authored_problem_ir(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
+            problem.validate().expect("GPU BB policy must survive canonical authored-IR validation");
+            assert_eq!(problem.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
+                .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            let stages = crate::script::scene_document_to_authored_stages(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
+            assert!(!stages.is_empty());
+            for stage in &stages {
+                stage.ir.validate().unwrap();
+                assert!(matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+                }));
+                assert_eq!(stage.ir.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
+                    .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            }
+            let prepared = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
+                &repo_root, workspace.path(), None, &reloaded, &requested).unwrap();
+            let mut expected = problem.clone();
+            expected.study = prepared.study.clone();
+            assert_eq!(serde_json::to_value(prepared).unwrap(), serde_json::to_value(expected).unwrap());
+        }
+    }
 }
 
 #[tokio::test]

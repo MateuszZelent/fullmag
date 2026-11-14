@@ -5,11 +5,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <array>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "backend_handle.hpp"
 #include "fullmag_fem.h"
@@ -18,6 +22,7 @@
 #include <cuda_runtime.h>
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
+#include "gpu/cuda/transfer/transfer_kernels.hpp"
 #endif
 
 namespace {
@@ -227,6 +232,13 @@ void gpu_snapshot_submission_uses_preallocated_bounded_pool() {
     check(
         schedule.find("gpu_snapshot_pool_acquire(") != std::string::npos,
         "GPU snapshot submission must lease a preallocated runtime slot");
+    const std::size_t pack = schedule.find("fullmag_cuda_pack_soa_to_aos(");
+    const std::size_t payload_copy = schedule.find("err = cudaMemcpyAsync(", pack);
+    check(
+        pack != std::string::npos && payload_copy != std::string::npos &&
+            schedule.find("err = cudaMemcpyAsync(", payload_copy + 1u) == std::string::npos &&
+            schedule.find("cudaMemcpy2DAsync(") == std::string::npos,
+        "GPU snapshot payload must pack AoS before one contiguous D2H copy");
     for (const char *forbidden : {
              "cudaMalloc(",
              "cudaHostAlloc(",
@@ -247,9 +259,11 @@ void gpu_snapshot_submission_uses_preallocated_bounded_pool() {
         "CUDA runtime state must share ownership of the persistent GPU snapshot pool");
     check(
         pool_header.find("kFemGpuSnapshotPoolCapacity = 8") != std::string::npos &&
+            pool_header.find("void *device_aos = nullptr") != std::string::npos &&
             pool_header.find("uint32_t leased_slots") != std::string::npos &&
+            pool_source.find("cudaMalloc(&slot.device_aos") != std::string::npos &&
             pool_source.find("__atomic_compare_exchange_n(") != std::string::npos,
-        "GPU snapshot pool must expose a fixed eight-slot atomic lease bound");
+        "GPU snapshot pool must preallocate device AoS per slot within its fixed atomic bound");
     check(
         pool_source.find("initialize_gpu_snapshot_pool(") != std::string::npos &&
             pool_source.find("destroy_gpu_snapshot_pool(") != std::string::npos &&
@@ -266,9 +280,13 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
 
     fullmag_fem_backend backend;
     auto &ctx = backend.context;
-    ctx.mesh.n_nodes = 2;
+    constexpr std::size_t node_count = 26149;
+    static_assert(node_count > 1031u && node_count % 256u != 0u);
+    constexpr std::size_t component_bytes = node_count * sizeof(double);
+    constexpr std::size_t snapshot_bytes = 3 * component_bytes;
+    ctx.mesh.n_nodes = node_count;
     ctx.gpu_state.device.lifecycle.allocated = true;
-    ctx.gpu_state.device.lifecycle.node_count = 2;
+    ctx.gpu_state.device.lifecycle.node_count = node_count;
 
     cudaStream_t compute_stream{};
     cudaStream_t io_stream{};
@@ -290,22 +308,47 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
             ctx.mesh.n_nodes,
             error),
         "initialize bounded GPU snapshot pool");
+    for (std::size_t i = 0; i < fullmag::fem::kFemGpuSnapshotPoolCapacity; ++i) {
+        const void *device_aos = ctx.gpu_state.cuda.snapshot_pool->slots[i].device_aos;
+        check(device_aos != nullptr, "each GPU snapshot pool slot owns a device AoS buffer");
+        for (std::size_t previous = 0; previous < i; ++previous) {
+            check(
+                device_aos != ctx.gpu_state.cuda.snapshot_pool->slots[previous].device_aos,
+                "GPU snapshot pool slots must own distinct device AoS buffers");
+        }
+    }
 
-    const double x_host[2] = {1.0, 4.0};
-    const double y_host[2] = {2.0, 5.0};
-    const double z_host[2] = {3.0, 6.0};
+    std::vector<double> x_host(node_count);
+    std::vector<double> y_host(node_count);
+    std::vector<double> z_host(node_count);
+    for (std::size_t i = 0; i < node_count; ++i) {
+        const auto value = static_cast<int>(i % 4093u);
+        x_host[i] = static_cast<double>(value - 2048) / 64.0;
+        y_host[i] = static_cast<double>(1024 - value) / 32.0;
+        z_host[i] = static_cast<double>(value - 17) / 16.0;
+    }
+    x_host[0] = -0.0;
+    const std::uint64_t nan_payload_bits = UINT64_C(0x7ff8000000001234);
+    std::memcpy(&y_host[1], &nan_payload_bits, sizeof(nan_payload_bits));
+    z_host[2] = 42.125;
+    std::vector<double> expected_aos(node_count * 3u);
+    for (std::size_t i = 0; i < node_count; ++i) {
+        std::memcpy(expected_aos.data() + 3u * i, &x_host[i], sizeof(double));
+        std::memcpy(expected_aos.data() + 3u * i + 1u, &y_host[i], sizeof(double));
+        std::memcpy(expected_aos.data() + 3u * i + 2u, &z_host[i], sizeof(double));
+    }
     auto &m = ctx.gpu_state.device.magnetization.m;
-    check(cudaMalloc(&m.x, sizeof(x_host)) == cudaSuccess, "allocate snapshot-pool m.x");
-    check(cudaMalloc(&m.y, sizeof(y_host)) == cudaSuccess, "allocate snapshot-pool m.y");
-    check(cudaMalloc(&m.z, sizeof(z_host)) == cudaSuccess, "allocate snapshot-pool m.z");
+    check(cudaMalloc(&m.x, component_bytes) == cudaSuccess, "allocate snapshot-pool m.x");
+    check(cudaMalloc(&m.y, component_bytes) == cudaSuccess, "allocate snapshot-pool m.y");
+    check(cudaMalloc(&m.z, component_bytes) == cudaSuccess, "allocate snapshot-pool m.z");
     check(
-        cudaMemcpy(m.x, x_host, sizeof(x_host), cudaMemcpyHostToDevice) == cudaSuccess,
+        cudaMemcpy(m.x, x_host.data(), component_bytes, cudaMemcpyHostToDevice) == cudaSuccess,
         "upload snapshot-pool m.x");
     check(
-        cudaMemcpy(m.y, y_host, sizeof(y_host), cudaMemcpyHostToDevice) == cudaSuccess,
+        cudaMemcpy(m.y, y_host.data(), component_bytes, cudaMemcpyHostToDevice) == cudaSuccess,
         "upload snapshot-pool m.y");
     check(
-        cudaMemcpy(m.z, z_host, sizeof(z_host), cudaMemcpyHostToDevice) == cudaSuccess,
+        cudaMemcpy(m.z, z_host.data(), component_bytes, cudaMemcpyHostToDevice) == cudaSuccess,
         "upload snapshot-pool m.z");
 
     std::array<fullmag_fem_preview_snapshot *, fullmag::fem::kFemGpuSnapshotPoolCapacity>
@@ -334,14 +377,12 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
                 FULLMAG_FEM_OK,
             "wait for pooled GPU snapshot");
         check(
-            desc.node_count == 2 && desc.component_count == 3 &&
-                len_bytes == 6 * sizeof(double),
+            desc.node_count == node_count && desc.component_count == 3 &&
+                len_bytes == snapshot_bytes,
             "pooled GPU snapshot layout");
-        const auto *values = static_cast<const double *>(data);
         check(
-            values[0] == 1.0 && values[1] == 2.0 && values[2] == 3.0 &&
-                values[3] == 4.0 && values[4] == 5.0 && values[5] == 6.0,
-            "pooled GPU snapshot must preserve exact AoS payload");
+            std::memcmp(data, expected_aos.data(), snapshot_bytes) == 0,
+            "pooled GPU snapshot must preserve bitwise AoS payload and partial-block tail");
     }
 
     fullmag_fem_preview_snapshot_destroy(snapshots[0]);
@@ -359,6 +400,10 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
             &reused_len_bytes,
             &reused_desc) == FULLMAG_FEM_OK,
         "wait for reused GPU snapshot slot");
+    check(
+        reused_desc.node_count == node_count && reused_len_bytes == snapshot_bytes &&
+            std::memcmp(reused_data, expected_aos.data(), snapshot_bytes) == 0,
+        "reused GPU snapshot slot must preserve the same bitwise AoS payload");
     for (auto *snapshot : snapshots) {
         fullmag_fem_preview_snapshot_destroy(snapshot);
     }
@@ -368,6 +413,128 @@ void gpu_snapshot_pool_is_bounded_exact_and_reusable() {
             &ctx.gpu_state.cuda.snapshot_pool->leased_slots,
             __ATOMIC_ACQUIRE) == 0,
         "all pooled GPU snapshot slots must be released");
+
+    fullmag::fem::FemGpuSnapshotPoolLease timing_lease{};
+    check(
+        fullmag::fem::gpu_snapshot_pool_acquire(
+            *ctx.gpu_state.cuda.snapshot_pool,
+            timing_lease,
+            error),
+        "lease preallocated buffers for snapshot transfer timing comparison");
+    const auto timing_host = static_cast<double *>(timing_lease.host_aos);
+    const auto timing_device = static_cast<double *>(timing_lease.device_aos);
+    check(timing_host != nullptr && timing_device != nullptr,
+        "snapshot pool lease must expose pinned host and device AoS buffers");
+    auto run_strided_transfer = [&]() {
+        check(
+            cudaMemcpy2DAsync(
+                timing_host,
+                3u * sizeof(double),
+                m.x,
+                sizeof(double),
+                sizeof(double),
+                node_count,
+                cudaMemcpyDeviceToHost,
+                io_stream) == cudaSuccess,
+            "enqueue reference strided snapshot x transfer");
+        check(
+            cudaMemcpy2DAsync(
+                timing_host + 1u,
+                3u * sizeof(double),
+                m.y,
+                sizeof(double),
+                sizeof(double),
+                node_count,
+                cudaMemcpyDeviceToHost,
+                io_stream) == cudaSuccess,
+            "enqueue reference strided snapshot y transfer");
+        check(
+            cudaMemcpy2DAsync(
+                timing_host + 2u,
+                3u * sizeof(double),
+                m.z,
+                sizeof(double),
+                sizeof(double),
+                node_count,
+                cudaMemcpyDeviceToHost,
+                io_stream) == cudaSuccess,
+            "enqueue reference strided snapshot z transfer");
+    };
+    auto run_packed_transfer = [&]() {
+        check(
+            fullmag::fem::fullmag_cuda_pack_soa_to_aos(
+                m.x, m.y, m.z, timing_device, static_cast<int>(node_count), io_stream) ==
+                cudaSuccess,
+            "enqueue snapshot SoA-to-AoS pack for transfer timing");
+        check(
+            cudaMemcpyAsync(
+                timing_host,
+                timing_device,
+                snapshot_bytes,
+                cudaMemcpyDeviceToHost,
+                io_stream) == cudaSuccess,
+            "enqueue contiguous snapshot transfer for timing");
+    };
+    run_strided_transfer();
+    run_packed_transfer();
+    check(cudaStreamSynchronize(io_stream) == cudaSuccess,
+        "warm up snapshot transfer comparison");
+    struct TransferTiming {
+        float cuda_event_ms;
+        double host_wall_ms;
+    };
+    auto measure_transfers = [&](bool packed) {
+        constexpr int repetitions = 20;
+        cudaEvent_t start_event{};
+        cudaEvent_t stop_event{};
+        check(cudaEventCreate(&start_event) == cudaSuccess,
+            "create snapshot transfer timing start event");
+        check(cudaEventCreate(&stop_event) == cudaSuccess,
+            "create snapshot transfer timing stop event");
+        check(cudaStreamSynchronize(io_stream) == cudaSuccess,
+            "synchronize before snapshot transfer timing");
+        const auto wall_start = std::chrono::steady_clock::now();
+        check(cudaEventRecord(start_event, io_stream) == cudaSuccess,
+            "record snapshot transfer timing start");
+        for (int repetition = 0; repetition < repetitions; ++repetition) {
+            if (packed) {
+                run_packed_transfer();
+            } else {
+                run_strided_transfer();
+            }
+        }
+        check(cudaEventRecord(stop_event, io_stream) == cudaSuccess,
+            "record snapshot transfer timing stop");
+        check(cudaEventSynchronize(stop_event) == cudaSuccess,
+            "wait for snapshot transfer timing stop");
+        const auto wall_end = std::chrono::steady_clock::now();
+        float event_ms = 0.0f;
+        check(cudaEventElapsedTime(&event_ms, start_event, stop_event) == cudaSuccess,
+            "read snapshot transfer CUDA event timing");
+        check(cudaEventDestroy(start_event) == cudaSuccess,
+            "destroy snapshot transfer timing start event");
+        check(cudaEventDestroy(stop_event) == cudaSuccess,
+            "destroy snapshot transfer timing stop event");
+        return TransferTiming{
+            event_ms,
+            std::chrono::duration<double, std::milli>(wall_end - wall_start).count()};
+    };
+    const TransferTiming strided_timing = measure_transfers(false);
+    const TransferTiming packed_timing = measure_transfers(true);
+    std::fprintf(
+        stderr,
+        "FEM snapshot transfer timing (nodes=%zu repetitions=20): "
+        "3x-strided cuda-event=%.3fms host-wall=%.3fms; "
+        "pack+1D cuda-event=%.3fms host-wall=%.3fms\n",
+        node_count,
+        strided_timing.cuda_event_ms,
+        strided_timing.host_wall_ms,
+        packed_timing.cuda_event_ms,
+        packed_timing.host_wall_ms);
+    fullmag::fem::gpu_snapshot_pool_release(
+        *ctx.gpu_state.cuda.snapshot_pool,
+        timing_lease.slot_index,
+        true);
 
     auto *lifetime_snapshot = fullmag_fem_backend_begin_preview_snapshot(
         &backend,
@@ -429,10 +596,16 @@ void gpu_snapshot_fallback_reads_full_domain_demag_instead_of_masked_device_fiel
     check(cudaMemset(masked.y, 0, 2 * sizeof(double)) == cudaSuccess, "zero masked H_demag y");
     check(cudaMemset(masked.z, 0, 2 * sizeof(double)) == cudaSuccess, "zero masked H_demag z");
 
+    check(
+        fullmag_fem_backend_begin_preview_snapshot(&backend, FULLMAG_FEM_OBSERVABLE_H_DEMAG) == nullptr &&
+            backend.last_error.find("observable cache is invalid") != std::string::npos,
+        "full-domain snapshots must reject an unprepared accepted observable cache");
+    // This fixture seeds an already recovered accepted endpoint explicitly.
+    ctx.gpu_state.device.fields.accepted_observables_valid = true;
     fullmag_fem_preview_snapshot *snapshot = fullmag_fem_backend_begin_preview_snapshot(
         &backend,
         FULLMAG_FEM_OBSERVABLE_H_DEMAG);
-    check(snapshot != nullptr, "begin full-domain H_demag snapshot");
+    check(snapshot != nullptr, ("begin full-domain H_demag snapshot: " + backend.last_error).c_str());
 
     const void *data = nullptr;
     uint64_t len_bytes = 0;
@@ -507,6 +680,16 @@ void gpu_snapshot_composes_full_domain_effective_field_in_staging() {
 } // namespace
 
 int main() {
+#if defined(FULLMAG_SNAPSHOT_REQUIRE_CUDA) && FULLMAG_SNAPSHOT_REQUIRE_CUDA
+#if !FULLMAG_HAS_CUDA_RUNTIME
+    return 77;
+#else
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        return 77;
+    }
+#endif
+#endif
     snapshot_stats_are_owned_by_runtime_module();
     demag_phi_snapshot_contract_is_declared();
     gpu_snapshot_preserves_full_domain_observable_fields();

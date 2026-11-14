@@ -171,7 +171,7 @@ class BuildSpaceAdmissionTests(unittest.TestCase):
         build_control_factory = BuildControlFactory()
         with mock.patch.object(control, "require_host"), \
              mock.patch.object(control, "validate_host_path", return_value=repo), \
-             mock.patch.object(control, "local_volume"), \
+             mock.patch.object(control, "readonly_source_volume"), \
              mock.patch.object(control, "toolchain_configuration", return_value=configured), \
              mock.patch.object(control, "docker_capture", side_effect=capture), \
              mock.patch.object(control, "compose_capture", side_effect=pull) as compose, \

@@ -3562,6 +3562,18 @@ extern "C" {
         segment_start_time_s: f64,
         waveform_origin_time_s: f64,
     ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_bb_preconditioner(
+        handle: *mut fullmag_fem_backend,
+        policy: u32,
+    ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_pcg_control_v1(
+        handle: *mut fullmag_fem_backend,
+        config: *const fullmag_fem_gpu_pcg_control_config_v1,
+    ) -> i32;
+    pub fn fullmag_fem_backend_get_gpu_pcg_control_info_v1(
+        handle: *mut fullmag_fem_backend,
+        info: *mut fullmag_fem_gpu_pcg_control_info_v1,
+    ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
         request: fullmag_fem_gpu_execution_request_v1,
@@ -3754,6 +3766,22 @@ extern "C" {
     pub fn fullmag_fem_backend_get_transfer_audit(
         handle: *mut fullmag_fem_backend,
         out_audit: *mut fullmag_fem_transfer_audit,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_mandatory_control_counters_v1(
+        handle: *mut fullmag_fem_backend, scope: u32,
+        out_counters: *mut fullmag_fem_gpu_mandatory_control_counters_v1,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
+        handle: *mut fullmag_fem_backend,
+        scope: u32,
+        out_counters: *mut fullmag_fem_poisson_device_pcg_counters_v1,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_poisson_linear_engine_v1(
+        handle: *mut fullmag_fem_backend,
+        out_engine: *mut u32,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
@@ -7360,4 +7388,73 @@ extern "C" {
         profile: *mut fullmag_fem_surface_rt0_profile_result_v1,
         observer: *const fullmag_fem_antenna_operation_observer_v1,
     ) -> i32;
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_poisson_device_pcg_counters_v1 {
+    pub status_readbacks: u64,
+    pub status_record_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub solves: u64,
+    pub active_iterations: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_pcg_control_config_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub status_batch_stride: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_pcg_control_info_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub requested_status_batch_stride: u32,
+    pub resolved_status_batch_stride: u32,
+    pub solve_attempts: u64,
+    pub enqueued_iterations: u64,
+    pub amg_apply_calls: u64,
+    pub hot_loop_solve_attempts: u64,
+    pub hot_loop_enqueued_iterations: u64,
+    pub hot_loop_amg_apply_calls: u64,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_config_v1>() == 16);
+    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_info_v1>() == 64);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, solve_attempts) == 16);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, hot_loop_amg_apply_calls) == 56);
+};
+
+#[cfg(test)]
+#[test]
+fn poisson_device_pcg_counters_v1_is_additive_five_u64_layout() {
+    assert_eq!(std::mem::size_of::<fullmag_fem_poisson_device_pcg_counters_v1>(),40);
+    assert_eq!(std::mem::offset_of!(fullmag_fem_poisson_device_pcg_counters_v1,active_iterations),32);
+}
+
+#[repr(C)]
+#[derive(Debug,Clone,Copy,Default)]
+pub struct fullmag_fem_gpu_mandatory_control_counters_v1 {
+    pub bb_certificate_record_bytes: u64,
+    pub bb_certificate_readbacks: u64,
+    pub bb_certificate_bytes: u64,
+    pub bb_descent_readbacks: u64,
+    pub bb_descent_bytes: u64,
+    pub poisson_certificate_readbacks: u64,
+    pub poisson_certificate_bytes: u64,
+    pub confirmation_observations: u64,
+    pub confirmation_metric_readbacks: u64,
+    pub confirmation_metric_bytes: u64,
+}
+
+#[cfg(test)]
+#[test]
+fn mandatory_control_counters_v1_is_additive_ten_u64_layout() {
+    assert_eq!(std::mem::size_of::<fullmag_fem_gpu_mandatory_control_counters_v1>(),80);
 }

@@ -1,8 +1,8 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: measured no-go; no production implementation or selector retained
+- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU BB cooperative-PCG path has a managed hardware oracle and a passing frozen-SP4 common-stop component comparison at `1e-8 T`. The C7 accepted-energy finalization overlay also passes the managed native contract; this is not an SP4 speedup or parity result. Full scientific/performance qualification remains open, including the five alternating pairs; no production promotion is claimed.
 - Owners: Fullmag FEM backend
-- Last updated: 2026-07-26
+- Last updated: 2026-11-13 (historical NCG result remains dated 2026-07-26)
 - Related physics notes:
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 - Related specs:
@@ -370,6 +370,7 @@ ledger are in `.superpowers/sdd/task-11-report.md`.
   the historical matrix is invalid qualification evidence and cannot justify
   either.
 
+(scientific-bibliography)=
 ## 10. References
 
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, second edition,
@@ -380,3 +381,408 @@ ledger are in `.superpowers/sdd/task-11-report.md`.
 - `docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv`
 - `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`
 - `.superpowers/sdd/task-11-report.md`
+
+## 11. Candidate FEM GPU projected-gradient BB exchange-mass realization
+
+This section records a separate, bounded candidate for the FEM GPU
+`projected_gradient_bb` path. Sections 1–10 preserve the historical NCG
+proposal, measurements, and no-go decision. The fixed-CG, lumped-mass
+operators and strategy tokens in those sections do not specify this BB
+implementation. Public IR policy, CUDA kernel, and StudyBuilder sources exist
+in the task branch. Source presence is not GPU runtime, physics-parity, or
+performance qualification.
+
+(problem-statement)=
+### 11.1 Problem statement and governing equations
+
+(governing-equations)=
+The CPU projected-gradient BB path provides the operator and unit convention
+for this optimization. The GPU realization must use the same consistent
+finite-element mass and exchange forms. For P1 basis functions on the magnetic
+domain, define
+
+```{math}
+:label: fem-gpu-bb-consistent-forms
+ (M_{M_s})_{ij} = \int_{\Omega_m} M_s\,\phi_i\phi_j\,\mathrm{d}V,
+ \qquad
+ (K_A)_{ij} = \int_{\Omega_m} A\,\nabla\phi_i\cdot\nabla\phi_j\,\mathrm{d}V.
+```
+
+Clamp the BB step used by the operator to the existing direct-minimizer
+preconditioner bounds, `10^{-12}` to `10^{-6}\,\mathrm{m\,A^{-1}}`. For the
+resulting `\lambda_{\mathrm{BB}}`, the three Cartesian components use the same
+scalar system:
+
+```{math}
+:label: fem-gpu-bb-step-bounds
+ \lambda_{\mathrm{BB}} = \min\!\left(\lambda_{\max},
+ \max\!\left(\lambda_{\min},\lambda_{\mathrm{raw}}\right)\right),
+ \qquad
+ \lambda_{\min}=10^{-12}\,\mathrm{m\,A^{-1}},\quad
+ \lambda_{\max}=10^{-6}\,\mathrm{m\,A^{-1}}.
+```
+
+```{math}
+:label: fem-gpu-bb-exchange-mass-system
+ \left(M_{M_s} + \frac{2\lambda_{\mathrm{BB}}}{\mu_0}K_A\right)\mathbf{z}
+ = M_{M_s}\mathbf{g},
+ \qquad
+ \mathbf{d}=\Pi_T(\mathbf{m})\mathbf{z}
+ = \mathbf{z}-(\mathbf{m}\cdot\mathbf{z})\mathbf{m}.
+```
+
+```{math}
+:label: fem-gpu-bb-independent-residual
+ \mathbf{b}=M_{M_s}\mathbf{g},\qquad
+ \mathbf{r}=\left(M_{M_s}+\frac{2\lambda_{\mathrm{BB}}}{\mu_0}K_A\right)
+ \mathbf{z}-\mathbf{b},\qquad
+ \|\mathbf{r}\|_2\leq 10^{-8}\|\mathbf{b}\|_2
+ \quad(\mathbf{b}\ne\mathbf{0}),
+ \qquad
+ \mathbf{r}=\mathbf{0}\quad(\mathbf{b}=\mathbf{0}).
+```
+
+Here `\mathbf{g}` remains the original physical tangent energy gradient;
+`\mathbf{z}` is used to form the search direction after tangent projection.
+`\lambda_{\mathrm{BB}}` is the accepted BB step (`step_m_per_a`), and the
+exchange factor is exactly `2\lambda_{\mathrm{BB}}/\mu_0`, as in the CPU
+operator helper. This is the consistent-mass form, not the lumped-mass form
+used by the historical NCG experiment above.
+
+(symbols-and-si-units)=
+### 11.2 Symbols and SI units
+
+| Quantity | Exact symbol | Meaning | SI unit |
+|---|---|---|---|
+| Reduced magnetization | `$\mathbf{m}$` | Nodal unit-length magnetization | `$1$` |
+| Saturation magnetization | `$M_s$` | Saturation magnetization field | `$\mathrm{A\,m^{-1}}$` |
+| Exchange stiffness | `$A$` | Scalar exchange coefficient | `$\mathrm{J\,m^{-1}}$` |
+| Vacuum permeability | `$\mu_0$` | Vacuum permeability | `$\mathrm{N\,A^{-2}}$` |
+| Consistent Ms mass matrix | `$M_{M_s}$` | FEM mass matrix weighted by saturation magnetization | `$\mathrm{A\,m^2}$` |
+| Exchange stiffness matrix | `$K_A$` | Scalar weak exchange stiffness | `$\mathrm{J}$` |
+| BB step | `$\lambda_{\mathrm{BB}}$` | Accepted step used in the exchange weight | `$\mathrm{m\,A^{-1}}$` |
+| Raw tangent gradient | `$\mathbf{g}$` | Physical energy gradient before preconditioning | `$\mathrm{A\,m^{-1}}$` |
+| Preconditioned vector | `$\mathbf{z}$` | Solution of the exchange-mass system | `$\mathrm{A\,m^{-1}}$` |
+| Projected search direction | `$\mathbf{d}$` | Search direction after tangent projection | `$\mathrm{A\,m^{-1}}$` |
+| Tangent projector | `$\Pi_T(\mathbf{m})$` | Projection onto the nodal tangent plane | `$1$` |
+| P1 basis function | `$\phi_i$` | Scalar FEM nodal basis function | `$1$` |
+| Global basis indices | `$i,j$` | Row and column nodal basis indices | `$1$` |
+| Spatial gradient | `$\nabla$` | Derivative with respect to position | `$\mathrm{m^{-1}}$` |
+| Magnetic domain | `$\Omega_m$` | Domain integrated for magnetic exchange/mass | `$\mathrm{m^3}$` |
+| Volume measure | `$\mathrm{d}V$` | FEM volume integration measure | `$\mathrm{m^3}$` |
+| Unclamped BB step | `$\lambda_{\mathrm{raw}}$` | Step supplied by the current BB state | `$\mathrm{m\,A^{-1}}$` |
+| Minimum preconditioner step | `$\lambda_{\min}$` | Existing lower bound for the operator step | `$\mathrm{m\,A^{-1}}$` |
+| Maximum preconditioner step | `$\lambda_{\max}$` | Existing upper bound for the operator step | `$\mathrm{m\,A^{-1}}$` |
+| Preconditioner right-hand side | `$\mathbf{b}$` | Mass-weighted physical gradient | `$\mathrm{A^2\,m}$` |
+| True linear residual | `$\mathbf{r}$` | Unpreconditioned residual of the assembled system | `$\mathrm{A^2\,m}$` |
+
+The mass matrix and weighted exchange matrix both have units
+`\mathrm{A\,m^2}`; the right-hand side has units `\mathrm{A^2\,m}`. The
+solution therefore has units `\mathrm{A\,m^{-1}}`.
+
+(assumptions-and-validity)=
+### 11.3 Assumptions, validity, and backend matrix
+
+The candidate is limited to the existing FEM GPU projected-gradient
+BB legality envelope and its current exchange operator. It does not widen
+periodic-boundary support: existing FEM GPU PBC admission and restrictions
+remain unchanged. When an already-supported periodic reduced-node projection
+is present, the candidate applies the existing device periodic projection
+after the scalar solve, then the existing free-node-mask and nodal tangent
+projection. This does not claim a new periodic mass/stiffness assembly.
+The typed Study setting is a solver policy, not a physical parameter. It is
+accepted only for explicit FEM GPU `projected_gradient_bb`; other combinations
+remain rejected by existing validation. The requested policy is retained in IR
+separately from the resolved solver and execution provenance.
+
+| Solver | Device | Status for this preconditioner | Boundary |
+|---|---|---|---|
+| FEM | CPU | Existing reference | Consistent-mass exchange form and `step_m_per_a` scaling are owned by the current CPU minimizer helpers. |
+| FEM | GPU | Selected SP4 comparison passed; full qualification open | Managed native oracle, common-stop `1e-8 T` component parity, and C7 accepted-energy finalization contract passed; repeated performance/general qualification remains incomplete. |
+| FDM | CPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
+| FDM | GPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
+
+(discrete-realization)=
+### 11.4 GPU realization and unchanged physical behavior
+
+The target architecture uses `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp`
+as a host setup bridge for the assembled MFEM mass and exchange forms.
+`bb_exchange_mass_kernels.{cu,hpp}` owns a persistent cooperative CUDA PCG
+workflow over their immutable device CSR representations. Device Jacobi,
+reductions, `alpha`/`beta` updates, residual checks for iteration control, and
+convergence decisions stay inside the cooperative device launch. The inner
+relative tolerance is `1e-10`, and the iteration limit is `512`; failure to
+converge within that bound is explicit. The finite cap bounds the persistent
+kernel runtime; it is not a claim to repair CUDA error 719. Lack of
+cooperative-launch support also fails explicitly. No per-iteration scalar
+reaches the host and there is no CPU solver fallback.
+
+The independent final true-residual certificate applies the relative limit
+from Section 11.1 for every nonzero component RHS; an exactly zero RHS must
+produce an exactly zero solution and residual. There is no absolute residual
+floor for this GPU preconditioner, so a tiny nonzero RHS cannot pass with large
+relative error. Underflowed or overflowed norm-square calculations,
+non-finite values, non-convergence, or a failed residual check are explicit
+errors. This stricter preconditioner check is distinct from the historical CPU
+preconditioner absolute tolerance and does not change the existing strict
+Poisson solve or its independent certification. The final certificate performs
+one transfer from device to host; there is no CPU solve or fallback. Record
+actual launch support, solver identity `cooperative_device_pcg`, iteration
+count, residual, and transfer audit in execution provenance. The outer
+BB/Armijo scalar controller and HYPRE Poisson host control remain host-
+controlled; the existing Poisson `rtol` and iteration limit are unchanged.
+This does not claim the whole relaxation step is fully GPU controlled.
+
+Keep the original physical gradient for torque, stopping, and BB curvature.
+If the proposed GPU direction fails the existing physical energy-weighted
+`g·z > 0` descent check, restart from the raw GPU gradient, as on CPU. Preserve
+the existing representable-chord Armijo path, fresh-zero Poisson trial
+evaluation, independent Poisson certification, energy ownership, and
+accepted-state semantics. The preconditioner changes only the search
+direction.
+
+#### 11.4.1 C7: final accepted-energy snapshot reuse
+
+The PG-BB direct Armijo evaluation already produces a `GpuDirectEnergySnapshot`
+for each trial. After the direct decision and any required refinement finish,
+`accepted_trial_snapshot` is copied only when that trial is accepted; rejected
+trials do not replace it. The successful accepted-step finalizer reuses the
+snapshot for the nine published energy terms: exchange, demag, external,
+drive, interfacial/rotated DMI, bulk DMI, uniaxial anisotropy, cubic anisotropy,
+and magnetoelastic energy. This removes the duplicate final energy-term
+reduction for that accepted trial only. It adds no cross-step energy cache and
+does not exchange or swap magnetization pointers.
+
+The finalizer still computes fresh final observable reductions from the
+accepted state, then performs the existing 18-scalar control readback and its
+stream fence. `MaxRhs`, field maxima, torque, and moment therefore remain fresh;
+timing collection, finite validation, publication, and accepted-step rollback
+remain on the existing path. The energy snapshot is overlaid onto the local
+readback values after the read, so stale or reused resident energy slots are not
+published. Enabled energy entries are all checked for finiteness before the
+overlay writes any of them. The Robin boundary energy slot is diagnostic only:
+it is not one of the nine energy terms and is excluded from the published
+energy total. Stationary/confirmation branches continue to use the ordinary
+finalizer without an overlay. If accepted-path finalization fails, the existing
+accepted-step rollback path remains in force.
+
+The shared `gpu_pgbb_final_energy_overlay_contract` fixture verifies all nine
+energy terms and their published total, preserves the fresh torque and moment
+slots, ignores the Robin diagnostic, and rejects a non-finite energy without
+partial overlay. It runs in the managed `fem-demag-poisson` native contract:
+attempt `c1321d9442c641bd910f25b1b67a4a0e`, source snapshot
+`49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0`, library
+`c078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785`, compile
+13.122 s, test 5.200 s, exit 0. The gate also includes the paired-norm,
+true-residual corruption, and queue-property fixtures. It does not establish
+SP4 timing, speedup, or cross-backend parity for C7. The implementation is pinned by [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/relaxation/pgbb.cpp#L636).
+
+(python-api)=
+### 11.5 API, ProblemIR, validation errors, and provenance
+
+The typed Study policy is `StudyBuilder.fem_bb_preconditioner(policy)`, with
+`policy` in `auto`, `none`, or `exchange_mass`; it is a required argument.
+It is an internal solver policy, not a physical model field. The canonical
+SP4 authoring workload remains
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`.
+
+The Python method validates this finite set of strings and lowers it to the
+typed `FemGpuBbPreconditionerIR` request. There is no global environment
+variable selector.
+
+```python
+# %%
+from pathlib import Path
+
+import fullmag as fm
+
+study = fm.study("mumag_sp4_fem_relax_projected_gradient_bb")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+study.interactive(True)
+study.wait_for_solve(True)
+study.fem_bb_preconditioner(policy="auto")
+
+study.universe(
+    mode="manual",
+    size=(1200e-9, 600e-9, 550e-9),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=10e-9,
+    maximum_element_size=110e-9,
+    maximum_element_growth_rate=1.9,
+    grading="geometric",
+)
+film = study.geometry(
+    fm.Box(size=(500e-9, 125e-9, 3e-9), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+film.mesh.thin_film(
+    minimum_element_size=3e-9,
+    maximum_element_size=3e-9,
+    layers=1,
+    topology="prismatic",
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
+    order=1,
+)
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1e-12,
+    max_iterations=600,
+)
+study.mesh.save_or_load(
+    Path(__file__).resolve().with_suffix(".fullmag-mesh")
+)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=100_000,
+    tolT=5.8349e-9,
+).autosave(
+    fm.StageAutosave(
+        table=fm.TableAutosave(
+            every_steps=10,
+            quantities=["step", "mx", "my", "mz", "e_ex", "e_demag", "e_total", "max_torque_T"],
+        ),
+        fields=[],
+    )
+)
+```
+
+This is a BB-only SP4 authoring example with `policy="auto"`. It parses and the
+StudyBuilder method is present in source; this documentation task does not run
+the scenario or managed GPU runtime. Its runtime, parity, and performance
+support remain unqualified. The method-free repository SP4 scenario remains
+the existing executable reference.
+
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR mapping |
+|---|---|---|---|---|---|---|---|
+| `StudyBuilder.fem_bb_preconditioner.policy` | `str` | required | `1` | `auto`, `none`, or `exchange_mass`; requires explicit FEM GPU `projected_gradient_bb`, otherwise lowering rejects it | Requested FEM GPU BB direction policy | Strict FEM GPU `projected_gradient_bb`; other lanes unsupported | `FemHintsIR.gpu_bb_preconditioner` → `FemPlanIR.gpu_bb_preconditioner` |
+
+(problem-ir)=
+The IR enum is `FemGpuBbPreconditionerIR::{Auto,None,ExchangeMass}` and the
+planner validates its solver/backend scope before copying the request into
+`FemPlanIR`. `auto` preserves the requested intent; resolved execution records
+the actual solver (`cooperative_device_pcg` when the exchange-mass candidate is
+selected), device identity, and residual/iteration diagnostics. `none` is the
+raw device tangent-gradient baseline; `exchange_mass` requests the candidate
+explicitly. These values are serialized solver intent and provenance, not
+physical model parameters.
+
+A nonexecuted `flat_workspace` `TimeEvolution` carrier may preserve this
+hint solely for canonical BB-only pipeline transport. Constructor-origin BB
+primitives use the canonical
+`entrypoint_kind="problem"`; they retain the same explicit BB algorithm and
+FEM GPU requirements as StudyBuilder-origin primitives. The carrier requires explicit FEM
+GPU intent, no `active_stage_id`, a supported pipeline version, unique nonempty
+node IDs, correctly typed primitive/group nodes, and at least one enabled BB
+relaxation primitive. Every enabled primitive must explicitly select
+`projected_gradient_bb`; contradictory payload kind, entrypoint, or enabled
+values, conflicting algorithm aliases, macros, unknown nodes,
+mixed compute kinds, and malformed payloads reject the carrier. This exception
+does not authorize executing its `TimeEvolution` study: generic planner/native
+legality remains strict. The shared stage materializer clones the carrier and
+sets the concrete BB study before planning. Mesh preparation and magnetization
+Apply borrow only that validated concrete study, retaining the carrier's
+initial magnetization, material, field, and geometry payload unchanged.
+Startup's flags-only metadata command reads the two authored runtime flags
+before IR realization; it produces no executed-IR identity or solver admission.
+
+(round-trip-and-failure-semantics)=
+The method and native setting are being wired in the task branch. Unknown
+mode strings and unsupported combinations are validation errors and must fail
+closed. There is no process-global environment selector. The managed
+scientific recipe must run baseline and candidate as isolated Studies with
+explicit modes and retain the exact requested and resolved values, source,
+binary, mesh, initial state, and actual GPU identity in each receipt.
+
+(validation)=
+### 11.6 Validation and qualification gates
+
+1. Native manufactured tests compare GPU assembly and solve against an
+   independent tiny dense oracle. Cover tangent projection; active/inactive
+   masks; heterogeneous `M_s` and `A`; BB-step scaling; zero right-hand side;
+   cache reuse and invalidation; residual acceptance/rejection; non-finite and
+   non-converged failures; and descent restart behavior.
+2. Compare CPU and GPU on the same frozen SP4 R2 mesh, source, ProblemIR,
+   materials, and initial state. Require torque agreement within `1e-6`,
+   relative agreement of `E_total` within `1e-9` and each nonzero energy
+   component within `2e-6` (zero components within `1e-30 J`),
+   and preserve the CPU reference target `E_total = 6.23101634685e-19 J`.
+   Retain complete Zarr output and provenance for every run.
+3. Benchmark at least five alternating baseline/candidate repetitions after a
+   warm-up, with CUPTI disabled and identical hardware, resource limits,
+   binary, mesh, and initial state. Benchmark against CPU as a separate lane.
+   Report distributions and cost to the same stopping result; do not promise a
+   speedup before measurement. “GPU faster than CPU” is a measured conclusion,
+   not an acceptance assumption.
+4. Keep all native builds and managed GPU runs on the scientific managed
+   recipe. Source tests, dense oracles, and source presence do not qualify GPU
+   execution. Preserve the existing energy, torque, residual, and full-Zarr
+   evidence requirements.
+
+(limitations)=
+### 11.7 Limitations and source-code index
+
+No production promotion is claimed. The numerical thresholds are specified in
+Section 11.6. The native cooperative-PCG hardware oracle passed in the managed
+backend on 2026-11-11, and a complete default-policy SP4 pilot was retained in
+Zarr. Its unpaired timing was 45.692 s versus the historical 409.618 s GPU and
+90.099 s CPU runs. This is not the required alternating five-pair benchmark.
+The pilot's exchange component differs from the historical GPU endpoint by
+5.646 ppm, exceeding the unchanged 2 ppm component threshold, so scientific
+qualification remains open. Independent P1 tetrahedron integration reproduces
+exchange for each of the four retained CPU/GPU endpoint states within a
+relative error of 5.4e-14; this distinguishes different endpoint magnetizations
+from an observed same-state energy-evaluator discrepancy. The common-stop
+`1e-7 T` comparison still failed at 2.103205 ppm. At the predeclared stricter
+`1e-8 T` stop, CPU, GPU unpreconditioned and GPU exchange-mass all pass the
+unchanged component/total-energy gates: maximum exchange difference is
+0.217735 ppm and maximum total-energy relative difference is 3.493e-14.
+Independent reconstruction of the saved exchange fields has weighted-L2
+relative error at most 2.471e-13 for those three endpoints.
+Their single-run worker times are 123.572094, 535.705042 and 48.947291 s,
+respectively. This is not the required alternating five-pair performance
+benchmark and does not qualify the historical looser endpoints or FEM
+against MuMax3. See the
+[bounded follow-up evidence](../audits/2026-11-11-fem-gpu-bb-transfer-followup.md).
+
+(implementation-mapping)=
+(source-code-index)=
+| Claim | Repository path | Stable symbol / anchor | Lane | Evidence status |
+|---|---|---|---|---|
+| Consistent mass-plus-exchange operator and accepted-step coefficient | `backends/fem/cpu/mfem/relaxation/relaxation_math.hpp` | `assemble_exchange_mass_preconditioner_for_step` | FEM CPU reference | Implemented interface; implementation in `.cpp` |
+| Exact `2/mu0` exchange scale per BB step | `backends/fem/src/relaxation_operator_units.hpp` | `exchange_hessian_scale_from_step_m_per_a` | FEM CPU reference | Implemented source |
+| Existing BB step input sanitization | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `sanitized_relaxation_step_size` | FEM CPU reference | Implemented source |
+| CPU preconditioned-gradient and projected-gradient BB ownership | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `exchange_mass_preconditioned_gradient` | FEM CPU reference | Implemented source |
+| CPU projected-gradient BB step and Armijo integration | `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp` | `run_projected_gradient_bb_step` | FEM CPU reference | Implemented source |
+| Manufactured SI operator oracle | `backends/fem/tests/relaxation_operator_contract.cpp` | `main` | FEM CPU test | Source test |
+| SP4 authoring and existing comparison workload | `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` | `study` | FEM CPU/GPU request | Existing scenario; not GPU preconditioner evidence |
+| MFEM device workspace construction and immutable operator upload | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_create` | FEM GPU | Implemented source; runtime unqualified |
+| Operator lifecycle cache preparation | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_prepare` | FEM GPU | Implemented source; runtime unqualified |
+| Existing device periodic and tangent projections | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu` | `fullmag_cuda_relax_project_tangent_field` | FEM GPU | Existing source; unchanged |
+| Existing device periodic representative projection | `backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu` | `fullmag_cuda_relax_project_static_periodic_field` | FEM GPU | Existing source; unchanged |
+| Requested preconditioner enum and resolved IR fields | `crates/fullmag-ir/src/mesh_hints.rs` | `FemGpuBbPreconditionerIR` | FEM GPU request | Implemented IR source |
+| Typed FEM hints and planned `ProblemIR` destination | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | FEM GPU request | Implemented IR source |
+| Resolved FEM plan destination | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | FEM GPU plan | Implemented IR source |
+| Backend and algorithm legality validation | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | FEM GPU planning | Implemented planner source |
+| Cooperative device PCG recurrence and convergence | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu` | `gpu_bb_pcg_launch` | FEM GPU | Implemented source; runtime unqualified |
+| StudyBuilder policy entry point | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | FEM GPU request | Implemented source; runtime unqualified |
+| Native context policy setter | `backends/fem/src/api.cpp` | `fullmag_fem_backend_set_gpu_bb_preconditioner` | FEM GPU runtime | Implemented source; runtime unqualified |
+| Nonexecuted BB-only pipeline carrier | `crates/fullmag-ir/src/bb_pipeline.rs` | `is_gpu_bb_pipeline_carrier` | FEM GPU authoring | Source contract; managed bridge validation required |
+| Matching Python pipeline structural validation | `packages/fullmag-py/src/fullmag/model/bb_pipeline.py` | `is_gpu_bb_only_pipeline` | FEM GPU authoring | Interpreted regression tests |
+| BB preparation without stage physical mutations | `crates/fullmag-api/src/script.rs` | `gpu_bb_preparation_study` | FEM GPU preparation | Source regression; managed compile required |
+| Capture the final direct/refined Armijo snapshot for accepted PG-BB state | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | FEM GPU | Managed native contract passed; no C7 SP4 performance/parity claim; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/relaxation/pgbb.cpp#L636) |
+| Overlay the nine published energies after the existing scalar readback | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp` | `gpu_rk_overlay_final_energy_terms` | FEM GPU | Managed native contract and shared nine-term overlay fixture passed; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp#L50) |
+| Preserve fresh observables and the existing stream fence during finalization | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu` | `gpu_rk_finalize_step_stats_control_readback_with_energy_terms` | FEM GPU | Managed native contract passed; SP4 timing/parity not established; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu#L559) |
+| Synthetic accepted-energy, observable, Robin, and finite-failure regression | `backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp` | `gpu_pgbb_final_energy_overlay_contract` | FEM GPU native contract | Included in managed `fem-demag-poisson` attempt `c1321d9442c641bd910f25b1b67a4a0e`; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp#L13) |

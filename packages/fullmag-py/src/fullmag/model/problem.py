@@ -25,6 +25,7 @@ from fullmag._progress import (
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.cuda_device_identity import legacy_cuda_binding
 from fullmag.model._incomplete import IncompletePhysicsError
+from fullmag.model.bb_pipeline import is_gpu_bb_only_pipeline
 from fullmag.init.textures import PresetTexture
 from fullmag.model.antenna import (
     AntennaFieldSolveStage,
@@ -3134,6 +3135,22 @@ class Problem:
             for geometry in self._collect_geometries()
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
+        if discretization is not None and discretization.fem is not None and discretization.fem.gpu_bb_preconditioner is not None:
+            effective_device_is_gpu = (
+                runtime_device_override == "gpu"
+                if runtime_device_override is not None
+                else runtime.device_target is DeviceTarget.GPU
+            )
+            if (runtime.backend_target is not BackendTarget.FEM
+                    or not effective_device_is_gpu
+                    or not (
+                        isinstance(self.study, Relaxation) and self.study.algorithm == "projected_gradient_bb"
+                        or isinstance(self.study, TimeEvolution)
+                        and entrypoint_kind == "flat_workspace"
+                        and "active_stage_id" not in self.runtime_metadata
+                        and is_gpu_bb_only_pipeline(study_pipeline if study_pipeline is not None else self.runtime_metadata.get("study_pipeline"))
+                    )):
+                raise ValueError("gpu_bb_preconditioner requires explicit FEM GPU projected_gradient_bb relaxation")
         pbc_ir = _pbc_to_ir(self.pbc)
         if (
             runtime.backend_target == BackendTarget.FDM

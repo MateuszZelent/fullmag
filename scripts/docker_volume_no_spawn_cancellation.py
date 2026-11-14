@@ -10,6 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
+from types import SimpleNamespace
 import uuid
 
 from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
@@ -248,6 +250,84 @@ def guest(container,body,inputs):
     return obj(result.stdout,'guest result')
 
 
+def runtime_witness_pin(args):
+    from docker_activation_history import _runtime_witness_pin
+    return _runtime_witness_pin(SimpleNamespace(
+        historical_runtime_witness=getattr(args,'runtime_witness',None),
+        historical_runtime_witness_sha256=getattr(args,'runtime_witness_sha256',None)))
+
+
+class AuthorityReads:
+    """Pin every read made by the existing linked-runtime validators."""
+    def __init__(self,control,pins):self.control=control;self.pins=dict(pins)
+    def __getattr__(self,key):return getattr(self.control,key)
+    def read_bytes(self,relative,**kwargs):
+        raw=self.control.read_bytes(relative,**kwargs)
+        if relative in self.pins:require(self.pins[relative]==raw,'runtime authority changed during validation')
+        self.pins[relative]=raw
+        return raw
+    def read(self,relative,optional=False):
+        raw=self.read_bytes(relative,optional=optional)
+        return None if raw is None else obj(raw,'linked runtime authority')
+
+
+def development_authority(control,previous_raw,compose_raw,selected,args):
+    """Retain success compatibility; authenticate an early failure by explicit recovery."""
+    from docker_activation_history_admission import historical_mounts
+    from docker_volume_activate import _linked_runtime_terminals
+    previous=obj(previous_raw,'development terminal');document=obj(compose_raw,'Compose')
+    attempt=previous.get('attempt');base='development/attempts/'+str(attempt)
+    config_sha=sha(canonical(document));pin=runtime_witness_pin(args)
+    reads=AuthorityReads(control,{'development/current.json':previous_raw,base+'/compose.json':compose_raw})
+    verified_raw=reads.read_bytes('development/verified.json')
+    require(previous.get('inputs',{}).get('source_root')==str(selected)
+            and previous.get('compose_project')==control.project
+            and previous.get('inputs',{}).get('image_id')==args.image_id
+            and reads.read_bytes(base+'/terminal.json')==previous_raw,'retained development authority differs')
+    if previous.get('state')=='succeeded':
+        require(verified_raw==previous_raw and pin is None and previous.get('config_sha256')==config_sha
+                and previous.get('backend_container')==args.backend_container_id,'retained development authority differs')
+        return reads.pins,None
+    # Failed DEV does not publish verified.json. Its older success is unrelated
+    # historical data, never recovery authority; preserve and CAS-pin its bytes.
+    require(previous.get('state')=='failed-confirmed' and pin is not None,
+            'failed-confirmed development requires an explicit succeeded runtime witness')
+    # Reuse the history validator's full retained Compose/mount/source/namespace
+    # and chronological witness bindings. This transient scope is not a receipt
+    # and never changes the immutable original development record.
+    scope={'development_attempt':attempt,'config_sha256':config_sha,'source_root':str(selected),
+           'image_id':args.image_id,'backend_container':args.backend_container_id,
+           'control_namespace':control.namespace,'started_at':time.time()}
+    scope['inputs']={key:scope[key] for key in ('development_attempt','config_sha256','source_root','image_id','backend_container')}
+    historical_mounts(reads,scope,previous,document,selected,runtime_witness=pin)
+    linked=_linked_runtime_terminals(reads,attempt,previous,source_root=str(selected),
+                                    image=args.image_id,config_sha256=config_sha)
+    witness=obj(reads.read_bytes(pin[0]),'explicit runtime witness')
+    # Legacy terminals can lack ui_mode; still require a unique latest success,
+    # rather than allowing an operator to select a superseded predecessor.
+    finishes=[item.get('finished_at') for item in linked]
+    import math
+    require(all(type(value) in (int,float) and math.isfinite(value) and value>0 for value in finishes),
+            'linked runtime chronology is invalid')
+    latest=[item for item in linked if item['finished_at']==max(finishes)]
+    require(latest and all(canonical(item)==canonical(witness) for item in latest),
+            'explicit runtime witness is not the latest verified linked success')
+    started_at=witness.get('backend_started_at')
+    require(isinstance(started_at,str) and bool(started_at.strip()),'runtime witness has no backend incarnation')
+    return reads.pins,{'path':pin[0],'sha256':pin[1],'backend_started_at':started_at}
+
+
+def validate_runtime_incarnation(actual,witness):
+    if witness is not None:
+        require(actual.get('State',{}).get('StartedAt')==witness['backend_started_at'],
+                'backend differs from selected runtime witness incarnation')
+
+
+def validate_authority_pins(control,pins):
+    require(all(control.read_bytes(path,optional=True)==expected for path,expected in pins.items()),
+            'development/config/runtime witness CAS changed')
+
+
 def cancel(args):
     from docker_development_inputs import select_checkout
     from docker_dev_host import require_host
@@ -266,18 +346,14 @@ def cancel(args):
     attempt=previous.get('attempt');require(isinstance(attempt,str) and re.fullmatch('[0-9a-f]{32}',attempt),'invalid development attempt')
     base='development/attempts/'+attempt;compose_raw=control.read_bytes(base+'/compose.json');document=obj(compose_raw,'Compose')
     config_sha=sha(canonical(document))
-    require(previous.get('state')=='succeeded' and previous.get('inputs',{}).get('source_root')==str(selected)
-            and previous.get('compose_project')==control.project and previous.get('config_sha256')==config_sha
-            and previous.get('backend_container')==args.backend_container_id
-            and previous.get('inputs',{}).get('image_id')==args.image_id
-            and control.read_bytes(base+'/terminal.json')==previous_raw
-            and control.read_bytes('development/verified.json')==previous_raw,'retained development authority differs')
+    authority_pins,runtime_witness=development_authority(control,previous_raw,compose_raw,selected,args)
     image=json.loads(docker_capture('image','inspect',args.image_id).stdout)[0]
     first=None
     def observe():
         actual=json.loads(docker_capture('inspect',args.backend_container_id).stdout)
         require(len(actual)==1 and actual[0].get('Id')==args.backend_container_id,'backend incarnation differs')
         actual=actual[0];validate_source_labels(actual,identity)
+        validate_runtime_incarnation(actual,runtime_witness)
         require(actual.get('Image')==args.image_id and actual.get('State',{}).get('Running')is True,'backend is not the retained running image')
         _validate_retained_service(document,actual,'backend',image['Config'])
         try:
@@ -288,9 +364,7 @@ def cancel(args):
         except docker_group_ledger.GroupLedgerError as error:
             raise BuildControlError('No-spawn cancellation: ' + str(error)) from error
         if first is not None:require((actual['State']['StartedAt'],fingerprint(actual))==first,'backend restarted or changed')
-        require(control.read_bytes('development/current.json')==previous_raw
-                and control.read_bytes(base+'/terminal.json')==previous_raw
-                and control.read_bytes(base+'/compose.json')==compose_raw,'development/config CAS changed')
+        validate_authority_pins(control,authority_pins)
         return actual,guest(args.backend_container_id,GUEST,{'request':request})
     actual,before=observe();first=(actual['State']['StartedAt'],fingerprint(actual))
     validate_request(request,before,args.process_receipt_sha256)
@@ -300,12 +374,13 @@ def cancel(args):
             receipt_sha256=args.failed_receipt_sha256,request_raw=raw,selected=selected,
             backend_id=args.backend_container_id,image_id=args.image_id,before=before,
             observe=lambda:observe()[1],apply=args.apply)
-    if not args.apply:return {'state':'preview-no-mutation','request':request,'before':before,'development_attempt':attempt,'compose_config_sha256':config_sha}
+    if not args.apply:return {'state':'preview-no-mutation','request':request,'before':before,'development_attempt':attempt,'compose_config_sha256':config_sha,'runtime_witness':runtime_witness}
     executor_root=Path(__file__).resolve().parent.parent
     executor={'source_root':str(executor_root),'commit':storage.git(executor_root,'rev-parse','HEAD'),
               'controller_sha256':sha(Path(__file__).read_bytes())}
     with control.operation('cancel-failed-no-spawn',{'source_root':str(selected),'request_sha256':sha(raw),
-            'backend_container_id':args.backend_container_id,'image_id':args.image_id,'executor':executor}) as operation:
+            'backend_container_id':args.backend_container_id,'image_id':args.image_id,'executor':executor,
+            'runtime_witness':runtime_witness}) as operation:
         root='cancel-failed-no-spawn/attempts/'+operation['receipt']['attempt']
         saved_request=root+'/request.json';native_result=root+'/native-result.json'
         _,again=observe();require(again==before,'native cancellation evidence changed')
@@ -324,7 +399,7 @@ def cancel(args):
             raise ControlOutcomeUnknown('Native cancellation outcome requires receipt inspection; do not retry: '+str(error)) from error
         record={'schema':SCHEMA,'state':'cancelled-no-spawn','compose_project':control.project,'control_volume':control.volume,
                 'control_namespace':control.namespace,'namespace_registry_sha256':control.namespace_registry_sha256,
-                'source_root':str(selected),'development_attempt':attempt,'compose_config_sha256':config_sha,
+                'source_root':str(selected),'development_attempt':attempt,'compose_config_sha256':config_sha,'runtime_witness':runtime_witness,
                 'backend_container_id':args.backend_container_id,'image_id':args.image_id,'started_at':first[0],
                 'backend_fingerprint':first[1],'native_binary_sha256':before['native_binary_sha256'],
                 'process_receipt_sha256':before['process_receipt_sha256'],'owner_sha256':before['owner_sha256'],
@@ -345,6 +420,7 @@ def main():
     p.add_argument('--process-receipt-sha256',required=True);p.add_argument('--request',type=Path,required=True)
     p.add_argument('--request-sha256',required=True);p.add_argument('--apply',action='store_true')
     p.add_argument('--reconcile-loader-failure');p.add_argument('--failed-receipt-sha256')
+    p.add_argument('--runtime-witness');p.add_argument('--runtime-witness-sha256')
     args=p.parse_args()
     for value in (args.backend_container_id,args.process_receipt_sha256,args.request_sha256):require(SHA.fullmatch(value),'invalid explicit SHA/ID pin')
     require(re.fullmatch(r'sha256:[0-9a-f]{64}',args.image_id),'invalid image pin')
@@ -352,7 +428,9 @@ def main():
     if args.reconcile_loader_failure:
         require(re.fullmatch(r'[0-9a-f]{32}',args.reconcile_loader_failure)
                 and SHA.fullmatch(args.failed_receipt_sha256),'invalid loader reconciliation pins')
-    try:print(json.dumps(cancel(args),indent=2))
+    try:
+        runtime_witness_pin(args)
+        print(json.dumps(cancel(args),indent=2))
     except (ValueError,OSError,BuildControlError) as error:p.exit(2,str(error)+'\n')
 
 

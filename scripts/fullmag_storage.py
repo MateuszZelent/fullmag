@@ -1340,6 +1340,10 @@ def register(layout, task_id, owner, purpose, state="active", *, retirement_resu
                   "head": git(layout["repo_root"], "rev-parse", "HEAD"), "updated_at": now(),
                   "base_commit": previous.get("base_commit", git(layout["repo_root"], "rev-parse", "HEAD")),
                   "created_at": previous.get("created_at", now())}
+        # This opt-in outlives task/status updates. Dropping one side of its
+        # registration pair would correctly fence the group's next startup.
+        if "data_volume_registration" in previous:
+            record["data_volume_registration"] = previous["data_volume_registration"]
         if cleanup is not None:
             record["docker_cache_retirement"] = cleanup
         atomic_json(path, record)

@@ -66,6 +66,30 @@ __global__ void demag_validation_norm_kernel(
     }
 }
 
+__global__ void demag_validation_norm_pair_kernel(
+    const double *rhs, const double *residual, int rows, double *device_pair)
+{
+    ScaledNorm rhs_local{0.0, 0.0}, residual_local{0.0, 0.0};
+    const MergeScaledNorm merge;
+    for (int64_t i = threadIdx.x; i < rows; i += kBlockSize) {
+        const double a = fabs(rhs[i]), b = fabs(residual[i]);
+        rhs_local = merge(rhs_local, {isfinite(a) ? a : CUDART_INF, 1.0});
+        residual_local = merge(residual_local, {isfinite(b) ? b : CUDART_INF, 1.0});
+    }
+    using BlockReduce = cub::BlockReduce<ScaledNorm, kBlockSize>;
+    __shared__ BlockReduce::TempStorage storage;
+    const ScaledNorm rhs_norm = BlockReduce(storage).Reduce(rhs_local, merge);
+    __syncthreads(); // CUB storage is reused only after the first reduction.
+    const ScaledNorm residual_norm = BlockReduce(storage).Reduce(residual_local, merge);
+    // No output can overwrite either input until every thread has finished
+    // every stride of BOTH vectors and both reductions have completed.
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        device_pair[0] = rhs_norm.scale * sqrt(rhs_norm.sum_squares);
+        device_pair[1] = residual_norm.scale * sqrt(residual_norm.sum_squares);
+    }
+}
+
 } // namespace
 
 cudaError_t fullmag_cuda_demag_validation_norm(
@@ -86,6 +110,24 @@ cudaError_t fullmag_cuda_demag_validation_norm(
     }
     const cudaError_t copy_status = cudaMemcpyAsync(
         &norm, device_scalar, sizeof(norm), cudaMemcpyDeviceToHost, stream);
+    return copy_status == cudaSuccess ? cudaStreamSynchronize(stream) : copy_status;
+}
+
+cudaError_t fullmag_cuda_demag_validation_norm_pair(
+    const double *rhs, const double *residual, int rows,
+    double *device_pair, double *host_pair, cudaStream_t stream)
+{
+    if (rhs == nullptr || residual == nullptr || rows < 2 || device_pair == nullptr ||
+        host_pair == nullptr || stream == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    demag_validation_norm_pair_kernel<<<1, kBlockSize, 0, stream>>>(rhs, residual, rows, device_pair);
+    const cudaError_t launch_status = cudaGetLastError();
+    if (launch_status != cudaSuccess) {
+        return launch_status;
+    }
+    const cudaError_t copy_status = cudaMemcpyAsync(
+        host_pair, device_pair, 2 * sizeof(double), cudaMemcpyDeviceToHost, stream);
     return copy_status == cudaSuccess ? cudaStreamSynchronize(stream) : copy_status;
 }
 

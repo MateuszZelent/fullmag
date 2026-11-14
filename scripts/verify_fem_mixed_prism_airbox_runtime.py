@@ -46,6 +46,10 @@ GPU_NCG_CONTROL_READBACK_PER_STEP = 3
 GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 GPU_SCALAR_RESULT_SLOTS = 32
 DOUBLE_BYTES = 8
+DEVICE_SCALAR_PCG_ENGINE = "device_scalar_pcg_amg"
+DEVICE_SCALAR_PCG_RUNTIME_SOLVER = "DeviceScalarPCG"
+DEVICE_PCG_BATCH_ITERATIONS = 8
+U64_MAX = (1 << 64) - 1
 REQUIRED_NATIVE_LIBRARIES = ("fullmag_fem", "mfem", "hypre", "libceed")
 DIMENSIONLESS_RECOMPUTATION_ATOL = 16.0 * sys.float_info.epsilon
 MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
@@ -1075,34 +1079,85 @@ def _validate_persisted_lane_summary(
             "GPU summary control scalar D2H total",
         ):
             raise ContractError("GPU summary control scalar telemetry is inconsistent")
-        sync_budget = _expected_control_sync_budget(
-            {
-                "accepted_steps": summary["accepted_steps"],
-                "total_rhs_evals": _nonnegative_int(
-                    summary.get("total_rhs_evals"),
-                    "GPU summary total RHS evaluations",
-                ),
-                "rejected_attempts": _nonnegative_int(
-                    summary.get("rejected_attempts"),
-                    "GPU summary rejected attempts",
-                ),
-            }
+        budget_steps = {
+            "accepted_steps":summary["accepted_steps"],
+            "total_rhs_evals":_nonnegative_int(summary.get("total_rhs_evals"),"GPU summary total RHS evaluations"),
+            "rejected_attempts":_nonnegative_int(summary.get("rejected_attempts"),"GPU summary rejected attempts"),
+            "rejected_attempts_scope":telemetry.get("rejected_attempts_scope","accepted_step_trials"),
+        }
+        reported_engine = telemetry.get("resolved_linear_engine")
+        raw_demag_control = telemetry.get("demag_runtime_control")
+        if reported_engine == DEVICE_SCALAR_PCG_ENGINE and raw_demag_control is None:
+            raise ContractError("GPU summary device scalar PCG counters are missing")
+        if reported_engine not in (None, "hypre_pcg", DEVICE_SCALAR_PCG_ENGINE):
+            raise ContractError("GPU summary resolved Poisson engine is unsupported")
+        demag_control = (
+            {"runtime_solver": "HyprePCG"}
+            if raw_demag_control is None
+            else _object(raw_demag_control, "GPU summary demag runtime control")
         )
-        byte_budget = sync_budget * GPU_SCALAR_RESULT_SLOTS * DOUBLE_BYTES
+        if reported_engine is not None and demag_control.get(
+            "resolved_linear_engine", reported_engine
+        ) != reported_engine:
+            raise ContractError("GPU summary resolved Poisson engine disagrees with its control record")
+        accounting = validated_gpu_control_scalar_accounting(
+            demag_control, control_syncs, control_bytes,
+            mandatory_controls=telemetry.get("mandatory_controls"),
+        )
+        sync_budget=_expected_control_sync_budget({**budget_steps,
+            "confirmation_observations":accounting["mandatory_confirmation_observations"]})
+        byte_budget=sync_budget*GPU_SCALAR_RESULT_SLOTS*DOUBLE_BYTES
+        unattributed_syncs = accounting[
+            "unattributed_control_scalar_host_sync_count"
+        ]
+        unattributed_bytes = accounting[
+            "unattributed_control_scalar_d2h_bytes"
+        ]
+        if unattributed_syncs > sync_budget or unattributed_bytes > byte_budget:
+            raise ContractError("GPU summary exceeds the bounded control-scalar budget")
+        expected_allowed_syncs = sync_budget + accounting[
+            "device_pcg_status_readbacks"
+        ] + accounting["mandatory_control_readbacks"]
+        expected_allowed_bytes = byte_budget + accounting[
+            "device_pcg_control_d2h_bytes"
+        ] + accounting["mandatory_control_bytes"]
         if _nonnegative_int(
             telemetry.get("allowed_control_scalar_host_sync_count"),
             "GPU summary allowed control scalar sync count",
-        ) != sync_budget or _nonnegative_int(
+        ) != expected_allowed_syncs or _nonnegative_int(
             telemetry.get("allowed_control_scalar_d2h_bytes"),
             "GPU summary allowed control scalar D2H bytes",
-        ) != byte_budget:
+        ) != expected_allowed_bytes:
             raise ContractError("GPU summary control-scalar budget is not reproducible")
-        if control_syncs > sync_budget or control_bytes > byte_budget:
-            raise ContractError("GPU summary exceeds the bounded control-scalar budget")
+        if control_syncs > expected_allowed_syncs or control_bytes > expected_allowed_bytes:
+            raise ContractError("GPU summary exceeds the bounded total control-scalar budget")
         if control_bytes % DOUBLE_BYTES != 0:
             raise ContractError("GPU summary control-scalar bytes must contain complete doubles")
         if (control_syncs == 0) != (control_bytes == 0):
             raise ContractError("GPU summary control-scalar bytes and syncs disagree")
+        if unattributed_bytes % DOUBLE_BYTES != 0:
+            raise ContractError("GPU summary unattributed control-scalar bytes are incomplete")
+        if (unattributed_syncs == 0) != (unattributed_bytes == 0):
+            raise ContractError("GPU summary unattributed control-scalar bytes and syncs disagree")
+        if accounting["engine"] == DEVICE_SCALAR_PCG_ENGINE:
+            expected_pcg = accounting["demag_runtime_control"]["device_pcg_hot_loop"]
+            for field, expected_value in (
+                ("device_pcg_status_readbacks", accounting["device_pcg_status_readbacks"]),
+                ("device_pcg_status_record_bytes", accounting["device_pcg_status_record_bytes"]),
+                ("device_pcg_control_d2h_bytes", accounting["device_pcg_control_d2h_bytes"]),
+                ("unattributed_control_scalar_host_sync_count", unattributed_syncs),
+                ("unattributed_control_scalar_d2h_bytes", unattributed_bytes),
+                ("allowed_unattributed_control_scalar_host_sync_count", sync_budget),
+                ("allowed_unattributed_control_scalar_d2h_bytes", byte_budget),
+            ):
+                if _nonnegative_int(
+                    telemetry.get(field), f"GPU summary {field}"
+                ) != expected_value:
+                    raise ContractError(f"GPU summary {field} is not reproducible")
+            if expected_pcg["control_d2h_bytes"] != accounting["device_pcg_control_d2h_bytes"]:
+                raise ContractError("GPU summary device PCG record byte accounting differs")
+        elif "demag_runtime_control" in telemetry:
+            raise ContractError("legacy GPU summary must not carry device PCG accounting")
         normalized_residency = {
             "mode": "device_source_of_truth",
             "transfer_telemetry": telemetry,
@@ -1252,6 +1307,8 @@ def validated_algorithm_counter_budget(
     executed_steps: int,
     total_rhs_evals: int,
     rejected_attempts: int,
+    *, confirmation_observations: int = 0,
+    rejected_attempts_include_confirmations: bool = False,
 ) -> dict[str, int]:
     values = {
         "executed_steps": executed_steps,
@@ -1263,10 +1320,19 @@ def validated_algorithm_counter_budget(
             raise ContractError(f"{label} must be a nonnegative integer")
     if executed_steps < 1:
         raise ContractError("executed_steps must be positive")
-    if rejected_attempts > total_rhs_evals:
+    if not isinstance(rejected_attempts_include_confirmations, bool):
+        raise ContractError("rejected-attempt confirmation scope must be a bool")
+    if isinstance(confirmation_observations, bool) or not isinstance(confirmation_observations, int) or confirmation_observations < 0:
+        raise ContractError("confirmation_observations must be a nonnegative integer")
+    rhs_rejections = rejected_attempts
+    if rejected_attempts_include_confirmations:
+        if algorithm != "projected_gradient_bb" or confirmation_observations > rejected_attempts:
+            raise ContractError("invalid typed same-step confirmation rejection accounting")
+        rhs_rejections -= confirmation_observations
+    if rhs_rejections > total_rhs_evals:
         raise ContractError("rejected_attempts cannot exceed total_rhs_evals")
     if algorithm == "llg_overdamped":
-        minimum_rhs = executed_steps + rejected_attempts
+        minimum_rhs = executed_steps + rhs_rejections
         if total_rhs_evals < minimum_rhs:
             raise ContractError(
                 "LLG counters require at least one RHS evaluation per accepted or rejected attempt"
@@ -1276,7 +1342,7 @@ def validated_algorithm_counter_budget(
             + GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT * rejected_attempts
         )
     elif algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
-        minimum_rhs = 2 * executed_steps + rejected_attempts
+        minimum_rhs = 2 * executed_steps + rhs_rejections
         if total_rhs_evals < minimum_rhs:
             raise ContractError(
                 f"{algorithm} counters require two RHS evaluations per step and one per rejection"
@@ -1295,12 +1361,284 @@ def validated_algorithm_counter_budget(
     return {**values, "minimum_rhs_evals": minimum_rhs, "control_sync_budget": budget}
 
 
+def _strict_u64(value: object, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= U64_MAX
+    ):
+        raise ContractError(f"{label} must be a u64")
+    return value
+
+
+def _validated_poisson_control_scalar_accounting(
+    demag_runtime: dict[str, Any],
+    hot_loop_control_syncs: int,
+    hot_loop_control_d2h_bytes: int,
+) -> dict[str, Any]:
+    """Validate the observed Poisson engine and subtract only its exact hot-loop readbacks."""
+    aggregate_syncs = _strict_u64(
+        hot_loop_control_syncs, "GPU hot-loop control sync count"
+    )
+    aggregate_bytes = _strict_u64(
+        hot_loop_control_d2h_bytes, "GPU hot-loop control D2H bytes"
+    )
+    runtime_solver = demag_runtime.get("runtime_solver")
+    explicit_engine = "resolved_linear_engine" in demag_runtime
+    engine = demag_runtime.get("resolved_linear_engine") if explicit_engine else "hypre_pcg"
+
+    if engine == "hypre_pcg":
+        if runtime_solver != "HyprePCG":
+            raise ContractError("resolved Poisson engine hypre_pcg requires runtime_solver HyprePCG")
+        raw_legacy_hot_loop = demag_runtime.get("device_pcg_hot_loop")
+        if raw_legacy_hot_loop is not None:
+            reported_hot_loop = _object(
+                raw_legacy_hot_loop,
+                "demag_runtime.device_pcg_hot_loop",
+            )
+            expected_fields = {
+                "status_readbacks",
+                "status_record_bytes",
+                "control_d2h_bytes",
+                "solves",
+                "active_iterations",
+            }
+            if set(reported_hot_loop) != expected_fields:
+                raise ContractError(
+                    "legacy HyprePCG device_pcg_hot_loop must contain exactly the five counters"
+                )
+            values = {
+                key: _strict_u64(
+                    reported_hot_loop[key], f"demag_runtime.device_pcg_hot_loop.{key}"
+                )
+                for key in expected_fields
+            }
+            record_bytes = values["status_record_bytes"]
+            if (
+                record_bytes == 0
+                or record_bytes % DOUBLE_BYTES != 0
+                or record_bytes > GPU_SCALAR_RESULT_SLOTS * DOUBLE_BYTES
+            ):
+                raise ContractError("legacy device PCG status record size is invalid")
+            if any(
+                values[key] != 0
+                for key in (
+                    "status_readbacks",
+                    "control_d2h_bytes",
+                    "solves",
+                    "active_iterations",
+                )
+            ):
+                raise ContractError("legacy HyprePCG conflicts with active device PCG counters")
+        return {
+            "engine": "hypre_pcg",
+            "device_pcg_status_readbacks": 0,
+            "device_pcg_status_record_bytes": 0,
+            "device_pcg_control_d2h_bytes": 0,
+            "unattributed_control_scalar_host_sync_count": aggregate_syncs,
+            "unattributed_control_scalar_d2h_bytes": aggregate_bytes,
+            "demag_runtime_control": None,
+        }
+
+    if engine != DEVICE_SCALAR_PCG_ENGINE:
+        raise ContractError(f"unsupported resolved Poisson engine: {engine!r}")
+    if runtime_solver != DEVICE_SCALAR_PCG_RUNTIME_SOLVER:
+        raise ContractError(
+            "resolved Poisson engine device_scalar_pcg_amg requires runtime_solver DeviceScalarPCG"
+        )
+    if demag_runtime.get("runtime_preconditioner") != "HypreBoomerAMG":
+        raise ContractError(
+            "device_scalar_pcg_amg requires runtime_preconditioner HypreBoomerAMG"
+        )
+
+    # Physical-lifetime counters have a wider scope and cannot be subtracted here.
+    raw_counters = demag_runtime.get("device_pcg_hot_loop")
+    if raw_counters is None:
+        raise ContractError(
+            "device_scalar_pcg_amg requires demag_runtime.device_pcg_hot_loop; "
+            "physical-lifetime counters cannot justify hot-loop readbacks"
+        )
+    counters = _object(raw_counters, "demag_runtime.device_pcg_hot_loop")
+    expected_fields = {
+        "status_readbacks",
+        "status_record_bytes",
+        "control_d2h_bytes",
+        "solves",
+        "active_iterations",
+    }
+    if set(counters) != expected_fields:
+        raise ContractError(
+            "demag_runtime.device_pcg_hot_loop must contain exactly the five counters"
+        )
+    values = {
+        key: _strict_u64(counters[key], f"demag_runtime.device_pcg_hot_loop.{key}")
+        for key in expected_fields
+    }
+    readbacks = values["status_readbacks"]
+    record_bytes = values["status_record_bytes"]
+    status_bytes = values["control_d2h_bytes"]
+    solves = values["solves"]
+    iterations = values["active_iterations"]
+    if (
+        record_bytes == 0
+        or record_bytes % DOUBLE_BYTES != 0
+        or record_bytes > GPU_SCALAR_RESULT_SLOTS * DOUBLE_BYTES
+    ):
+        raise ContractError(
+            "device PCG status record size must be a positive bounded scalar multiple of 8 bytes"
+        )
+    if status_bytes != readbacks * record_bytes:
+        raise ContractError("device PCG status D2H bytes do not match readbacks times record size")
+    max_iterations = _strict_u64(
+        demag_runtime.get("max_iterations"), "demag_runtime.max_iterations"
+    )
+    if max_iterations == 0:
+        raise ContractError("demag_runtime.max_iterations must be positive for device PCG")
+    if iterations > solves * max_iterations:
+        raise ContractError("device PCG active_iterations exceed solves times max_iterations")
+    if solves == 0:
+        if iterations != 0 or readbacks != 0:
+            raise ContractError("device PCG zero solves require zero iterations and readbacks")
+        readback_bound = 0
+    elif iterations == 0:
+        readback_bound = solves
+    else:
+        # The first batch is capped at five; later batches contain at most eight.
+        # Python integers keep the cumulative S + floor((I + 2S) / 8) bound exact.
+        readback_bound = solves + (iterations + 2 * solves) // DEVICE_PCG_BATCH_ITERATIONS
+    if readbacks < solves or readbacks > readback_bound:
+        raise ContractError(
+            "device PCG status readback count is outside the completed-solve bounds"
+        )
+    if readbacks > aggregate_syncs or status_bytes > aggregate_bytes:
+        raise ContractError("device PCG status counters underflow aggregate hot-loop telemetry")
+
+    # Completed-run lifetime includes setup and all completed HotLoop work.
+    # Validate it independently; only the HotLoop record justifies subtraction.
+    physical = _object(demag_runtime.get("device_pcg_physical"),
+                       "demag_runtime.device_pcg_physical")
+    if set(physical) != expected_fields:
+        raise ContractError("device PCG physical must contain exactly the five counters")
+    physical = {key: _strict_u64(physical[key], f"device_pcg_physical.{key}")
+                for key in expected_fields}
+    ps, pi, pr = (physical[key] for key in
+                  ("solves", "active_iterations", "status_readbacks"))
+    physical_bound = ps if pi == 0 else ps + (pi + 2 * ps) // DEVICE_PCG_BATCH_ITERATIONS
+    if (physical["status_record_bytes"] != record_bytes
+            or physical["control_d2h_bytes"] != pr * record_bytes
+            or pi > ps * max_iterations or not ps <= pr <= physical_bound):
+        raise ContractError("device PCG physical lifetime counters are inconsistent")
+    if any(physical[key] < values[key] for key in expected_fields):
+        raise ContractError("device PCG physical lifetime omits completed hot-loop work")
+
+    runtime_control = {
+        "resolved_linear_engine": DEVICE_SCALAR_PCG_ENGINE,
+        "runtime_solver": DEVICE_SCALAR_PCG_RUNTIME_SOLVER,
+        "runtime_preconditioner": "HypreBoomerAMG",
+        "max_iterations": max_iterations,
+        "device_pcg_hot_loop": values,
+        "device_pcg_physical": physical,
+    }
+    return {
+        "engine": DEVICE_SCALAR_PCG_ENGINE,
+        "device_pcg_status_readbacks": readbacks,
+        "device_pcg_status_record_bytes": record_bytes,
+        "device_pcg_control_d2h_bytes": status_bytes,
+        "unattributed_control_scalar_host_sync_count": aggregate_syncs - readbacks,
+        "unattributed_control_scalar_d2h_bytes": aggregate_bytes - status_bytes,
+        "demag_runtime_control": runtime_control,
+    }
+
+
+MANDATORY_CONTROL_FIELDS = {
+    "bb_certificate_record_bytes", "bb_certificate_readbacks", "bb_certificate_bytes",
+    "bb_descent_readbacks", "bb_descent_bytes", "poisson_certificate_readbacks",
+    "poisson_certificate_bytes", "confirmation_observations", "confirmation_metric_readbacks",
+    "confirmation_metric_bytes",
+}
+
+
+def validated_gpu_control_scalar_accounting(
+    demag_runtime: dict[str, Any], hot_loop_control_syncs: int,
+    hot_loop_control_d2h_bytes: int, *, mandatory_controls: object = None,
+) -> dict[str, Any]:
+    """Keep the original core budget; credit only disjoint source-owned HotLoop records."""
+    result = _validated_poisson_control_scalar_accounting(
+        demag_runtime, hot_loop_control_syncs, hot_loop_control_d2h_bytes
+    )
+    result.update(mandatory_control_readbacks=0, mandatory_control_bytes=0,
+                  mandatory_confirmation_observations=0, mandatory_controls=None)
+    if mandatory_controls is None:
+        return result
+    scopes = _object(mandatory_controls, "fem_gpu_solver_controls")
+    if set(scopes) != {"physical", "hot_loop"}:
+        raise ContractError("mandatory controls require exactly physical and hot_loop scopes")
+    if scopes["hot_loop"] is None:
+        if scopes["physical"] is not None:
+            raise ContractError("physical mandatory counters cannot justify HotLoop readbacks")
+        return result
+    validated = {}
+    for scope in ("physical", "hot_loop"):
+        raw = scopes[scope]
+        values = _object(raw, f"fem_gpu_solver_controls.{scope}")
+        if set(values) != MANDATORY_CONTROL_FIELDS:
+            raise ContractError(f"mandatory {scope} must contain exactly ten counters")
+        values = {key: _strict_u64(values[key], f"mandatory {scope}.{key}") for key in MANDATORY_CONTROL_FIELDS}
+        cert = values["bb_certificate_readbacks"]
+        record = values["bb_certificate_record_bytes"]
+        if (cert and (record == 0 or record % DOUBLE_BYTES or record > GPU_SCALAR_RESULT_SLOTS*DOUBLE_BYTES)) or (record and (record % DOUBLE_BYTES or record > GPU_SCALAR_RESULT_SLOTS*DOUBLE_BYTES)):
+            raise ContractError("BB certificate record size is invalid")
+        if values["bb_certificate_bytes"] != cert*record:
+            raise ContractError("BB certificate bytes do not equal count times record size")
+        if values["bb_descent_bytes"] != values["bb_descent_readbacks"]*DOUBLE_BYTES or values["bb_descent_readbacks"] > cert:
+            raise ContractError("BB descent count/bytes conflict with certificate")
+        poisson_reads = values["poisson_certificate_readbacks"]
+        # Legacy/one-row validation returns each norm separately. The paired
+        # kernel returns both unchanged norms in one 16-byte readback. Credit
+        # the actual fences/bytes in either fixed record layout; never raise
+        # the remaining core budget or infer a second fence from two doubles.
+        if values["poisson_certificate_bytes"] not in {
+            poisson_reads * DOUBLE_BYTES, poisson_reads * 2 * DOUBLE_BYTES,
+        }:
+            raise ContractError("Poisson certificate bytes do not match single or paired norm records")
+        confirmations = values["confirmation_observations"]
+        if values["confirmation_metric_readbacks"] != 2*confirmations:
+            raise ContractError("confirmation must retain current and final metric readbacks")
+        # ABI v1: packed current 23 doubles plus final stats 18 doubles.
+        if values["confirmation_metric_bytes"] != (23+18)*DOUBLE_BYTES*confirmations:
+            raise ContractError("confirmation bytes conflict with its exclusive metric record")
+        validated[scope] = values
+    hot = validated["hot_loop"]
+    physical = validated["physical"]
+    for key in MANDATORY_CONTROL_FIELDS:
+        if key == "bb_certificate_record_bytes":
+            if hot[key] and physical[key] != hot[key]:
+                raise ContractError("mandatory physical certificate record differs from hot-loop")
+        elif physical[key] < hot[key]:
+            raise ContractError("mandatory physical lifetime omits completed hot-loop controls")
+    reads = sum(hot[key] for key in ("bb_certificate_readbacks", "bb_descent_readbacks", "poisson_certificate_readbacks", "confirmation_metric_readbacks"))
+    byte_count = sum(hot[key] for key in ("bb_certificate_bytes", "bb_descent_bytes", "poisson_certificate_bytes", "confirmation_metric_bytes"))
+    if reads > result["unattributed_control_scalar_host_sync_count"] or byte_count > result["unattributed_control_scalar_d2h_bytes"]:
+        raise ContractError("mandatory controls underflow HotLoop remainder or double-subtract PCG status")
+    result["unattributed_control_scalar_host_sync_count"] -= reads
+    result["unattributed_control_scalar_d2h_bytes"] -= byte_count
+    result.update(mandatory_control_readbacks=reads, mandatory_control_bytes=byte_count,
+                  mandatory_confirmation_observations=hot["confirmation_observations"],
+                  mandatory_controls=validated)
+    return result
+
+
 def _expected_control_sync_budget(steps: dict[str, Any]) -> int:
+    scope=steps.get("rejected_attempts_scope","accepted_step_trials")
+    if scope not in {"accepted_step_trials","execution_attempts"}:
+        raise ContractError("unknown rejected-attempt counter scope")
     return validated_algorithm_counter_budget(
         EXPECTED_ALGORITHM,
         steps["accepted_steps"],
         steps["total_rhs_evals"],
         steps["rejected_attempts"],
+        confirmation_observations=steps.get("confirmation_observations",0),
+        rejected_attempts_include_confirmations=scope=="execution_attempts",
     )["control_sync_budget"]
 
 
@@ -1388,25 +1726,40 @@ def _validate_gpu_execution(
     ]:
         raise ContractError("GPU qualification and provenance control-sync counts differ")
 
-    sync_budget = _expected_control_sync_budget(steps)
     control_syncs = telemetry["hot_loop_control_scalar_host_sync_count"]
     control_bytes = telemetry["hot_loop_control_scalar_d2h_bytes"]
-    byte_budget = sync_budget * GPU_SCALAR_RESULT_SLOTS * DOUBLE_BYTES
-    if control_syncs > sync_budget or control_bytes > byte_budget:
+    demag_runtime = _object(metadata.get("demag_runtime"), "GPU demag runtime")
+    # Subtract only the engine-specific counter with matching hot-loop scope.
+    control_accounting = validated_gpu_control_scalar_accounting(
+        demag_runtime, control_syncs, control_bytes,
+        mandatory_controls=metadata.get("fem_gpu_solver_controls"),
+    )
+    sync_budget=_expected_control_sync_budget({**steps,
+        "confirmation_observations":control_accounting["mandatory_confirmation_observations"]})
+    byte_budget=sync_budget*GPU_SCALAR_RESULT_SLOTS*DOUBLE_BYTES
+    unattributed_syncs = control_accounting[
+        "unattributed_control_scalar_host_sync_count"
+    ]
+    unattributed_bytes = control_accounting[
+        "unattributed_control_scalar_d2h_bytes"
+    ]
+    if unattributed_syncs > sync_budget or unattributed_bytes > byte_budget:
         raise ContractError(
             "GPU control-scalar readbacks exceed the bounded PGBB budget: "
-            f"syncs={control_syncs}/{sync_budget}, bytes={control_bytes}/{byte_budget}"
+            f"unattributed_syncs={unattributed_syncs}/{sync_budget}, "
+            f"unattributed_bytes={unattributed_bytes}/{byte_budget}"
         )
     if control_bytes % DOUBLE_BYTES != 0:
         raise ContractError("GPU control-scalar D2H bytes must contain complete doubles")
     if (control_syncs == 0) != (control_bytes == 0):
         raise ContractError("GPU control-scalar bytes and syncs must have matching zero state")
+    if unattributed_bytes % DOUBLE_BYTES != 0:
+        raise ContractError("unattributed GPU control-scalar bytes must contain complete doubles")
+    if (unattributed_syncs == 0) != (unattributed_bytes == 0):
+        raise ContractError("unattributed GPU control-scalar bytes and syncs disagree")
 
-    demag_runtime = _object(metadata.get("demag_runtime"), "GPU demag runtime")
     if demag_runtime.get("hypre_version") != native_build.get("hypre_version"):
         raise ContractError("GPU demag Hypre version does not match the managed runtime")
-    if demag_runtime.get("runtime_solver") != "HyprePCG":
-        raise ContractError("GPU demag runtime_solver must be HyprePCG")
     if demag_runtime.get("runtime_preconditioner") != "HypreBoomerAMG":
         raise ContractError("GPU demag runtime_preconditioner must be HypreBoomerAMG")
     if demag_runtime.get("mfem_device") != "cuda":
@@ -1434,8 +1787,9 @@ def _validate_gpu_execution(
         raise ContractError(
             "GPU solver-step demag residual does not match demag runtime diagnostics"
         )
-    return {
+    result: dict[str, Any] = {
         "raw": telemetry,
+        "resolved_linear_engine": control_accounting["engine"],
         "control_scalar_host_sync_count": control_syncs,
         "control_scalar_d2h_bytes": control_bytes,
         "allowed_control_scalar_host_sync_count": sync_budget,
@@ -1445,6 +1799,40 @@ def _validate_gpu_execution(
         "demag_relative_tolerance": relative_tolerance,
         "demag_solves": steps["demag_solves"],
     }
+    if control_accounting["engine"] == DEVICE_SCALAR_PCG_ENGINE:
+        status_readbacks = control_accounting["device_pcg_status_readbacks"]
+        status_bytes = control_accounting["device_pcg_control_d2h_bytes"]
+        result.update(
+            {
+                "demag_runtime_control": control_accounting["demag_runtime_control"],
+                "device_pcg_status_readbacks": status_readbacks,
+                "device_pcg_status_record_bytes": control_accounting[
+                    "device_pcg_status_record_bytes"
+                ],
+                "device_pcg_control_d2h_bytes": status_bytes,
+                "unattributed_control_scalar_host_sync_count": unattributed_syncs,
+                "unattributed_control_scalar_d2h_bytes": unattributed_bytes,
+                "allowed_unattributed_control_scalar_host_sync_count": sync_budget,
+                "allowed_unattributed_control_scalar_d2h_bytes": byte_budget,
+                "allowed_control_scalar_host_sync_count": sync_budget + status_readbacks,
+                "allowed_control_scalar_d2h_bytes": byte_budget + status_bytes,
+            }
+        )
+    if steps.get("rejected_attempts_scope")=="execution_attempts":
+        result["rejected_attempts_scope"]="execution_attempts"
+    if control_accounting["mandatory_controls"] is not None:
+        result.update(
+            mandatory_controls=control_accounting["mandatory_controls"],
+            mandatory_control_readbacks=control_accounting["mandatory_control_readbacks"],
+            mandatory_control_bytes=control_accounting["mandatory_control_bytes"],
+            unattributed_control_scalar_host_sync_count=unattributed_syncs,
+            unattributed_control_scalar_d2h_bytes=unattributed_bytes,
+            allowed_unattributed_control_scalar_host_sync_count=sync_budget,
+            allowed_unattributed_control_scalar_d2h_bytes=byte_budget,
+            allowed_control_scalar_host_sync_count=sync_budget+control_accounting["device_pcg_status_readbacks"]+control_accounting["mandatory_control_readbacks"],
+            allowed_control_scalar_d2h_bytes=byte_budget+control_accounting["device_pcg_control_d2h_bytes"]+control_accounting["mandatory_control_bytes"],
+        )
+    return result
 
 
 def validate_runtime_artifacts(

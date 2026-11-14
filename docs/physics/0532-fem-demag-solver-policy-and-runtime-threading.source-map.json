@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
-    "reviewed_revision": "70d35b84dae4e840e8cc881c35ef45014c604284"
+    "reviewed_revision": "50c84284edc9c45c4befbab67235621fca8451ca"
   },
   "backend_matrix": [
     {
@@ -55,6 +55,59 @@
       "sources": [
         "cpu-poisson-solve",
         "gpu-poisson-validation"
+      ]
+    },
+    {
+      "id": "eq-fem-poisson-device-pcg-recurrence",
+      "symbols": [
+        "pcg-A",
+        "pcg-C",
+        "pcg-loads",
+        "pcg-potential",
+        "pcg-products",
+        "pcg-scalars",
+        "pcg-atol"
+      ],
+      "sources": [
+        "device-scalar-poisson-pcg",
+        "device-pcg-recurrence"
+      ]
+    },
+    {
+      "id": "eq-fem-poisson-device-pcg-transfer-bound",
+      "symbols": [
+        "pcg-R",
+        "pcg-N",
+        "pcg-T",
+        "pcg-S",
+        "pcg-I",
+        "pcg-Rmax"
+      ],
+      "sources": [
+        "device-pcg-physical-counters",
+        "device-pcg-subaccounting-regression",
+        "device-pcg-hot-loop-counters",
+        "device-pcg-initial-batch-regression"
+      ]
+    },
+    {
+      "id": "eq-fem-demag-robin-coefficient",
+      "symbols": [
+        "K",
+        "robin-A",
+        "robin-B",
+        "robin-beta",
+        "robin-factor",
+        "robin-radius",
+        "robin-extent",
+        "robin-open-axes"
+      ],
+      "sources": [
+        "native-robin-radius",
+        "native-robin-boundary",
+        "native-robin-provenance",
+        "native-coordinate-preservation",
+        "native-robin-mode-map"
       ]
     }
   ],
@@ -136,6 +189,126 @@
       "latex": "\\mathrm{atol}",
       "meaning": "Absolute residual tolerance for the unscaled system",
       "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "pcg-A",
+      "latex": "A",
+      "meaning": "FE Poisson stiffness operator",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "pcg-C",
+      "latex": "C",
+      "meaning": "Fixed AMG approximation to inverse stiffness",
+      "si_unit": "\\mathrm{m}^{-1}"
+    },
+    {
+      "id": "pcg-loads",
+      "latex": "b",
+      "meaning": "Load, residual, and stiffness applied to direction",
+      "si_unit": "\\mathrm{A}\\,\\mathrm{m}"
+    },
+    {
+      "id": "pcg-potential",
+      "latex": "x",
+      "meaning": "Scalar potential, preconditioned residual, and direction",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "pcg-products",
+      "latex": "D",
+      "meaning": "Preconditioned squared products",
+      "si_unit": "\\mathrm{A}^2\\,\\mathrm{m}"
+    },
+    {
+      "id": "pcg-scalars",
+      "latex": "\\alpha",
+      "meaning": "Recurrence scalars and inner relative tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-atol",
+      "latex": "a_{\\mathrm{tol}}",
+      "meaning": "Preconditioned absolute tolerance",
+      "si_unit": "\\mathrm{A}\\,\\mathrm{m}^{1/2}"
+    },
+    {
+      "id": "pcg-R",
+      "latex": "R",
+      "meaning": "Cumulative completed PCG status readbacks",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-N",
+      "latex": "N",
+      "meaning": "Size of one PCG status record",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "pcg-T",
+      "latex": "T",
+      "meaning": "Cumulative PCG control bytes",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "pcg-S",
+      "latex": "S",
+      "meaning": "Cumulative valid PCG invocations starting enqueue",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-I",
+      "latex": "I",
+      "meaning": "Cumulative GPU-reported active iterations",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-Rmax",
+      "latex": "R_{\\max}",
+      "meaning": "Cumulative readback upper bound for the selected batch sizes",
+      "si_unit": "1"
+    },
+    {
+      "id": "robin-A",
+      "latex": "\\mathbf{A}_{\\mathrm{Robin}}",
+      "meaning": "Native Robin Poisson system matrix",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-B",
+      "latex": "\\mathbf{B}_{\\partial D}",
+      "meaning": "Mass matrix on the selected nonperiodic boundary",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "robin-beta",
+      "latex": "\\beta",
+      "meaning": "Native effective constant Robin coefficient",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "robin-factor",
+      "latex": "c",
+      "meaning": "Dimensionless coefficient resolved from the Robin mode",
+      "si_unit": "1"
+    },
+    {
+      "id": "robin-radius",
+      "latex": "R_{\\ast}",
+      "meaning": "Reference radius from the mesh bounding-box extents",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-extent",
+      "latex": "L_j",
+      "meaning": "Mesh bounding-box extent along coordinate axis j",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "robin-open-axes",
+      "latex": "\\mathcal{O}",
+      "meaning": "Set of nonperiodic coordinate-axis indices",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -312,7 +485,43 @@
       "id": "gpu-pgbb-accepted-field-reuse",
       "path": "backends/fem/gpu/cuda/relaxation/pgbb.hpp",
       "symbol": "gpu_relax_pgbb_field_reuse_key",
-      "responsibility": "Qualifies single-use static endpoint field reuse; actual solves remain fresh-zero and torque confirmations stay fresh. Runtime parity pending."
+      "responsibility": "Qualifies single-use static endpoint field reuse. Actual solves use fresh-zero unless the separately qualified C2 initial-guess permit applies; torque confirmations stay fresh."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-key",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp",
+      "symbol": "gpu_demag_pgbb_potential_key",
+      "responsibility": "Builds an exact key from accepted endpoint identity, operator fingerprint, device, workspace and solution buffers, streams, rows, and operator/upload/setup generations. Controlled native GPU contract including Auto passed; broader SP4 performance qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-consume",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "gpu_demag_consume_pgbb_potential",
+      "responsibility": "Issues a move-only single-use permit and consumes it before solution-buffer overwrite. Controlled native GPU contract including Auto passed; broader SP4 performance qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-trial",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "compute_device_demag_for_pgbb_trial",
+      "responsibility": "Uses a qualified initial guess only for the first ordinary trial; later backtracks, refinement, and torque confirmation remain fresh. Controlled native GPU contract including Auto passed; broader SP4 performance qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-publish",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "gpu_demag_publish_pgbb_potential",
+      "responsibility": "Publishes the accepted-potential token when the caller confirms an eligible endpoint. Controlled native GPU contract including Auto passed; broader SP4 performance qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-publication-gate",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "symbol": "gpu_relax_projected_gradient_bb_step",
+      "responsibility": "Suppresses token publication after refinement or due torque confirmation and only publishes from the fully finalized ordinary endpoint. Controlled native GPU contract including Auto passed; broader SP4 performance qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-potential-regression",
+      "path": "backends/fem/tests/cuda_pgbb_accepted_potential_fixture.hpp",
+      "symbol": "gpu_pgbb_accepted_potential_contract",
+      "responsibility": "Exercises one-use warm start, Armijo evidence, rollback, rejection/backtracks, key mismatch, fresh refinement and confirmation, and no replay. It does not force an accepted-refinement endpoint; controlled native GPU execution including Auto passed; broader SP4 qualification pending."
     },
     {
       "id": "native-linear-iteration-work",
@@ -343,6 +552,240 @@
       "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
       "symbol": "take_pgbb_accepted_stats",
       "responsibility": "Checks exact endpoint buffers and operator dependency keys before static CPU BB reuse. Runtime parity pending."
+    },
+    {
+      "id": "device-scalar-poisson-pcg",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "apply_demag_poisson_device_pcg",
+      "responsibility": "Runs device-scalar PCG with a first batch capped at five and later batches at eight; retains the independent certificate and counts actual internal AMG API calls. Fresh-zero initialization reuses initial Cb and its product as rho, skipping the duplicate AMG, SpMV and dot; warm starts retain both applies and D=b^TCb."
+    },
+    {
+      "id": "device-pcg-recurrence",
+      "path": "backends/fem/gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu",
+      "symbol": "pcg_finish_rho_kernel",
+      "responsibility": "Owns GPU recurrence, first-stop latching and fail-closed status."
+    },
+    {
+      "id": "poisson-engine-provenance",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_poisson_linear_engine_v1",
+      "responsibility": "Additive getter reports actual initialized GPU Poisson engine without altering existing ABI layouts."
+    },
+    {
+      "id": "device-pcg-physical-counters",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "gpu_performance_device_pcg_snapshot",
+      "responsibility": "Returns stable additive physical PCG lifetime, including setup outside attempts; legacy aggregate counters have the narrower attempt scope."
+    },
+    {
+      "id": "device-pcg-subaccounting-regression",
+      "path": "backends/fem/tests/poisson_device_pcg_counter_fixture.hpp",
+      "symbol": "device_pcg_physical_subaccounting_survives_rollback",
+      "responsibility": "Verifies active exclusion, reject/fail/copy/reset, exact aggregate subtraction, and cumulative readback-bound boundaries including the first short batch."
+    },
+    {
+      "id": "device-pcg-hot-loop-counters",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "record_device_pcg_status_to_host",
+      "responsibility": "Records PCG and existing control audit under identical hot_loop_depth predicate; preserves audit owner lifecycle."
+    },
+    {
+      "id": "mandatory-physical",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "gpu_performance_mandatory_controls_snapshot",
+      "responsibility": "Reads stable physical mandatory control records."
+    },
+    {
+      "id": "mandatory-hot",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "note_hot_loop_mandatory_controls",
+      "responsibility": "Attributes mandatory records at the exact audit depth predicate."
+    },
+    {
+      "id": "mandatory-confirmation",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "resolve_confirmation_control_delta",
+      "responsibility": "Excludes independent Poisson certificate and PCG statuses from confirmation metrics."
+    },
+    {
+      "id": "mandatory-abi",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_mandatory_control_counters_v1",
+      "responsibility": "Additive versioned getter with strict scope validation."
+    },
+    {
+      "id": "mandatory-regression",
+      "path": "backends/fem/tests/mandatory_control_counter_fixture.hpp",
+      "symbol": "mandatory_control_accounting_contract",
+      "responsibility": "Checks saved SP4 arithmetic, scopes, rollback and no double attribution inside existing managed gate."
+    },
+    {
+      "id": "device-pcg-initial-batch-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step",
+      "responsibility": "Counts actual AMG API calls and enqueued iterations for zero-RHS, exact nonzero warm, initial Nonfinite and invalid-configuration states; verifies reset and terminal-batch limits. Fresh nonzero, zero and Nonfinite cases require one initial AMG and account for the8B D2D reuse; warm cases retain two initial AMG calls."
+    },
+    {
+      "id": "direct-gpu-performance-lifecycle",
+      "path": "backends/fem/cpu/mfem/runtime/backend_step.cpp",
+      "symbol": "run_backend_relaxation_step",
+      "responsibility": "Direct GPU minimizers open the existing counter transaction alongside their execution receipt and close it exactly once on each terminal path."
+    },
+    {
+      "id": "direct-gpu-performance-guard",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.hpp",
+      "symbol": "class GpuPerformanceAttemptScope",
+      "responsibility": "Owns commit/reject/fail publication and active exclusion without new CUDA events, allocation or ABI fields."
+    },
+    {
+      "id": "direct-gpu-performance-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "void direct_pgbb_performance_lifecycle_contract",
+      "responsibility": "Existing native gate exercises real public-ABI accepted PGBB and repeated terminal confirmations with profiler off/on; managed native gate passed on library0bd7e6f1; same-binary SP4 validates both additive scopes."
+    },
+    {
+      "id": "gpu-residual-paired-norm",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair",
+      "responsibility": "Pairs the unchanged scaled RHS and true-residual norms into one 16-byte scalar readback after all aliased input reads; the one-row device path remains separate."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-type",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "FemGpuPerformanceSnapshotProvenance",
+      "responsibility": "Represents every named native v1 snapshot field plus schema, backend-lifetime scope, and accepted source step; it adds no ProblemIR or native ABI field."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-mapper",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "to_provenance",
+      "responsibility": "Maps and validates the full native v1 snapshot for terminal serialization, preserving integer counters and rejecting non-finite sums or a mismatched accepted step."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-publication",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Captures once at terminal direct-minimizer finalization after backend work, then publishes the optional full snapshot through the existing final provenance writer. Managed runner validation pending."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-regression",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "performance_snapshot_v1_roundtrips_every_native_field",
+      "responsibility": "Exercises all native fields, u64 values above 2^53, ABI size 480, finite-value rejection, and step identity. Managed Rust execution pending."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-zarr-regression",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "performance_snapshot_reaches_terminal_zarr_provenance",
+      "responsibility": "Publishes a typed snapshot through the existing streamed-stage writer and checks both the terminal stage manifest and Zarr field attributes; managed Rust execution pending."
+    },
+    {
+      "id": "fem-gpu-terminal-performance-snapshot-legacy-regression",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "legacy_execution_provenance_without_performance_snapshot_remains_valid",
+      "responsibility": "Confirms that historical ExecutionProvenance JSON without the optional terminal snapshot remains deserializable and does not emit a null field. Managed Rust execution pending."
+    },
+    {
+      "id": "hypre-l1-stream-copy-patch",
+      "path": "scripts/test_bootstrap_docker_toolchain.py",
+      "symbol": "test_hypre_l1_patch_is_pinned_applied_and_recorded",
+      "responsibility": "Checks explicit dependency context inputs, immutable patch/header digests, apply ordering and dependency metadata; source checks alone do not qualify runtime or speedup."
+    },
+    {
+      "id": "hypre-l1-stream-copy-bridge",
+      "path": "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp",
+      "symbol": "hypre_BoomerAMGRelax7CopyAsyncDevice",
+      "responsibility": "Uses the existing HYPRE compute stream for the qualified copy and preserves sticky submission failure before following relaxation work."
+    },
+    {
+      "id": "hypre-l1-stream-copy-native-hit",
+      "path": "backends/fem/tests/hypre_l1_async_copy_fixture.hpp",
+      "symbol": "require_hypre_l1_async_copy_production_hit",
+      "responsibility": "Requires a positive process counter delta around the real production AMG computation when the patched dependency is loaded; older dependencies do not earn C1 qualification."
+    },
+    {
+      "id": "hypre-l1-stream-copy-submission-error",
+      "path": "backends/fem/tests/hypre_l1_async_copy_fixture.hpp",
+      "symbol": "hypre_l1_async_copy_submission_error_contract",
+      "responsibility": "Exercises a rejected copy submission, exact sticky HYPRE error and unchanged successful-copy counters; managed execution pending."
+    },
+    {
+      "id": "hypre-l1-stream-copy-terminal-observation",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "terminal_hypre_relax7_async_copy",
+      "responsibility": "Optionally reads private process-cumulative HYPRE host counters at terminal quiescence, omits missing symbols or detected count changes, and adds no GPU readback or native ABI fields."
+    },
+    {
+      "id": "native-robin-radius",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "robin_reference_radius_for_mesh",
+      "responsibility": "Uses half the largest nonperiodic mesh bounding-box extent, with the all-axis fallback for no open axis.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-boundary",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Resolves the dimensionless mode coefficient and positive beta-weighted mass on the selected nonperiodic boundary.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-provenance",
+      "path": "crates/fullmag-runner/src/fem/runtime_contract.rs",
+      "symbol": "fem_poisson_demag_provenance",
+      "responsibility": "Preserves the existing historically named robin_beta JSON field as the dimensionless plan factor, not native effective-beta telemetry.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-coordinate-preservation",
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp",
+      "symbol": "verify_finalized_mesh",
+      "responsibility": "Checks exact preservation of input MeshIR node coordinates after native mesh finalization.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Source contract only; no new runtime or free-space qualification."
+    },
+    {
+      "id": "native-robin-mode-map",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "create_backend_with_initial_effective_field",
+      "responsibility": "Maps legacy/dipole/user Robin plan modes to native mode integers before native FEM creation.",
+      "reviewed_revision": "c447d001a2338587edde31f0f25d521efc258b63",
+      "evidence_status": "Existing adapter source contract; no policy change."
+    },
+    {
+      "id": "initial-fields-preparation-deferral",
+      "path": "crates/fullmag-api/src/accepted_fem_preparer.rs",
+      "symbol": "prepared_observation_outcome",
+      "responsibility": "Defers requested GPU physical fields without invoking an evaluator or bundle publisher under the CPU preparation lease; keeps both phase timings absent.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Task source candidate with callback-spy regressions; CI and managed SP4 parity pending."
+    },
+    {
+      "id": "initial-fields-native-gpu-capture",
+      "path": "crates/fullmag-runner/src/fem/relax/preview.rs",
+      "symbol": "publish_initial_native_fem_observation",
+      "responsibility": "Copies the complete active initial field generation from the admitted native GPU context with its actual clock and local-node map; does not create a physical backend.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Source candidate; managed GPU execution, initial payload and full-Zarr parity pending."
+    },
+    {
+      "id": "initial-fields-callback-control",
+      "path": "crates/fullmag-runner/src/fem/relax/initial_observation.rs",
+      "symbol": "publish_initial_fem_observation_with_capture",
+      "responsibility": "One initial callback preserves the post-begin-stage clock and returns Stop/Pause before the physical loop; no terminal or finished endpoint is fabricated.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Executable regression source present; CI execution pending."
+    },
+    {
+      "id": "initial-fields-admitted-worker-budget",
+      "path": "crates/fullmag-api/src/accepted_fem_study_worker.rs",
+      "symbol": "initial_observation_policy",
+      "responsibility": "Enables one-shot native initial fields only for an actual GPU allocation and the existing full-generation live budget gate; retains bounded preview behavior elsewhere.",
+      "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
+      "evidence_status": "Source candidate; no solver or scheduler lane added, runtime qualification pending."
     }
   ],
   "public_api": {
@@ -435,6 +878,15 @@
     "object_example": "Policy.to_ir checked without Solve.",
     "gpu_residual_norm": "Managed native corrupted-potential RED/GREEN passed, followed by a seven-step 50 fs full-Zarr OFF parity check with independent relative residuals 2.16e-13..2.86e-13 <= 1e-12. Full 1 ns SP4 and corrected-source CUPTI remain unqualified.",
     "unchanged_tolerances": "SP4 uses rtol1e-12,atolNone,max500; the transport probe did not change these.",
-    "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed."
+    "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed.",
+    "device_scalar_pcg": "First69de pilot remains retained with failed PhysicalLifetime containment. Lifecycle-fixed35d15e3f native gate and3same-binary SP4 runs pass Physical/HotLoop,8energies,torque and independent true residual. No Poisson speedup was established for that change.",
+    "mandatory_controls": "110 Python verifier/matrix tests passed including missing/zero Physical rejection. Real direct-BB profiler-off/on native regression and3fresh-reuse SP4 runs pass scopes and unchanged residual control budget. No Physical subtraction from narrower legacy aggregates. Direct-module entrypoint moved after all classes: targeted RED becomes8PASS; full110tests PASS25.582s.",
+    "fresh_zero_initialization_reuse": "Native gate2a6aa743 PASS5.514010441s, library0bd7e6f1; fresh initial AMG count drops by1, warm unchanged. Three92-step SP4 runs preserve all numeric Zarr arrays bitwise; worker median44.611956→42.858635s, inclusive Poisson median19.719933→20.276239s. No isolated AMG or statistical paired speedup claim.",
+    "fresh_reuse_cupti": "Separate full92-step SP4 with solver_profile+cuda_trace passes science/control/Zarr. CUPTI is accepted as attempt/PID/GPU-bound but partial at512MiB,1021904records,5690drops,limit_flags1; timing qualification not_verified. Counts are incomplete; no full-run GPU timing/utilization or AMG speedup inferred.",
+    "paired_residual_readback": "Managed fem-demag-poisson contract passed at attempt c1321d9442c641bd910f25b1b67a4a0e, snapshot49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0 and libraryc078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785; includes zero/nonfinite/extreme-scale/aliasing, true-residual corruption and queue-property fixtures. Full-Zarr SP4 timing and parity NOT VERIFIED.",
+    "gpu_terminal_performance_snapshot": "Bounded source contract: complete native v1 fields inline in terminal ExecutionProvenance for native FEM GPU direct minimization only when final accepted step is positive. 480-byte ABI unchanged; Rust tests and managed execution pending. No CPU, LLG, interactive-runtime, or full-SP4 qualification.",
+    "gpu_pgbb_accepted_potential_c2": "Move-only, exact-key, single-use accepted-potential guess for only the first ordinary PGBB trial. Managed fem-demag-poisson GPU contract including requested Auto passed at998032a3cef54e568cd0feac015ec813, source9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe, libraryd0972baf40b81785526e484e8d33ddc3ff1226e7b857717398623930078d393c. One matched full-Zarr SP4 relaxation passes retained component-energy, torque and native-residual gates. Repeated total-time measurements and broader workloads remain pending; no overall speedup claim. The fixture does not force an accepted-refinement endpoint.",
+    "accepted_potential_pgbb_reuse": "Native gate998032a3cef54e568cd0feac015ec813 including resolved Auto owner passed. Three full-Zarr static SP4 runs share selected ProblemIR and authored m0; all21 numeric chunks match across C2 runs. Hot-loop PCG7477→6106iterations,1017→852statusreads; worker44.345637/39.772995/39.002946s. Startup versus Run This Stage and output-port differences prevent an isolated causal or UI end-to-end speedup claim.",
+    "hypre_l1_stream_copy": "Source candidate only. Managed dependency build/link, production predicate hit, submission-error regression, terminal SP4 count/bytes, unchanged physics/Zarr and speedup are NOT VERIFIED."
   }
 }

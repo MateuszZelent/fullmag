@@ -71,6 +71,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
@@ -116,6 +119,9 @@ jobs:
         # its tests. This does not link or qualify the MFEM runtime.
         run: |
           cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
+          cargo test --locked -p fullmag-runner --lib fem::relax::initial_observation::tests
+          cargo test --locked -p fullmag-runner --lib initial_observation_policy_preserves_legacy_bool_mapping
+          cargo test --locked -p fullmag-runner --lib native_gpu_initial_observation_
           FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
 
       - name: Check FDM CUDA runner contracts
@@ -178,7 +184,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api session_status_reports_current_energy --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
-          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation::tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact
           cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
@@ -196,13 +202,17 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparer --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparation-supervisor --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves
           cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
           cargo test -p fullmag-api --bin fullmag-api old_preparation_terminalization_does_not_mutate_replacement_session_ledger
           cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
 
       - name: Run runtime service sampler and control contracts
-        run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+        run: |
+          cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+          cargo test --locked -p fullmag-runtime-control --lib gpu_pre_spawn_
 
       - name: Check mixed-history recovery CLI contract
         run: cargo check -p fullmag-cli --bin fullmag
@@ -457,6 +467,21 @@ jobs:
           cargo test --locked -p fullmag-authoring --lib compute_resources
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir -- --exact
 
+      - name: Run FEM GPU BB typed policy and provenance contracts
+        # The numerical CUDA oracle runs in the managed GPU backend. These
+        # source tests pin the per-run policy, legality and provenance bridge.
+        # Keep them explicit: unrelated runner filters do not select them.
+        run: |
+          cargo test --locked -p fullmag-authoring --test gpu_bb_scene_bridge
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir -- --exact
+          cargo test --locked -p fullmag-ir --lib gpu_bb
+          cargo test --locked -p fullmag-ir --test gpu_bb_pipeline
+          cargo test --locked -p fullmag-api --bin fullmag-api script::tests::gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload -- --exact
+          cargo test --locked -p fullmag-plan --lib gpu_bb_policy
+          cargo test --locked -p fullmag-runner --lib native_fem_snapshot_flat_values
+          cargo test --locked -p fullmag-runner --lib performance_snapshot
+          cargo test --locked -p fullmag-runner --lib relaxation::provenance::tests
+
       - name: Run full field identity binary transport contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api field_vector_v5
@@ -675,6 +700,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -702,6 +730,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -762,6 +793,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -889,6 +923,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -976,6 +1013,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
@@ -1022,6 +1062,7 @@ jobs:
           python -B scripts/test_docker_activation_history_reader.py -v
           python -B scripts/test_docker_activation_history_storage.py -v
           python -B scripts/test_docker_activation_history_inventory.py -v
+          python -B scripts/test_docker_activation_history_closed_recovery.py -v
           python -B scripts/test_docker_activation_history_cli.py -v
           python -B scripts/test_docker_activation_history_admission.py -v
           python -B scripts/test_docker_activation_history_output.py -v
@@ -1058,6 +1099,7 @@ jobs:
           python -B scripts/test_docker_completed_cache_reconcile.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
+          python -B scripts/test_docker_volume_cancelled_activation.py -v
           python -B scripts/test_docker_preaccepted_clock.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_interaction_abi_checks.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_pbc_abi_checks.py -v
@@ -1075,6 +1117,8 @@ jobs:
           python -B scripts/test_docker_terminal_observation_lifecycle.py -v
           python -B scripts/test_docker_terminal_observation_producer.py -v
           python -B scripts/test_docker_terminal_observation_exit.py -v
+          python -B scripts/test_docker_terminal_source_origin.py -v
+          python -B scripts/test_docker_terminal_legacy_origin.py -v
           python -B scripts/test_docker_volume_ownerless_terminal_receipts.py -v
           python -B scripts/test_docker_volume_resumed_budget_proof.py -v
           python -B scripts/test_docker_volume_resumed_budget_projection.py -v
@@ -1203,6 +1247,11 @@ jobs:
 
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
+
+      - name: Verify optional FEM preparation process timings
+        run: |
+          python -B scripts/test_preparation_phase_timings_wire.py -q
+          python -B -m pytest -q scripts/test_accepted_fem_cpu_runtime.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

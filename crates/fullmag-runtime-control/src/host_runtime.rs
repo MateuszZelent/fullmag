@@ -72,13 +72,69 @@ mod recovery_tests {
     }
 
     fn recovery_fixture_with_sample(include_sample: bool) -> RecoveryFixture {
+        recovery_fixture_with_sample_and_gpu(include_sample, false)
+    }
+
+    const TEST_GPU: &str = "GPU-00000000-0000-4000-8000-000000000001";
+
+    fn seal_fixture_snapshot(
+        snapshot: ComputeNodeSnapshot,
+        previous: Option<&ComputeNodeSnapshot>,
+    ) -> ComputeNodeSnapshot {
+        use fullmag_session::compute_node_snapshot::ComputeNodeSnapshotData;
+        // Synthetic inventory/enforcement edits belong in the constructor input:
+        // it seals the final digest and advances only the revisions that changed.
+        let sealed = ComputeNodeSnapshot::successor(
+            ComputeNodeSnapshotData {
+                node_id: snapshot.node_id,
+                boot_id: snapshot.boot_id,
+                runtime_owner_id: snapshot.runtime_owner_id,
+                owner_epoch: snapshot.owner_epoch,
+                host_owner_id: snapshot.host_owner_id,
+                host_owner_epoch: snapshot.host_owner_epoch,
+                inventory_revision: snapshot.inventory_revision,
+                capabilities_revision: snapshot.capabilities_revision,
+                cpu: snapshot.cpu,
+                memory: snapshot.memory,
+                gpus: snapshot.gpus,
+                capabilities: snapshot.capabilities,
+                sample: snapshot.sample,
+                enforcement: snapshot.enforcement,
+            },
+            previous,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        if let Some(previous) = previous {
+            assert!(!sealed.sample_does_not_advance(previous));
+        }
+        sealed
+    }
+
+    fn reported_test_gpu() -> fullmag_session::compute_node_snapshot::GpuDeviceSnapshot {
+        use fullmag_session::compute_node_snapshot::{GpuDeviceSnapshot, GpuPartition, Observation};
+        let unavailable = || Reported::Unavailable { reason: UnavailableReason::NotReported, last_known: None };
+        GpuDeviceSnapshot {
+            uuid: TEST_GPU.into(), pci_id: unavailable(), name: unavailable(),
+            local_ordinal: Observation::Available { value: 0 },
+            vram_bytes: Reported::Available { value: 4096 },
+            utilization_percent: Observation::Available { value: 0 },
+            temperature_millicelsius: Observation::Available { value: 0 },
+            partition: Reported::Available { value: GpuPartition::FullDevice },
+            topology: Reported::Unavailable { reason: UnavailableReason::NotReported, last_known: None },
+            runtime_compatibility: Reported::Available { value: vec!["fem.gpu".into()] },
+        }
+    }
+
+    fn recovery_fixture_with_sample_and_gpu(include_sample: bool, gpu: bool) -> RecoveryFixture {
+        let resource_id = if gpu { "compute.gpu" } else { "compute.cpu" };
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let budget = FmsResourceBudget {
             cpu_millis: 1000,
             memory_bytes: 1024,
             storage_bytes: 1024,
-            gpu_memory_bytes: 0,
+            gpu_memory_bytes: if gpu { 1024 } else { 0 },
         };
         let policy = HostResourceLedgerPolicy {
             schema_version: HOST_RESOURCE_LEDGER_POLICY_SCHEMA_V1.into(),
@@ -93,7 +149,7 @@ mod recovery_tests {
                 gpu_memory_bytes: 0,
             },
             allowed_cpu_ids: BTreeSet::new(),
-            gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            gpu_vram_bytes_by_uuid: if gpu { BTreeMap::from([(TEST_GPU.into(), 4096)]) } else { BTreeMap::new() },
         };
         let ledger_root = directory.path().join("host");
         let application_state_root = directory.path().join("application-state");
@@ -120,6 +176,12 @@ mod recovery_tests {
                 };
             sample.enforcement.cpu_quota =
                 fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
+            if gpu {
+                sample.gpus = Reported::Available { value: vec![reported_test_gpu()] };
+                sample.enforcement.gpu_visibility =
+                    fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
+            }
+            let sample = seal_fixture_snapshot(sample, None);
             ledger
                 .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
                 .unwrap();
@@ -131,13 +193,13 @@ mod recovery_tests {
             compute_pool_id: "compute".into(),
             preparation_pool_id: "prep".into(),
             compute_resources: vec![FmsSchedulerResourceOffer {
-                resource_id: "compute.cpu".into(),
-                kind: FmsResourceKind::Cpu,
+                resource_id: resource_id.into(),
+                kind: if gpu { FmsResourceKind::Gpu } else { FmsResourceKind::Cpu },
                 budget: budget.clone(),
             }],
             preparation_resources: vec![FmsPreparationResourceOffer {
                 resource_id: "prep.cpu".into(),
-                budget: budget.clone(),
+                budget: FmsResourceBudget { gpu_memory_bytes: 0, ..budget.clone() },
             }],
             worker_timeout_seconds: 30,
             preparation_timeout_seconds: 30,
@@ -152,10 +214,10 @@ mod recovery_tests {
                 compute_max_concurrency: 1,
                 preparation_max_concurrency: 1,
                 compute_placements: BTreeMap::from([(
-                    "compute.cpu".into(),
+                    resource_id.into(),
                     RuntimeServiceHostPlacement {
                         cpu_ids: BTreeSet::new(),
-                        gpu_uuid: None,
+                        gpu_uuid: gpu.then(|| TEST_GPU.into()),
                     },
                 )]),
                 preparation_cpu_ids: BTreeMap::from([("prep.cpu".into(), BTreeSet::new())]),
@@ -166,7 +228,7 @@ mod recovery_tests {
                 store_id: HostResourceLedger::store_id(store.root()).unwrap(),
                 run_id: "run-1".into(),
                 task_id: "task-1".into(),
-                resource_id: "compute.cpu".into(),
+                resource_id: resource_id.into(),
                 lease_token: "lease-1".into(),
                 owner: HostReservationOwner::Solver {
                     attempt_id: "attempt-1".into(),
@@ -185,10 +247,11 @@ mod recovery_tests {
             ),
             expected_topology_sha256: policy.topology_sha256.clone(),
             runtime_generation_sha256: None,
-            budget: budget.clone(),
+            // Host VRAM is keyed by UUID; only the local lease uses its scalar GPU budget.
+            budget: FmsResourceBudget { gpu_memory_bytes: 0, ..budget.clone() },
             cpu_ids: BTreeSet::new(),
-            exclusive_gpu_uuids: BTreeSet::new(),
-            gpu_vram_bytes_by_uuid: BTreeMap::new(),
+            exclusive_gpu_uuids: if gpu { BTreeSet::from([TEST_GPU.into()]) } else { BTreeSet::new() },
+            gpu_vram_bytes_by_uuid: if gpu { BTreeMap::from([(TEST_GPU.into(), 1024)]) } else { BTreeMap::new() },
             scheduling_priority: 0,
             parallelism: fullmag_ir::compute_resources::ComputeParallelismIR::SingleProcess,
         };
@@ -285,6 +348,124 @@ mod recovery_tests {
         assert!(!error
             .chain()
             .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()));
+    }
+
+    #[test]
+    fn gpu_pre_spawn_unindexed_claim_defers_when_inventory_changes_after_admission() {
+        let fixture = recovery_fixture_with_sample_and_gpu(true, true);
+        seed_ready_queued_catalog(&fixture, None);
+        let now = chrono::Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: fixture.request.identity.resource_id.clone(), kind: FmsResourceKind::Gpu,
+            budget: fixture.budget.clone(), run_id: fixture.request.identity.run_id.clone(),
+            task_id: fixture.request.identity.task_id.clone(), attempt_id: "attempt-1".into(),
+            ownership_epoch: 1, lease_token: fixture.request.identity.lease_token.clone(),
+            state: FmsResourceLeaseState::Active, acquired_at: now, heartbeat_at: now,
+            heartbeat_sequence: 0, released_at: None, host_launch_binding: None,
+        };
+        assert!(fixture.ledger.try_commit_task_admission(
+            &fixture.request, &fixture.store, &lease,
+            &FmsResolvedInputsSnapshot::new(serde_json::json!({})).unwrap(),
+        ).unwrap().is_some());
+        let claim = crate::load_current_task_claim(&fixture.store,
+            &fullmag_application::RunId::parse(&fixture.request.identity.run_id).unwrap(),
+            &fixture.request.identity.task_id).unwrap();
+        assert_eq!(claim.lease.kind, fullmag_application::ResourceKind::Gpu);
+        assert_eq!(claim.lease.budget.gpu_memory_bytes, 1024);
+        assert_eq!(fixture.ledger.policy().total_budget.gpu_memory_bytes, 0);
+        assert_eq!(fixture.request.budget.gpu_memory_bytes, 0);
+        assert_eq!(fixture.config.preparation_resources[0].budget.gpu_memory_bytes, 0);
+        let reconstructed = crate::host_allocation::host_request_for_task_claim(
+            &fixture.store, fixture.context.ledger(), &claim,
+            fixture.context.solver_placement(&fixture.request.identity.resource_id).unwrap(),
+            fixture.context.expected_runtime_generation_sha256(),
+        ).unwrap();
+        assert_eq!(reconstructed.budget, fixture.request.budget);
+        assert_eq!(reconstructed.gpu_vram_bytes_by_uuid, fixture.request.gpu_vram_bytes_by_uuid);
+        assert_eq!(reconstructed.exclusive_gpu_uuids, fixture.request.exclusive_gpu_uuids);
+        let before = fixture.ledger.read().unwrap().reservations;
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert("runtime_selection".into(),
+            serde_json::json!({"device":"gpu", "device_index":null}));
+        let placement = fixture.context.solver_placement(&fixture.request.identity.resource_id).unwrap();
+        assert!(fixture.context.gpu_request_matches_placement(&problem, placement).unwrap());
+        fixture.context.ensure_committed_request(&fixture.request).unwrap();
+        let baseline = fixture.context.required_current_compute_node_snapshot().unwrap();
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger, fixture.inventory_owner.descriptor(), Some(&baseline)).unwrap();
+        snapshot.cpu = baseline.cpu.clone();
+        snapshot.enforcement = baseline.enforcement.clone();
+        snapshot.gpus = Reported::Unavailable {
+            reason: UnavailableReason::SourceUnavailable, last_known: Some(vec![reported_test_gpu()]),
+        };
+        let unavailable_snapshot = seal_fixture_snapshot(snapshot, Some(&baseline));
+        assert_eq!(unavailable_snapshot.inventory_sha256, baseline.inventory_sha256);
+        assert_eq!(unavailable_snapshot.inventory_revision, baseline.inventory_revision);
+        assert_eq!(unavailable_snapshot.capabilities_revision, baseline.capabilities_revision);
+        fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &unavailable_snapshot).unwrap();
+        let error = fixture.context.gpu_request_matches_placement(&problem, placement).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
+        assert!(!format!("{error:#}").contains("ordinal request"));
+        assert!(fixture.context.ensure_committed_request(&fixture.request).unwrap_err().chain()
+            .any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
+        let error = fixture.context.solver_claim_has_pending_launch(&fixture.store, &claim).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
+        assert_eq!(fixture.ledger.read().unwrap().reservations, before);
+        assert!(matches!(before[0].worker_launch_gate,
+            Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending)));
+        // The same immutable claim can be considered again after a new sample recovers.
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger, fixture.inventory_owner.descriptor(), Some(&unavailable_snapshot)).unwrap();
+        snapshot.cpu = baseline.cpu;
+        snapshot.enforcement = baseline.enforcement;
+        snapshot.gpus = Reported::Available { value: vec![reported_test_gpu()] };
+        let snapshot = seal_fixture_snapshot(snapshot, Some(&unavailable_snapshot));
+        assert_eq!(snapshot.inventory_sha256, unavailable_snapshot.inventory_sha256);
+        assert_eq!(snapshot.inventory_revision, unavailable_snapshot.inventory_revision);
+        assert_eq!(snapshot.capabilities_revision, unavailable_snapshot.capabilities_revision);
+        fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot).unwrap();
+        assert!(fixture.context.gpu_request_matches_placement(&problem, placement).unwrap());
+        fixture.context.ensure_committed_request(&fixture.request).unwrap();
+        assert_eq!(fixture.ledger.read().unwrap().reservations, before);
+        assert!(fixture.context.cuda_device_uuids.get().is_none(), "unindexed requests must not initialize CUDA");
+    }
+
+    #[test]
+    fn gpu_pre_spawn_stale_or_missing_sample_remains_typed_not_ordinal_mismatch() {
+        let fixture = recovery_fixture_with_sample_and_gpu(false, true);
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let placement = fixture.context.solver_placement(&fixture.request.identity.resource_id).unwrap();
+        let error = fixture.context.gpu_request_matches_placement(&problem, placement).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+        let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
+            &fixture.ledger, fixture.inventory_owner.descriptor(), None).unwrap();
+        snapshot.gpus = Reported::Available { value: vec![reported_test_gpu()] };
+        let now = chrono::Utc::now();
+        snapshot.sample.collected_at = now - chrono::Duration::seconds(31);
+        snapshot.sample.refresh_freshness_at(now);
+        let snapshot = seal_fixture_snapshot(snapshot, None);
+        fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot).unwrap();
+        let error = fixture.context.gpu_request_matches_placement(&problem, placement).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+    }
+
+    #[test]
+    fn gpu_pre_spawn_real_immutable_uuid_mismatch_still_refuses_placement() {
+        let fixture = recovery_fixture_with_sample_and_gpu(true, true);
+        fixture.context.cuda_device_uuids.set(Ok(vec![TEST_GPU.into()])).unwrap();
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({
+            "device":"gpu", "device_index":0, "legacy_cuda_binding": {
+                "schema_version":"legacy_cuda_binding.v1", "ordinal":0,
+                "cuda_visible_devices":null, "gpu_uuid":TEST_GPU,
+            }
+        }));
+        let correct = fixture.context.solver_placement(&fixture.request.identity.resource_id).unwrap();
+        assert!(fixture.context.gpu_request_matches_placement(&problem, correct).unwrap());
+        let wrong = HostTaskPlacement { cpu_ids: BTreeSet::new(),
+            gpu_uuid: Some("GPU-00000000-0000-4000-8000-000000000002".into()) };
+        assert!(!fixture.context.gpu_request_matches_placement(&problem, &wrong).unwrap());
     }
 
     #[test]
@@ -1193,8 +1374,12 @@ impl HostRuntimeAdmission {
         problem: &fullmag_ir::ProblemIR,
         placement: &HostTaskPlacement,
     ) -> Result<bool> {
-        if placement.gpu_uuid.is_some() && !self.current_gpu_inventory_is_available()? {
-            return Ok(false);
+        if placement.gpu_uuid.is_some() {
+            // Inventory can expire after admission or the recovery precheck.
+            // Preserve its typed deferral; false means an actual ordinal/UUID
+            // mismatch and is fatal when verifying an immutable claim.
+            let snapshot = self.required_current_compute_node_snapshot()?;
+            require_available_gpu_snapshot(&snapshot)?;
         }
         if crate::host_allocation::legacy_cuda_device_index(problem)?.is_none() {
             return Ok(true);
@@ -1840,21 +2025,7 @@ impl HostRuntimeAdmission {
             .required_current_compute_node_snapshot()
             .context("process spawn requires a current compute-node sample for this boot")?;
         if !request.exclusive_gpu_uuids.is_empty() {
-            match &current_snapshot.gpus {
-                Reported::Available { value } if !value.is_empty() => {}
-                Reported::Unavailable {
-                    reason,
-                    last_known: Some(devices),
-                } if !devices.is_empty()
-                    && matches!(
-                        reason,
-                        UnavailableReason::ProbeFailed | UnavailableReason::SourceUnavailable
-                    ) =>
-                {
-                    return Err(TransientGpuInventoryUnavailable { reason: *reason }.into());
-                }
-                _ => bail!("GPU process spawn requires a current GPU inventory"),
-            }
+            require_available_gpu_snapshot(&current_snapshot)?;
         }
         let snapshot = self.ledger.read()?;
         let reservation = snapshot
@@ -1892,4 +2063,18 @@ impl HostRuntimeAdmission {
 
 fn gpu_snapshot_is_available(snapshot: &ComputeNodeSnapshot) -> bool {
     matches!(&snapshot.gpus, Reported::Available { value } if !value.is_empty())
+}
+
+/// Read-only pre-spawn telemetry validation, shared by placement and committed
+/// reservation checks. Last-known devices never authorize GPU work.
+fn require_available_gpu_snapshot(snapshot: &ComputeNodeSnapshot) -> Result<()> {
+    match &snapshot.gpus {
+        Reported::Available { value } if !value.is_empty() => Ok(()),
+        Reported::Unavailable { reason, last_known: Some(devices) }
+            if !devices.is_empty() && matches!(reason, UnavailableReason::ProbeFailed | UnavailableReason::SourceUnavailable) =>
+        {
+            Err(TransientGpuInventoryUnavailable { reason: *reason }.into())
+        }
+        _ => bail!("GPU process spawn requires a current GPU inventory"),
+    }
 }

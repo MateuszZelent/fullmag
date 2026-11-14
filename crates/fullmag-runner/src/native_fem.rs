@@ -80,7 +80,8 @@ pub(crate) use plan::{
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    strict_gpu_runtime_build_info, terminal_hypre_relax7_async_copy, DeviceInfo,
+    NativeFemDataResidency, NativeFemGpuRkPlanInfo,
     NativeFemGpuStateInfo,
 };
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -2370,6 +2371,8 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
     };
 
     FemPlanIR {
+        gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         frozen_spins: None,
         mesh_name: "unit_tet".to_string(),
         mesh_source: Some("meshes/unit_tet.msh".to_string()),
@@ -3102,7 +3105,7 @@ pub(crate) struct NativeFemEnergyDensitySnapshot {
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe impl Send for NativeFemEnergyDensitySnapshot {}
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NativeFemFieldSnapshotInfo {
     pub node_count: usize,
@@ -3476,16 +3479,39 @@ impl NativeFemBackend {
 
         let mut cpu_plan = plan.clone();
         cpu_plan.mfem_device_string = Some("cpu".to_string());
-        Self::create_backend_with_initial_effective_field(
-            &cpu_plan,
-            eager_initial_effective_field,
-        )
+        Self::create_backend_with_initial_effective_field(&cpu_plan, eager_initial_effective_field)
     }
 
     fn create_backend_with_initial_effective_field(
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        if let Some(request) = &plan.gpu_pcg_control_experiment {
+            request.validate().map_err(|message| RunError { message })?;
+            let policy = resolved_native_fem_demag_solver_policy(plan);
+            if !native_fem_plan_requests_gpu_mfem_device(plan)
+                || !plan.enable_demag
+                || !plan.demag_realization.is_some_and(|model| model.is_poisson())
+                || plan.precision != fullmag_ir::ExecutionPrecision::Double
+                || !policy.solver.eq_ignore_ascii_case("CG")
+                || !policy.preconditioner.eq_ignore_ascii_case("AMG")
+                || !plan.mesh.periodic_node_pairs.is_empty()
+                || !plan.mesh.periodic_boundary_pairs.is_empty()
+            {
+                return Err(RunError { message: "fem_gpu_pcg_control_experiment requires nonperiodic FEM GPU/double Poisson CG/AMG; fallback=none".into() });
+            }
+        }
+        if plan.gpu_bb_preconditioner.is_some()
+            && (!native_fem_plan_requests_gpu_mfem_device(plan)
+                || !plan.relaxation.as_ref().is_some_and(|control| {
+                    control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                }))
+        {
+            return Err(RunError {
+                message: "gpu_bb_preconditioner requires GPU projected_gradient_bb execution"
+                    .to_string(),
+            });
+        }
         let backend_create_started = std::time::Instant::now();
         // Resolve ownership before runtime marker normalization can merge
         // authored domain markers into magnetic/nonmagnetic attributes.
@@ -4319,6 +4345,36 @@ impl NativeFemBackend {
                 && plan.dbulk_field.is_none(),
             local_node_map_identity: std::sync::Mutex::new(None),
         };
+        if let Some(request) = &plan.gpu_pcg_control_experiment {
+            // GPU create_v5 performs Setup but no physical PCG solve. Install
+            // the explicit policy before initial field/snapshot evaluation.
+            let config = ffi::fullmag_fem_gpu_pcg_control_config_v1 {
+                abi_version: 1,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_pcg_control_config_v1>() as u32,
+                status_batch_stride: request.status_batch_stride,
+                reserved: 0,
+            };
+            let rc = unsafe { ffi::fullmag_fem_backend_set_gpu_pcg_control_v1(backend.handle, &config) };
+            if rc != ffi::FULLMAG_FEM_OK {
+                return Err(backend.last_error_or("setting FEM GPU PCG control experiment failed"));
+            }
+        }
+        if native_fem_plan_requests_gpu_mfem_device(plan)
+            && plan.relaxation.as_ref().is_some_and(|control| {
+                control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            })
+        {
+            let policy = plan
+                .gpu_bb_preconditioner
+                .unwrap_or(fullmag_ir::FemGpuBbPreconditionerIR::Auto)
+                .native_id();
+            let rc = unsafe {
+                ffi::fullmag_fem_backend_set_gpu_bb_preconditioner(backend.handle, policy)
+            };
+            if rc != ffi::FULLMAG_FEM_OK {
+                return Err(backend.last_error_or("setting GPU BB preconditioner policy failed"));
+            }
+        }
         if native_fem_plan_requests_gpu_mfem_device(plan) {
             // Prepare object ownership before the first accepted step. This
             // reads the resident initial magnetization without changing it;
@@ -4400,6 +4456,49 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU transfer audit read failed"));
         }
         Ok(audit)
+    }
+
+    fn mandatory_control_counters(&self, scope: u32) -> Result<Option<crate::types::GpuMandatoryControlCounters>, RunError> {
+        let mut counters=ffi::fullmag_fem_gpu_mandatory_control_counters_v1::default();
+        let rc=unsafe { ffi::fullmag_fem_backend_get_mandatory_control_counters_v1(self.handle,scope,&mut counters) };
+        if rc != ffi::FULLMAG_FEM_OK { return Err(self.last_error_or("FEM mandatory control counter query failed")); }
+        Ok(Some(crate::types::GpuMandatoryControlCounters {
+            bb_certificate_record_bytes: counters.bb_certificate_record_bytes,
+            bb_certificate_readbacks: counters.bb_certificate_readbacks,
+            bb_certificate_bytes: counters.bb_certificate_bytes,
+            bb_descent_readbacks: counters.bb_descent_readbacks,
+            bb_descent_bytes: counters.bb_descent_bytes,
+            poisson_certificate_readbacks: counters.poisson_certificate_readbacks,
+            poisson_certificate_bytes: counters.poisson_certificate_bytes,
+            confirmation_observations: counters.confirmation_observations,
+            confirmation_metric_readbacks: counters.confirmation_metric_readbacks,
+            confirmation_metric_bytes: counters.confirmation_metric_bytes,
+        }))
+    }
+
+    fn poisson_device_pcg_counters(&self, scope: u32) -> Result<Option<crate::types::FemPoissonDevicePcgCounters>, RunError> {
+        let mut counters=ffi::fullmag_fem_poisson_device_pcg_counters_v1::default();
+        let rc=unsafe { ffi::fullmag_fem_backend_get_poisson_device_pcg_counters_v1(self.handle,scope,&mut counters) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM Poisson device PCG counters query failed"));
+        }
+        if counters.status_record_bytes==0 { return Ok(None); }
+        Ok(Some(crate::types::FemPoissonDevicePcgCounters {
+            status_readbacks:counters.status_readbacks,status_record_bytes:counters.status_record_bytes,
+            control_d2h_bytes:counters.control_d2h_bytes,solves:counters.solves,
+            active_iterations:counters.active_iterations,
+        }))
+    }
+
+    fn poisson_linear_engine(&self) -> Result<Option<String>, RunError> {
+        let mut engine = 0;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_poisson_linear_engine_v1(self.handle, &mut engine)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM Poisson linear engine query failed"));
+        }
+        poisson_linear_engine_name(engine)
     }
 
     fn gpu_demag_amg_coarse_relax_type(&self) -> Result<Option<i32>, RunError> {
@@ -4551,6 +4650,22 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU performance snapshot read failed"));
         }
         runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
+    }
+
+    pub(crate) fn gpu_pcg_control_experiment(
+        &self,
+        requested_stride: u32,
+    ) -> Result<crate::types::FemGpuPcgControlExperimentProvenance, RunError> {
+        let mut info = ffi::fullmag_fem_gpu_pcg_control_info_v1 {
+            abi_version: 1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_pcg_control_info_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_pcg_control_info_v1(self.handle, &mut info) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU PCG control experiment read failed"));
+        }
+        runtime_info::gpu_pcg_control_experiment_from_ffi(info, requested_stride)
     }
 
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
@@ -4907,6 +5022,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -5373,6 +5493,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -5743,6 +5868,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -6776,6 +6906,200 @@ mod task5_energy_density_tests {
     }
 }
 
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeFemFieldSnapshotLayoutError {
+    UnsupportedLayout,
+    MismatchedPayloadLength,
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+fn native_fem_field_snapshot_layout_error(name: &str, error: NativeFemFieldSnapshotLayoutError) -> RunError {
+    RunError {
+        message: match error {
+            NativeFemFieldSnapshotLayoutError::UnsupportedLayout => {
+                format!("native FEM field snapshot '{}' returned unsupported layout", name)
+            }
+            NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength => format!(
+                "native FEM field snapshot '{}' returned mismatched payload length",
+                name
+            ),
+        },
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+fn native_fem_field_snapshot_scalar_count(
+    info: NativeFemFieldSnapshotInfo,
+    len_bytes: u64,
+) -> Result<usize, NativeFemFieldSnapshotLayoutError> {
+    if !matches!(info.component_count, 1 | 3)
+        || info.scalar_bytes != std::mem::size_of::<f64>()
+    {
+        return Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout);
+    }
+
+    let expected_scalar_count = info
+        .node_count
+        .checked_mul(info.component_count)
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let expected_len_bytes = expected_scalar_count
+        .checked_mul(info.scalar_bytes)
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let max_slice_bytes = usize::try_from(isize::MAX)
+        .map_err(|_| NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    if expected_len_bytes > max_slice_bytes {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+    let expected_len_bytes = u64::try_from(expected_len_bytes)
+        .map_err(|_| NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    if len_bytes != expected_len_bytes {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+
+    Ok(expected_scalar_count)
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+fn flatten_native_fem_snapshot_values(
+    values: &[f64],
+    info: NativeFemFieldSnapshotInfo,
+) -> Result<Vec<f64>, NativeFemFieldSnapshotLayoutError> {
+    let len_bytes = values
+        .len()
+        .checked_mul(std::mem::size_of::<f64>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let scalar_count = native_fem_field_snapshot_scalar_count(info, len_bytes)?;
+    if values.len() != scalar_count {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+
+    match info.component_count {
+        3 => Ok(values.to_vec()),
+        1 => {
+            let flat_count = info
+                .node_count
+                .checked_mul(3)
+                .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+            let mut flat = Vec::with_capacity(flat_count);
+            for value in values {
+                flat.push(*value);
+                flat.push(0.0);
+                flat.push(0.0);
+            }
+            Ok(flat)
+        }
+        _ => Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout),
+    }
+}
+
+#[cfg(test)]
+mod native_fem_snapshot_flat_values_tests {
+    use super::*;
+
+    #[test]
+    fn native_fem_snapshot_flat_values_preserve_aos_order_and_scalar_fallback() {
+        let vector_info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let vector_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&vector_values, vector_info)
+                .expect("validated vector snapshot"),
+            vector_values.to_vec()
+        );
+
+        let scalar_info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 1,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let scalar_values = [7.0, -2.5];
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&scalar_values, scalar_info)
+                .expect("validated scalar snapshot"),
+            vec![7.0, 0.0, 0.0, -2.5, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn native_fem_snapshot_flat_values_reject_invalid_layout_in_safe_helper() {
+        let values = [1.0, 2.0, 3.0];
+        let invalid_component_count = NativeFemFieldSnapshotInfo {
+            node_count: 1,
+            component_count: 2,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_component_count),
+            Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout)
+        );
+
+        let invalid_scalar_bytes = NativeFemFieldSnapshotInfo {
+            node_count: 1,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f32>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_scalar_bytes),
+            Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout)
+        );
+
+        let invalid_length = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_length),
+            Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)
+        );
+
+        let max_slice_bytes = usize::try_from(isize::MAX).expect("isize max fits usize");
+        let oversized_scalar_info = NativeFemFieldSnapshotInfo {
+            node_count: max_slice_bytes / std::mem::size_of::<f64>() + 1,
+            component_count: 1,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            native_fem_field_snapshot_scalar_count(oversized_scalar_info, u64::MAX),
+            Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)
+        );
+    }
+
+    #[test]
+    fn native_fem_snapshot_flat_values_preserve_float_bits() {
+        let info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let values = [
+            -0.0,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+        ];
+        let flattened =
+            flatten_native_fem_snapshot_values(&values, info).expect("validated vector snapshot");
+        assert_eq!(
+            flattened
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemFieldSnapshot {
     fn wait_payload(
@@ -6897,6 +7221,34 @@ impl NativeFemFieldSnapshot {
                 ),
             }),
         }
+    }
+
+    pub(crate) fn into_flat_vector_field(mut self) -> Result<Vec<f64>, RunError> {
+        let (data, len_bytes, info) = self.wait_payload()?;
+        let scalar_count = native_fem_field_snapshot_scalar_count(info, len_bytes)
+            .map_err(|error| native_fem_field_snapshot_layout_error(&self.name, error))?;
+        if scalar_count == 0 {
+            return Ok(Vec::new());
+        }
+        if data.is_null() {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned a null payload",
+                    self.name
+                ),
+            });
+        }
+        if (data as usize) % std::mem::align_of::<f64>() != 0 {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned a misaligned payload",
+                    self.name
+                ),
+            });
+        }
+        let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), scalar_count) };
+        flatten_native_fem_snapshot_values(values, info)
+            .map_err(|error| native_fem_field_snapshot_layout_error(&self.name, error))
     }
 }
 
@@ -8812,6 +9164,8 @@ mod tests {
 
     fn make_exchange_only_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             frozen_spins: None,
             mesh_name: "two_tets".to_string(),
             mesh_source: Some("meshes/two_tets.msh".to_string()),
@@ -12694,4 +13048,35 @@ mod tests {
             );
         }
     }
+}
+
+fn poisson_linear_engine_name(engine: u32) -> Result<Option<String>, crate::types::RunError> {
+    match engine {
+        0 => Ok(None),
+        1 => Ok(Some("hypre_pcg".to_string())),
+        2 => Ok(Some("hypre_gmres".to_string())),
+        3 => Ok(Some("device_scalar_pcg_amg".to_string())),
+        value => Err(crate::types::RunError {
+            message: format!("unknown FEM Poisson linear engine {value}"),
+        }),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn poisson_linear_engine_mapping_uses_actual_native_engine() {
+    assert_eq!(poisson_linear_engine_name(0).unwrap(), None);
+    assert_eq!(
+        poisson_linear_engine_name(1).unwrap().as_deref(),
+        Some("hypre_pcg")
+    );
+    assert_eq!(
+        poisson_linear_engine_name(2).unwrap().as_deref(),
+        Some("hypre_gmres")
+    );
+    assert_eq!(
+        poisson_linear_engine_name(3).unwrap().as_deref(),
+        Some("device_scalar_pcg_amg")
+    );
+    assert!(poisson_linear_engine_name(4).is_err());
 }

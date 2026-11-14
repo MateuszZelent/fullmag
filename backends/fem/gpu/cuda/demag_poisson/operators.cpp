@@ -9,6 +9,7 @@
  */
 
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 
 #include "context.hpp"
 #include "core/fem_material_runtime.hpp"
@@ -1252,6 +1253,7 @@ bool upload_demag_poisson_operators(
 void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
+    destroy_demag_poisson_device_pcg(workspace);
     destroy_hypre_stream_interop(workspace.stream_interop);
     destroy_triple(workspace.rhs);
     destroy_scalar(workspace.recovery_x);

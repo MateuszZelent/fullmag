@@ -23,6 +23,11 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Setup just for Linux recipe contract tests
+        if: runner.os == 'Linux'
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.51.0'
       - name: Check storage paths, links and concurrent writers
         run: python -B scripts/test_fullmag_storage.py
       - name: Check Windows launcher refusal before writes
@@ -38,6 +43,47 @@ jobs:
           test_backend_group_cache_cleanup test_docker_group_frontend_seed
           test_docker_dev_defaults test_bootstrap_docker_toolchain
           test_docker_volume_post_build_integration
+      - name: Check Linux data-volume copy and admission contracts
+        if: runner.os == 'Linux'
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m unittest
+          scripts.test_fullmag_data_volume scripts.test_fullmag_data_volume_manifest
+          scripts.test_fullmag_data_volume_fs scripts.test_fullmag_data_volume_guard
+          scripts.test_fullmag_data_volume_pending
+          scripts.test_fullmag_data_volume_runtime_binding
+          scripts.test_docker_data_volume_runtime_binding_evidence
+          scripts.test_docker_dev_data_volume_runtime_binding
+          scripts.test_linux_native_data_volume_migration scripts.test_linux_native_host
+          scripts.test_fullmag_data_volume_admission
+          scripts.test_linux_native_readmission scripts.test_docker_linux_native_readmission
+          scripts.test_linux_native_probe scripts.test_docker_dev_storage
+          scripts.test_fullmag_data_volume_journal scripts.test_docker_dev_data_volume
+          scripts.test_fullmag_data_volume_linux_request scripts.test_linux_data_volume_provision
+          scripts.test_linux_data_volume_format scripts.test_linux_data_volume_recover scripts.test_docker_data_volume_linux
+          scripts.test_fullmag_data_volume_completion scripts.test_fullmag_data_volume_zarr_qualification scripts.test_docker_dev_data_volume_register
+          scripts.test_linux_data_volume_copy_recovery scripts.test_docker_data_volume_copy_recovery_job
+          scripts.test_docker_dev_data_volume_copy_recover
+          scripts.test_linux_data_volume_copy scripts.test_fullmag_data_volume_bind
+          scripts.test_linux_data_volume_bind
+          scripts.test_linux_data_volume_admission
+          scripts.test_docker_data_volume_stopped_group scripts.test_docker_data_volume_copy_job
+          scripts.test_docker_data_volume_copy_job_contracts scripts.test_docker_dev_data_volume_copy
+          scripts.test_docker_data_volume_bind_job scripts.test_docker_dev_data_volume_bind
+          scripts.test_docker_data_volume_admission_job scripts.test_docker_dev_data_volume_admission
+          scripts.test_docker_data_volume_startup_scope
+          scripts.test_docker_data_volume_qualification_scope
+          scripts.test_docker_data_volume_removed_group
+          scripts.test_terminal_observation_owned_publish scripts.test_data_volume_start_terminal
+          scripts.test_terminal_observation_repeated_stop scripts.test_data_volume_repeated_stop_observer
+          scripts.test_docker_data_volume_restart_context scripts.test_docker_dev_data_volume_restart
+          scripts.test_docker_data_volume_relocated
+          scripts.test_just_data_volume_shell
+          scripts.test_data_volume_stopped_windows_bind
+          scripts.test_data_volume_released_state scripts.test_data_volume_copy_fences
+          scripts.test_data_volume_copy_fence_service scripts.test_docker_data_volume_copy_guard
+          scripts.test_docker_volume_cold_budget_restore scripts.test_docker_volume_startup_diagnostic_restart
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 
@@ -46,6 +92,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Install ripgrep
         run: |

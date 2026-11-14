@@ -826,6 +826,17 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Actual initialized native GPU Poisson engine; historical/unconfigured paths omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_resolved_linear_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_device_pcg_physical: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_device_pcg_hot_loop: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_physical: Option<GpuMandatoryControlCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_hot_loop: Option<GpuMandatoryControlCounters>,
     /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
     /// Historical results and unconfigured/non-GPU paths have no observation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1173,6 +1184,11 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_resolved_linear_engine: None,
+            demag_device_pcg_physical: None,
+            demag_device_pcg_hot_loop: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
@@ -3388,6 +3404,8 @@ pub struct RelaxationControllerPolicyProvenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FemDirectMinimizerPolicyProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_policy_source: Option<String>,
     pub requested_direction_policy: String,
     pub resolved_direction_policy: String,
     pub requested_linear_solver: String,
@@ -4090,6 +4108,79 @@ pub enum FemGpuExecutionClass {
     Cpu,
 }
 
+/// Complete native v1 FEM GPU performance snapshot, attached only to terminal
+/// direct-minimizer provenance. Integer fields retain the native ABI values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuPerformanceSnapshotProvenance {
+    pub schema_version: String,
+    pub scope: String,
+    pub accepted_source_step: u64,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub available: u32,
+    pub execution_class: u32,
+    pub precision: u32,
+    pub integrator: u32,
+    pub device_ordinal: i32,
+    pub completed_step: u64,
+    pub completed_execution_id: u64,
+    pub completed_operator_id: u64,
+    pub completed_attempt_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub physical_rhs_evaluations: u64,
+    pub physical_exchange_applies: u64,
+    pub physical_exchange_launches: u64,
+    pub physical_exchange_nnz_visited: u64,
+    pub physical_demag_solves: u64,
+    pub physical_demag_iterations: u64,
+    pub physical_demag_rhs_norm_evaluations: u64,
+    pub physical_demag_stage_energy_evaluations: u64,
+    pub physical_normalization_launches: u64,
+    pub physical_normalization_readbacks: u64,
+    pub physical_adaptive_readbacks: u64,
+    pub physical_control_fences: u64,
+    pub physical_endpoint_cache_hits: u64,
+    pub physical_endpoint_cache_misses: u64,
+    pub physical_endpoint_cache_invalidations: u64,
+    pub physical_device_to_device_bytes: u64,
+    pub physical_control_d2h_bytes: u64,
+    pub physical_bulk_d2h_bytes: u64,
+    pub physical_demag_rhs_norm_sum: f64,
+    pub physical_demag_stage_energy_sum_joules: f64,
+    pub accepted_rhs_evaluations: u64,
+    pub accepted_exchange_applies: u64,
+    pub accepted_exchange_launches: u64,
+    pub accepted_exchange_nnz_visited: u64,
+    pub accepted_demag_solves: u64,
+    pub accepted_demag_iterations: u64,
+    pub accepted_demag_rhs_norm_evaluations: u64,
+    pub accepted_demag_stage_energy_evaluations: u64,
+    pub accepted_normalization_launches: u64,
+    pub accepted_normalization_readbacks: u64,
+    pub accepted_adaptive_readbacks: u64,
+    pub accepted_control_fences: u64,
+    pub accepted_endpoint_cache_hits: u64,
+    pub accepted_endpoint_cache_misses: u64,
+    pub accepted_endpoint_cache_invalidations: u64,
+    pub accepted_device_to_device_bytes: u64,
+    pub accepted_control_d2h_bytes: u64,
+    pub accepted_bulk_d2h_bytes: u64,
+    pub accepted_demag_rhs_norm_sum: f64,
+    pub accepted_demag_stage_energy_sum_joules: f64,
+    pub physical_exchange_elapsed_ns: u64,
+    pub physical_demag_assemble_elapsed_ns: u64,
+    pub physical_demag_recover_elapsed_ns: u64,
+    pub physical_demag_energy_elapsed_ns: u64,
+    pub physical_rhs_elapsed_ns: u64,
+    pub accepted_exchange_elapsed_ns: u64,
+    pub accepted_demag_assemble_elapsed_ns: u64,
+    pub accepted_demag_recover_elapsed_ns: u64,
+    pub accepted_demag_energy_elapsed_ns: u64,
+    pub accepted_rhs_elapsed_ns: u64,
+}
+
 /// Native FEM GPU execution evidence captured after execution.
 ///
 /// The resolved and executed fields are derived only from the versioned
@@ -4273,6 +4364,12 @@ pub struct FemEigenNativeExecutionAttestation {
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pcg_physical: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pcg_hot_loop: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_linear_engine: Option<String>,
     pub linear_solver: String,
     pub preconditioner: String,
     pub rtol: f64,
@@ -4379,6 +4476,32 @@ pub struct FdmMultilayerStageTelemetry {
     pub forward_fft_count: u64,
     pub inverse_fft_count: u64,
     pub pair_accumulation_count: u64,
+}
+
+/// Optional HYPRE process-global submissions observed after GPU work completes.
+/// These are not per-backend, Physical, or HotLoop counters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HypreRelax7AsyncCopyTelemetry {
+    pub count: u64,
+    pub bytes: u64,
+    pub scope: String,
+}
+
+/// Raw Context-lifetime API submissions, captured at terminal quiescence.
+/// These include rejected/failed attempts and do not count executed GPU cycles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuPcgControlExperimentProvenance {
+    pub schema_version: String,
+    pub requested_status_batch_stride: u32,
+    pub resolved_status_batch_stride: u32,
+    pub counter_scope: String,
+    pub solve_attempts: u64,
+    pub enqueued_iterations: u64,
+    pub amg_apply_calls: u64,
+    pub hot_loop_solve_attempts: u64,
+    pub hot_loop_enqueued_iterations: u64,
+    pub hot_loop_amg_apply_calls: u64,
 }
 
 /// Included in artifact metadata for reproducibility.
@@ -4580,6 +4703,17 @@ pub struct ExecutionProvenance {
     /// Native accounting for accepted PG-BB/NCG steps, without RK operators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_minimizer_execution_receipt: Option<FemGpuMinimizerExecutionReceipt>,
+    /// Complete native v1 performance snapshot, published once at direct
+    /// minimizer finalization rather than repeated in per-step telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_performance_snapshot: Option<FemGpuPerformanceSnapshotProvenance>,
+    /// Explicit PCG control experiment, captured once at terminal quiescence.
+    /// Counts attempted API submissions, including failed/rejected work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_pcg_control_experiment: Option<FemGpuPcgControlExperimentProvenance>,
+    /// Optional process-global HYPRE async-copy submissions at terminal capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypre_relax7_async_copy: Option<HypreRelax7AsyncCopyTelemetry>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.
@@ -4793,6 +4927,10 @@ pub struct ExecutionProvenance {
     /// FEM Poisson demag solver policy and observed solve result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_physical: Option<GpuMandatoryControlCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_hot_loop: Option<GpuMandatoryControlCounters>,
     /// Measured body-only Fredkin-Koehler FEM/BEM operator provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_bem_demag: Option<FemBemDemagProvenance>,
@@ -5148,6 +5286,27 @@ pub struct AuxiliaryArtifact {
     pub bytes: Vec<u8>,
 }
 
+/// Selects whether the runner publishes an initial live observation.
+///
+/// The legacy magnetization snapshot preserves the historical host-copy
+/// behavior. Native GPU fields are a distinct, explicit FEM GPU-only mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialObservationPolicy {
+    None,
+    LegacyMagnetizationSnapshot,
+    NativeGpuInitialFields,
+}
+
+impl From<bool> for InitialObservationPolicy {
+    fn from(initial_snapshot: bool) -> Self {
+        if initial_snapshot {
+            Self::LegacyMagnetizationSnapshot
+        } else {
+            Self::None
+        }
+    }
+}
+
 pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
     /// Cadence for heavier live payloads such as full magnetization snapshots.
@@ -5155,6 +5314,9 @@ pub(crate) struct LiveStepConsumer<'a> {
     /// Whether this consumer needs a full step-0 physics snapshot before
     /// the first accepted step.
     pub initial_snapshot: bool,
+    /// Whether the consumer requests the one-time native FEM GPU initial
+    /// fields observation instead of the legacy magnetization snapshot.
+    pub initial_native_gpu_fields: bool,
     pub display_selection: Option<&'a (dyn Fn() -> crate::DisplaySelectionState + Send + Sync)>,
     #[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
     pub interrupt_requested: Option<&'a AtomicBool>,
@@ -5357,6 +5519,8 @@ mod tests {
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("test".to_string()),
             mesh: MeshIR {
@@ -6105,6 +6269,43 @@ mod tests {
     }
 
     #[test]
+    fn hypre_async_copy_provenance_is_optional_and_preserves_u64() {
+        let legacy = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        assert!(legacy.get("hypre_relax7_async_copy").is_none());
+        let mut provenance: ExecutionProvenance = serde_json::from_value(legacy).unwrap();
+        assert!(provenance.hypre_relax7_async_copy.is_none());
+        provenance.hypre_relax7_async_copy = Some(super::HypreRelax7AsyncCopyTelemetry {
+            count: 9_007_199_254_740_993,
+            bytes: u64::MAX,
+            scope: "process_cumulative_at_terminal_capture".into(),
+        });
+        let encoded = serde_json::to_string(&provenance).unwrap();
+        let decoded: ExecutionProvenance = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            decoded.hypre_relax7_async_copy,
+            provenance.hypre_relax7_async_copy
+        );
+    }
+
+    #[test]
+    fn legacy_execution_provenance_without_performance_snapshot_remains_valid() {
+        let mut value = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        value
+            .as_object_mut()
+            .expect("execution provenance JSON object")
+            .remove("fem_gpu_performance_snapshot");
+
+        let provenance: ExecutionProvenance = serde_json::from_value(value)
+            .expect("legacy execution provenance should omit the optional snapshot");
+
+        assert!(provenance.fem_gpu_performance_snapshot.is_none());
+        assert!(serde_json::to_value(provenance)
+            .unwrap()
+            .get("fem_gpu_performance_snapshot")
+            .is_none());
+    }
+
+    #[test]
     fn adaptive_timestep_provenance_keeps_requested_and_resolved_values() {
         let policy = TimestepPolicyProvenance {
             requested: RequestedTimestepPolicy::Adaptive {
@@ -6263,4 +6464,29 @@ pub struct TerminalOutputScheduleBinding {
     pub schedule_index: u64,
     pub name: String,
     pub every_seconds: f64,
+}
+
+/// Physical lifetime subaccounting of completed PCG status readbacks.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemPoissonDevicePcgCounters {
+    pub status_readbacks: u64,
+    pub status_record_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub solves: u64,
+    pub active_iterations: u64,
+}
+
+/// Source-owned solver controls, independent of demag being enabled.
+#[derive(Debug,Clone,Copy,Default,Serialize,Deserialize,PartialEq,Eq)]
+pub struct GpuMandatoryControlCounters {
+    pub bb_certificate_record_bytes: u64,
+    pub bb_certificate_readbacks: u64,
+    pub bb_certificate_bytes: u64,
+    pub bb_descent_readbacks: u64,
+    pub bb_descent_bytes: u64,
+    pub poisson_certificate_readbacks: u64,
+    pub poisson_certificate_bytes: u64,
+    pub confirmation_observations: u64,
+    pub confirmation_metric_readbacks: u64,
+    pub confirmation_metric_bytes: u64,
 }

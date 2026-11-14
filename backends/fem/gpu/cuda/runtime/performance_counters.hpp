@@ -13,11 +13,13 @@
 #include "fullmag_fem.h"
 
 #include <cstdint>
+#include <array>
 #include <mutex>
 
 namespace fullmag::fem {
 
 struct GpuPerformanceCounterDelta {
+    fullmag_fem_gpu_mandatory_control_counters_v1 mandatory_controls{};
     uint64_t rhs_evaluations = 0;
     uint64_t exchange_applies = 0;
     uint64_t exchange_launches = 0;
@@ -35,6 +37,10 @@ struct GpuPerformanceCounterDelta {
     uint64_t endpoint_cache_invalidations = 0;
     uint64_t device_to_device_bytes = 0;
     uint64_t control_d2h_bytes = 0;
+    uint64_t device_pcg_status_readbacks = 0;
+    uint64_t device_pcg_control_d2h_bytes = 0;
+    uint64_t device_pcg_solves = 0;
+    uint64_t device_pcg_active_iterations = 0;
     uint64_t bulk_d2h_bytes = 0;
     uint64_t exchange_elapsed_ns = 0;
     uint64_t demag_assemble_elapsed_ns = 0;
@@ -106,7 +112,54 @@ void gpu_performance_commit_attempt(GpuPerformanceCounterState &state);
 void gpu_performance_reject_attempt(GpuPerformanceCounterState &state);
 void gpu_performance_fail_attempt(GpuPerformanceCounterState &state);
 
+// Transaction owner for direct minimizers. Unclosed exits, including exception
+// unwinding, publish failed physical work and leave no active counter delta.
+class GpuPerformanceAttemptScope {
+public:
+    GpuPerformanceAttemptScope(GpuPerformanceCounterState &state, uint64_t step)
+        : state_(state)
+    {
+        gpu_performance_begin_attempt(state_, step);
+    }
+    ~GpuPerformanceAttemptScope()
+    {
+        if (active_) gpu_performance_fail_attempt(state_);
+    }
+    GpuPerformanceAttemptScope(const GpuPerformanceAttemptScope &) = delete;
+    GpuPerformanceAttemptScope &operator=(const GpuPerformanceAttemptScope &) = delete;
+    void commit()
+    {
+        gpu_performance_commit_attempt(state_);
+        active_ = false;
+    }
+    void reject()
+    {
+        gpu_performance_reject_attempt(state_);
+        active_ = false;
+    }
+private:
+    GpuPerformanceCounterState &state_;
+    bool active_ = true;
+};
+
 fullmag_fem_gpu_performance_snapshot_v1 gpu_performance_snapshot(
     const GpuPerformanceCounterState &state);
 
 } // namespace fullmag::fem
+
+namespace fullmag::fem {
+fullmag_fem_poisson_device_pcg_counters_v1 gpu_performance_device_pcg_snapshot(
+    const GpuPerformanceCounterState &state, uint64_t status_record_bytes);
+}
+
+namespace fullmag::fem {
+void add_mandatory_control_counters(fullmag_fem_gpu_mandatory_control_counters_v1 &target,
+    const fullmag_fem_gpu_mandatory_control_counters_v1 &delta);
+fullmag_fem_gpu_mandatory_control_counters_v1 gpu_performance_mandatory_controls_snapshot(
+    const GpuPerformanceCounterState &state);
+}
+
+namespace fullmag::fem {
+bool resolve_confirmation_control_delta(const std::array<uint64_t,6> &before,
+    const std::array<uint64_t,6> &after, fullmag_fem_gpu_mandatory_control_counters_v1 &out);
+}

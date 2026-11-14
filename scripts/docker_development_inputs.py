@@ -15,7 +15,7 @@ import stat
 import uuid
 
 import fullmag_storage as storage
-from docker_dev_host import local_volume, require_host
+from docker_dev_host import local_volume, readonly_source_volume, require_host
 
 
 def read_owned_regular(path, maximum=1024 * 1024):
@@ -340,7 +340,7 @@ def seed(source, state, port, *, reuse_from=None, write_file=None):
     require_host()
     # Check lexical input before resolving so a checkout alias cannot hide a link.
     source = storage.absolute(source, "live source checkout").resolve(strict=True)
-    source_volume = local_volume(source)
+    source_volume = readonly_source_volume(source)
     initial_commit = storage.git(source, "rev-parse", "HEAD")
     app = source / "apps/control-room"
     directories = []
@@ -348,7 +348,7 @@ def seed(source, state, port, *, reuse_from=None, write_file=None):
         path = app / name
         if not path.is_dir():
             raise ValueError(f"Missing live frontend source directory: {path}")
-        local_volume(path)
+        readonly_source_volume(path)
         directories.append({"name": name, "source": str(path),
                             "target": WORKSPACE + "/apps/control-room/" + name})
     package_relative = Path("package.json")

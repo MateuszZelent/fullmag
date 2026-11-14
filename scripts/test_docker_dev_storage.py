@@ -24,12 +24,40 @@ class DockerDevStorageTests(unittest.TestCase):
             layout = {"profile": "docker-all-gpu"}
             with patch("docker_development_inputs.select_checkout", return_value=repo), \
                     patch.object(fullmag_storage, "resolve_layout", return_value=layout), \
+                    patch.object(docker_dev, "_compose_identity", return_value={"project_name": "fullmag-master"}), \
+                    patch.object(docker_dev, "_verify_registered_data_volume") as verify_volume, \
                     patch.object(fullmag_storage, "initialize_runtime") as initialize_runtime:
                 selected, observed = docker_dev._select_source(repo, None)
 
             self.assertEqual(selected, repo.resolve())
             self.assertIs(observed, layout)
             initialize_runtime.assert_called_once_with(layout)
+            verify_volume.assert_called_once_with(layout, "fullmag-master")
+
+    def test_missing_volume_refuses_before_storage_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            layout = {"profile": "docker-all-gpu"}
+            with patch("docker_development_inputs.select_checkout", return_value=repo), \
+                    patch.object(fullmag_storage, "resolve_layout", return_value=layout), \
+                    patch.object(docker_dev, "_compose_identity", return_value={"project_name": "fullmag-master"}), \
+                    patch.object(docker_dev, "_verify_registered_data_volume", side_effect=docker_dev.DirectDockerError("missing mount")), \
+                    patch.object(fullmag_storage, "initialize_runtime") as initialize_runtime:
+                with self.assertRaisesRegex(docker_dev.DirectDockerError, "missing mount"):
+                    docker_dev._select_source(repo, None)
+            initialize_runtime.assert_not_called()
+
+    def test_unmapped_new_state_refuses_before_mkdir(self):
+        import docker_volume_dev
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            layout = {"runtime_root": str(root / 'runtimes'), "storage_root": str(root)}
+            with patch.object(docker_dev, '_verify_registered_data_volume',
+                              side_effect=docker_dev.DirectDockerError('unmapped state')), \
+                    patch.object(Path, 'mkdir') as mkdir:
+                with self.assertRaisesRegex(docker_dev.DirectDockerError, 'unmapped state'):
+                    docker_volume_dev._create_session_state_root(layout, 'fullmag-master', 'a' * 32)
+            mkdir.assert_not_called()
 
     def test_project_image_and_control_volume_are_stable_per_group(self):
         project = "fullmag-worktree-example"

@@ -4506,6 +4506,18 @@ pub(crate) fn plan_fem(
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
 
+    if fem_hints.gpu_bb_preconditioner.is_some()
+        && (!runtime_requests_cuda(problem)
+            || !relaxation.as_ref().is_some_and(|control| {
+                control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+            }))
+    {
+        errors.push(
+            "fem.gpu_bb_preconditioner requires explicit GPU projected_gradient_bb execution"
+                .to_string(),
+        );
+    }
+
     let requested_static_pbc = problem
         .pbc
         .as_ref()
@@ -5070,6 +5082,8 @@ pub(crate) fn plan_fem(
     )?;
 
     let mut fem_plan = FemPlanIR {
+        gpu_bb_preconditioner: fem_hints.gpu_bb_preconditioner,
+        gpu_pcg_control_experiment: crate::pcg_control_experiment::request(problem)?,
         mesh_name: mesh_name.clone(),
         mesh_source,
         mesh,

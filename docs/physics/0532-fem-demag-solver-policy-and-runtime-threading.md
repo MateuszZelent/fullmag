@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-11-07
+- Last updated: 2026-11-14
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -81,6 +81,13 @@ absolute threshold is serialized or requested.
 | `\lVert\cdot\rVert_2` | Euclidean norm over algebraic coefficients | $\mathrm{A\,m}$; preserves its operand unit |
 | `\mathrm{rtol}` | Relative linear-solver tolerance | `$1$` |
 | `\mathrm{atol}` | Absolute residual tolerance for the unscaled system | `$\mathrm{A\,m}$` |
+| `\mathbf{A}_{\mathrm{Robin}}` | Native Robin Poisson system matrix | `$\mathrm{m}$` |
+| `\mathbf{B}_{\partial D}` | Mass matrix on the selected nonperiodic boundary | `$\mathrm{m^2}$` |
+| `\beta` | Native effective constant Robin coefficient | `$\mathrm{m^{-1}}$` |
+| `c` | Dimensionless coefficient resolved from the Robin mode | `$1$` |
+| `R_{\ast}` | Reference radius from the mesh bounding-box extents | `$\mathrm{m}$` |
+| `L_j` | Mesh bounding-box extent along coordinate axis j | `$\mathrm{m}$` |
+| `\mathcal{O}` | Set of nonperiodic coordinate-axis indices | `$1$` |
 
 All user-visible physical quantities remain SI-clean.
 
@@ -94,6 +101,43 @@ path also computes that certificate after every solve, including a reported
 CG success. A successful CG report alone is not an independent Euclidean
 certificate. The historical 50 fs SP4 transport experiments use `atol=None`
 and predate this correction; see the qualification boundary in section 5.1.
+
+(native-robin-coefficient)=
+### 2.2.1 Native Robin coefficient and retained provenance
+
+For the native FEM CPU/GPU `poisson_robin` realization, the implemented system is
+
+```{math}
+:label: eq-fem-demag-robin-coefficient
+\mathbf{A}_{\mathrm{Robin}}=\mathbf{K}+\beta\mathbf{B}_{\partial D},
+\qquad \beta=\frac{c}{R_{\ast}},
+\qquad R_{\ast}=\frac12\max_{j\in\mathcal{O}} L_j.
+```
+
+Here $\mathbf{B}_{\partial D}$ is the boundary mass matrix on the selected
+canonical boundary marker, excluding periodic markers, with units of
+$\mathrm{m^2}$. The dimensionless resolved coefficient $c$ is 1 for native mode 1,
+2 for native mode 2, or the configured factor for other modes. The adapter maps
+`legacy` to 1, `dipole` (including the default) to 2, and `user` to 3. Each $L_j$ is a
+mesh bounding-box extent in metres, and $\mathcal{O}$ contains the nonperiodic
+coordinate axes. With no open axis the implementation uses the largest extent
+over all axes. Thus $R_{\ast}$ has units of metres, $\beta$ has units of
+$\mathrm{m^{-1}}$, and $\mathbf{A}_{\mathrm{Robin}}$ has units of metres.
+This is a constant mesh-domain coefficient, not a pointwise distance from a
+chosen center. The operator keeps the input MeshIR coordinates; this boundary
+path does not rescale them.
+
+The retained JSON field `fem_poisson_demag.robin_beta` currently copies
+`air_box_config.robin_beta_factor`. Despite its historical name, it stores the
+dimensionless plan factor, not the native effective $\beta$. The resolved mode
+can override that factor. Do not interpret the field alone as an inverse
+length or as a measured native coefficient. This documents the existing
+serialization; no field, operator, boundary condition or tolerance changes.
+
+The volume-equivalent-radius formula in the historical bootstrap note 0520
+does not specify this native policy. A small algebraic residual certifies the
+assembled finite-airbox system. It does not certify the free-space limit;
+airbox and mesh convergence remain separate scientific gates.
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -369,6 +413,34 @@ observed quantities.
 - Logs and UI must not pretend that live thread-pool changes apply to an already
   running solve
 
+### Terminal direct-minimizer GPU performance snapshot
+
+The bounded runner contract is to publish the complete existing
+`fullmag_fem_gpu_performance_snapshot_v1` once in terminal execution
+provenance for native FEM GPU direct minimization, when at least one accepted
+step exists. Its recorded scope is
+`native_attempt_lifetimes_at_terminal_capture`, and
+`accepted_source_step` must match the native snapshot's completed step. Physical
+and accepted counters retain their native meanings; rejected and failed work is
+not reclassified. Nanosecond, byte, and Joule fields retain those units, and
+Poisson RHS norm sums describe the unscaled residual system in
+$\mathrm{A\,m}$.
+
+The native getter copies committed attempt lifetimes and explicit physical
+setup counters. It excludes an active, uncommitted attempt and does not count
+every confirmation or field-publication operation outside those transactions.
+Consequently these counters need not equal terminal metadata's Poisson or
+mandatory-control aggregates. Capture time is not a claim of whole-backend
+coverage. A profile-disabled zero timing channel does not prove zero work.
+
+This is bounded observability for the direct-minimizer lane, not a new physical
+quantity, Python/IR setting, or qualification of full SP4. It adds no per-step
+`StepStats` record, device readback, CUDA fence, or ABI field. The existing
+480-byte native v1 ABI remains authoritative. Legacy provenance without the
+optional snapshot remains valid. Runner serialization and its managed
+runtime require separate qualification; do not infer CPU, LLG,
+interactive-runtime, or full-run coverage from this scope.
+
 ### 5.1 Fail-closed linear-solve publication
 
 Every production FEM demagnetization realization (non-periodic Poisson,
@@ -411,6 +483,22 @@ device-HYPRE Poisson solve, before publishing its candidate field, irrespective
 of HYPRE's success report. It preserves authored tolerances, the iteration cap,
 the internal CG norm choice, and the existing shared acceptance rule. Only two
 scalar norms return to the host; full vectors stay on the device for this check.
+
+The paired-readback optimization keeps the same independently formed residual
+and scaled Euclidean norms. For at least two local rows,
+`fullmag_cuda_demag_validation_norm_pair` reduces both inputs before reusing
+the first two entries of the private residual scratch, then returns two doubles
+in one readback and stream fence. A one-row problem retains the single-norm
+device implementation. The RHS diagnosis still precedes the residual diagnosis
+for nonfinite inputs. This changes neither the stopping tolerance nor the
+physical operator. The managed `fem-demag-poisson` native contract passed at
+attempt `c1321d9442c641bd910f25b1b67a4a0e`, source snapshot
+`49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0`, and
+library `c078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785`
+(compile 13.122 s, test 5.200 s, exit 0). The gate includes the paired-norm
+regression, true-residual corruption check, accepted-energy overlay, and queue
+property fixtures. It does not establish SP4 timing or parity; the historical
+evidence below qualifies the earlier two-readback implementation only.
 
 The native regression starts with a real successful GPU CG solve, zeros only
 the test-owned potential after its final use, and requires the production
@@ -629,6 +717,111 @@ refined-Armijo endpoints and pending torque confirmations retain fresh
 evaluation. Ordinary physical solve counts can decrease while logical RHS
 record semantics remain unchanged. Source tests do not establish trajectory
 parity or a performance improvement; both require managed full-Zarr runs.
+
+Update 2026-11-13 accepted-potential warm-start candidate (C2; broader workload
+qualification pending): strict FEM GPU PGBB may use the independently certified potential
+from its accepted endpoint as a one-use initial guess for only the first trial
+of the next ordinary step. This is a linear-solver initial condition for the
+same existing Poisson problem; it changes neither the demagnetizing model,
+operator, preconditioner, solver tolerance, stopping rule, nor independent
+$\lVert A\phi-b\rVert_2$ acceptance certificate. A private move-only permit is
+bound to the accepted endpoint generation, full operator fingerprint, device,
+workspace and solution buffers, both CUDA/HYPRE streams, scalar row count, and
+operator-build, upload, and solver-setup generations. The permit is consumed
+before the solution buffer can be overwritten. Any mismatch, invalidation, or
+rollback discards it. Rejection of that first trial consumes it permanently;
+all later backtracks use a fresh GPU guess. Direct-energy refinement and torque
+confirmation also use fresh GPU solves, and a refined or incompletely finalized
+endpoint cannot publish a token for the next step. CPU fallback is not allowed.
+
+Device identity in this key is the resolved MFEM owner index. A public Auto
+request retains its negative requested-index sentinel, so that request field
+cannot establish or exclude the identity of an already selected GPU. The native
+fixture requests Auto and checks the resolved owner before exercising reuse.
+
+The guess can alter finite-precision iteration order, so unchanged equations and
+tolerances do not establish trajectory parity or a speedup. The controlled
+native fixture checks cold-first/warm-next behavior, one-time
+consumption, strict accepted Armijo evidence, rollback, key mismatch, fresh
+backtracks/refinement/confirmation, and no replay. It does not force an
+accepted-refinement endpoint. The managed `fem-demag-poisson` GPU contract,
+including Auto selection, passed at attempt
+`998032a3cef54e568cd0feac015ec813` for source snapshot
+`9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe`.
+Three static SP4 relaxations also passed the retained component-energy, torque,
+and native-residual gates with complete Zarr. The selected ProblemIR, mesh and
+authored initial magnetization agree; all 21 saved numeric chunks are bitwise
+equal between these C2 repetitions. Hot-loop PCG work decreased from 7477 to
+6106 iterations and from 1017 to 852 status reads. The observed worker times
+were 44.345637, 39.772995 and 39.002946 seconds; inclusive Poisson median was
+15.031024 seconds versus 18.017044 seconds in the preceding C6/C7 series.
+The first repetition used startup-script execution and the other two used
+public Run This Stage. Its explicit authored input and output-port binding
+differ from the startup Study, while the selected ProblemIR, initial values
+and energy autosave remain equal. Thus the worker median comparison
+43.633727 to 39.772995 seconds is observational, not an isolated causal A/B or
+UI end-to-end speedup. Broader workload qualification remains pending.
+
+Update 2026-11-14 stream-ordered L1-Jacobi copy candidate (C1; managed build,
+native execution and speedup **NOT VERIFIED**): the pinned HYPRE 3.1.0 source
+calls the Relax7Jacobi device helper from relaxation type 18. Its existing
+copy from the local RHS into the temporary vector can use a device-to-device
+`cudaMemcpyAsync` on HYPRE's existing compute stream when both vectors have
+equal positive sizes, one vector, canonical contiguous strides and actual
+DEVICE memory. Identical data pointers remain a no-op. Other layouts and
+memory backends retain the original copy implementation. This preserves all
+arithmetic, stream ownership and Fullmag producer/consumer event ordering;
+it adds no host norm, field transfer, solver option or CPU fallback. A rejected
+copy submission retains HYPRE's sticky error and returns before the following
+Matvec/Divpy, restoring the helper's stream-sync and profiler state.
+
+| Realization | C1 effect and qualification |
+|---|---|
+| FDM CPU | Not applicable; no HYPRE AMG dependency in this solver path. |
+| FDM GPU | Not applicable; its demagnetizing solver is separate. |
+| FEM CPU | Original copy implementation; no CUDA bridge or residency change. |
+| FEM GPU | Narrow CUDA, non-mixed-precision device-vector copy candidate; runtime and performance pending. |
+
+Two private HYPRE getters expose successful copy submissions and submitted
+bytes as process-cumulative host counters. These are not completed GPU events,
+per-context Physical/HotLoop counters, or per-level coverage. Their relaxed
+host atomics add no GPU synchronization. Terminal provenance may retain the
+optional `hypre_relax7_async_copy` observation with
+`scope="process_cumulative_at_terminal_capture"`, `count` (dimensionless) and
+`bytes` (bytes); unavailable symbols in an older HYPRE produce an absent
+observation, never a fabricated zero. A changing count during the bounded
+count/bytes/count read likewise earns no coherent observation. The existing
+480-byte native snapshot and Python/ProblemIR authoring remain unchanged.
+The caller must provide a terminal, inactive process observation: this bounded
+check detects a count change but is not a seqlock for concurrently updated
+relaxed counters, and does not establish quiescence of unrelated contexts.
+
+The native regression brackets an actual production CG/AMG computation and
+requires a positive copy-count/byte delta when the patched dependency is
+present. It also checks failed-submission accounting and the sticky error
+without launching an invalid-address device kernel. An older unpatched
+dependency remains explicitly C1-unverified. Qualification requires the pinned
+patch digest in dependency metadata, actual native hit markers, positive
+terminal SP4 observations, and the unchanged energy, torque, true-residual and
+complete-Zarr gates. Submitted-copy counts alone do not prove a performance
+gain or the removal of every blocking operation in AMG.
+
+Update 2026-11-14 initial-observation execution policy (implementation and
+runtime qualification **NOT VERIFIED**): a task requesting FEM GPU must not
+evaluate its prepared initial fields in a separate FEM CPU backend. Mesh/space
+preparation remains under the preparation lease; its observation record may
+explicitly defer physical fields until the existing compute worker owns the
+GPU. The native context already evaluates its initial effective field. A
+separate one-shot observation mode copies a coherent field generation from
+that context before the first integrator/minimizer step, with its actual
+post-begin-stage clock and local-node map. This is observation I/O, not a new
+Poisson solve, CPU fallback, accepted endpoint or legacy per-step snapshot
+request. Explicit CPU requests retain their existing CPU prepared observations;
+Auto has no preparer physics observation and the worker uses its actual admitted
+device when selecting the one-shot capture. Equations,
+operators, residual certificates, tolerances, and Zarr autosave are unchanged.
+See ADR 0071 and the initial-observation design for admission, budgeting,
+initial Stop/Pause handling and the required runtime parity evidence.
 
 The CPU direct-minimizer profile also accumulates linear iterations from each
 sample (current field, rejected/accepted trial and explicit refinement) before
@@ -1034,13 +1227,28 @@ telemetry.
 (source-code-index)=
 ## 10. Source-code index
 
-The links below are immutable links at the reviewed source revision
-`53a5d5171e06db3c4950511d4523f872f58317f1`. Runtime statements are bounded by
+Each immutable link below pins the reviewed source revision for its row.
+Runtime statements are bounded by
 the evidence column; source presence and tests do not replace scientific or
 managed-runtime qualification.
 
 | Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
 |---|---|---|---|---|---|---|
+| Initial physical evaluation deferral | `crates/fullmag-api/src/accepted_fem_preparer.rs` | `prepared_observation_outcome` | Defers GPU fields without an evaluator or bundle publication under the preparation CPU lease. | FEM GPU | Callback-spy regressions added; CI and managed SP4 pending. | Unpublished task candidate. |
+| Initial native GPU fields | `crates/fullmag-runner/src/fem/relax/preview.rs` | `publish_initial_native_fem_observation` | Copies all active initial fields from the existing context and actual clock/map. | FEM GPU | Managed initial-frame and full-Zarr parity pending. | Unpublished task candidate. |
+| Initial callback control | `crates/fullmag-runner/src/fem/relax/initial_observation.rs` | `publish_initial_fem_observation_with_capture` | Preserves one callback, Stop/Pause and legacy behavior without a physical step. | FEM callbacks | Executable regressions added; CI pending. | Unpublished task candidate. |
+| Admitted initial observation budget | `crates/fullmag-api/src/accepted_fem_study_worker.rs` | `initial_observation_policy` | Requires actual GPU allocation and the existing full-generation live budget gate. | FEM GPU worker | Source contract; runtime pending. | Unpublished task candidate. |
+| Native Robin coefficient | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `robin_reference_radius_for_mesh`; `initialize_demag_poisson_boundary_operator` | Resolves the open-axis reference radius, mode coefficient and positive boundary mass contribution. | FEM CPU/GPU | Source contract; no new free-space or runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp#L27) |
+| Legacy Robin provenance units | `crates/fullmag-runner/src/fem/runtime_contract.rs` | `fem_poisson_demag_provenance` | Copies the dimensionless plan factor into the historically named `robin_beta` JSON field. | FEM CPU/GPU artifacts | Existing serialization, not native effective-beta telemetry. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/fem/runtime_contract.rs#L318) |
+| Robin mode adapter | `crates/fullmag-runner/src/native_fem.rs` | `create_backend_with_initial_effective_field` | Maps `legacy`, `dipole` and `user` to native coefficient modes. | FEM CPU/GPU | Existing adapter contract; no policy change. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/crates/fullmag-runner/src/native_fem.rs#L3802) |
+| Native coordinate preservation | `backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp` | `verify_finalized_mesh` | Checks exact preservation of input MeshIR node coordinates after native mesh finalization. | FEM CPU/GPU | Source invariant; no new runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/c447d001a2338587edde31f0f25d521efc258b63/backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp#L318) |
+| Paired scalar certificate readback | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `fullmag_cuda_demag_validation_norm_pair` | Both scaled norms complete before aliased scratch output; one 16-byte readback for at least two rows. | FEM GPU | Managed `fem-demag-poisson` native contract passed at attempt `c1321d9442c641bd910f25b1b67a4a0e`; SP4 timing/parity NOT VERIFIED. | [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu#L116) |
+| Typed terminal GPU performance snapshot | `crates/fullmag-runner/src/types.rs` | `FemGpuPerformanceSnapshotProvenance` | Holds all native v1 fields with schema, accepted source step, and backend-lifetime scope; no per-step record or ABI change. | FEM GPU direct minimizer | Source change present; managed runner validation pending. | Unpublished task candidate. |
+| Native snapshot mapping | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `to_provenance` | Preserves native integer values and rejects non-finite totals or a terminal-step mismatch. | FEM GPU direct minimizer | Unit regressions added; managed execution pending. | Unpublished task candidate. |
+| Terminal snapshot publication | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | Captures once before artifact finish only for accepted direct native-GPU relaxations. | FEM GPU direct minimizer | Source change present; managed execution pending. | Unpublished task candidate. |
+| Terminal snapshot regression | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `performance_snapshot_v1_roundtrips_every_native_field` | Checks all mapped counters, ABI size 480, exact large integers, finiteness, and accepted-step identity. | FEM GPU direct minimizer | Regression source added; managed execution pending. | Unpublished task candidate. |
+| Legacy provenance regression | `crates/fullmag-runner/src/types.rs` | `legacy_execution_provenance_without_performance_snapshot_remains_valid` | Confirms old provenance JSON without the optional snapshot remains deserializable and omits the null field on serialization. | Artifact provenance compatibility | Regression source added; managed execution pending. | Unpublished task candidate. |
+| Zarr terminal snapshot regression | `crates/fullmag-runner/src/artifacts.rs` | `performance_snapshot_reaches_terminal_zarr_provenance` | Uses the existing streamed-stage writer and checks the final manifest and field `.zattrs`. | Artifact provenance serialization | Regression source added; managed execution pending. | Unpublished task candidate. |
 | Public policy defaults, validation, and object IR | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FemLinearSolverPolicy` | Defines the six policy fields and omits `atol` when `None`. | FEM CPU/GPU API | Source and object lowering checked for this page. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L160) |
 | Positive tolerance validation | `packages/fullmag-py/src/fullmag/_validation.py` | `require_positive` | Converts a numeric value and rejects nonfinite or nonpositive tolerances. | FEM CPU/GPU API | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/_validation.py#L261) |
 | FEM policy container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Places the optional policy in FEM discretization hints. | FEM CPU/GPU API | Source-visible; no runtime claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L476) |
@@ -1067,6 +1275,17 @@ managed-runtime qualification.
 | Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
 | Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L151) |
 | Independent GPU residual regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Corrupts a successfully solved GPU potential and requires independent rejection despite the stale HYPRE success report. | FEM GPU | Managed RED compiled and failed at the intended assertion; GREEN passed with the actual corruption-rejection marker. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711) |
+| hypre-l1-stream-copy-patch | `scripts/test_bootstrap_docker_toolchain.py` | `test_hypre_l1_patch_is_pinned_applied_and_recorded` | Checks tracked dependency inputs, both immutable content digests and application ordering. The Dockerfile applies the patch before building HYPRE. | FEM GPU dependency | Source regression; managed build pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-bridge | `docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp` | `hypre_BoomerAMGRelax7CopyAsyncDevice` | Owns the stream-ordered CUDA copy and sticky-error handling; CPU and other memory/layout paths retain the original copy. | FEM GPU | Managed execution and speedup pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-native-hit | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `require_hypre_l1_async_copy_production_hit` | Brackets a production CG/AMG computation and requires actual successful copy submissions. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-submission-error | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `hypre_l1_async_copy_submission_error_contract` | Exercises rejected submission and unchanged successful-copy counters while preserving exact HYPRE error handling. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
+| hypre-l1-stream-copy-terminal-observation | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `terminal_hypre_relax7_async_copy` | Optionally observes process-cumulative host counters after solver completion without changing the native snapshot ABI. | FEM GPU | Serialization regressions present; managed runtime pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-key | `backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp` | `gpu_demag_pgbb_potential_key` | Computes the exact eligibility key for accepted-potential reuse, including endpoint, operator, device, workspace, solution, streams, row count, and setup generations. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-consume | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_consume_pgbb_potential` | Issues a move-only single-use permit and consumes it before the solution buffer can be overwritten. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-trial | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_pgbb_trial` | Applies a qualified initial guess only on the first ordinary trial; subsequent backtracks, refinement, and confirmation use fresh solves. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-publish | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_publish_pgbb_potential` | Publishes a token only when the caller has an ordinary finalized accepted endpoint; the PGBB caller suppresses it after refinement or due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-publication-gate | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | Gates accepted-endpoint publication on no refinement and no due torque confirmation. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
+| gpu-pgbb-accepted-potential-regression | `backends/fem/tests/cuda_pgbb_accepted_potential_fixture.hpp` | `gpu_pgbb_accepted_potential_contract` | Covers one-use warm start, Armijo evidence, rollback, rejection/backtracks, key mismatch, and fresh refinement/confirmation. It does not force an accepted-refinement endpoint. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
 | gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
 | cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
 | gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
@@ -1074,3 +1293,316 @@ managed-runtime qualification.
 | native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
 | native-openmp-runtime | `backends/fem/tests/cpu_threads_contract.cpp` | `class ScopedOpenMpRuntimeState` | Probe the library runtime setters after seeding distinct OpenMP control values. | FEM CPU/GPU host control | Existing package defect confirmed; corrected runtime test pending. | Unpublished task candidate. |
 | mfem-element-parallel-policy | `backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp` | `mfem_shared_element_evaluation_parallel_safe` | Require thread-safe MFEM scratch before parallel element evaluation. | FEM CPU host element kernels | Provider flags inspected; runtime parity pending. | Unpublished task candidate. |
+
+
+(device-scalar-poisson-pcg)=
+## Device-scalar PCG with the retained GPU AMG hierarchy (candidate)
+
+The strict FEM GPU `CG/AMG` implementation retains the existing MFEM matrix
+and BoomerAMG hierarchy. It caps the first batch at five iterations and later
+batches at eight, always limited by the remaining iteration cap.
+This is an internal realization of the same requested policy, not a new Python,
+ProblemIR, or native ABI selector. CPU, GPU Jacobi and GMRES are unchanged.
+No failed device-PCG solve may retry through another engine or CPU fallback.
+Managed native and selected-point SP4 evidence is recorded below. These
+measurements do not qualify all four solver lanes or FEM against MuMax3.
+
+With the existing `two_norm=0` convention, let $C$ denote one fixed AMG V-cycle,
+$b$ the Poisson RHS, $x$ its potential, $r=b-Ax$, and $p$ the CG direction.
+The quantities $D=b^T Cb$ and $\rho=r^T Cr$ use the same discrete units as the
+existing preconditioned inner products; their ratio and the relative tolerance
+are dimensionless. The absolute tolerance retains HYPRE's preconditioned-norm
+convention. The production stopping comparison is strictly
+$\rho/D < \max(\tau_{\mathrm{inner}}^2,a_{\mathrm{tol}}^2/D)$.
+For warm starts $D$ is computed from $b$, never from the initial residual.
+For a declared fresh zero guess, $x_0=0$ and $r_0=b$: the implementation
+reuses the first $z=C b$ and copies $D$ to $\rho$ on the borrowed device
+stream. This avoids a second initial AMG application, the $A x_0$ matvec
+and the repeated initial dot product. Warm guesses retain both initial AMG
+applications and the $b^T Cb$ denominator. The eight-byte device-to-device
+copy is included in the existing transfer counters; no host scalar or new
+allocation is introduced. The independent true-residual certificate, inner
+tolerance, terminal-latch policy and iteration cap are unchanged. Native
+regression and three same-input profiler-off SP4 runs passed on library
+`0bd7e6f1…`, with bitwise-identical numeric Zarr arrays. The worker median
+changed from 44.611956 to 42.858635 s, while the inclusive Poisson phase
+median increased from 19.719933 to 20.276239 s. This is not an isolated AMG
+speedup or an alternating paired benchmark; the earlier device-PCG
+measurements belong to a different binary cohort.
+The recurrence is $q=Ap$, $\alpha=\rho/(p^Tq)$,
+$x\leftarrow x+\alpha p$, $r\leftarrow r-\alpha q$,
+$z=Cr$, $\beta=(r^Tz)/\rho$, and $p\leftarrow z+\beta p$.
+The existing inner tolerance factor, configured iteration limit, and independent
+true-residual certificate remain unchanged.
+
+The GPU latches the first converged iteration and freezes the candidate before
+host status collection. Remaining queued calls receive zero preconditioner
+inputs. True zero RHS returns zero potential; a zero preconditioned product
+with nonzero RHS, nonfinite data, nonpositive curvature or unsafe division
+fails closed. A final short batch never exceeds the configured iteration cap.
+`HyprePCG` statistics cannot describe the unexecuted outer solver: the workspace
+reports the actual device-PCG iteration count and recurrence residual instead.
+
+The owned workspace preallocates device vectors and CUB scratch. All recurrence,
+matvec and AMG work uses the borrowed HYPRE stream; Fullmag producer/consumer
+events retain their existing ordering. Raw `HYPRE_BoomerAMGSolve` preserves
+explicit library status checking, and its output is zeroed for every apply.
+Debug AMG norm logging is suppressed for this internal fixed preconditioner;
+setup and final Fullmag certificate still validate the unchanged operator.
+
+Acceptance requires native zero-RHS/exact-warm/Nonfinite/breakdown/batch-boundary
+oracles, no per-iteration D2H or allocation, one retained hierarchy setup, and
+the same SP4 torque, independent certificate, full Zarr and 2 ppm component-energy
+gates. The first five-iteration batch and later eight-iteration batches preserve
+the configured cap. After a device terminal latch, at most seven additional
+AMG API calls can be issued across the remainder of the apply, including up to
+two pre-loop applies and the first queued batch. This counts HYPRE API calls,
+not measured GPU cycles; no speedup is claimed.
+A history-based first batch is not qualified by the cumulative readback bound
+alone: after a previous solve of 66 iterations, a first batch of 65 would issue
+64 post-latch AMG calls if the next solve converges after one iteration. Any
+future adaptive schedule or graph replay must preserve both bounds for sudden
+early convergence, zero RHS and nonfinite input, as well as ordinary SP4 steps.
+The no-inner-norm claim applies to the qualified l1-Jacobi AMG smoother
+(relax type 18 and coarse type 18). The engine explicitly requires `MPI_COMM_SELF`, relax/coarse type 18 and
+`print_level=0`; explicit verbose requests keep the existing HYPRE GPU engine
+and its diagnostics. Positive row/iteration counts and finite positive relative
+and finite nonnegative active absolute tolerances are checked before enqueue
+or any pinned host-status read.
+Other previously legal AMG smoothers keep the existing GPU HYPRE implementation.
+This setup-time selection changes neither the requested parameters nor CPU/GPU
+placement. Once device PCG is selected, errors cannot retry the old solver.
+An additive native getter reports the actual initialized engine;
+`fem_poisson_demag.resolved_linear_engine` preserves that result in provenance
+without changing existing ABI structures. CPU or uninitialized contexts return
+not applicable; the runner does not infer an engine from requests.
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Device-scalar outer PCG | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `apply_demag_poisson_device_pcg` | First batch capped at five, later batches at eight; API-call diagnostics are internal; managed tests required |
+| Initial terminal-batch regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Counts actual AMG calls for fresh/warm/zero/Nonfinite states, including fresh reuse and its D2D bytes; managed gate `2a6aa743…` passed |
+| Actual engine provenance | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_poisson_linear_engine_v1` | Candidate source; managed tests required |
+| GPU recurrence and stopping | `backends/fem/gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu` | `pcg_finish_rho_kernel` | Candidate source; managed tests required |
+
+
+```{math}
+:label: eq-fem-poisson-device-pcg-recurrence
+\begin{aligned}
+ D &= b^T C b, & r &= b-Ax, & z &= Cr, & \rho &= r^Tz, \\
+ q &= Ap, & \alpha &= \rho/(p^Tq), & x^+ &= x+\alpha p, & r^+ &= r-\alpha q, \\
+ z^+ &= Cr^+, & \rho^+ &= (r^+)^Tz^+, & \beta &= \rho^+/\rho, & p^+ &= z^++\beta p, \\
+ \rho/D &< \max(\tau_{\mathrm{inner}}^2,a_{\mathrm{tol}}^2/D).
+\end{aligned}
+```
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $A$ | FE Poisson stiffness operator | $\mathrm{m}$ |
+| $C$ | Fixed AMG approximation to inverse stiffness | $\mathrm{m}^{-1}$ |
+| $b$, $r$, $q$ | Load, residual, and stiffness applied to direction | $\mathrm{A}\,\mathrm{m}$ |
+| $x$, $z$, $p$ | Scalar potential, preconditioned residual, and direction | $\mathrm{A}$ |
+| $D$, $\rho$ | Preconditioned squared products | $\mathrm{A}^2\,\mathrm{m}$ |
+| $\alpha$, $\beta$, $\tau_{\mathrm{inner}}$ | Recurrence scalars and inner relative tolerance | $1$ |
+| $a_{\mathrm{tol}}$ | Preconditioned absolute tolerance | $\mathrm{A}\,\mathrm{m}^{1/2}$ |
+
+The superscript $+$ denotes the next CG iterate. The equation applies to the
+same constrained SPD FE system and fixed preconditioner as the existing CG
+realization; it changes no magnetic field, energy, or boundary operator.
+
+
+(device-scalar-poisson-pcg-accounting)=
+### Scoped PCG control-transfer subaccounting (candidate)
+
+The additive `fullmag_fem_backend_get_poisson_device_pcg_counters_v1` getter
+accepts a scope enum (`Physical=0`, `HotLoop=1`) and returns a new record of
+five `uint64_t` fields: `status_readbacks`, `status_record_bytes`,
+`control_d2h_bytes`, `solves`, and `active_iterations`. Unknown scopes fail;
+existing ABI structure sizes and requested CG/AMG policy remain unchanged.
+`status_record_bytes` is `sizeof(DemagPcgState)`.
+
+Physical counters belong to `GpuPerformanceCounterState.physical_lifetime`,
+updated through the same `gpu_performance_note` as aggregate physical control
+fences/bytes. Active outer attempts remain excluded until commit/reject/fail;
+rejected/failed work survives rollback. The existing GPU lifecycle reset resets
+these totals, while rebuilding the Poisson workspace does not.
+
+HotLoop counters belong to `TransferAudit.device_pcg_hot_loop` and use exactly
+the existing audit predicate `audit.hot_loop_depth>0`. They share the existing
+audit's immediate visibility, value-copy/reset and rollback boundaries. A solve
+records its scoped start before first enqueue; every completed status readback
+records scoped bytes and active-iteration delta under that same condition.
+The solve scope cannot change during an apply. Each readback remains in the
+existing aggregate transfer audit and performance counters; no transfer is
+hidden or reclassified as bulk.
+
+`solves` counts valid invocations starting enqueue. `active_iterations` adds
+differences of the GPU first-stop iteration counter after each completed
+readback, including a terminal numerical rejection. Neither scope is inferred
+from last-step or accepted-row solve/iteration statistics. A CUDA failure before
+the first readback may leave `solves>0` and zero readbacks; this is not a
+qualified complete-run claim.
+
+The runner preserves distinct `StepStats.demag_device_pcg_physical` and
+`StepStats.demag_device_pcg_hot_loop` observations. The corresponding provenance
+and `demag_runtime` fields are `device_pcg_physical` and `device_pcg_hot_loop`,
+each containing the same five keys. Adjacent `resolved_linear_engine` comes
+from the context getter; `runtime_preconditioner=HypreBoomerAMG` remains.
+Historical and unchanged HYPRE engines may omit the additive observations.
+
+For either consistent scope of a completed converged run, let $R$ denote its
+cumulative status readbacks, $N$ the record size in bytes, $T$ PCG control
+bytes, $S$ started solves, and $I$ cumulative active iterations. For one solve,
+$R(I)$ has the bound shown below; summing it across $S$ solves gives the
+cumulative bound:
+
+```{math}
+:label: eq-fem-poisson-device-pcg-transfer-bound
+\begin{aligned}
+ R(I) &= 1+\lfloor (I+2)/8\rfloor && (S=1), \\
+ T &= RN, \\
+ R_{\max} &=
+ \begin{cases}
+ 0, & S=0\quad (I=0),\\
+ S, & S>0\quad (I=0),\\
+ S+\lfloor (I+2S)/8\rfloor, & I>0,
+ \end{cases} \\
+ S &\le R \le R_{\max}.
+\end{aligned}
+```
+
+| Symbol | Meaning | Unit |
+|---|---|---|
+| $R$ | Cumulative completed PCG status readbacks | $1$ |
+| $N$ | Size of one PCG status record | $\mathrm{byte}$ |
+| $T$ | Cumulative PCG control bytes | $\mathrm{byte}$ |
+| $S$ | Cumulative valid PCG invocations starting enqueue | $1$ |
+| $I$ | Cumulative GPU-reported active iterations | $1$ |
+| $R_{\max}$ | Cumulative readback upper bound for the selected batch sizes | $1$ |
+
+Status is still read once at each batch boundary: the initial boundary is now
+five iterations, while later boundaries are at most eight. This can add an
+ordinary batch-status read for a solve that continues beyond iteration five;
+there is no per-iteration or separate terminal-status D2H readback. The counter
+fixture covers $S=4,I=0$ and $I=0,5,6,13,14,500$, and rejects arithmetic
+overflow in its fixed-width native helper. The Python validator uses
+arbitrary-precision integers and enforces $R\le R_{\max}$ before subtracting exact status bytes.
+This bound does not relax the existing compute, exchange, row-parity, or
+independent residual gates.
+
+The existing HotLoop validators subtract **only** the exact $R$ and $T$ from
+`device_pcg_hot_loop`, never `device_pcg_physical`, from HotLoop aggregate
+control fences/bytes. They first require nonnegative subtraction, $T=RN$ and
+the cumulative PCG bound. The unchanged prior PGBB budget applies to the
+remainder: `B=3+4*steps+max(0,rhs_evals-2*steps)` fences and `256*B` bytes.
+Physical-only evidence cannot qualify this subtraction. Unchanged HYPRE PCG
+paths retain their existing validation route and budgets.
+
+For a completed observation, additive PhysicalLifetime includes setup outside
+attempts and every completed accepted, rejected or failed attempt. Direct GPU
+minimizers must open the performance lifecycle alongside their execution
+receipt; an accepted step commits, a terminal observation without a step
+rejects, and an unclosed error path fails. In-flight attempt deltas stay private.
+This lifecycle is independent of the profiler setting. Legacy 480-byte
+`physical_control_*` aggregates remain attempt-scoped: setup counted by additive
+Physical must not be subtracted from those legacy aggregates. Only matching
+HotLoop scopes justify the core-budget subtraction.
+The physical D2D-byte field also includes the eight-byte denominator-to-rho
+initialization copy before the first attempt. Accepted D2D bytes retain their
+accepted-step transaction semantics; this correction does not change the
+legacy control-fence or control-byte subtraction rules.
+
+Completed-run validation requires both PCG scopes, identical status-record size,
+valid cumulative bounds, and Physical counters at least as large as HotLoop.
+Mandatory-control lifetime counts must likewise contain the completed HotLoop
+counts. Persisted summaries retain both records for revalidation. A live active
+attempt is intentionally not a completed-run certificate.
+
+The first full-Zarr device-PCG SP4 pilot passed all component-energy, torque and
+true-residual checks, but failed this lifetime gate: its direct-minimizer path
+had not opened a performance attempt. Its 45.124280 s single-run measurement
+does not establish a speedup. The lifecycle fix and real direct-path regression
+remain candidates until the managed native gate and a new SP4 cohort pass.
+
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Physical subaccounting owner | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `gpu_performance_device_pcg_snapshot` | Source candidate; managed gate pending |
+| HotLoop subaccounting owner | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `record_device_pcg_status_to_host` | Source candidate; managed gate pending |
+| Scope/subtraction regression | `backends/fem/tests/poisson_device_pcg_counter_fixture.hpp` | `device_pcg_physical_subaccounting_survives_rollback` | Source candidate; managed gate pending |
+| Direct minimizer lifecycle | `backends/fem/cpu/mfem/runtime/backend_step.cpp` | `run_backend_relaxation_step` | Source candidate; new managed gate pending |
+| Attempt guard | `backends/fem/gpu/cuda/runtime/performance_counters.hpp` | `class GpuPerformanceAttemptScope` | Source candidate; active exclusion and exactly one terminal boundary |
+| Real direct-path regression | `backends/fem/tests/demag_poisson_contract.cpp` | `void direct_pgbb_performance_lifecycle_contract` | Source candidate; profiler OFF/ON and two confirmations; managed execution pending |
+
+The shared fixture proves outside-HotLoop physical growth with zero HotLoop
+counts, inside-HotLoop accounting, reject/fail/copy/reset/rollback behavior and
+exact subtraction only from the matching aggregate. It runs in the existing
+`fem-demag-poisson` gate (`device_pcg_scope_accounting_contract`) and the
+existing performance unit; no extra gate selector is required.
+
+
+(mandatory-gpu-controls)=
+## Mandatory GPU controls and unchanged core readback budget (candidate)
+
+Typed source attribution separates BB certificate/descent, independent Poisson
+certificate and same-step torque-confirmation metrics from the legacy core
+PG-BB budget. This changes no readback, tolerance, field, energy, step count or
+stopping rule. New telemetry is source-only until managed regression/runtime
+qualification. Physical counters share the performance owner; HotLoop counters
+share TransferAudit and exactly its depth/copy/reset/rollback semantics.
+
+Generic provenance fields `gpu_mandatory_controls_physical` and
+`gpu_mandatory_controls_hot_loop` publish through `fem_gpu_solver_controls`
+(`physical`, `hot_loop`), including BB without demag. A new versioned getter
+returns ten uint64 counters, scope0 Physical/scope1 HotLoop; old ABI layouts
+are unchanged. Legacy null/missing records earn no attribution credit.
+
+For the saved SP4 observation, accepted callbacks end at792 fences/70128B;
+two same-step torque confirmations add8 fences/688B, yielding800/70816.
+Exclusive source buckets are BB184/9568B, Poisson certificate226/1808B and
+confirmation metrics4/656B. Confirmation excludes BOTH certificate and device
+PCG status subcounts. The remainder386/58784 satisfies unchangedB389 and256B
+per allowed fence. Confirmation observations never become accepted steps or
+CSV RHS evaluations. Rejected-attempt counts must declare whether they include
+confirmations before RHS minima can exclude those observations.
+
+
+The additive record fields have type `uint64_t`, default zero, no ProblemIR
+or authoring destination, and support FEM GPU controls independently of demag.
+CPU counters remain zero; FDM has no realization of this native FEM getter.
+
+| Record field | Meaning | Unit |
+|---|---|---|
+| `bb_certificate_record_bytes` | Actual size of one terminal BB result | $\mathrm{byte}$ |
+| `bb_certificate_readbacks` | Completed BB certificate reads | $1$ |
+| `bb_certificate_bytes` | BB certificate data transferred | $\mathrm{byte}$ |
+| `bb_descent_readbacks` | Completed projected-direction descent reads | $1$ |
+| `bb_descent_bytes` | Descent data transferred | $\mathrm{byte}$ |
+| `poisson_certificate_readbacks` | Independent RHS/residual norm reads | $1$ |
+| `poisson_certificate_bytes` | Independent certificate data transferred | $\mathrm{byte}$ |
+| `confirmation_observations` | Same-step torque observations, not accepted steps | $1$ |
+| `confirmation_metric_readbacks` | Exclusive current/final confirmation reads | $1$ |
+| `confirmation_metric_bytes` | Exclusive confirmation data, excluding Poisson certificate and PCG status | $\mathrm{byte}$ |
+
+Physical BB certificate reads previously existed in TransferAudit but lacked
+a performance aggregate note; the new source note also closes that accounting
+gap without adding a readback. Descent and Poisson certificate aggregate notes
+are retained exactly once. Confirmation only attributes previously recorded
+reads; it does not increment aggregate counts again.
+
+Accepted-CSV rejection counts remain line-search trials. An explicit
+`execution_attempts` rejection scope may exclude only the typed confirmation
+count from the RHS minimum and must agree with the native execution receipt.
+Neither case changesB: `3+4*steps+max(0,rhs_evals-2*steps)` or the256B allowance.
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Physical mandatory controls | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `gpu_performance_mandatory_controls_snapshot` | Source candidate; native gate pending |
+| HotLoop mandatory controls | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `note_hot_loop_mandatory_controls` | Source candidate; native gate pending |
+| Exclusive confirmation attribution | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `resolve_confirmation_control_delta` | Source candidate; native gate pending |
+| Additive C ABI scopes | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_mandatory_control_counters_v1` | Source candidate; ABI/native gate pending |
+| Real SP4 and scope regression | `backends/fem/tests/mandatory_control_counter_fixture.hpp` | `mandatory_control_accounting_contract` | Source candidate; native gate pending |
+
+Pure Python source tests preserve the existing95 guard cases and add9 cases for
+actual800/70816 accounting, combined PCG statuses, bad scopes/missing records,
+underflow/double attribution and explicit rejection domains. These are mocked
+transport/source tests, not managed runtime or scientific qualification.

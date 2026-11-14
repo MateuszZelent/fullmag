@@ -67,6 +67,7 @@ set(FEM_SOURCES
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
     gpu/cuda/relaxation/pgbb.cpp
+    gpu/cuda/relaxation/bb_exchange_mass.cpp
     gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp
     gpu/cuda/relaxation/relaxation_memory.cpp
     gpu/cuda/state/device_memory.cpp
@@ -355,9 +356,11 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
+            gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
+            gpu/cuda/relaxation/bb_exchange_mass_kernels.cu
             gpu/cuda/reductions/object_average_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
@@ -868,6 +871,16 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
 
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
+    add_executable(fem_cuda_bb_exchange_mass_contract tests/cuda_bb_exchange_mass_contract.cpp)
+    target_link_libraries(fem_cuda_bb_exchange_mass_contract PRIVATE fullmag_fem CUDA::cudart)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_bb_exchange_mass_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_bb_exchange_mass_contract PRIVATE mfem)
+    endif()
+    target_include_directories(fem_cuda_bb_exchange_mass_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME fem_cuda_bb_exchange_mass_contract COMMAND fem_cuda_bb_exchange_mass_contract)
     add_executable(fem_cuda_object_average_contract tests/cuda_object_average_contract.cpp)
     target_link_libraries(fem_cuda_object_average_contract PRIVATE fullmag_fem CUDA::cudart)
     target_include_directories(fem_cuda_object_average_contract PRIVATE
@@ -1822,6 +1835,20 @@ target_include_directories(fem_snapshot_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_snapshot_contract COMMAND fem_snapshot_contract)
+
+add_executable(fem_cuda_snapshot_contract tests/snapshot_contract.cpp)
+target_link_libraries(fem_cuda_snapshot_contract PRIVATE fullmag_fem)
+target_compile_definitions(fem_cuda_snapshot_contract PRIVATE
+    FULLMAG_SNAPSHOT_REQUIRE_CUDA=1)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_snapshot_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_snapshot_contract COMMAND fem_cuda_snapshot_contract)
+set_tests_properties(fem_cuda_snapshot_contract PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(fem_mfem_context_contract tests/mfem_context_contract.cpp)
 target_link_libraries(fem_mfem_context_contract PRIVATE fullmag_fem)

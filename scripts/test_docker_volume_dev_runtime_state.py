@@ -18,6 +18,32 @@ import docker_volume_dev
 
 
 class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
+    def test_preparation_phase_timings_are_optional_but_closed_and_bounded(self):
+        valid = {
+            "schema_version": "fem_preparation_phase_timings.v1",
+            "scope": "accepted_fem_preparation_process_body.v1",
+            "total_body_ns": 100,
+            "load_accepted_snapshot_ns": 10,
+            "native_mesh_space_ns": 20,
+            "prepared_fields_evaluation_ns": 30,
+            "prepared_bundle_publication_ns": 15,
+            "prepared_observation_commit_ns": 5,
+            "task_preparation_commit_ns": 10,
+        }
+        self.assertTrue(docker_volume_dev._validate_preparation_phase_timings(valid))
+        self.assertTrue(docker_volume_dev._validate_preparation_phase_timings(None))
+        invalid = (
+            {**valid, "unknown": 1},
+            {**valid, "total_body_ns": True},
+            {**valid, "load_accepted_snapshot_ns": -1},
+            {**valid, "task_preparation_commit_ns": 21},
+            {**valid, "scope": "other"},
+            {key: value for key, value in valid.items() if key != "total_body_ns"},
+        )
+        for candidate in invalid:
+            with self.subTest(candidate=candidate):
+                self.assertFalse(docker_volume_dev._validate_preparation_phase_timings(candidate))
+
     @staticmethod
     def _frontend_owner_service(actual_options):
         owner = "/run/fullmag/frontend-owner"
@@ -65,6 +91,10 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                     )
 
     def test_native_contract_allowlist_keeps_one_contract_per_invocation(self):
+        self.assertEqual(
+            docker_volume_dev._native_contracts(["fem-cuda-bb-exchange-mass"]),
+            ("fem-cuda-bb-exchange-mass",),
+        )
         self.assertEqual(docker_volume_dev._native_contracts(None), ())
         self.assertEqual(docker_volume_dev._native_contracts([]), ())
         self.assertEqual(

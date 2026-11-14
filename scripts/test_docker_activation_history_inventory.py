@@ -63,6 +63,97 @@ class HistoryInventoryTests(unittest.TestCase):
             with self.subTest(root=name),self.assertRaises(HistoryError):control_references(self.root,TOKEN)
             path.unlink();path.parent.rmdir()
 
+    def test_storage_operation_roots_preserve_live_pins(self):
+        self.terminal(TOKEN, RUN)
+        for name in ("data-volume-migration", "profile-storage-copy", "profile-storage-index"):
+            with self.subTest(root=name):
+                path = self.put(name + "/current.json", {"state": "succeeded"})
+                try:
+                    result = control_references(self.root, TOKEN)
+                    self.assertIn(name + "/current.json", result["pins"])
+                    self.assertNotIn(TOKEN, result["protected"])
+                    path.write_bytes(raw({"activation": TOKEN}))
+                    with self.assertRaisesRegex(HistoryError, "referenced by live control/recovery roots"):
+                        control_references(self.root, TOKEN)
+                finally:
+                    path.unlink()
+                    path.parent.rmdir()
+
+    def test_terminal_diagnostic_stop_records_remain_pinned_references(self):
+        self.terminal(TOKEN, RUN)
+        stop_attempt = "a" * 32
+        stop_root = "stop-diagnostic/attempts/" + stop_attempt
+        stop_receipt = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "stop-diagnostic",
+            "state": "succeeded",
+            "attempt": stop_attempt,
+            "compose_project": "fullmag-worktree-test",
+            "control_volume": "fullmag-worktree-test-control",
+            "inputs": {"attempt": TOKEN, "preview_only": False},
+            "stopped_backend": True,
+            "execution_state": "unknown",
+        }
+        stop_raw = raw(stop_receipt)
+        for name in ("receipt.json", "terminal.json"):
+            self.root.joinpath(stop_root, name).parent.mkdir(parents=True, exist_ok=True)
+            self.root.joinpath(stop_root, name).write_bytes(stop_raw)
+        self.put(stop_root + "/diagnostic-stop-preflight.json", {"attempt": TOKEN})
+        self.put(stop_root + "/diagnostic-stop-terminal.json", {"attempt": TOKEN})
+        self.put("stop-diagnostic/current.json", stop_receipt)
+        self.put("stop-diagnostic/verified.json", stop_receipt)
+
+        preview_attempt = "b" * 32
+        preview_root = "stop-diagnostic-preview/attempts/" + preview_attempt
+        preview_receipt = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "stop-diagnostic-preview",
+            "state": "succeeded",
+            "attempt": preview_attempt,
+            "compose_project": "fullmag-worktree-test",
+            "control_volume": "fullmag-worktree-test-control",
+            "inputs": {"attempt": TOKEN, "preview_only": True},
+            "stopped_backend": False,
+            "execution_state": "unknown",
+        }
+        preview_raw = raw(preview_receipt)
+        for name in ("receipt.json", "terminal.json"):
+            self.root.joinpath(preview_root, name).parent.mkdir(parents=True, exist_ok=True)
+            self.root.joinpath(preview_root, name).write_bytes(preview_raw)
+        self.put(preview_root + "/diagnostic-stop-preflight.json", {"attempt": TOKEN})
+        self.put("stop-diagnostic-preview/current.json", preview_receipt)
+        self.put("stop-diagnostic-preview/verified.json", preview_receipt)
+
+        proof = control_references(self.root, "0" * 32)
+        self.assertIn(TOKEN, proof["protected"])
+        for relative in (
+            "stop-diagnostic/current.json",
+            stop_root + "/receipt.json",
+            stop_root + "/terminal.json",
+            stop_root + "/diagnostic-stop-preflight.json",
+            stop_root + "/diagnostic-stop-terminal.json",
+            "stop-diagnostic-preview/current.json",
+            preview_root + "/receipt.json",
+            preview_root + "/terminal.json",
+            preview_root + "/diagnostic-stop-preflight.json",
+        ):
+            self.assertIn(relative, proof["pins"])
+
+    def test_active_or_unknown_diagnostic_stop_stays_a_live_reference(self):
+        self.terminal(TOKEN, RUN)
+        attempt = "c" * 32
+        receipt_path = "stop-diagnostic/attempts/" + attempt + "/receipt.json"
+        for state in ("stopping-diagnostic-api", "outcome-unknown-resources-retained"):
+            self.put(receipt_path, {
+                "schema": "fullmag.docker-build-operation.v1",
+                "phase": "stop-diagnostic",
+                "state": state,
+                "attempt": attempt,
+                "inputs": {"attempt": TOKEN},
+            })
+            with self.subTest(state=state), self.assertRaisesRegex(HistoryError, "referenced"):
+                control_references(self.root, TOKEN)
+
     def test_bootstrap_proof_roots_keep_activation_path_pins(self):
         self.terminal(TOKEN, RUN)
         activation_path = "/control/activation/attempts/" + TOKEN + "/receipt.json"

@@ -28,9 +28,11 @@ KNOWN_ROOTS = frozenset({
     "host-device-reattest", "container-recovery-preparation", "runtime-services",
     "stop-bootstrap", "stop-bootstrap-frontend",
     "startup-recovery-stop", "startup-recovery-stop-preview",
+    "stop-diagnostic", "stop-diagnostic-preview",
     "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
     "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
     "bootstrap-namespace-proof", "bootstrap-container-proof",
+    "data-volume-migration", "profile-storage-copy", "profile-storage-index",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
@@ -152,11 +154,244 @@ def source_inventory(root):
     return {path.name: digest(_raw(path)) for path in paths}
 
 
-def control_references(root, candidate, *, owner_marker_pin=None, qualified_rejection=None):
+def _closed_recovery_metadata_file(path):
+    from pathlib import PurePosixPath
+    from docker_volume_offline_reconcile import _metadata_file
+    parts = PurePosixPath(path).parts
+    retirement_json = len(parts) >= 3 and parts[0] == "retirements" and path.endswith(".json")
+    retirement_script = len(parts) == 4 and parts[0] == "retirements" and parts[2:] == ("project", "main.py")
+    return (retirement_json or retirement_script or (path.endswith(".json") and (
+        _metadata_file(path) or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))))
+
+
+def _authenticate_own_predecessor_retirement(attempt, receipt, records, paths):
+    """Allow one operation identity only inside its byte-bound predecessor archive."""
+    from docker_startup_script import _validate_retirement_response, _retirement_scope, StartupScriptError
+    prefix = "retirements/" + attempt
+    own_paths = [path for path in paths if path == prefix or path.startswith(prefix + "/")]
+    response = receipt.get("retirement")
+    if not own_paths and response is None:
+        return None
+    manifest_path = prefix + "/project/retirement-manifest.json"
+    raw = records.get(manifest_path)
+    if not isinstance(response, dict) or not isinstance(raw, bytes):
+        raise HistoryError("Closed recovery predecessor retirement manifest or response is missing")
+    proof = document(raw, "closed recovery predecessor retirement")
+    if (proof.get("schema") != "fullmag.live-workspace-retirement-proof.v2"
+            or proof.get("state") != "retired" or proof.get("operation_id") != attempt
+            or response.get("schema") != "fullmag.live-workspace-retirement-response.v1"
+            or response.get("archive_sha256") != digest(raw)
+            or response.get("archive_manifest_path") != manifest_path
+            or receipt.get("retirement_result") != {"state": "retirement-only", "retirement": response}):
+        raise HistoryError("Closed recovery predecessor retirement is not authenticated")
+    try:
+        _retirement_scope(proof["request_scope_epoch"])
+        _retirement_scope(response["api_request_scope_epoch"])
+        _validate_retirement_response(response, operation_id=attempt, session_id=proof["session_id"],
+            run_id=proof["run_id"], request_scope_epoch=proof["request_scope_epoch"],
+            api_request_scope_epoch=response["api_request_scope_epoch"])
+    except (StartupScriptError, KeyError) as error:
+        raise HistoryError("Closed recovery predecessor retirement response differs") from error
+    fields = ("session_id", "run_id", "request_scope_epoch", "session_epoch", "scene_revision",
+              "state_version", "terminal_outcome", "terminal_evidence_sha256", "ui_state_scope", "script_available")
+    if any(response.get(key) != proof.get(key) for key in fields):
+        raise HistoryError("Closed recovery predecessor retirement manifest identity differs")
+    run_id = proof.get("run_id")
+    catalog_raw = records.get("runs/" + str(run_id) + "/run_catalog.json")
+    intent_raw = records.get("runs/" + str(run_id) + "/run_intent.json")
+    if not isinstance(catalog_raw, bytes) or not isinstance(intent_raw, bytes):
+        raise HistoryError("Closed recovery predecessor accepted run evidence is missing")
+    catalog = document(catalog_raw, "predecessor run catalog")
+    intent = document(intent_raw, "predecessor run intent")
+    workspace = intent.get("specification", {}).get("parameters", {}).get("live_workspace", {})
+    revision = proof.get("terminal_catalog_revision")
+    if (catalog.get("schema_version") != "run_catalog.v1" or catalog.get("run_id") != run_id
+            or type(revision) is not int or revision <= 0
+            or type(catalog.get("revision")) is not int or catalog["revision"] < revision
+            or proof.get("terminal_outcome") not in {"completed", "failed", "cancelled"}
+            or intent.get("schema_version") != "run_intent.v1" or intent.get("run_id") != run_id
+            or not isinstance(workspace, dict) or workspace.get("session_id") != proof.get("session_id")):
+        raise HistoryError("Closed recovery predecessor run/session inventory binding differs")
+    documents = proof.get("documents")
+    # Match live_retirement::validate_document_name; every optional document
+    # still requires its exact archived bytes and immutable object/hash pin.
+    allowed = {"main.py", "scene_document.json", "script_builder.json", "ui_state.json", "workspace_metadata.json"}
+    if (not isinstance(documents, dict) or not {"ui_state.json", "workspace_metadata.json"} <= set(documents)
+            or not set(documents) <= allowed or proof.get("script_available") != ("main.py" in documents)):
+        raise HistoryError("Closed recovery predecessor document set is invalid")
+    for name, pin in documents.items():
+        content = records.get(prefix + "/project/" + name)
+        if (not isinstance(pin, dict) or not isinstance(content, bytes)
+                or pin.get("sha256") != digest(content) or pin.get("object_ref") != pin.get("sha256")
+                or type(pin.get("byte_length")) is not int or pin["byte_length"] != len(content)):
+            raise HistoryError("Closed recovery predecessor document pin differs")
+    return prefix, manifest_path
+
+
+def _closed_recovery_store_evidence(store_root):
+    """Read complete fresh admission metadata; caller holds existing writer fences."""
+    from docker_volume_offline_reconcile import _inventory_store, _read_store_file
+    root = Path(store_root)
+    _inventory_store(root)  # Requires terminal catalogs, released leases and writer.
+    paths = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+    required = [path for path in paths if _closed_recovery_metadata_file(path)]
+    return {path: _read_store_file(root, path)[0] for path in required}, paths
+
+
+def _closed_recovery_request_identities(attempt, inputs):
+    request_hash = digest(inputs["request_id"].encode())
+    session_parts = [inputs["request_id"], inputs["source_sha256"]]
+    needles = {attempt, inputs["request_id"], request_hash, "live-http-" + request_hash,
+               "docker-startup-" + digest("\0".join(session_parts).encode())}
+    if "solver_profile_sha256" in inputs:
+        session_parts.append(inputs["solver_profile_sha256"])
+        needles.add("docker-startup-" + digest("\0".join(session_parts).encode()))
+    if "cuda_trace_sha256" in inputs:
+        # Match docker_startup.rs::startup_session_id exactly, including its tag.
+        session_parts.extend(["cuda_trace", inputs["cuda_trace_sha256"]])
+        needles.add("docker-startup-" + digest("\0".join(session_parts).encode()))
+    return needles
+
+
+def validate_closed_pre_admission_recovery(attempt, files, *, marker_raw, identity,
+                                           store_records, inventory_paths):
+    """Authenticate only the completed no-admission producer, without rewriting it."""
+    import math
+    from types import SimpleNamespace
+    from docker_build_control import BuildControlError
+    from docker_dev_reconcile_helper_output_failure import (
+        SCHEMA, failure_response, failure_variant, retained_plan, validate_terminal_proof_variant,
+    )
+    from docker_volume_activation_reconcile import _validate_activation_receipt
+
+    required_files = {"receipt.json", "terminal.json", "authorization.json", "startup-provenance.json",
+                      "terminal-history-output-intent.json", "terminal-history-output-proof.json", "build.log"}
+    if not isinstance(files, dict) or set(files) != required_files or not isinstance(identity, dict):
+        raise HistoryError("Closed recovery record set is incomplete or unclassified")
+    receipt = document(files["receipt.json"], "closed recovery original receipt")
+    terminal = document(files["terminal.json"], "closed recovery terminal")
+    proof = document(files["terminal-history-output-proof.json"], "closed recovery proof")
+    intent = document(files["terminal-history-output-intent.json"], "closed recovery intent")
+    try:
+        _, _, inputs = _validate_activation_receipt(
+            SimpleNamespace(project=identity["compose_project"], volume=identity["control_volume"]),
+            activation_attempt=attempt, development_attempt=receipt["development_attempt"],
+            config_sha256=receipt["config_sha256"], source_root=identity["source_root"],
+            image_id=receipt["image_id"], backend_id=receipt["backend_container"],
+            receipt_raw=files["receipt.json"])
+        for key in ("started_at", "finished_at"):
+            value = receipt.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise HistoryError("Closed recovery receipt timestamp is invalid")
+        if receipt["finished_at"] < receipt["started_at"]:
+            raise HistoryError("Closed recovery receipt timestamps are unordered")
+        if receipt.get("retirement_phase") != "startup":
+            raise HistoryError("Closed recovery was not a startup failure")
+        if any(record.get(key) is not None for record in (receipt, terminal)
+               for key in ("run_id", "session_id")):
+            raise HistoryError("Closed recovery has an accepted run or session")
+        if any(receipt.get(key) != value for key, value in inputs.items()):
+            raise HistoryError("Closed recovery top-level identity differs from immutable inputs")
+        response = failure_response(receipt.get("error"))
+        variant = failure_variant(response)
+        validate_terminal_proof_variant(proof, variant)
+        # The producer authenticates an absent variant only for its original
+        # overflow format. Preserve that closed legacy shape without rewriting
+        # its pinned proof bytes; newer failure variants still require the tag.
+        proof_fields = {"schema", "plan", "plan_sha256", "process_tree_sha256",
+                        "preserved_store", "outcome", "old_request_replay"}
+        if (set(proof) not in (proof_fields, proof_fields | {"failure_variant"})
+                or proof.get("schema") != SCHEMA or proof.get("outcome") != "not-admitted"
+                or proof.get("old_request_replay") != "forbidden"
+                or re.fullmatch(r"[0-9a-f]{64}", str(proof.get("process_tree_sha256"))) is None):
+            raise HistoryError("Closed recovery release proof is malformed")
+        marker = document(marker_raw, "closed recovery started marker")
+        authorization = document(files["authorization.json"], "closed recovery authorization")
+        if (marker != {"schema": "fullmag.docker-startup-activation-receipt.v1", "state": "started",
+                       "request_id": inputs["request_id"], "source_sha256": inputs["source_sha256"],
+                       "provenance_sha256": inputs["provenance_sha256"], "authorization": authorization}
+                or digest(files["startup-provenance.json"]) != inputs["provenance_sha256"]
+                or document(files["startup-provenance.json"], "closed recovery provenance") != authorization):
+            raise HistoryError("Closed recovery started marker or authorization binding differs")
+        for key in ("request_id", "source_sha256", "source_relative", "source_root"):
+            if authorization.get(key) != inputs[key]:
+                raise HistoryError("Closed recovery authorization identity differs")
+        bindings = {"schema": SCHEMA, "activation": attempt, "backend": inputs["backend_container"],
+                    "receipt_sha256": digest(files["receipt.json"]), "marker_sha256": digest(marker_raw),
+                    "config_sha256": inputs["config_sha256"], "source_root": identity["source_root"],
+                    "request_id": inputs["request_id"], "source_sha256": inputs["source_sha256"], "response": response}
+        plan = proof.get("plan")
+        if (not isinstance(plan, dict) or set(plan) != set(bindings) | {
+                "backend_started_at", "protected_runs_sha256", "run_count"}
+                or not isinstance(plan.get("backend_started_at"), str)):
+            raise HistoryError("Closed recovery backend incarnation is missing")
+        from docker_dev_release_unknown_activation import docker_time
+        docker_time(plan["backend_started_at"])
+        retained_plan(proof, bindings, plan["backend_started_at"])
+        retained_plan(intent, bindings, plan["backend_started_at"])
+        if set(intent) != {"schema", "plan", "plan_sha256"} or intent["plan"] != plan or intent["plan_sha256"] != proof["plan_sha256"]:
+            raise HistoryError("Closed recovery intent and proof differ")
+        preserved = proof.get("preserved_store")
+        if (not isinstance(preserved, dict) or preserved.get("root") != identity.get("store_root")
+                or not isinstance(preserved.get("runs"), list) or type(plan.get("run_count")) is not int
+                or plan["run_count"] != len(preserved["runs"])):
+            raise HistoryError("Closed recovery historical store identity differs")
+        finished = terminal.get("finished_at")
+        if (isinstance(finished, bool) or not isinstance(finished, (int, float)) or not math.isfinite(finished)
+                or finished < receipt["finished_at"]):
+            raise HistoryError("Closed recovery completion timestamp is invalid")
+        expected = {**receipt, "state": "failed-confirmed", "activation_state": "not-admitted",
+                    "reconciliation": "pre-admission-output-terminal-history",
+                    "release_proof_sha256": digest(canonical(proof)), "finished_at": finished}
+        if terminal != expected:
+            raise HistoryError("Closed recovery terminal is not the exact producer overlay")
+    except (BuildControlError, KeyError, TypeError, ValueError) as error:
+        raise HistoryError("Closed pre-admission recovery authentication failed: " + str(error)) from error
+    if (not isinstance(store_records, dict) or not isinstance(inventory_paths, list)
+            or any(not isinstance(path, str) for path in inventory_paths)
+            or len(set(inventory_paths)) != len(inventory_paths)):
+        raise HistoryError("Closed recovery requires complete fresh admission metadata")
+    required = {path for path in inventory_paths if _closed_recovery_metadata_file(path)}
+    if set(store_records) != required:
+        raise HistoryError("Closed recovery admission metadata inventory is incomplete")
+    owner = document(store_records.get("WRITER.owner.json", b"{}"), "fresh store writer")
+    if owner.get("schema") != "fullmag.writer.v1" or owner.get("released") is not True:
+        raise HistoryError("Closed recovery store writer is not released")
+    needles = _closed_recovery_request_identities(attempt, inputs)
+    own_retirement = _authenticate_own_predecessor_retirement(attempt, receipt, store_records, inventory_paths)
+    def references(value):
+        if isinstance(value, dict): return any(references(key) or references(item) for key, item in value.items())
+        if isinstance(value, list): return any(references(item) for item in value)
+        return isinstance(value, str) and any(needle in value for needle in needles)
+    for path in inventory_paths:
+        scanned = path
+        if own_retirement is not None:
+            prefix, _ = own_retirement
+            if path == prefix or path.startswith(prefix + "/"):
+                # Remove only the authenticated namespace component. Repeated
+                # attempt IDs or real request identities below it remain live.
+                scanned = path[len(prefix):]
+        if references(scanned):
+            raise HistoryError("Closed recovery request has fresh RunIntent/admission/lease evidence")
+    for path, raw in store_records.items():
+        value = document(raw, "fresh admission metadata") if path.endswith(".json") else raw.decode("utf-8", "strict")
+        if own_retirement is not None and path == own_retirement[1]:
+            value = dict(value)
+            # Its exact operation_id was authenticated above. No other field,
+            # nested payload or foreign retirement receives this exception.
+            del value["operation_id"]
+        if references(value):
+            raise HistoryError("Closed recovery request has fresh RunIntent/admission/lease evidence")
+    return terminal
+
+
+def control_references(root, candidate, *, owner_marker_pin=None, qualified_rejection=None,
+                       store_root=None, identity=None):
     """Conservatively preserve references from nonhistorical control documents.
 
-    A succeeded terminal attempt is historical. Failed, incomplete and unknown
-    attempts remain roots, including their entire bounded record set. Backend
+    A succeeded terminal attempt is historical. A completed pre-admission
+    recovery is historical only after exact producer and fresh store validation.
+    Other failed, incomplete and unknown attempts remain roots. Backend
     script activation markers are historical only when confirmed activated.
     """
     root = _directory(root)
@@ -198,12 +433,44 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
     known_runs = {}
     closed_activations = {}
     qualified_current_terminal = None
+    closed_recovery_pins = {}
+    fresh_recovery_store = None
     live = _entries(root / "activation/attempts")
     def closed_terminal(path):
         terminal, receipt = path / "terminal.json", path / "receipt.json"
         if terminal.exists() and receipt.exists():
             terminal_raw = _raw(terminal)
             value = document(terminal_raw, str(path) + "/terminal")
+            if (value.get("state") == "failed-confirmed"
+                    and value.get("reconciliation") == "pre-admission-output-terminal-history"
+                    and path.parent == root / "activation/attempts"
+                    and store_root is not None and identity is not None):
+                nonlocal fresh_recovery_store
+                from docker_activation_history_storage import source_files
+                files = source_files(path)
+                recovery_proof = document(files["terminal-history-output-proof.json"], "closed recovery proof")
+                preserved = recovery_proof.get("preserved_store")
+                if (not isinstance(preserved, dict) or not isinstance(preserved.get("root"), str)):
+                    raise HistoryError("Closed recovery store identity is malformed")
+                if preserved["root"] != identity.get("store_root"):
+                    # The selected candidate's mount cannot authenticate another
+                    # SessionStore. Keep this entire recovery as a live root;
+                    # never mount or read a path supplied by historical proof.
+                    return None
+                receipt_value = document(files["receipt.json"], "closed recovery receipt")
+                key = receipt_value.get("activation_receipt_key")
+                if not isinstance(key, str) or re.fullmatch(r"[0-9a-f]{64}", key) is None:
+                    raise HistoryError("Closed recovery marker key is invalid")
+                marker_relative = "backend/script-activation-" + key + "/activation.json"
+                marker_raw = _raw(root / marker_relative)
+                if fresh_recovery_store is None:
+                    fresh_recovery_store = _closed_recovery_store_evidence(store_root)
+                validate_closed_pre_admission_recovery(path.name, files, marker_raw=marker_raw,
+                    identity=identity, store_records=fresh_recovery_store[0], inventory_paths=fresh_recovery_store[1])
+                for name, raw in files.items():
+                    closed_recovery_pins[(path / name).relative_to(root).as_posix()] = digest(raw)
+                closed_recovery_pins[marker_relative] = digest(marker_raw)
+                return value
             if (value.get("schema") == "fullmag.docker-build-operation.v1"
                     and (value.get("state") == "succeeded" or (
                         qualified_rejection is not None and path.name == candidate
@@ -246,7 +513,10 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
                 if relative in {"activation/history-v1", "activation/history-staging-v1",
                                 "activation/history-operations-v1"}:
                     continue
-                if entry.parent.name == "attempts":
+                if (entry.parent.name == "attempts"
+                        and entry.parent.parent.name not in {
+                            "stop-diagnostic", "stop-diagnostic-preview",
+                        }):
                     if closed_terminal(entry) is not None:
                         # A current/verified pointer outside attempts still
                         # protects this record and its direct dependencies.
@@ -326,6 +596,7 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
             else:
                 raise HistoryError("Linked or special control reference entry")
     walk(root, top=True)
+    pins.update(closed_recovery_pins)
     protected = referenced_attempts(references, known_runs)
     # Follow explicit attempt/path pins to a fixed point. A past retirement's
     # run_id is historical evidence, not a requirement to keep every predecessor

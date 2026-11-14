@@ -1,0 +1,281 @@
+"""Supervise one source-pinned WSL root bind stage under the held migration fence.
+
+This adapter authenticates the selected checkout and the completed copy, then
+hands the fixed command and bind validator to the shared root-client supervisor.
+It does not expose a standalone root command, restart a client, or admit the
+new namespace.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+
+from docker_compose_identity import compose_project_identity
+from docker_data_volume_linux import _wsl_executable
+from fullmag_data_volume_linux_request import validate_linux_request
+from fullmag_data_volume_runtime_binding import load_plan
+import linux_data_volume_provision as qualification
+
+try:
+    from . import docker_data_volume_root_bootstrap as root_bootstrap
+    from . import docker_data_volume_copy_job as copy_job
+    from . import fullmag_data_volume_pending as pending
+    from . import fullmag_data_volume_bind as bind_result
+    from . import linux_data_volume_bind as bind_stage
+    from . import linux_data_volume_copy as copy_stage
+    from .fullmag_data_volume_journal import next_phase
+except ImportError:
+    import docker_data_volume_root_bootstrap as root_bootstrap
+    import docker_data_volume_copy_job as copy_job
+    import fullmag_data_volume_pending as pending
+    import fullmag_data_volume_bind as bind_result
+    import linux_data_volume_bind as bind_stage
+    import linux_data_volume_copy as copy_stage
+    from fullmag_data_volume_journal import next_phase
+
+run_prepared_root = copy_job.run_prepared_root
+_ROOT_BIND_BOOTSTRAP = root_bootstrap.bootstrap("bind")
+
+
+def _operation_match(fence, request):
+    return copy_job._operation_match(fence, request)
+
+
+def prepare_command(fence, source, distro, request_path, request_sha256):
+    """Authenticate scope and return a fixed WSL/Python root-bind command."""
+    source, request_path = Path(source), Path(request_path)
+    qualification.require(source.is_absolute() and str(source) == os.path.normpath(str(source)) and
+        not str(source).startswith("//"), "Exact canonical source root required for the root client")
+    qualification.require(type(distro) is str and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", distro),
+                          "Exact WSL distro required")
+    qualification.require(type(request_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", request_sha256),
+                          "Exact root bind request SHA required")
+    _, value = qualification._read(request_path, request_sha256)
+    request = bind_stage.validate_request(value)
+    _operation_match(fence, request)
+
+    layout = copy_job.storage.resolve_layout(source, profile="docker-all-gpu")
+    identity = compose_project_identity(layout)
+    operation_root = Path(layout["storage_root"]) / "migrations/data-volumes" / request["volume_id"]
+    qualification.require(request_path == operation_root / "linux-bind-request.json" and
+        request["storage_root"] == layout["storage_root"] and
+        fence.control.project == identity["project_name"],
+        "Root bind request is outside the selected source group")
+
+    copy_request_path = operation_root / "linux-copy-request.json"
+    _, copy_value = qualification._read(copy_request_path, request["copy_request_sha256"])
+    copy_request = copy_stage.validate_request(copy_value)
+    qualification.require(copy_request["volume_id"] == request["volume_id"] and
+        copy_request["storage_root"] == request["storage_root"],
+        "Root bind predecessor copy belongs to another volume")
+
+    _, linux_raw = qualification._read(
+        operation_root / "linux-provision-request.json", copy_request["linux_request_sha256"]
+    )
+    linux = validate_linux_request(linux_raw)
+    plan_raw, plan, _binding = load_plan(operation_root, linux)
+    _, copy_result = qualification._read(
+        operation_root / "linux-copy-result.json", request["copy_receipt_sha256"]
+    )
+    copy_stage.validate_result(copy_result, copy_request, linux, request["copy_request_sha256"])
+    _, journal = qualification._selected_journal(operation_root)
+    previous = journal["events"][-1] if journal["events"] else {}
+    qualification.require(journal.get("volume_id") == request["volume_id"] and
+        journal.get("request_sha256") == hashlib.sha256(plan_raw).hexdigest() and
+        next_phase(journal) == "binds-switched" and
+        previous.get("phase") == "copy-verified" and previous.get("state") == "succeeded" and
+        previous.get("inputs_sha256") == request["copy_request_sha256"] and
+        previous.get("receipt_sha256") == request["copy_receipt_sha256"],
+        "Root bind predecessor copy has no exact successful journal terminal")
+    qualification.require(plan.get("source_root") == str(source) and
+        plan.get("project_id") == identity["project_id"] and
+        plan.get("worktree_id") == identity["worktree_id"] and
+        plan.get("compose_project") == identity["project_name"] and
+        plan.get("provision_request", {}).get("wsl_distro") == distro and
+        plan.get("runtime_pins", {}).get("image_id") == fence.control.image,
+        "Root bind plan belongs to another checkout, image or WSL distro")
+    qualification.require(plan.get("volume_id") == request["volume_id"] and
+        linux["volume_id"] == request["volume_id"] and
+        linux["storage_root"] == request["storage_root"] and
+        linux["source_roots"] == plan.get("observation", {}).get("datasets") and
+        {role: {key: pin[key] for key in ("device", "inode")}
+         for role, pin in linux["source_roots"].items()} == fence.request["source_roots"],
+        "Root bind original dataset identities differ from the held helper")
+
+    _, drain = qualification._read(operation_root / "group-drained.json", copy_request["drain_sha256"])
+    qualification.require(type(drain) is dict and set(drain) == {
+        "schema", "volume_id", "token", "plan_sha256", "source_roots", "stop_attempt",
+        "stop_sha256", "process_receipt_sha256", "containers",
+    } and drain["schema"] == "fullmag.data-volume-group-drained.v1" and
+        drain["volume_id"] == request["volume_id"] and drain["token"] == copy_request["token"] and
+        drain["plan_sha256"] == hashlib.sha256(plan_raw).hexdigest() and
+        drain["source_roots"] == linux["source_roots"] and
+        drain["containers"] == {key: plan["runtime_pins"][key] for key in ("backend", "frontend")},
+        "Root bind predecessor drain differs from the selected copy and runtime")
+
+    _, ready = qualification._read(operation_root / "bind-fence-ready.json", request["fence_ready_sha256"])
+    qualification.require(ready == fence.ready, "Root bind does not use the exact held fence acknowledgement")
+    copy_stage.validate_held_fence(
+        ready, request["token"], request["volume_id"], drain["process_receipt_sha256"]
+    )
+
+    for name in bind_stage.COMPONENTS:
+        raw = qualification._read_optional_regular(source / "scripts" / name,
+            "root bind component", maximum=4 * 1024**2)
+        qualification.require(raw is not None and qualification.digest(raw) == request["components"][name],
+                              "Root bind component source changed: " + name)
+
+    command = [
+        _wsl_executable(), "--distribution", distro, "--user", "root", "--exec",
+        "/usr/bin/python3", "-I", "-B", "-c", _ROOT_BIND_BOOTSTRAP,
+        str(source), str(request_path), request_sha256,
+        json.dumps(request["components"], sort_keys=True, separators=(",", ":")),
+    ]
+    return command, operation_root, request
+
+
+def _verified_copy_inputs(operation_root, request, request_sha256):
+    """Reauthenticate the unchanged plan, Linux request, and completed copy."""
+    operation_root = Path(operation_root)
+    qualification.require(operation_root == Path(request["storage_root"]) / "migrations/data-volumes" /
+                          request["volume_id"], "Root bind terminal escapes its selected operation")
+    _, stored_request = qualification._read(operation_root / "linux-bind-request.json", request_sha256)
+    qualification.require(bind_stage.validate_request(stored_request) == request,
+                          "Root bind terminal request changed")
+
+    _, copy_value = qualification._read(operation_root / "linux-copy-request.json",
+                                        request["copy_request_sha256"])
+    copy_request = copy_stage.validate_request(copy_value)
+    qualification.require(copy_request["volume_id"] == request["volume_id"] and
+        copy_request["storage_root"] == request["storage_root"],
+        "Completed copy predecessor differs from the root bind request")
+    _, linux_raw = qualification._read(operation_root / "linux-provision-request.json",
+                                       copy_request["linux_request_sha256"])
+    linux = validate_linux_request(linux_raw)
+    plan_raw, plan, _binding = load_plan(operation_root, linux)
+    qualification.require(plan.get("volume_id") == request["volume_id"] and
+        plan.get("storage_root") == request["storage_root"] and
+        plan.get("mount_root") == linux["mount_root"] and
+        plan.get("observation", {}).get("datasets") == linux["source_roots"],
+        "Root bind terminal plan or original datasets differ")
+    _, copy_result = qualification._read(operation_root / "linux-copy-result.json",
+                                          request["copy_receipt_sha256"])
+    copy_stage.validate_result(copy_result, copy_request, linux, request["copy_request_sha256"])
+    return copy_request, linux, plan_raw, plan, copy_result
+
+
+def _positive_identity(value, label):
+    return bind_result._positive_identity(value, label)
+
+
+def _validate_switch(switch, request, linux, copy_result):
+    return bind_result.validate_switch_result(switch, request, linux, copy_result)
+
+
+def validate_terminal(operation_root, request, request_sha256, exit_code):
+    """Accept only an exact terminal bind result or a confirmed root failure."""
+    require = qualification.require
+    require(type(exit_code) is int, "An observed terminal root bind exit is required")
+    require(type(request_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", request_sha256),
+            "Exact root bind request SHA required")
+    request = bind_stage.validate_request(request)
+    operation_root = Path(operation_root)
+    require(operation_root == Path(request["storage_root"]) / "migrations/data-volumes" /
+            request["volume_id"], "Root bind terminal escapes its selected operation")
+    _, journal = qualification._selected_journal(operation_root)
+    events = journal["events"]
+    event = events[-1] if events else {}
+    require(event.get("phase") == "binds-switched" and event.get("inputs_sha256") == request_sha256,
+            "Root bind journal belongs to another request")
+
+    success_path = operation_root / "linux-bind-result.json"
+    failure_path = operation_root / "linux-bind-failed.json"
+    copy_request, linux, plan_raw, plan, copy_result = _verified_copy_inputs(
+        operation_root, request, request_sha256
+    )
+    require(journal.get("volume_id") == request["volume_id"] and
+        journal.get("request_sha256") == hashlib.sha256(plan_raw).hexdigest() and
+        len(events) >= 4 and events[-2].get("phase") == "binds-switched" and
+        events[-2].get("state") == "started" and
+        events[-3].get("phase") == "copy-verified" and events[-3].get("state") == "succeeded" and
+        events[-3].get("inputs_sha256") == request["copy_request_sha256"] and
+        events[-3].get("receipt_sha256") == request["copy_receipt_sha256"],
+        "Root bind journal does not continue the exact verified copy terminal")
+    if exit_code == 0:
+        require(not os.path.lexists(failure_path) and event.get("state") == "succeeded",
+                "Successful root client exit has no unambiguous completed bind")
+        raw, result = qualification._read(success_path, event["receipt_sha256"])
+        expected_keys = {"schema", "state", "volume_id", "token", "request_sha256", "copy_receipt_sha256",
+                         "pending_marker", "switch", "namespace_admitted", "originals_retired"}
+        require(type(result) is dict and set(result) == expected_keys and
+            result["schema"] == "fullmag.data-volume-linux-bind-result.v1" and
+            result["state"] == "binds-switched-not-admitted" and
+            result["volume_id"] == request["volume_id"] and result["token"] == request["token"] and
+            result["request_sha256"] == request_sha256 and
+            result["copy_receipt_sha256"] == request["copy_receipt_sha256"] and
+            result["namespace_admitted"] is False and result["originals_retired"] is False,
+            "Root bind success receipt scope or authority flags differ")
+        _validate_switch(result["switch"], request, linux, copy_result)
+        marker_ref = result["pending_marker"]
+        layout = {"repo_root": plan["source_root"], "storage_root": plan["storage_root"],
+                  "runtime_root": plan["runtime_root"], "worktree_id": plan["worktree_id"],
+                  "env": {"FULLMAG_PROJECT_ID": plan["project_id"]}}
+        marker_path = pending.pending_path(layout)
+        require(type(marker_ref) is dict and set(marker_ref) == {"path", "sha256"} and
+            marker_ref["path"] == str(marker_path) and
+            type(marker_ref["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", marker_ref["sha256"]),
+            "Root bind success does not reference the exact pending marker")
+        marker_raw = qualification._read_optional_regular(
+            marker_path, "published pending marker", maximum=pending.MAX_BYTES
+        )
+        require(marker_raw is not None and qualification.digest(marker_raw) == marker_ref["sha256"],
+                "Published pending marker bytes differ from the bind receipt")
+        marker = pending.validate_pending(qualification._parse_object(marker_raw, "published pending marker"),
+                                          layout, plan["compose_project"])
+        expected_marker = {
+            "schema": pending.SCHEMA,
+            "project_id": plan["project_id"],
+            "worktree_id": plan["worktree_id"],
+            "compose_project": plan["compose_project"],
+            "source_root": plan["source_root"],
+            "volume_id": request["volume_id"],
+            "plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+            "linux_request_sha256": copy_request["linux_request_sha256"],
+            "copy_receipt_sha256": request["copy_receipt_sha256"],
+            "state_root": linux["source_roots"]["state"]["canonical_root"],
+            "user_data_root": linux["source_roots"]["user_data"]["canonical_root"],
+        }
+        require(marker == expected_marker, "Pending marker changed the original plan or copy scope")
+    else:
+        require(not os.path.lexists(success_path) and event.get("state") == "failed-confirmed",
+                "Root bind client failed without a confirmed terminal root failure")
+        layout = {"repo_root": plan["source_root"], "storage_root": plan["storage_root"],
+                  "runtime_root": plan["runtime_root"], "worktree_id": plan["worktree_id"],
+                  "env": {"FULLMAG_PROJECT_ID": plan["project_id"]}}
+        require(not os.path.lexists(pending.pending_path(layout)),
+                "Confirmed root bind failure conflicts with a published pending marker")
+        raw, result = qualification._read(failure_path, event["receipt_sha256"])
+        require(type(result) is dict and set(result) == {
+            "schema", "state", "volume_id", "token", "request_sha256", "error_type",
+            "originals_and_copies_retained", "manual_recovery_required",
+        } and result["schema"] == "fullmag.data-volume-linux-bind-failure.v1" and
+            result["state"] == "failed-confirmed" and result["volume_id"] == request["volume_id"] and
+            result["token"] == request["token"] and result["request_sha256"] == request_sha256 and
+            result["originals_and_copies_retained"] is True and result["manual_recovery_required"] is True,
+            "Root bind confirmed failure scope differs")
+    return {"state": result["state"], "receipt_sha256": hashlib.sha256(raw).hexdigest(), "result": result}
+
+
+def run_root_bind(fence, source, distro, request_path, request_sha256, *, poll_interval=2.0):
+    """Supervise the fixed root bind until its exact receipt is terminal."""
+    qualification.require(type(poll_interval) in (int, float) and 0 < poll_interval <= 5,
+                          "Bounded root-client polling interval required")
+    fence.check()
+    command, operation_root, request = prepare_command(fence, source, distro, request_path, request_sha256)
+    return run_prepared_root(
+        "bind", fence, command, operation_root, request, request_sha256, validate_terminal,
+        release_copy_sha256=request["copy_receipt_sha256"], poll_interval=poll_interval,
+    )

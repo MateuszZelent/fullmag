@@ -74,6 +74,34 @@ def load_json(path: Path, label: str) -> dict[str, object]:
     return value
 
 
+def _validate_preparation_phase_timings(value: object) -> bool:
+    if value is None:
+        return True
+    required = {"schema_version", "scope", "total_body_ns"}
+    phase_fields = {
+        "load_accepted_snapshot_ns", "replay_validation_ns", "native_mesh_space_ns",
+        "prepared_fields_evaluation_ns", "prepared_bundle_publication_ns",
+        "prepared_observation_commit_ns", "task_preparation_commit_ns",
+    }
+    if (not isinstance(value, dict) or not required.issubset(value)
+            or not set(value).issubset(required | phase_fields)
+            or value.get("schema_version") != "fem_preparation_phase_timings.v1"
+            or value.get("scope") != "accepted_fem_preparation_process_body.v1"):
+        return False
+    durations = []
+    for key in {"total_body_ns"} | phase_fields:
+        if key not in value:
+            continue
+        duration = value[key]
+        if duration is None and key != "total_body_ns":
+            continue
+        if type(duration) is not int or not 0 <= duration <= (1 << 64) - 1:
+            return False
+        if key != "total_body_ns":
+            durations.append(duration)
+    return sum(durations) <= value["total_body_ns"]
+
+
 def load_fixture(repo_root: Path, invocation_id: str) -> tuple[dict[str, object], dict[str, object]]:
     path = (repo_root / FIXTURE).resolve()
     raw = path.read_bytes()
@@ -239,6 +267,8 @@ def validate_durable_evidence(
         or process_exit.get("schema_version") != "preparation_process_exit_receipt.v1"
     ):
         raise AcceptedFemPreparationRuntimeError("durable preparation evidence is incomplete or unsuccessful")
+    if not _validate_preparation_phase_timings(process_exit.get("phase_timings")):
+        raise AcceptedFemPreparationRuntimeError("durable preparation phase timings are malformed")
     payload = receipt.get("payload")
     plan = payload.get("plan") if isinstance(payload, dict) else None
     if (

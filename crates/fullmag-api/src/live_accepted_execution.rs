@@ -202,6 +202,11 @@ pub(crate) async fn submit_live_command_with_transition(
         if let Some(error) = accepted_preparation_recovery_error(snapshot) {
             return Err(error);
         }
+        if matches!(command.kind.as_str(), "run" | "relax" | "solve") {
+            if let Some(error) = restored_asset_origin_error(snapshot) {
+                return Err(error);
+            }
+        }
         if matches!(command.kind.as_str(), "run" | "relax" | "solve")
             && snapshot.scene_document.as_ref().is_some_and(|scene| {
                 scene.study.requested_backend.eq_ignore_ascii_case("fem")
@@ -473,6 +478,23 @@ pub(crate) async fn submit_live_command_with_transition(
         step_id,
         selected_step_id: prepared.selected_step_id,
     }, admission)))
+}
+
+fn restored_asset_origin_error(snapshot: &crate::types::SessionStateResponse) -> Option<ApiError> {
+    let restored_terminal = snapshot.metadata.as_ref()
+        .and_then(|metadata| metadata.pointer("/accepted_run_reattach/schema"))
+        .and_then(serde_json::Value::as_str)
+        == Some("fullmag.development-terminal-observation-input.v1");
+    if restored_terminal && snapshot.session.script_path.is_empty()
+        && snapshot.scene_document.as_ref().is_some_and(|scene| scene.study.fem_domain_mesh.is_some())
+    {
+        Some(ApiError::conflict_with_code(
+            "restored_asset_origin_unavailable",
+            "The restored FEM scene requires its verified original script asset directory.",
+        ))
+    } else {
+        None
+    }
 }
 
 fn accepted_preparation_recovery_error(
@@ -1221,6 +1243,9 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
         if let Some(error) = accepted_preparation_recovery_error(snapshot) {
+            return Err(error);
+        }
+        if let Some(error) = restored_asset_origin_error(snapshot) {
             return Err(error);
         }
         let scene = snapshot
@@ -3182,6 +3207,29 @@ mod tests {
             request_scope_epoch: "scope:17".into(),
         };
         (snapshot, context)
+    }
+
+    #[test]
+    fn restored_relative_mesh_requires_origin_without_blocking_ordinary_ui_scenes() {
+        let (mut snapshot, _) = grid_refresh_predecessor_snapshot("completed");
+        let mut scene = fullmag_authoring::SceneDocument::default();
+        scene.study.fem_domain_mesh = Some(fullmag_authoring::SceneFemDomainMeshReference {
+            source: "model.fullmag-mesh".into(), sha256: "a".repeat(64),
+            build_requested: false,
+        });
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        assert!(super::restored_asset_origin_error(&snapshot).is_none());
+        snapshot.metadata = Some(serde_json::json!({"accepted_run_reattach": {
+            "schema": "fullmag.development-terminal-observation-input.v1"
+        }}).into());
+        assert_eq!(super::restored_asset_origin_error(&snapshot).unwrap().code.as_deref(),
+            Some("restored_asset_origin_unavailable"));
+        snapshot.session.script_path = "/opt/fullmag/source/examples/model.py".into();
+        assert!(super::restored_asset_origin_error(&snapshot).is_none());
+        snapshot.session.script_path.clear();
+        snapshot.scene_document.as_mut().unwrap().study.fem_domain_mesh = None;
+        assert!(super::restored_asset_origin_error(&snapshot).is_none());
     }
 
     fn record_accepted_commit(

@@ -30,6 +30,43 @@ INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
 _MAX_INCLUDE_UNTRACKED_BYTES = 64 * 1024
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
+_PREPARATION_PHASE_TIMING_SCHEMA = "fem_preparation_phase_timings.v1"
+_PREPARATION_PHASE_TIMING_SCOPE = "accepted_fem_preparation_process_body.v1"
+_PREPARATION_PHASE_TIMING_FIELDS = frozenset({
+    "load_accepted_snapshot_ns",
+    "replay_validation_ns",
+    "native_mesh_space_ns",
+    "prepared_fields_evaluation_ns",
+    "prepared_bundle_publication_ns",
+    "prepared_observation_commit_ns",
+    "task_preparation_commit_ns",
+})
+_U64_MAX = (1 << 64) - 1
+
+
+def _validate_preparation_phase_timings(value):
+    """Accept absent legacy timing data or one exact, bounded diagnostic object."""
+    if value is None:
+        return True
+    required = {"schema_version", "scope", "total_body_ns"}
+    if (not isinstance(value, dict)
+            or not required.issubset(value)
+            or not set(value).issubset(required | _PREPARATION_PHASE_TIMING_FIELDS)
+            or value.get("schema_version") != _PREPARATION_PHASE_TIMING_SCHEMA
+            or value.get("scope") != _PREPARATION_PHASE_TIMING_SCOPE):
+        return False
+    durations = []
+    for key in {"total_body_ns"} | _PREPARATION_PHASE_TIMING_FIELDS:
+        if key not in value:
+            continue
+        duration = value[key]
+        if duration is None and key != "total_body_ns":
+            continue
+        if type(duration) is not int or not 0 <= duration <= _U64_MAX:
+            return False
+        if key != "total_body_ns":
+            durations.append(duration)
+    return sum(durations) <= value["total_body_ns"]
 
 
 def _session_host():
@@ -2140,7 +2177,8 @@ def _native_contracts(values):
             or any(not isinstance(value, str)
                    or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
                                     "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
-                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"}
+                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+                                    "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot"}
                    for value in values)
             or len(values) > 1
             or len(set(values)) != len(values)):
@@ -2230,14 +2268,27 @@ def _preflight_prepared_start_budget(control, operation, maintenance, recovery, 
     return document
 
 
+def _create_session_state_root(layout, project, token):
+    from docker_dev import _verify_registered_data_volume
+    state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
+                                  layout["storage_root"], "session storage")
+    _verify_registered_data_volume(layout, project, state_root=state)
+    state.mkdir(parents=True, exist_ok=False)
+    return state
+
+
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None, prepared_recovery_constraints=None):
-    from docker_dev import (_select_source, _compose_identity,
+          cold_budget_restore=None, prepared_recovery_constraints=None, capture_terminal=False):
+    if type(capture_terminal) is not bool:
+        raise BuildControlError("Internal start terminal capture must be boolean")
+    if capture_terminal and (control is not None or operation is not None):
+        raise BuildControlError("Captured start must own its new development operation")
+    from docker_dev import (_select_source, _compose_identity, _verify_registered_data_volume,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
@@ -2573,10 +2624,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                                               layout["runtime_root"], "isolated session storage")
                 if not state.is_dir() or state.resolve(strict=True) != state:
                     raise BuildControlError("Copied session state is missing or noncanonical")
+                _verify_registered_data_volume(layout, control.project, state_root=state)
             else:
-                state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
-                                              layout["storage_root"], "session storage")
-                state.mkdir(parents=True, exist_ok=False)
+                state = _create_session_state_root(layout, control.project, token)
             if os.name == "nt":
                 operation["receipt"]["windows_runtime_directories"] = list(
                     _precreate_new_windows_runtime_state(state)
@@ -2621,6 +2671,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             reuse_state["state"] = state
             reuse_state["host_certificate"] = certificate_path
             reuse_state["owner_marker"] = owner_marker
+            _verify_registered_data_volume(layout, control.project, state_root=state)
         operation["receipt"]["state_root"] = str(state)
         if validated_post_build_generation is not None:
             # BuildKit has already completed and the new development lease is
@@ -2972,6 +3023,32 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             _finish(control, operation, document, backend_id, frontend_id, selected, state,
                     certificate_path, certificate, cache, toolchain, image, git_common,
                     ledger_profile, args.port, helper_source_binding=helper_source_binding)
+    if capture_terminal:
+        return _captured_start_terminal(control, operation)
+
+
+def _captured_start_terminal(control, operation):
+    """Return this invocation's exact finalized receipt, never a current pointer."""
+    receipt = operation.get("receipt") if isinstance(operation, Mapping) else None
+    if (getattr(control, "_active_operation", None) is not None
+            or not isinstance(receipt, dict) or operation.get("daemon_pending") is not False
+            or receipt.get("phase") != "development" or receipt.get("state") != "succeeded"
+            or receipt.get("compose_project") != control.project
+            or receipt.get("control_volume") != control.volume
+            or not isinstance(receipt.get("attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", receipt["attempt"]) is None
+            or operation.get("root") != "development/attempts/" + receipt["attempt"]
+            or any(not isinstance(receipt.get(key), str) or
+                   re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None
+                   for key in ("backend_container", "frontend_container"))):
+        raise BuildControlError("Captured start has no exact successful closed development operation")
+    relative = operation["root"] + "/terminal.json"
+    raw = control.read_bytes(relative)
+    if raw != canonical(receipt) + b"\n":
+        raise BuildControlError("Captured start terminal differs from this invocation's finalized receipt")
+    from copy import deepcopy
+    return {"schema": "fullmag.development-start-terminal.v1", "relative": relative,
+            "sha256": hashlib.sha256(raw).hexdigest(), "receipt": deepcopy(receipt)}
 
 
 
@@ -3394,7 +3471,11 @@ def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup
     the existing native drain receipt remains mandatory before restart.
     """
     script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
-        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,urllib.error,urllib.request
+        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,sys,urllib.error,urllib.request
+from pathlib import Path
+sys.path.insert(0,"/opt/fullmag/source/scripts")
+from docker_terminal_source_origin import capture_source_origin,revalidate_source_origin
+SOURCE_ROOT=Path("/opt/fullmag/source")
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
 MAX_STARTUP_MARKERS=256
@@ -3789,6 +3870,13 @@ if (not STARTUP_ENABLED and run is None
 elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared):
     print("null")
 else:
+    source_script=session.get("script")
+    try:
+        source_origin=capture_source_origin(source_script,source_root=SOURCE_ROOT)
+    except (OSError,ValueError) as error:
+        raise RuntimeError("terminal source origin could not be captured") from error
+    source_script_key=((source_script.get("origin"),source_script.get("path"))
+        if isinstance(source_script,dict) else None)
     run_id=run.get("run_id")
     if (not isinstance(run_id,str) or not run_id
             or run.get("session_id")!=identity[0]
@@ -3825,6 +3913,18 @@ else:
         raise RuntimeError("terminal restart requires a live native runtime for drain")
     after=get("/v2/sessions/current/status")
     after_run=get("/v2/sessions/current/simulation/runs/current")
+    after_session=after.get("session") or {}
+    after_script=after_session.get("script")
+    after_script_key=((after_script.get("origin"),after_script.get("path"))
+        if isinstance(after_script,dict) else None)
+    if after_script_key!=source_script_key:
+        raise RuntimeError("terminal source origin script path changed during observation")
+    try:
+        revalidated_origin=revalidate_source_origin(source_origin,after_script,root=SOURCE_ROOT)
+    except (OSError,ValueError) as error:
+        raise RuntimeError("terminal source origin changed during observation") from error
+    if revalidated_origin!=source_origin:
+        raise RuntimeError("terminal source origin changed during observation")
     if (tuple((after.get("session") or {}).get(k) for k in
               ("session_id","session_epoch","request_scope_epoch"))!=identity
             or after.get("run",{}).get("run_id")!=run_id
@@ -3850,6 +3950,7 @@ else:
     if type(scene_revision) is int and scene_revision>=0:
         result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
+    if source_origin is not None: result["source_origin"]=source_origin
     print(json.dumps(result,sort_keys=True))
 '''
     )
@@ -4250,6 +4351,25 @@ try:
         exit_required={"schema_version","receipt_id","run_id","task_id","preparation_attempt_id",
                        "resource_id","lease_token","lease_heartbeat_sequence","process_id",
                        "status_success","exit_code","timed_out","observed_at"}
+        def valid_phase_timings(value):
+            if value is None: return True
+            required={"schema_version","scope","total_body_ns"}
+            phases={"load_accepted_snapshot_ns","replay_validation_ns","native_mesh_space_ns",
+                    "prepared_fields_evaluation_ns","prepared_bundle_publication_ns",
+                    "prepared_observation_commit_ns","task_preparation_commit_ns"}
+            if (not isinstance(value,dict) or not required.issubset(value)
+                    or not set(value).issubset(required|phases)
+                    or value.get("schema_version")!="fem_preparation_phase_timings.v1"
+                    or value.get("scope")!="accepted_fem_preparation_process_body.v1"):
+                return False
+            durations=[]
+            for key in {"total_body_ns"}|phases:
+                if key not in value: continue
+                duration=value[key]
+                if duration is None and key!="total_body_ns": continue
+                if type(duration) is not int or not 0<=duration<=(1<<64)-1: return False
+                if key!="total_body_ns": durations.append(duration)
+            return sum(durations)<=value["total_body_ns"]
         lease_required={"schema_version","resource_id","budget","run_id","task_id","preparation_attempt_id",
                         "lease_token","state","acquired_at","heartbeat_at","heartbeat_sequence","released_at"}
         if (not all(isinstance(value,str) and value and len(value)<=200
@@ -4273,7 +4393,8 @@ try:
                 or any(launch.get(key)!=value for key,value in identity.items())
                 or exit_record["path"]!="preparation_process_exit_receipts/"+exit_id+".json"
                 or not exit_required.issubset(process_exit)
-                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason"})
+                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason","phase_timings"})
+                or not valid_phase_timings(process_exit.get("phase_timings"))
                 or process_exit.get("schema_version")!="preparation_process_exit_receipt.v1"
                 or any(process_exit.get(key)!=value for key,value in identity.items())
                 or process_exit.get("lease_heartbeat_sequence")!=exit_heartbeat
@@ -4562,6 +4683,10 @@ def _cancelled_activation_store_probe(
         value["preparation_evidence"] = _cancelled_activation_preparation_evidence(
             value["preparation_evidence"], "store probe preparation evidence",
         )
+    failed_preparation = value.get("failed_preparation")
+    if (isinstance(failed_preparation, dict)
+            and not _validate_preparation_phase_timings(failed_preparation.get("phase_timings"))):
+        raise BuildControlError("Cancelled activation store probe returned malformed preparation timings")
     if "preparation_host_reservations" in value:
         value["preparation_host_reservations"] = _cancelled_activation_preparation_host_reservations(
             value["preparation_host_reservations"], "store probe preparation host reservations",
@@ -7774,6 +7899,19 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
             package_built=True, runtime_started=False, storage_admitted=False, runtime_qualification="NOT VERIFIED")
 
 
+def _terminal_legacy_source_preflight(preflight, *, pins, control, selected, state):
+    from docker_terminal_legacy_origin import augment_preflight
+    if pins is None:
+        return preflight
+    store_root = storage.validate_path(
+        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
+    )
+    return augment_preflight(
+        preflight, pins=pins, control=control, store_root=store_root, source_root=selected,
+        project=control.project, volume=control.volume, namespace=control.namespace,
+    )
+
+
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
@@ -7781,6 +7919,15 @@ def _retained_operation(
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
     quiesce_api = getattr(args, "quiesce_api", False)
+    from docker_terminal_legacy_origin import validate_options as legacy_source_options
+    try:
+        legacy_source_pins = legacy_source_options(
+            args, restart_idle_service=restart_idle_service, stop_after_drain=stop_after_drain,
+            recreate_services=recreate_services, resume_recreation_id=resume_recreation_id,
+            refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+        )
+    except ValueError as error:
+        raise BuildControlError(str(error)) from error
     from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
     capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
         args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
@@ -8080,6 +8227,9 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
+                                            **({"terminal_source_activation": legacy_source_pins[0],
+                                                "terminal_source_activation_sha256": legacy_source_pins[1]}
+                                               if legacy_source_pins is not None else {}),
                                             **({"capture_native_terminal": True} if capture_native else {}),
                                             **({"capture_prelaunch_failure": True} if capture_prelaunch_failure else {}),
                                             **({"quiesce_api": True} if quiesce_api else {}),
@@ -8157,6 +8307,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                             ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
                         )
                         if terminal_session is not None:
+                            terminal_session = _terminal_legacy_source_preflight(
+                                terminal_session, pins=legacy_source_pins, control=control,
+                                selected=selected, state=state,
+                            )
                             control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
                             operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
                                 canonical(terminal_session)
@@ -8181,10 +8335,20 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     store_root = storage.validate_path(
                         state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
                     )
-                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
-                    if _terminal_session_restart_probe(
+                    native_capture = capture_terminal_observation(
+                        ids["backend"], store_root, terminal_session, control=control,
+                        scope={"compose_project": control.project, "control_volume": control.volume,
+                               "source_root": str(selected), "image_id": image},
+                    )
+                    fresh_terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                    ) != terminal_session:
+                    )
+                    if fresh_terminal_session is not None:
+                        fresh_terminal_session = _terminal_legacy_source_preflight(
+                            fresh_terminal_session, pins=legacy_source_pins, control=control,
+                            selected=selected, state=state,
+                        )
+                    if fresh_terminal_session != terminal_session:
                         raise BuildControlError("Terminal session changed during native capture")
                     capture_raw = canonical(native_capture) + b"\n"
                     control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)

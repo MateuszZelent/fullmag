@@ -118,6 +118,88 @@ class AuthoredZarrTests(unittest.TestCase):
 
 
 
+class CurrentRuntimeConfigRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.compose = {"name": "fullmag-group", "services": {}}
+        self.config = digest(canonical(self.compose))
+        self.original = {
+            "phase": "development", "attempt": ATTEMPT, "state": "failed-confirmed",
+            "compose_project": "fullmag-group",
+            "inputs": {"image_id": BACKEND_IMAGE, "source_root": "/selected"},
+        }
+        self.linked = {
+            "phase": "resume", "attempt": "d" * 32, "state": "succeeded",
+            "compose_project": "fullmag-group", "config_sha256": self.config,
+            "inputs": {"attempt": ATTEMPT, "config_sha256": self.config,
+                       "source_root": "/selected", "image_id": BACKEND_IMAGE},
+            "backend_container": "e" * 64, "frontend_container": "f" * 64,
+            "source_commit": "1" * 40, "source_digest": "2" * 64,
+            "source_snapshot_sha256": "3" * 64, "backend_build_receipt_sha256": "4" * 64,
+        }
+        self.records = {
+            "resume/verified.json": self.linked,
+            "resume/attempts/" + "d" * 32 + "/terminal.json": self.linked,
+        }
+        self.control = types.SimpleNamespace(read=lambda key, optional=False: self.records.get(key))
+
+    def resolve(self, previous=None, original=None):
+        return history._current_runtime_terminals(
+            self.control, self.original if previous is None else previous,
+            self.original if original is None else original, self.compose,
+            source_root="/selected")
+
+    def test_failed_missing_config_requires_authenticated_resume_without_mutation(self):
+        before = canonical(self.original)
+        image, terminals = self.resolve()
+        self.assertEqual(image, BACKEND_IMAGE)
+        self.assertEqual(terminals, [self.linked])
+        self.assertEqual(canonical(self.original), before)
+        self.assertNotIn("config_sha256", self.original)
+
+    def test_unlinked_failure_is_rejected(self):
+        self.records.clear()
+        with self.assertRaisesRegex(BuildControlError, "No succeeded resume or iteration"):
+            self.resolve()
+
+    def test_declared_wrong_hash_is_rejected_even_with_valid_resume(self):
+        original = {**self.original, "config_sha256": "0" * 64}
+        with self.assertRaisesRegex(HistoryError, "terminal/config differs"):
+            self.resolve(original, original)
+
+    def test_missing_config_exception_rejects_succeeded_unknown_and_explicit_null(self):
+        for change in ({"state": "succeeded"}, {"state": "outcome-unknown-resources-retained"},
+                       {"config_sha256": None}):
+            with self.subTest(change=change):
+                original = {**self.original, **change}
+                with self.assertRaises(HistoryError):
+                    self.resolve(original, original)
+
+    def test_current_terminal_mismatch_is_rejected(self):
+        with self.assertRaisesRegex(HistoryError, "terminal/config differs"):
+            self.resolve(original={**self.original, "state": "succeeded"})
+
+    def test_linked_terminal_and_both_config_pins_remain_enforced(self):
+        for kind in ("terminal", "verified_config", "input_config"):
+            with self.subTest(kind=kind):
+                self.setUp()
+                if kind == "terminal":
+                    self.records["resume/attempts/" + "d" * 32 + "/terminal.json"] = {
+                        **self.linked, "backend_container": "5" * 64}
+                elif kind == "verified_config":
+                    self.linked["config_sha256"] = "0" * 64
+                else:
+                    self.linked["inputs"]["config_sha256"] = "0" * 64
+                with self.assertRaises(BuildControlError):
+                    self.resolve()
+
+    def test_succeeded_matching_declared_config_remains_legal(self):
+        original = {**self.original, "state": "succeeded", "config_sha256": self.config}
+        self.records.clear()
+        image, terminals = self.resolve(original, original)
+        self.assertEqual(image, BACKEND_IMAGE)
+        self.assertEqual(terminals, [original])
+
+
 class HistoricalWitnessArgumentsTests(unittest.TestCase):
     def test_optional_witness_pin_is_explicit_and_canonical(self):
         args = _args()
@@ -422,6 +504,37 @@ class ActivationHistoryRunTests(unittest.TestCase):
             with self.assertRaisesRegex(HistoryError, "incarnation changed"):
                 history.run(args)
         invoke.assert_not_called()
+
+
+class RejectedStoreRecordCollectionTests(unittest.TestCase):
+    def test_rejected_inventory_includes_own_retirement_documents_and_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = "retirements/" + ATTEMPT
+            expected = {
+                "admission/request.json": b"{}",
+                "runs/old/run_catalog.json": b"{}",
+                "runs/old/run_intent.json": b"{}",
+                prefix + "/project/retirement-manifest.json": b"{}",
+                prefix + "/project/ui_state.json": b"{}",
+                prefix + "/project/workspace_metadata.json": b"{}",
+                prefix + "/project/main.py": b"# old workspace\n",
+            }
+            for relative, content in expected.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            records, paths = history.rejected_store_records(root, ATTEMPT)
+
+            self.assertEqual(set(records), set(expected))
+            self.assertTrue(set(expected).issubset(paths))
+            self.assertEqual(records[prefix + "/project/main.py"], expected[prefix + "/project/main.py"])
+
+    def test_rejected_inventory_rejects_unpinned_attempt_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(HistoryError):
+                history.rejected_store_records(Path(temporary), "not-an-attempt")
 
 
 if __name__ == "__main__":

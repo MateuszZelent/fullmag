@@ -14,6 +14,8 @@ mod runtime_smoke;
 
 fn make_test_plan() -> FemPlanIR {
     FemPlanIR {
+        gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         mesh_name: "unit_tet".to_string(),
         mesh_source: Some("meshes/unit_tet.msh".to_string()),
         mesh: MeshIR {
@@ -121,6 +123,8 @@ fn make_test_plan() -> FemPlanIR {
 }
 fn make_exchange_only_plan() -> FemPlanIR {
     FemPlanIR {
+        gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         mesh_name: "two_tets".to_string(),
         mesh_source: Some("meshes/two_tets.msh".to_string()),
         mesh: MeshIR {

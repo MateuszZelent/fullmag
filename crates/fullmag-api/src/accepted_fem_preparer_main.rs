@@ -45,12 +45,16 @@ fn run() -> Result<()> {
     println!(
         "{}",
         serde_json::to_string(&serde_json::json!({
+            "schema_version": "accepted_fem_preparation_summary.v1",
             "status": if result.replayed { "replayed" } else { "prepared" },
             "run_id": result.run_id,
             "task_id": result.task_id,
             "step_id": result.step_id,
             "preparation_id": result.preparation_id,
             "plan_fingerprint": result.plan_fingerprint,
+            "preparation_attempt_id": args.preparation_attempt_id,
+            "process_id": std::process::id(),
+            "phase_timings": result.phase_timings,
         }))?
     );
     Ok(())

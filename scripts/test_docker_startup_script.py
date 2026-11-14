@@ -711,7 +711,7 @@ class DockerStartupScriptTests(unittest.TestCase):
             "container_script_path": "/opt/fullmag/source/examples/start.py",
         }
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             overlay = root / "compose.startup.json"
             provenance = root / "run" / "startup-provenance.json"
             provenance.parent.mkdir()
@@ -778,7 +778,7 @@ class DockerStartupScriptTests(unittest.TestCase):
 class StartupRejectionTests(unittest.TestCase):
     def setUp(self):
         self.receipt_directory = tempfile.TemporaryDirectory()
-        self.receipt_path = Path(self.receipt_directory.name) / "activation.json"
+        self.receipt_path = Path(self.receipt_directory.name).resolve() / "activation.json"
         self.receipt_patch = mock.patch.object(startup, "ACTIVATION_RECEIPT_PATH", self.receipt_path)
         self.receipt_patch.start()
         self.health_patch = mock.patch.object(startup, "_assert_no_active_session")
@@ -982,7 +982,7 @@ class StartupRejectionTests(unittest.TestCase):
         api.poll.return_value = None
         api.wait.return_value = 0
         with tempfile.TemporaryDirectory() as directory:
-            paths = SimpleNamespace(state_root=Path(directory), store=Path(directory) / "store")
+            paths = SimpleNamespace(state_root=Path(directory).resolve(), store=Path(directory).resolve() / "store")
             handle = SimpleNamespace(owner={"state": "ready"})
             service = SimpleNamespace(
                 prepare_storage=mock.Mock(return_value=paths),
@@ -1001,7 +1001,7 @@ class StartupRejectionTests(unittest.TestCase):
                 terminal_observation_api_input=mock.Mock(
                     side_effect=lambda _paths, **_kwargs: nullcontext(({}, None, None))
                 ),
-                process_receipt_path=mock.Mock(return_value=Path(directory) / "process-tree.json"),
+                process_receipt_path=mock.Mock(return_value=Path(directory).resolve() / "process-tree.json"),
                 start=mock.Mock(return_value=handle),
                 stop=mock.Mock(return_value={"state": "drained"}),
                 _atomic_json=lambda _path, value, _label: receipts.append(copy.deepcopy(value)),
@@ -1051,7 +1051,7 @@ class StartupRejectionTests(unittest.TestCase):
 class ActivationReceiptTests(unittest.TestCase):
     def setUp(self):
         self.receipt_directory = tempfile.TemporaryDirectory()
-        self.receipt_path = Path(self.receipt_directory.name) / "activation.json"
+        self.receipt_path = Path(self.receipt_directory.name).resolve() / "activation.json"
         self.receipt_patch = mock.patch.object(startup, "ACTIVATION_RECEIPT_PATH", self.receipt_path)
         self.receipt_patch.start()
         self.health_patch = mock.patch.object(startup, "_assert_no_active_session")
@@ -1147,7 +1147,7 @@ class ActivationReceiptTests(unittest.TestCase):
         activate.assert_not_called()
 
     def test_two_distinct_requests_use_distinct_receipts_when_health_reports_no_active_session(self):
-        root = Path(self.receipt_directory.name) / "control" / "backend"
+        root = Path(self.receipt_directory.name).resolve() / "control" / "backend"
         root.mkdir(parents=True)
         authorization_one = self.authorization
         authorization_two = {

@@ -18,6 +18,9 @@ from fullmag.runtime.output_storage_lowering import (
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import SelectionDefinition
 from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
+from fullmag.runtime.fem_gpu_pcg_control import (
+    validate_fem_gpu_pcg_control_experiment,
+)
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
 from fullmag.runtime.scene_document import validate_fem_domain_mesh_reference
@@ -70,7 +73,9 @@ _STUDY_FIELDS = frozenset(
         "execution_layers",
         "compute_resources",
         "fem_demag_solver_policy",
+        "fem_bb_preconditioner",
         "fem_demag_accuracy_contract",
+        "fem_gpu_pcg_control_experiment",
         "exchange_enabled",
         "demag_enabled",
         "demag_realization",
@@ -199,6 +204,11 @@ def _capture_scene_document(
         study.get("fem_demag_accuracy_contract"),
         context="SceneDocument.study.fem_demag_accuracy_contract",
     )
+    pcg_control_present = "fem_gpu_pcg_control_experiment" in study
+    pcg_control_experiment = validate_fem_gpu_pcg_control_experiment(
+        study.get("fem_gpu_pcg_control_experiment"),
+        context="SceneDocument.study.fem_gpu_pcg_control_experiment",
+    )
     study_pipeline = study.get("study_pipeline")
     if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
         raise ValueError("SceneDocument.study.study_pipeline must be an object")
@@ -211,6 +221,13 @@ def _capture_scene_document(
             runtime_metadata["fem_demag_accuracy_contract"] = copy.deepcopy(
                 accuracy_contract
             )
+        if pcg_control_present:
+            if pcg_control_experiment is None:
+                runtime_metadata.pop("fem_gpu_pcg_control_experiment", None)
+            else:
+                runtime_metadata["fem_gpu_pcg_control_experiment"] = copy.deepcopy(
+                    pcg_control_experiment
+                )
         if output_storage is not None:
             runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
         if isinstance(study_pipeline, Mapping):
@@ -512,6 +529,10 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
         validate_fem_demag_accuracy_contract(
             study.get("fem_demag_accuracy_contract"),
             context="SceneDocument.study.fem_demag_accuracy_contract",
+        )
+        validate_fem_gpu_pcg_control_experiment(
+            study.get("fem_gpu_pcg_control_experiment"),
+            context="SceneDocument.study.fem_gpu_pcg_control_experiment",
         )
         unknown_study_fields = set(study) - _STUDY_FIELDS
         if unknown_study_fields:

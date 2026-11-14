@@ -1,0 +1,15 @@
+name: Prefer canonical Ubuntu apt mirrors
+description: Remove the unavailable Azure mirror from the runner's apt mirror list.
+runs:
+  using: composite
+  steps:
+    - name: Test the apt mirror list transformation
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "$ACTION_PATH/test_remove_azure_mirror.py"
+    - name: Remove the Azure mirror entry
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: sudo python3 "$ACTION_PATH/remove_azure_mirror.py"

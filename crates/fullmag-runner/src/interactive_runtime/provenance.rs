@@ -82,8 +82,13 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     })
 }
 
@@ -181,8 +186,13 @@ pub(crate) fn cuda_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     })
 }
 
@@ -328,8 +338,13 @@ pub(crate) fn fem_gpu_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     Ok(provenance)

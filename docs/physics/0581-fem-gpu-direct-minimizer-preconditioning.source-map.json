@@ -1,0 +1,395 @@
+{
+  "document": {
+    "path": "docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented-unvalidated",
+      "reason": "Managed native oracle, frozen-SP4 component parity at common torque 1e-8 T, and the C7 accepted-energy finalization native contract passed; the required five alternating performance pairs and broader scientific qualification remain open. The C7 contract is not SP4 timing or parity evidence."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Ta nota opisuje FEM spójną postać masową i wymianę słabą; semantyka operatora FDM nie jest zmieniana."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Ta nota opisuje FEM spójną postać masową i wymianę słabą; semantyka operatora FDM nie jest zmieniana."
+    }
+  ],
+  "equations": [
+    {
+      "id": "fem-gpu-bb-consistent-forms",
+      "symbols": [
+        "M_Ms",
+        "i",
+        "j",
+        "Ms",
+        "phi_i",
+        "Omega_m",
+        "dV",
+        "K_A",
+        "A",
+        "nabla"
+      ],
+      "sources": [
+        "cpu-operator",
+        "gpu-setup",
+        "gpu-kernel-launch"
+      ]
+    },
+    {
+      "id": "fem-gpu-bb-step-bounds",
+      "symbols": [
+        "lambda_BB",
+        "lambda_min",
+        "lambda_max",
+        "lambda_raw"
+      ],
+      "sources": [
+        "cpu-step-scale",
+        "gpu-kernel-launch"
+      ]
+    },
+    {
+      "id": "fem-gpu-bb-exchange-mass-system",
+      "symbols": [
+        "M_Ms",
+        "lambda_BB",
+        "mu0",
+        "K_A",
+        "z",
+        "g",
+        "d",
+        "Pi_T",
+        "m"
+      ],
+      "sources": [
+        "cpu-operator",
+        "cpu-step-scale",
+        "gpu-kernel-launch",
+        "gpu-tangent"
+      ]
+    },
+    {
+      "id": "fem-gpu-bb-independent-residual",
+      "symbols": [
+        "b",
+        "M_Ms",
+        "g",
+        "r",
+        "lambda_BB",
+        "mu0",
+        "K_A",
+        "z"
+      ],
+      "sources": [
+        "gpu-kernel-launch"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "M_Ms",
+      "latex": "M_{M_s}",
+      "meaning": "FEM mass matrix weighted by saturation magnetization",
+      "si_unit": "\\mathrm{A\\,m^2}"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_s",
+      "meaning": "Saturation magnetization field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "K_A",
+      "latex": "K_A",
+      "meaning": "Scalar weak exchange stiffness",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "A",
+      "latex": "A",
+      "meaning": "Scalar exchange coefficient",
+      "si_unit": "\\mathrm{J\\,m^{-1}}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "Vacuum permeability",
+      "si_unit": "\\mathrm{N\\,A^{-2}}"
+    },
+    {
+      "id": "lambda_BB",
+      "latex": "\\lambda_{\\mathrm{BB}}",
+      "meaning": "Accepted step used in the exchange weight",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_min",
+      "latex": "\\lambda_{\\min}",
+      "meaning": "Existing lower bound for the operator step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_max",
+      "latex": "\\lambda_{\\max}",
+      "meaning": "Existing upper bound for the operator step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "lambda_raw",
+      "latex": "\\lambda_{\\mathrm{raw}}",
+      "meaning": "Step supplied by the current BB state",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "g",
+      "latex": "\\mathbf{g}",
+      "meaning": "Physical energy gradient before preconditioning",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "z",
+      "latex": "\\mathbf{z}",
+      "meaning": "Solution of the exchange-mass system",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "d",
+      "latex": "\\mathbf{d}",
+      "meaning": "Search direction after tangent projection",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "m",
+      "latex": "\\mathbf{m}",
+      "meaning": "Nodal unit-length magnetization",
+      "si_unit": "1"
+    },
+    {
+      "id": "Pi_T",
+      "latex": "\\Pi_T(\\mathbf{m})",
+      "meaning": "Projection onto the nodal tangent plane",
+      "si_unit": "1"
+    },
+    {
+      "id": "phi_i",
+      "latex": "\\phi_i",
+      "meaning": "Scalar FEM nodal basis function",
+      "si_unit": "1"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "Row and column nodal basis indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "Row and column nodal basis indices",
+      "si_unit": "1"
+    },
+    {
+      "id": "Omega_m",
+      "latex": "\\Omega_m",
+      "meaning": "Domain integrated for magnetic exchange/mass",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "dV",
+      "latex": "\\mathrm{d}V",
+      "meaning": "FEM volume integration measure",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "nabla",
+      "latex": "\\nabla",
+      "meaning": "Derivative with respect to position",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "b",
+      "latex": "\\mathbf{b}",
+      "meaning": "Mass-weighted physical gradient",
+      "si_unit": "\\mathrm{A^2\\,m}"
+    },
+    {
+      "id": "r",
+      "latex": "\\mathbf{r}",
+      "meaning": "Unpreconditioned residual of the assembled system",
+      "si_unit": "\\mathrm{A^2\\,m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "cpu-operator",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.hpp",
+      "symbol": "assemble_exchange_mass_preconditioner_for_step",
+      "responsibility": "Składa spójny operator mass-plus-exchange z macierzy CPU-oracle."
+    },
+    {
+      "id": "cpu-step-scale",
+      "path": "backends/fem/src/relaxation_operator_units.hpp",
+      "symbol": "exchange_hessian_scale_from_step_m_per_a",
+      "responsibility": "Definiuje dokładny współczynnik 2*step/mu0 dla wymiany."
+    },
+    {
+      "id": "cpu-gradient",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "exchange_mass_preconditioned_gradient",
+      "responsibility": "Realizuje CPU referencyjne działanie inverse-mass-plus-exchange na gradiencie."
+    },
+    {
+      "id": "cpu-bb",
+      "path": "backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp",
+      "symbol": "run_projected_gradient_bb_step",
+      "responsibility": "Właściciel CPU projected-gradient BB i integracji z Armijo."
+    },
+    {
+      "id": "cpu-operator-test",
+      "path": "backends/fem/tests/relaxation_operator_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Sprawdza SI i operator M_Ms + step*(2/mu0)*K_A względem jawnej macierzy."
+    },
+    {
+      "id": "sp4-scenario",
+      "path": "tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py",
+      "symbol": "study",
+      "responsibility": "Ustala istniejące stage-first wejście SP4 używane jako workload; nie dowodzi wykonania GPU preconditionera."
+    },
+    {
+      "id": "gpu-create",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp",
+      "symbol": "gpu_bb_exchange_mass_create",
+      "responsibility": "Tworzy host/device workspace i waliduje wejściowe macierze MFEM."
+    },
+    {
+      "id": "gpu-setup",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp",
+      "symbol": "gpu_bb_exchange_mass_prepare",
+      "responsibility": "Przygotowuje i cache'uje workspace z assembled MFEM mass i exchange forms."
+    },
+    {
+      "id": "gpu-tangent",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu",
+      "symbol": "fullmag_cuda_relax_project_tangent_field",
+      "responsibility": "Projekcja GPU na nodalną płaszczyznę styczną i aktualna maska wolnych węzłów."
+    },
+    {
+      "id": "gpu-periodic",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu",
+      "symbol": "fullmag_cuda_relax_project_static_periodic_field",
+      "responsibility": "Istniejąca projekcja pola na statyczne reprezentanty węzłów okresowych."
+    },
+    {
+      "id": "ir-policy-enum",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemGpuBbPreconditionerIR",
+      "responsibility": "Definiuje tryby requested policy auto, none i exchange_mass."
+    },
+    {
+      "id": "ir-fem-hints",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "Przechowuje opcjonalne żądanie gpu_bb_preconditioner w FEM hints."
+    },
+    {
+      "id": "ir-fem-plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Przenosi typowane żądanie preconditionera do rozwiązanego planu FEM."
+    },
+    {
+      "id": "planner-fem",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Odrzuca kombinacje bez explicit GPU projected_gradient_bb."
+    },
+    {
+      "id": "gpu-kernel-launch",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu",
+      "symbol": "gpu_bb_pcg_launch",
+      "responsibility": "Realizuje persistent cooperative device PCG launch na immutable MFEM CSR."
+    },
+    {
+      "id": "python-study-policy",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "StudyBuilder udostępnia fem_bb_preconditioner(policy: str) i lowering FEM hints."
+    },
+    {
+      "id": "native-cabi-setter",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_set_gpu_bb_preconditioner",
+      "responsibility": "Ustawia typowaną politykę BB w kontekście natywnym FEM."
+    },
+    {
+      "id": "bb-pipeline-carrier",
+      "path": "crates/fullmag-ir/src/bb_pipeline.rs",
+      "symbol": "is_gpu_bb_pipeline_carrier",
+      "responsibility": "Validates a nonexecuted BB-only pipeline carrier; generic execution remains strict."
+    },
+    {
+      "id": "python-bb-pipeline-carrier",
+      "path": "packages/fullmag-py/src/fullmag/model/bb_pipeline.py",
+      "symbol": "is_gpu_bb_only_pipeline",
+      "responsibility": "Matches the canonical BB-only pipeline structural predicate in Python."
+    },
+    {
+      "id": "bb-preparation-study",
+      "path": "crates/fullmag-api/src/script.rs",
+      "symbol": "gpu_bb_preparation_study",
+      "responsibility": "Borrows only validated concrete BB study controls while preserving the base physical payload."
+    },
+    {
+      "id": "gpu-pgbb-accepted-energy-snapshot",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "symbol": "gpu_relax_projected_gradient_bb_step",
+      "responsibility": "Retains the final accepted direct/refined Armijo energy snapshot for final statistics; rejected trials do not publish it."
+    },
+    {
+      "id": "gpu-final-energy-overlay",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp",
+      "symbol": "gpu_rk_overlay_final_energy_terms",
+      "responsibility": "Validates and overlays only the nine enabled published energy terms; the Robin boundary diagnostic remains excluded."
+    },
+    {
+      "id": "gpu-final-stats-with-energy-overlay",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu",
+      "symbol": "gpu_rk_finalize_step_stats_control_readback_with_energy_terms",
+      "responsibility": "Keeps fresh observable reductions, the existing scalar control readback/fence, timing collection, and publication while reusing accepted energy terms."
+    },
+    {
+      "id": "gpu-final-energy-overlay-contract",
+      "path": "backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp",
+      "symbol": "gpu_pgbb_final_energy_overlay_contract",
+      "responsibility": "Checks all nine published energies and their total, fresh torque/moment retention, Robin exclusion, and finite-failure atomicity."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.fem_bb_preconditioner.policy",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "`auto`, `none`, or `exchange_mass`; requires explicit FEM GPU `projected_gradient_bb`, otherwise lowering rejects it",
+        "meaning": "Requested FEM GPU BB direction policy",
+        "backend_support": "Strict FEM GPU `projected_gradient_bb`; other lanes unsupported",
+        "problem_ir": "`FemHintsIR.gpu_bb_preconditioner` → `FemPlanIR.gpu_bb_preconditioner`"
+      }
+    ]
+  }
+}

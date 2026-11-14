@@ -41,6 +41,10 @@ void destroy_gpu_snapshot_pool(FemGpuSnapshotPoolState &pool)
             cudaFreeHost(slot.host_aos);
             slot.host_aos = nullptr;
         }
+        if (slot.device_aos != nullptr) {
+            cudaFree(slot.device_aos);
+            slot.device_aos = nullptr;
+        }
     }
     if (pool.staging.x != nullptr) {
         cudaFree(pool.staging.x);
@@ -91,6 +95,10 @@ bool initialize_gpu_snapshot_pool(
     if (status != cudaSuccess) return fail("cudaMalloc(FEM snapshot pool.z)", status);
 
     for (auto &slot : pool.slots) {
+        status = cudaMalloc(&slot.device_aos, pool.host_aos_bytes);
+        if (status != cudaSuccess) {
+            return fail("cudaMalloc(FEM snapshot pool.device_aos)", status);
+        }
         status = cudaHostAlloc(&slot.host_aos, pool.host_aos_bytes, cudaHostAllocDefault);
         if (status != cudaSuccess) {
             return fail("cudaHostAlloc(FEM snapshot pool.host_aos)", status);
@@ -162,6 +170,7 @@ bool gpu_snapshot_pool_acquire(
                 const auto &slot = pool.slots[candidate];
                 lease.slot_index = candidate;
                 lease.host_aos = slot.host_aos;
+                lease.device_aos = slot.device_aos;
                 lease.staging = pool.staging;
                 lease.ready_event = slot.ready_event;
                 lease.staging_done_event = slot.staging_done_event;
@@ -185,6 +194,7 @@ bool gpu_snapshot_pool_acquire(
             const auto &slot = pool.slots[slot_index];
             lease.slot_index = slot_index;
             lease.host_aos = slot.host_aos;
+            lease.device_aos = slot.device_aos;
             lease.staging = pool.staging;
             lease.ready_event = slot.ready_event;
             lease.staging_done_event = slot.staging_done_event;

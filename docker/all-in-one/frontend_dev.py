@@ -180,6 +180,17 @@ REQUIRED_SEED_RELATIVES = frozenset(
         "apps/control-room/next.config.ts",
     }
 )
+DEPENDENCY_INSTALL_WITNESS_SCHEMA = "fullmag.frontend-dependency-install-witness.v1"
+REQUIRED_DEPENDENCY_SEED_RELATIVES = frozenset(
+    {
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "apps/control-room/package.json",
+    }
+)
+DIRECT_DEPENDENCY_SECTIONS = ("dependencies", "devDependencies")
+NPM_PACKAGE_NAME = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 FORBIDDEN_RELATIVE_PARTS = frozenset({".git", "node_modules"})
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -1481,6 +1492,9 @@ def _receipt_base(
             "bind_port": INSPECTOR_BIND_PORT,
         },
     }
+    dependency_witness = _dependency_install_witness(inputs)
+    if dependency_witness is not None:
+        receipt["dependency_install_witness"] = dependency_witness
     failure = _receipt_failure(previous)
     if failure is not None:
         receipt["previous_failure_evidence"] = failure
@@ -2286,8 +2300,164 @@ def _next_binary(inputs: DevelopmentInputs) -> Path:
     return binary
 
 
+def _dependency_install_witness(inputs: DevelopmentInputs) -> dict[str, str] | None:
+    """Return the stable dependency/tool seed identity, or refuse cache reuse.
+
+    The source commit and authored UI files intentionally do not participate:
+    they can change without changing the pnpm dependency tree.  Older host
+    manifests do not carry enough information to prove that identity, so a
+    ready receipt from those manifests cannot authorize a cache hit.
+    """
+
+    manifest = inputs.manifest
+    dependency_sha = manifest.get("dependency_seed_sha256")
+    toolpins_sha = manifest.get("toolpins_sha256")
+    relative_files = manifest.get("dependency_seed_files")
+    if (not isinstance(dependency_sha, str) or not HEX64.fullmatch(dependency_sha)
+            or not isinstance(toolpins_sha, str) or not HEX64.fullmatch(toolpins_sha)
+            or not isinstance(relative_files, list) or not relative_files):
+        return None
+
+    normalized: list[str] = []
+    for index, relative in enumerate(relative_files):
+        try:
+            name = _relative_path(relative, f"dependency_seed_files[{index}]")
+        except FrontendDevError:
+            return None
+        if name != relative or name in normalized:
+            return None
+        normalized.append(name)
+    dependency_files = set(normalized)
+    if not REQUIRED_DEPENDENCY_SEED_RELATIVES <= dependency_files:
+        return None
+
+    file_hashes = {file.relative: file.sha256 for file in inputs.files}
+    if not dependency_files <= set(file_hashes):
+        return None
+    entries = {name: file_hashes[name] for name in sorted(dependency_files)}
+    dependency_digest = hashlib.sha256(
+        json.dumps(entries, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if dependency_digest != dependency_sha:
+        return None
+    return {
+        "schema": DEPENDENCY_INSTALL_WITNESS_SCHEMA,
+        "dependency_seed_sha256": dependency_sha,
+        "toolpins_sha256": toolpins_sha,
+    }
+
+
+def _direct_dependency_links_ready(inputs: DevelopmentInputs, app_root: Path) -> bool:
+    """Check required app dependencies without trusting a surviving Next link.
+
+    Optional and peer dependencies are intentionally excluded. The package
+    manager may omit optional dependencies, while peers are supplied by their
+    consumers. Workspace-root development dependencies are also outside this
+    app installer's direct importer contract.
+    """
+
+    package_relative = "apps/control-room/package.json"
+    expected = next((file.sha256 for file in inputs.files if file.relative == package_relative), None)
+    if expected is None:
+        return False
+    package_path = app_root / "package.json"
+    try:
+        package_bytes = _bounded_bytes(package_path, "Control Room package manifest", 4 * 1024 * 1024)
+    except FrontendDevError:
+        return False
+    if _hash_bytes(package_bytes) != expected:
+        return False
+    try:
+        package = json.loads(package_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(package, dict):
+        return False
+
+    dependency_specs: dict[str, str] = {}
+    for section in DIRECT_DEPENDENCY_SECTIONS:
+        values = package.get(section, {})
+        if not isinstance(values, dict):
+            return False
+        for name, version in values.items():
+            if (not isinstance(name, str) or not NPM_PACKAGE_NAME.fullmatch(name)
+                    or not isinstance(version, str)):
+                return False
+            previous = dependency_specs.get(name)
+            if previous is not None and previous != version:
+                return False
+            dependency_specs[name] = version
+
+    workspace_node_modules = inputs.workspace_root / "node_modules"
+    app_node_modules = app_root / "node_modules"
+    workspace_root = inputs.workspace_root.resolve(strict=True)
+    seeded_dependency_files = set(inputs.manifest.get("dependency_seed_files", []))
+    input_hashes = {file.relative: file.sha256 for file in inputs.files}
+    for name, specifier in sorted(dependency_specs.items()):
+        parts = name.split("/")
+        if len(parts) == 2 and (not parts[0].startswith("@") or len(parts[0]) == 1):
+            return False
+        if len(parts) > 2:
+            return False
+        link = app_node_modules.joinpath(*parts)
+        try:
+            if len(parts) == 2:
+                scope = app_node_modules / parts[0]
+                scope_metadata = scope.lstat()
+                if not stat.S_ISDIR(scope_metadata.st_mode) or stat.S_ISLNK(scope_metadata.st_mode):
+                    return False
+            link_metadata = link.lstat()
+            if stat.S_ISLNK(link_metadata.st_mode):
+                resolved = link.resolve(strict=True)
+            elif stat.S_ISDIR(link_metadata.st_mode):
+                resolved = link.resolve(strict=True)
+            else:
+                return False
+            if not resolved.is_dir():
+                return False
+            installed_manifest = resolved / "package.json"
+            metadata = installed_manifest.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                return False
+            installed_bytes = _bounded_bytes(
+                installed_manifest, f"installed dependency {name} manifest", 4 * 1024 * 1024
+            )
+            in_dependency_store = (
+                _is_within(resolved, workspace_node_modules)
+                or _is_within(resolved, app_node_modules)
+            )
+            if in_dependency_store:
+                continue
+            if not specifier.startswith("workspace:") or not _is_within(resolved, workspace_root):
+                return False
+            try:
+                relative_target = resolved.relative_to(workspace_root).as_posix()
+            except ValueError:
+                return False
+            target_parts = PurePosixPath(relative_target).parts
+            # The current pnpm workspace contract is exactly apps/*. Requiring
+            # this shape prevents a seeded but non-workspace path from becoming
+            # an implicit dependency authority.
+            if len(target_parts) != 2 or target_parts[0] != "apps":
+                return False
+            manifest_relative = f"{relative_target}/package.json"
+            expected_manifest = input_hashes.get(manifest_relative)
+            if (manifest_relative not in seeded_dependency_files
+                    or expected_manifest is None or _hash_bytes(installed_bytes) != expected_manifest):
+                return False
+            try:
+                workspace_package = json.loads(installed_bytes)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return False
+            if not isinstance(workspace_package, dict) or workspace_package.get("name") != name:
+                return False
+        except (FileNotFoundError, FrontendDevError, OSError, RuntimeError):
+            return False
+    return True
+
+
 def _dependency_tree_ready(inputs: DevelopmentInputs) -> bool:
-    """Require a real state-owned dependency tree before trusting its receipt."""
+    """Require Next and every direct app dependency in the state-owned tree."""
 
     _require_real_directory(inputs.workspace_root / "node_modules", "workspace node_modules")
     app_root = inputs.workspace_root / "apps" / "control-room"
@@ -2298,7 +2468,18 @@ def _dependency_tree_ready(inputs: DevelopmentInputs) -> bool:
     except FileNotFoundError:
         return False
     _next_binary(inputs)
-    return True
+    return _direct_dependency_links_ready(inputs, app_root)
+
+
+def _dependency_install_cache_hit(inputs: DevelopmentInputs, history: Mapping[str, Any] | None) -> bool:
+    """Accept a ready receipt only for the current verified dependency seed."""
+
+    witness = _dependency_install_witness(inputs)
+    if (witness is None or not isinstance(history, Mapping)
+            or history.get("dependency_install") != "ready"
+            or history.get("dependency_install_witness") != witness):
+        return False
+    return _dependency_tree_ready(inputs)
 
 
 def _attach_frontend_handle(error: Exception, handle: FrontendHandle) -> None:
@@ -2684,16 +2865,24 @@ def start(stopping_event: Any) -> FrontendHandle:
     handle: FrontendHandle | None = None
     try:
         # A fresh Docker incarnation has no owner receipt, but the named-volume
-        # diagnostic copy still records whether this cache was prepared. Use
-        # that history only to avoid reinstalling dependencies; ownership
-        # authorization remains exclusively on the ephemeral receipt above.
-        needs_install = history is None or history.get("dependency_install") != "ready"
-        if not needs_install and not _dependency_tree_ready(inputs):
-            needs_install = True
+        # diagnostic copy still records dependency history. Reuse it only when
+        # it proves the exact current dependency seed and the direct app links
+        # still exist. Older receipts and manifests fail closed into one frozen
+        # install; source-only commits do not change this dependency witness.
+        needs_install = not _dependency_install_cache_hit(inputs, history)
+        if needs_install:
+            witness = _dependency_install_witness(inputs)
+            if witness is None:
+                reason = "current dependency seed identity is unavailable or invalid"
+            elif (history is None or history.get("dependency_install") != "ready"
+                    or history.get("dependency_install_witness") != witness):
+                reason = "ready receipt does not match the current dependency seed"
+            else:
+                reason = "a direct dependency link or installed package manifest is missing"
             _write_lifecycle_log(
                 "dependency_install_reconcile",
-                status="missing",
-                reason="state-owned dependency tree is absent",
+                status="required",
+                reason=reason,
                 log_path=LOG_PATH,
             )
         if needs_install:

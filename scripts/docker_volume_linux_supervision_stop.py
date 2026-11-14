@@ -30,6 +30,34 @@ def require(value, message):
         raise ValueError('Linux supervision stop: ' + message)
 
 
+def _validate_preparation_phase_timings(value):
+    if value is None:
+        return True
+    required = {'schema_version', 'scope', 'total_body_ns'}
+    phase_fields = {
+        'load_accepted_snapshot_ns', 'replay_validation_ns', 'native_mesh_space_ns',
+        'prepared_fields_evaluation_ns', 'prepared_bundle_publication_ns',
+        'prepared_observation_commit_ns', 'task_preparation_commit_ns',
+    }
+    if (not isinstance(value, dict) or not required.issubset(value)
+            or not set(value).issubset(required | phase_fields)
+            or value.get('schema_version') != 'fem_preparation_phase_timings.v1'
+            or value.get('scope') != 'accepted_fem_preparation_process_body.v1'):
+        return False
+    durations = []
+    for key in {'total_body_ns'} | phase_fields:
+        if key not in value:
+            continue
+        duration = value[key]
+        if duration is None and key != 'total_body_ns':
+            continue
+        if type(duration) is not int or not 0 <= duration <= (1 << 64) - 1:
+            return False
+        if key != 'total_body_ns':
+            durations.append(duration)
+    return sum(durations) <= value['total_body_ns']
+
+
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -302,6 +330,8 @@ def _prepared_release(store, ledger, rows, store_id, target):
                            (published, 'task_prepared_observation.v1')):
         require(record.get('schema_version') == schema
                 and all(record.get(k) == target[k] for k in ('run_id', 'task_id')), 'prepared chain identity differs')
+    require(_validate_preparation_phase_timings(exited.get('phase_timings')),
+            'preparation process exit phase timings are invalid')
     require(lease.get('state') == 'released' and exited.get('status_success') is True
             and type(exited.get('exit_code')) is int and exited['exit_code'] == 0
             and exited.get('timed_out') is False

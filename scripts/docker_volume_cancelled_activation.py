@@ -78,6 +78,34 @@ def _fail(message: str) -> CancelledActivationRecoveryError:
     return CancelledActivationRecoveryError(message)
 
 
+def _validate_preparation_phase_timings(value: object) -> bool:
+    if value is None:
+        return True
+    required = {"schema_version", "scope", "total_body_ns"}
+    phase_fields = {
+        "load_accepted_snapshot_ns", "replay_validation_ns", "native_mesh_space_ns",
+        "prepared_fields_evaluation_ns", "prepared_bundle_publication_ns",
+        "prepared_observation_commit_ns", "task_preparation_commit_ns",
+    }
+    if (not isinstance(value, dict) or not required.issubset(value)
+            or not set(value).issubset(required | phase_fields)
+            or value.get("schema_version") != "fem_preparation_phase_timings.v1"
+            or value.get("scope") != "accepted_fem_preparation_process_body.v1"):
+        return False
+    durations = []
+    for key in {"total_body_ns"} | phase_fields:
+        if key not in value:
+            continue
+        duration = value[key]
+        if duration is None and key != "total_body_ns":
+            continue
+        if type(duration) is not int or not 0 <= duration <= (1 << 64) - 1:
+            return False
+        if key != "total_body_ns":
+            durations.append(duration)
+    return sum(durations) <= value["total_body_ns"]
+
+
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -244,7 +272,9 @@ def _validate_failed_preparation_probe(
         "lease_state",
         "released_at",
     }
-    if set(failed) != required:
+    if (not required.issubset(failed)
+            or not set(failed).issubset(required | {"phase_timings"})
+            or not _validate_preparation_phase_timings(failed.get("phase_timings"))):
         raise _fail("failed preparation identity fields differ")
     for key in ("launch_id", "preparation_attempt_id", "resource_id", "lease_token"):
         _cancelled_activation_id(failed.get(key), "preparation " + key)
@@ -338,6 +368,25 @@ def _failed_preparation_probe_script() -> str:
     exit_required={"schema_version","receipt_id","run_id","task_id","preparation_attempt_id",
                    "resource_id","lease_token","lease_heartbeat_sequence","process_id",
                    "process_start_token","status_success","exit_code","timed_out","failure_reason","observed_at"}
+    def valid_phase_timings(value):
+        if value is None: return True
+        required={"schema_version","scope","total_body_ns"}
+        phases={"load_accepted_snapshot_ns","replay_validation_ns","native_mesh_space_ns",
+                "prepared_fields_evaluation_ns","prepared_bundle_publication_ns",
+                "prepared_observation_commit_ns","task_preparation_commit_ns"}
+        if (not isinstance(value,dict) or not required.issubset(value)
+                or not set(value).issubset(required|phases)
+                or value.get("schema_version")!="fem_preparation_phase_timings.v1"
+                or value.get("scope")!="accepted_fem_preparation_process_body.v1"):
+            return False
+        durations=[]
+        for key in {"total_body_ns"}|phases:
+            if key not in value: continue
+            duration=value[key]
+            if duration is None and key!="total_body_ns": continue
+            if type(duration) is not int or not 0<=duration<=(1<<64)-1: return False
+            if key!="total_body_ns": durations.append(duration)
+        return sum(durations)<=value["total_body_ns"]
     lease_required={"schema_version","resource_id","budget","run_id","task_id","preparation_attempt_id",
                     "lease_token","state","acquired_at","heartbeat_at","heartbeat_sequence","released_at",
                     "host_launch_binding"}
@@ -363,7 +412,9 @@ def _failed_preparation_probe_script() -> str:
             or not isinstance(launch.get("created_at"),str)
             or exit_id!="prep-exit-"+launch_id
             or exit_record["path"]!="preparation_process_exit_receipts/"+exit_id+".json"
-            or set(process_exit)!=exit_required
+            or not exit_required.issubset(process_exit)
+            or not set(process_exit).issubset(exit_required|{"phase_timings"})
+            or not valid_phase_timings(process_exit.get("phase_timings"))
             or process_exit.get("schema_version")!="preparation_process_exit_receipt.v1"
             or any(process_exit.get(key)!=value for key,value in identity.items())
             or process_exit.get("status_success") is not False
@@ -457,6 +508,8 @@ def _failed_preparation_probe_script() -> str:
         "lease_state":prep_lease["state"],
         "released_at":prep_lease["released_at"],
     }
+    if "phase_timings" in process_exit:
+        probe["failed_preparation"]["phase_timings"]=process_exit["phase_timings"]
     print(json.dumps(probe,sort_keys=True))'''
     if source.count(output_marker) != 1:
         raise _fail("existing cancellation probe output point changed")

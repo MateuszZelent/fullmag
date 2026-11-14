@@ -71,6 +71,12 @@ void gpu_rk_publish_final_step_stats(
     const double moment_weight = scalar(GpuFinalScalarSlot::MomentWeight);
 
     stats.max_rhs_amplitude = max_rhs;
+    stats.relaxation_preconditioner_wall_time_ns =
+        ctx.gpu_state.device.relaxation.bb_preconditioner_wall_time_ns;
+    stats.relaxation_preconditioner_cache_hits =
+        ctx.gpu_state.device.relaxation.bb_preconditioner_cache_hits;
+    stats.relaxation_preconditioner_cache_misses =
+        ctx.gpu_state.device.relaxation.bb_preconditioner_cache_misses;
     stats.exchange_energy_joules = exchange_energy;
     stats.demag_energy_joules = demag_energy;
     stats.external_energy_joules = external_energy;

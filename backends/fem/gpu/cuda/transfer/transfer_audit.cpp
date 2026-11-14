@@ -7,6 +7,7 @@
  */
 
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #include "context.hpp"
 
@@ -190,6 +191,31 @@ void record_host_to_device(TransferAudit &audit, uint64_t bytes)
 void record_device_to_host(TransferAudit &audit, uint64_t bytes)
 {
     record_host_read(audit, bytes);
+}
+
+void record_device_pcg_solve_started(TransferAudit &audit, uint64_t record_bytes)
+{
+    if (audit.hot_loop_depth > 0) {
+        audit.device_pcg_hot_loop.solves += 1;
+        audit.device_pcg_hot_loop.status_record_bytes = record_bytes;
+    }
+}
+
+void record_device_pcg_status_to_host(TransferAudit &audit, uint64_t bytes, uint64_t iteration_delta)
+{
+    record_control_scalar_read(audit,bytes);
+    if (audit.hot_loop_depth > 0) {
+        audit.device_pcg_hot_loop.status_readbacks += 1;
+        audit.device_pcg_hot_loop.status_record_bytes = bytes;
+        audit.device_pcg_hot_loop.control_d2h_bytes += bytes;
+        audit.device_pcg_hot_loop.active_iterations += iteration_delta;
+    }
+}
+
+void note_hot_loop_mandatory_controls(TransferAudit &audit,
+    const fullmag_fem_gpu_mandatory_control_counters_v1 &delta)
+{
+    if (audit.hot_loop_depth>0) add_mandatory_control_counters(audit.mandatory_controls_hot_loop,delta);
 }
 
 void record_device_control_scalar_to_host(TransferAudit &audit, uint64_t bytes)

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/index.md",
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+    "reviewed_revision": "7f2d02a3d4b0af26d8dcb66c736c98039b953911"
   },
   "backend_matrix": [
     {
@@ -36,7 +36,13 @@
       "id": "fem",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FEM",
-      "responsibility": "Owns study-level order, hmax alias, imported mesh, demag policy, and IR lowering."
+      "responsibility": "Owns study-level order, hmax alias, imported mesh, demag policy, optional GPU BB policy, and FEM hint IR lowering."
+    },
+    {
+      "id": "bb_policy_validation",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Rejects explicit FEM GPU BB policies outside FEM GPU projected_gradient_bb relaxation."
     },
     {
       "id": "recipe",
@@ -108,6 +114,16 @@
         "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
         "backend_support": "FEM demagnetization lanes",
         "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
+      },
+      {
+        "python": "FEM.gpu_bb_preconditioner",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "When set, exactly `auto`, `none`, or `exchange_mass`; explicit use requires FEM GPU `projected_gradient_bb` relaxation or raises `ValueError`.",
+        "meaning": "Requested FEM GPU BB search-direction policy. `None` omits the hint from `ProblemIR` and preserves the backend default.",
+        "backend_support": "Explicit policy: FEM GPU `projected_gradient_bb` only; FEM CPU, FDM CPU/GPU, and other FEM relaxation algorithms reject it. Managed GPU execution, SP4 performance, and CPU/GPU parity remain `NOT VERIFIED`.",
+        "problem_ir": "`backend_policy.discretization_hints.fem.gpu_bb_preconditioner`"
       }
     ]
   }

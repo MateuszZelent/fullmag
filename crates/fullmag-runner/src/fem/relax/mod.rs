@@ -18,6 +18,7 @@ pub mod algorithm;
 pub(crate) mod direct_minimizer;
 #[cfg(feature = "fem-native")]
 pub(crate) mod finalize;
+pub(crate) mod initial_observation;
 pub mod llg_overdamped;
 #[cfg(feature = "fem-native")]
 pub(crate) mod preview;

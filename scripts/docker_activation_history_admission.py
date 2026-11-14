@@ -1,13 +1,17 @@
 """Read-only control admission and writer exclusion for history publication."""
 from contextlib import contextmanager, ExitStack
+import errno
 import math
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import time
 
 from docker_build_control import BuildControl, BuildControlError
 from docker_activation_history_policy import ATTEMPT, SHA, HistoryError, canonical, digest, document
 from docker_activation_history_storage import _directory, _optional_digest
+
+WRITER_BARRIER_WAIT_SECONDS = 5.0
 
 
 class ReadOnlyBuildControl(BuildControl):
@@ -120,7 +124,15 @@ def historical_mounts(control, receipt, terminal, compose, selected, *, runtime_
         raise HistoryError("Historical failed development requires one explicit recovery witness")
     expected = {"schema": "fullmag.docker-build-operation.v1", "phase": "development",
                 "state": development_state, "attempt": token, "compose_project": control.project,
-                "control_volume": control.volume, "config_sha256": expected_config}
+                "control_volume": control.volume}
+    if "config_sha256" not in terminal:
+        # An early failed build can precede publication of this pin. The
+        # retained Compose hash and explicit succeeded recovery witness must
+        # independently authenticate it below; never rewrite the old receipt.
+        if development_state != "failed-confirmed":
+            raise HistoryError("Historical development is missing its config pin")
+    elif terminal["config_sha256"] != expected_config:
+        raise HistoryError("Historical development terminal/config identity differs")
     if (any(terminal.get(key) != value for key, value in expected.items())
             or terminal.get("control_namespace", "") != control.namespace
             or receipt.get("control_namespace", "") != control.namespace
@@ -219,6 +231,7 @@ def writer_barriers(store_root, ledger_root, host_ledger_roots_root=None):
         paths.append(registry_root / "WRITER.lock")
     # Match host registry -> HostResourceLedger -> SessionStore lock order.
     paths.extend([ledger_root / "WRITER.lock", store_root / "WRITER.lock"])
+    deadline = time.monotonic() + WRITER_BARRIER_WAIT_SECONDS
     with ExitStack() as stack:
         held = []
         for path in paths:
@@ -233,10 +246,27 @@ def writer_barriers(store_root, ledger_root, host_ledger_roots_root=None):
             if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                     or identity(before) != identity(opened)):
                 raise HistoryError("History writer lock is linked, nonregular or replaced")
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise HistoryError("A native/API writer is active at " + str(path) + "; history retained") from error
+            while True:
+                if time.monotonic() >= deadline:
+                    raise HistoryError(
+                        f"A native/API writer is active at {path} after "
+                        f"{WRITER_BARRIER_WAIT_SECONDS:g}s; history retained"
+                    )
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as error:
+                    if error.errno not in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                        raise HistoryError(
+                            "Could not acquire history writer barrier at " + str(path)
+                        ) from error
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise HistoryError(
+                            f"A native/API writer is active at {path} after "
+                            f"{WRITER_BARRIER_WAIT_SECONDS:g}s; history retained"
+                        ) from error
+                    time.sleep(min(0.025, remaining))
             held.append((path, identity(opened)))
 
         def unchanged():

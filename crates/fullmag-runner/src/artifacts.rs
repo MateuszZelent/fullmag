@@ -203,6 +203,11 @@ struct RunMetadata<'a> {
     sampling_resolution: Option<&'a serde_json::Value>,
 }
 
+fn fem_gpu_solver_controls_metadata(provenance: &crate::types::ExecutionProvenance) -> serde_json::Value {
+    serde_json::json!({"physical":provenance.gpu_mandatory_controls_physical,
+                       "hot_loop":provenance.gpu_mandatory_controls_hot_loop})
+}
+
 impl serde::Serialize for RunMetadata<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -210,7 +215,7 @@ impl serde::Serialize for RunMetadata<'_> {
     {
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(26))?;
+        let mut map = serializer.serialize_map(Some(27))?;
         map.serialize_entry("problem_name", &self.problem.problem_meta.name)?;
         map.serialize_entry("ir_version", &self.problem.ir_version)?;
         map.serialize_entry("source_hash", &self.problem.problem_meta.source_hash)?;
@@ -231,6 +236,8 @@ impl serde::Serialize for RunMetadata<'_> {
         map.serialize_entry("execution_provenance", self.execution_provenance)?;
         map.serialize_entry("runtime_threading", self.runtime_threading)?;
         map.serialize_entry("demag_runtime", self.demag_runtime)?;
+        map.serialize_entry("fem_gpu_solver_controls",
+            &fem_gpu_solver_controls_metadata(self.execution_provenance.execution))?;
         map.serialize_entry(
             "fem_cpu_relaxation_qualification",
             self.fem_cpu_relaxation_qualification,
@@ -1240,10 +1247,19 @@ fn demag_runtime_metadata(
                 provenance.fem_demag_operator_mode.as_deref(),
                 Some("device_hypre_poisson") | Some("device_hypre_fem_bem")
             ) {
-                let solver = match linear_solver.as_str() {
-                    "CG" => Some("HyprePCG"),
-                    "GMRES" => Some("HypreGMRES"),
-                    _ => None,
+                let actual_engine =
+                    resolved_policy.and_then(|entry| entry.resolved_linear_engine.as_deref());
+                let solver = match actual_engine {
+                    Some("device_scalar_pcg_amg") => Some("DeviceScalarPCG"),
+                    Some("hypre_pcg") => Some("HyprePCG"),
+                    Some("hypre_gmres") => Some("HypreGMRES"),
+                    // Historical files lack the additive observed-engine field.
+                    Some(_) => None,
+                    None => match linear_solver.as_str() {
+                        "CG" => Some("HyprePCG"),
+                        "GMRES" => Some("HypreGMRES"),
+                        _ => None,
+                    },
                 };
                 let preconditioner = match preconditioner.as_str() {
                     "AMG" => Some("HypreBoomerAMG"),
@@ -1279,6 +1295,9 @@ fn demag_runtime_metadata(
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
                 "runtime_solver": runtime_solver,
+                "resolved_linear_engine": resolved_policy.and_then(|entry| entry.resolved_linear_engine.as_deref()),
+                "device_pcg_physical": resolved_policy.and_then(|entry| entry.device_pcg_physical),
+                "device_pcg_hot_loop": resolved_policy.and_then(|entry| entry.device_pcg_hot_loop),
                 "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
@@ -6242,6 +6261,169 @@ mod tests {
         (problem, plan, summary, executed, output_dir)
     }
 
+    fn performance_snapshot_provenance_fixture() -> crate::types::FemGpuPerformanceSnapshotProvenance {
+        let mut value = serde_json::Map::new();
+        value.insert(
+            "schema_version".into(),
+            serde_json::json!("fullmag.fem.gpu.performance-snapshot.v1"),
+        );
+        value.insert(
+            "scope".into(),
+            serde_json::json!("backend_lifetime_through_relaxation_finalization"),
+        );
+        let integer_fields = [
+            "accepted_source_step",
+            "abi_version",
+            "struct_size",
+            "available",
+            "execution_class",
+            "precision",
+            "integrator",
+            "device_ordinal",
+            "completed_step",
+            "completed_execution_id",
+            "completed_operator_id",
+            "completed_attempt_count",
+            "rejected_attempt_count",
+            "failed_attempt_count",
+            "physical_rhs_evaluations",
+            "physical_exchange_applies",
+            "physical_exchange_launches",
+            "physical_exchange_nnz_visited",
+            "physical_demag_solves",
+            "physical_demag_iterations",
+            "physical_demag_rhs_norm_evaluations",
+            "physical_demag_stage_energy_evaluations",
+            "physical_normalization_launches",
+            "physical_normalization_readbacks",
+            "physical_adaptive_readbacks",
+            "physical_control_fences",
+            "physical_endpoint_cache_hits",
+            "physical_endpoint_cache_misses",
+            "physical_endpoint_cache_invalidations",
+            "physical_device_to_device_bytes",
+            "physical_control_d2h_bytes",
+            "physical_bulk_d2h_bytes",
+            "accepted_rhs_evaluations",
+            "accepted_exchange_applies",
+            "accepted_exchange_launches",
+            "accepted_exchange_nnz_visited",
+            "accepted_demag_solves",
+            "accepted_demag_iterations",
+            "accepted_demag_rhs_norm_evaluations",
+            "accepted_demag_stage_energy_evaluations",
+            "accepted_normalization_launches",
+            "accepted_normalization_readbacks",
+            "accepted_adaptive_readbacks",
+            "accepted_control_fences",
+            "accepted_endpoint_cache_hits",
+            "accepted_endpoint_cache_misses",
+            "accepted_endpoint_cache_invalidations",
+            "accepted_device_to_device_bytes",
+            "accepted_control_d2h_bytes",
+            "accepted_bulk_d2h_bytes",
+            "physical_exchange_elapsed_ns",
+            "physical_demag_assemble_elapsed_ns",
+            "physical_demag_recover_elapsed_ns",
+            "physical_demag_energy_elapsed_ns",
+            "physical_rhs_elapsed_ns",
+            "accepted_exchange_elapsed_ns",
+            "accepted_demag_assemble_elapsed_ns",
+            "accepted_demag_recover_elapsed_ns",
+            "accepted_demag_energy_elapsed_ns",
+            "accepted_rhs_elapsed_ns",
+        ];
+        for field in integer_fields {
+            value.insert(field.into(), serde_json::json!(0));
+        }
+        for field in [
+            "physical_demag_rhs_norm_sum",
+            "physical_demag_stage_energy_sum_joules",
+            "accepted_demag_rhs_norm_sum",
+            "accepted_demag_stage_energy_sum_joules",
+        ] {
+            value.insert(field.into(), serde_json::json!(0.0));
+        }
+        value.insert("abi_version".into(), serde_json::json!(1));
+        value.insert("struct_size".into(), serde_json::json!(480));
+        value.insert("available".into(), serde_json::json!(1));
+        value.insert("execution_class".into(), serde_json::json!(1));
+        value.insert("completed_step".into(), serde_json::json!(3));
+        value.insert("accepted_source_step".into(), serde_json::json!(3));
+        value.insert(
+            "completed_execution_id".into(),
+            serde_json::json!(9_007_199_254_740_993_u64),
+        );
+        value.insert("physical_rhs_evaluations".into(), serde_json::json!(17));
+        value.insert("accepted_rhs_evaluations".into(), serde_json::json!(13));
+        value.insert(
+            "physical_demag_rhs_norm_sum".into(),
+            serde_json::json!(0.125),
+        );
+        serde_json::from_value(serde_json::Value::Object(value))
+            .expect("full typed performance snapshot fixture")
+    }
+
+    #[test]
+    fn performance_snapshot_reaches_terminal_zarr_provenance() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-performance-snapshot-zarr-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let autosave_root = root.join("autosave");
+        let (problem, plan, summary, mut executed, output) =
+            stage_completion_fixture(&root, &autosave_root, "relax", "gpu", None);
+        let snapshot = performance_snapshot_provenance_fixture();
+        executed.provenance.fem_gpu_performance_snapshot = Some(snapshot.clone());
+        let hypre = crate::types::HypreRelax7AsyncCopyTelemetry {
+            count: 9_007_199_254_740_993,
+            bytes: u64::MAX,
+            scope: "process_cumulative_at_terminal_capture".into(),
+        };
+        executed.provenance.hypre_relax7_async_copy = Some(hypre.clone());
+
+        write_artifacts(&output, &problem, &plan, &executed, Some(&summary))
+            .expect("publish the final execution provenance to the existing Zarr stage writer");
+
+        let target = summary
+            .stage_autosave_completion_target
+            .as_ref()
+            .expect("stage autosave completion target");
+        let stage: serde_json::Value =
+            serde_json::from_slice(&fs::read(&target.stage_manifest_path).unwrap()).unwrap();
+        let zarr_attrs_path = target
+            .stage_manifest_path
+            .parent()
+            .expect("stage root")
+            .join("fields/m/.zattrs");
+        let attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(zarr_attrs_path).unwrap()).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("metadata.json")).unwrap()).unwrap();
+        let expected_hypre = serde_json::to_value(hypre).unwrap();
+        assert_eq!(
+            metadata["execution_provenance"]["hypre_relax7_async_copy"],
+            expected_hypre
+        );
+        assert_eq!(stage["provenance"]["hypre_relax7_async_copy"], expected_hypre);
+        assert_eq!(attrs["provenance"]["hypre_relax7_async_copy"], expected_hypre);
+        let expected = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(
+            stage["provenance"]["fem_gpu_performance_snapshot"],
+            expected
+        );
+        assert_eq!(
+            attrs["provenance"]["fem_gpu_performance_snapshot"],
+            expected
+        );
+        assert_eq!(
+            stage["provenance"]["fem_gpu_performance_snapshot"]["completed_execution_id"],
+            serde_json::json!(9_007_199_254_740_993_u64)
+        );
+
+        fs::remove_dir_all(root).expect("remove temporary writer fixture");
+    }
+
     fn assert_owner_bound_stage_finalization(separate_root: bool) {
         let root =
             std::env::temp_dir().join(format!("fullmag-stage-owner-{}", uuid::Uuid::new_v4()));
@@ -7042,6 +7224,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                 linear_solver: "GMRES".to_string(),
                 preconditioner: "JACOBI".to_string(),
@@ -7068,6 +7252,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                 linear_solver: "CG".to_string(),
                 preconditioner: "NONE".to_string(),
@@ -8364,6 +8550,8 @@ mod tests {
                 material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fem(FemPlanIR {
+                gpu_bb_preconditioner: None,
+                gpu_pcg_control_experiment: None,
                 mesh_name: "unit_tet".to_string(),
                 mesh_source: Some("meshes/unit_tet.msh".to_string()),
                 mesh: MeshIR {
@@ -10218,6 +10406,8 @@ mod tests {
                     reason: "native_fem_gpu_unavailable".to_string(),
                     message: "native FEM GPU unavailable in test".to_string(),
                 }),
+                gpu_mandatory_controls_physical: None,
+                gpu_mandatory_controls_hot_loop: None,
                 fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                     potential_order: Some(2),
                     potential_true_dof_count: Some(9876),
@@ -12026,6 +12216,9 @@ mod tests {
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
+            fem_gpu_performance_snapshot: None,
+            hypre_relax7_async_copy: None,
+            fem_gpu_pcg_control_experiment: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -12095,6 +12288,8 @@ mod tests {
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: None,
             fem_bem_demag: None,
         };
@@ -12936,6 +13131,9 @@ mod tests {
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
+            fem_gpu_performance_snapshot: None,
+            hypre_relax7_async_copy: None,
+            fem_gpu_pcg_control_experiment: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),
@@ -13005,6 +13203,8 @@ mod tests {
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: None,
             fem_bem_demag: None,
         };
@@ -13762,5 +13962,68 @@ mod tests {
         );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }    #[cfg(test)]
+    #[test]
+    fn gpu_demag_metadata_reports_observed_device_scalar_engine() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("FEM fixture");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = crate::types::ExecutionProvenance {
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                device_pcg_physical:Some(crate::types::FemPoissonDevicePcgCounters {
+                    status_readbacks:2,status_record_bytes:104,control_d2h_bytes:208,
+                    solves:1,active_iterations:9,
+                }),
+                device_pcg_hot_loop:Some(crate::types::FemPoissonDevicePcgCounters {
+                    status_readbacks:1,status_record_bytes:104,control_d2h_bytes:104,
+                    solves:1,active_iterations:0,
+                }),
+                resolved_linear_engine: Some("device_scalar_pcg_amg".to_string()),
+                linear_solver: "CG".to_string(),
+                preconditioner: "AMG".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["resolved_linear_engine"], "device_scalar_pcg_amg");
+        assert_eq!(metadata["device_pcg_physical"]["status_readbacks"],2);
+        assert_eq!(metadata["device_pcg_physical"]["status_record_bytes"],104);
+        assert_eq!(metadata["device_pcg_physical"]["control_d2h_bytes"],208);
+        assert_eq!(metadata["device_pcg_physical"]["solves"],1);
+        assert_eq!(metadata["device_pcg_physical"]["active_iterations"],9);
+        assert_eq!(metadata["device_pcg_hot_loop"]["status_readbacks"],1);
+        assert_eq!(metadata["device_pcg_hot_loop"]["control_d2h_bytes"],104);
+        assert_eq!(metadata["device_pcg_hot_loop"]["active_iterations"],0);
+        assert_eq!(metadata["runtime_solver"], "DeviceScalarPCG");
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
     }
+    #[test]
+    fn mandatory_controls_metadata_preserves_bb_without_poisson() {
+        let counters=crate::types::GpuMandatoryControlCounters {
+            bb_certificate_record_bytes:96,bb_certificate_readbacks:1,bb_certificate_bytes:96,
+            bb_descent_readbacks:1,bb_descent_bytes:8,..Default::default()
+        };
+        let provenance=crate::types::ExecutionProvenance {
+            gpu_mandatory_controls_physical:Some(counters),
+            gpu_mandatory_controls_hot_loop:Some(counters),..Default::default()
+        };
+        assert!(provenance.fem_poisson_demag.is_none());
+        let metadata=fem_gpu_solver_controls_metadata(&provenance);
+        assert_eq!(metadata["hot_loop"]["bb_certificate_readbacks"],1);
+        assert_eq!(metadata["physical"]["bb_descent_bytes"],8);
+        let root=serde_json::to_value(&provenance).unwrap();
+        assert_eq!(root["gpu_mandatory_controls_hot_loop"]["bb_certificate_bytes"],96);
+        let decoded:crate::types::ExecutionProvenance=serde_json::from_value(root).unwrap();
+        assert_eq!(decoded.gpu_mandatory_controls_hot_loop,Some(counters));
+        assert!(fem_gpu_solver_controls_metadata(&Default::default())["hot_loop"].is_null());
+    }
+
 }

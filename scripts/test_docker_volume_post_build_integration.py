@@ -272,6 +272,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(cancelled_guard, "_read_control_bytes", return_value=None),
                 mock.patch.object(docker_dev, "_select_source", return_value=(source, {
                     "runtime_root": str(source), "storage_root": str(source),
+                    "worktree_id": "continuation",
                 })),
                 mock.patch.object(docker_dev, "_compose_identity", return_value={
                     "project_name": control.project, "network_name": control.project + "_fullmag",

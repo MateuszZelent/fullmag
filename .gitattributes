@@ -1,6 +1,8 @@
 *.sh text eol=lf
 *.bash text eol=lf
 *.diff text eol=lf
+# Preserve exact bytes of the hash-pinned HYPRE bridge source across Windows checkouts.
+/docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp text eol=lf
 *.mphtxt -text
 justfile text eol=lf
 scripts/local_runner/worker_entrypoint.py text eol=lf

@@ -42,6 +42,7 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
 
 bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
 #if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return gpu_demag_fem_bem_initialize(ctx, error);
@@ -106,6 +107,7 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return false;
     }
 
+    device_bytes = workspace->device_bytes;
     workspace->ready = true;
     ctx.poisson_demag.gpu_workspace = workspace.release();
     ctx.poisson_demag.gpu_workspace_ready = true;
@@ -121,6 +123,7 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
 
 void gpu_demag_poisson_destroy(Context &ctx)
 {
+    gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
 #if FULLMAG_HAS_MFEM_STACK
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         gpu_demag_fem_bem_destroy(ctx);

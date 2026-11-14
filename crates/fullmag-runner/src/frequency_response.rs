@@ -2625,6 +2625,8 @@ fn frequency_response_demag_backend_plan(
 ) -> fullmag_ir::FemPlanIR {
     let mfem_device_string = frequency_response_demag_provider_mfem_device(plan).to_string();
     fullmag_ir::FemPlanIR {
+        gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),
         mesh: plan.mesh.clone(),

@@ -37,6 +37,10 @@ bool gpu_rk_compute_effective_field_for_magnetization(
     const char *label,
     std::string &reason);
 
+bool gpu_rk_compute_effective_field_for_pgbb_trial(
+    Context &, const FemGpuComponentField &, cudaStream_t, int, double,
+    const char *, std::string &);
+
 bool gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
     Context &ctx,
     const FemGpuComponentField &m,

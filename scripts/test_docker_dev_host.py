@@ -56,11 +56,28 @@ class DockerDevHostTests(unittest.TestCase):
                 host.validate_host_path(link / "scripts")
 
     def test_linux_storage_description_is_not_windows_attestation(self):
-        with mock.patch.object(host.storage, "filesystem_type", return_value="ext4"):
+        with mock.patch.object(host.storage, "filesystem_type", return_value="ext4"), \
+                mock.patch.object(host.shutil, "disk_usage", return_value=SimpleNamespace(free=64*1024**2)):
             description = host.local_volume(Path(__file__).resolve().parent)
         self.assertEqual(description["host_platform"], "linux")
         self.assertNotIn("host_volume_serial", description)
         self.assertNotIn("host_drive_type", description)
+
+    def test_writable_storage_still_requires_startup_headroom(self):
+        with mock.patch.object(host.storage, "filesystem_type", return_value="ext4"), \
+                mock.patch.object(host.shutil, "disk_usage", return_value=SimpleNamespace(free=32*1024**2-1)):
+            with self.assertRaisesRegex(ValueError, "insufficient space"):
+                host.local_volume(Path(__file__).resolve().parent)
+
+    def test_read_only_dependency_source_does_not_require_host_write_headroom(self):
+        repo = Path(__file__).resolve().parents[1]
+        with mock.patch.object(host.storage, "resolve_layout", return_value={}), \
+                mock.patch("docker_compose_identity.compose_project_identity", return_value={"project_name": "fullmag-master"}), \
+                mock.patch.object(control, "toolchain_configuration", side_effect=RuntimeError("compose reached")), \
+                mock.patch.object(host.storage, "filesystem_type", return_value="ext4"), \
+                mock.patch.object(host.shutil, "disk_usage", return_value=SimpleNamespace(free=0)):
+            with self.assertRaisesRegex(RuntimeError, "compose reached"):
+                control.build_volume_toolchain(repo)
 
     def test_control_and_bootstrap_commands_use_host_adapter(self):
         with mock.patch.object(control, "bounded_capture", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as capture:
@@ -84,7 +101,6 @@ class DockerDevHostTests(unittest.TestCase):
         with mock.patch.object(host.storage,
                                "resolve_layout", return_value={}), \
                 mock.patch("docker_compose_identity.compose_project_identity", return_value={"project_name": "fullmag-master"}), \
-                mock.patch.object(control, "local_volume"), \
                 mock.patch.object(control, "toolchain_configuration", side_effect=RuntimeError("compose reached")), \
                 mock.patch.object(host.storage, "filesystem_type", return_value="ext4"):
             with self.assertRaisesRegex(RuntimeError, "compose reached"):

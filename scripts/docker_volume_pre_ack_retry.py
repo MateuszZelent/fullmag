@@ -9,12 +9,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import inspect
 import json
 from pathlib import Path, PurePosixPath
 import re
 import sys
 
 import fullmag_storage as storage
+from data_volume_released_state import collect_released_state
 from docker_build_control import MAX_DOCUMENT_BYTES, BuildControl, BuildControlError, bounded_capture, canonical, docker_capture, require_host, toolchain_configuration
 from docker_compose_identity import compose_project_identity
 from docker_volume_accepted_reattach import MAX_CONTROL_RECORD_BYTES, _bundle_from_records, _control_bytes, _decode_json
@@ -59,27 +61,15 @@ def _publish_raw(control, relative, raw, *, helper_name=None, maximum=MAX_CONTRO
 
 def _released_snapshot(control, actual):
     from docker_volume_linux_supervision_stop import readonly_mount
-    code = r'''import fcntl,hashlib,json,os,pathlib,re,stat,time
+    code = inspect.getsource(collect_released_state) + r'''
+import fcntl,json,os,pathlib,stat,time
 root=pathlib.Path('/state/runs/docker-all/session-store'); ledger=pathlib.Path('/host-ledger/ledger')
 locks=[]
-def read(p,limit=16777216):
- fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
- try:
-  st=os.fstat(fd)
-  if not stat.S_ISREG(st.st_mode) or st.st_size>limit: raise RuntimeError('unbounded/nonregular observation')
-  data=bytearray()
-  while len(data)<=limit:
-   chunk=os.read(fd,min(65536,limit+1-len(data)))
-   if not chunk: break
-   data.extend(chunk)
-  if len(data)!=st.st_size or len(data)>limit: raise RuntimeError('observation changed')
-  return bytes(data)
- finally: os.close(fd)
 try:
  deadline=time.monotonic()+5.0
  for p in [ledger/'WRITER.lock',root/'WRITER.lock']:
   fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW); locks.append(fd)
-  if not stat.S_ISREG(os.fstat(fd).st_mode): raise RuntimeError('writer lock is not a regular file')
+  if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink!=1: raise RuntimeError('writer lock is not one regular file')
   while True:
    try:
     fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB); break
@@ -87,40 +77,7 @@ try:
     remaining=deadline-time.monotonic()
     if remaining<=0: raise RuntimeError('timed out acquiring shared observation locks within 5s')
     time.sleep(min(0.025,remaining))
- doc=json.loads(read(ledger/'HOST_RESOURCE_LEDGER.json')); rows=doc['reservations']
- if len(rows)>8192 or any(r['state']!='released' for r in rows): raise RuntimeError('host reservation not released')
- refs=[]
- for row in rows:
-  digest=row['release_proof_sha256']
-  if not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest): raise RuntimeError('invalid proof digest')
-  raw=read(ledger/'proofs'/(digest+'.json'),65536)
-  if hashlib.sha256(raw).hexdigest()!=digest: raise RuntimeError('release proof digest differs')
-  proof=json.loads(raw)
-  if (proof.get('schema_version') not in ['host_resource_release_proof.v1','host_resource_release_proof.v2']
-      or proof.get('host_id')!=doc['policy']['host_id'] or proof.get('store_id')!=row['identity']['store_id']
-      or proof.get('request_sha256')!=row['request_sha256']): raise RuntimeError('release proof identity differs')
-  refs.append([row['identity'],row['request_sha256'],digest])
- leases=[]; count=0; runs=root/'runs'
- run_stat=os.lstat(runs)
- if not stat.S_ISDIR(run_stat.st_mode) or stat.S_ISLNK(run_stat.st_mode): raise RuntimeError('runs root is not a real directory')
- for run in os.scandir(runs):
-  count+=1
-  if count>8192 or run.is_symlink() or not run.is_dir(follow_symlinks=False): raise RuntimeError('invalid or unbounded run inventory')
-  for directory in ('resource_leases','preparation_resource_leases'):
-   lease_root=pathlib.Path(run.path)/directory
-   try: lease_stat=os.lstat(lease_root)
-   except FileNotFoundError: continue
-   if not stat.S_ISDIR(lease_stat.st_mode) or stat.S_ISLNK(lease_stat.st_mode): raise RuntimeError('lease root is not a real directory')
-   for resource in os.scandir(lease_root):
-    count+=1
-    if count>8192 or resource.is_symlink() or not resource.is_dir(follow_symlinks=False): raise RuntimeError('invalid or unbounded resource inventory')
-    for entry in os.scandir(resource.path):
-     count+=1
-     if count>8192 or entry.is_symlink() or not entry.is_file(follow_symlinks=False) or not entry.name.endswith('.json'): raise RuntimeError('invalid or unbounded lease entry')
-     raw=read(entry.path,262144); lease=json.loads(raw)
-     if lease['state']!='released': raise RuntimeError('local lease not released')
-     leases.append([str(pathlib.Path(entry.path).relative_to(root)),hashlib.sha256(raw).hexdigest()])
- print(json.dumps({'schema':'fullmag.pre-ack-released-observation.v1','reservations':sorted(refs,key=lambda r:json.dumps(r[0],sort_keys=True)),'leases':sorted(leases),'active_count':0},sort_keys=True,separators=(',',':')))
+ print(json.dumps(collect_released_state(root,ledger),sort_keys=True,separators=(',',':')))
 finally:
  for fd in reversed(locks): os.close(fd)
 '''

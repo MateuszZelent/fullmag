@@ -1,0 +1,84 @@
+--- a/src/parcsr_ls/par_relax.c
++++ b/src/parcsr_ls/par_relax.c
+@@ -14,8 +14,17 @@
+ #include "_hypre_parcsr_ls.h"
+ #include "Common.h"
+ #include "_hypre_lapack.h"
+ #include "par_relax.h"
++
++/* Private C-to-CUDA bridge: par_relax.c is a C translation unit. */
++#if defined(HYPRE_USING_CUDA) && !defined(HYPRE_MIXED_PRECISION)
++#ifdef __cplusplus
++extern "C"
++#endif
++HYPRE_Int hypre_BoomerAMGRelax7CopyAsyncDevice(HYPRE_Int count,
++                                            HYPRE_Complex *src, HYPRE_Complex *dst);
++#endif
+-
++
+ /*--------------------------------------------------------------------------
+  * hypre_BoomerAMGRelax
+  *--------------------------------------------------------------------------*/
+@@ -1212,9 +1221,42 @@
+-
++
+    /*-----------------------------------------------------------------
+     * Copy f into temporary vector.
+     *-----------------------------------------------------------------*/
+-   hypre_ParVectorCopy(f, Vtemp);
++#if defined(HYPRE_USING_CUDA) && !defined(HYPRE_MIXED_PRECISION)
++   hypre_Vector *f_local = hypre_ParVectorLocalVector(f);
++   hypre_Vector *v_local = hypre_ParVectorLocalVector(Vtemp);
++   HYPRE_Int copy_size = hypre_VectorSize(f_local);
++   /* Restrict stream-ordered copies to canonical, equally sized single
++    * device vectors. Keep SeqVectorCopy's truncation/layout rules elsewhere. */
++   if (copy_size > 0 && copy_size == hypre_VectorSize(v_local) &&
++       hypre_VectorNumVectors(f_local) == 1 && hypre_VectorNumVectors(v_local) == 1 &&
++       hypre_VectorMultiVecStorageMethod(f_local) == 0 &&
++       hypre_VectorMultiVecStorageMethod(v_local) == 0 &&
++       hypre_VectorIndexStride(f_local) == 1 && hypre_VectorIndexStride(v_local) == 1 &&
++       hypre_VectorVectorStride(f_local) == copy_size &&
++       hypre_VectorVectorStride(v_local) == copy_size &&
++       hypre_GetActualMemLocation(hypre_VectorMemoryLocation(f_local)) == hypre_MEMORY_DEVICE &&
++       hypre_GetActualMemLocation(hypre_VectorMemoryLocation(v_local)) == hypre_MEMORY_DEVICE &&
++       hypre_VectorData(f_local) != NULL && hypre_VectorData(v_local) != NULL)
++   {
++      /* Preserve Memcpy's exact self-alias no-op. */
++      if (hypre_VectorData(f_local) != hypre_VectorData(v_local) &&
++          hypre_BoomerAMGRelax7CopyAsyncDevice(copy_size,
++                                            hypre_VectorData(f_local), hypre_VectorData(v_local)))
++      {
++         /* Copy submission failed: preserve its sticky error and unwind only
++          * this function's state; do not execute Matvec/Divpy or add a fence. */
++         hypre_SetSyncCudaCompute(sync_stream);
++         hypre_GpuProfilingPopRange();
++         return hypre_error_flag;
++      }
++   }
++   else
++#endif
++   {
++      hypre_ParVectorCopy(f, Vtemp);
++   }
+-
++
+    /*-----------------------------------------------------------------
+     * Perform Matvec Vtemp = w * (f - Au)
+     *-----------------------------------------------------------------*/
+--- a/src/parcsr_ls/par_relax_device.c
++++ b/src/parcsr_ls/par_relax_device.c
+@@ -9,8 +9,12 @@
+ #include "_hypre_parcsr_ls.h"
+ #include "_hypre_utilities.hpp"
+-
++
+ #if defined(HYPRE_USING_GPU)
++
++#if defined(HYPRE_USING_CUDA) && !defined(HYPRE_MIXED_PRECISION)
++#include "fullmag_l1_stream_copy.hpp"
++#endif
+-
++
+ /*--------------------------------------------------------------------------
+  * hypre_BoomerAMGRelaxHybridGaussSeidelDevice
+  *--------------------------------------------------------------------------*/

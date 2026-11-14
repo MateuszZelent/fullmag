@@ -788,6 +788,8 @@ fn accepted_energy_relax_completion() -> fullmag_ir::StageCompletionIR {
 
 fn relax_source_plan_from_eigen(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
     fullmag_ir::FemPlanIR {
+        gpu_bb_preconditioner: None,
+        gpu_pcg_control_experiment: None,
         frozen_spins: None,
         mesh_name: plan.mesh_name.clone(),
         mesh_source: plan.mesh_source.clone(),

@@ -376,7 +376,7 @@ def _compute_proof_binding(intent: Mapping, live: Mapping, command: Mapping) -> 
     return {"command_id": command_id, "receipt_sha256": sha(canonical(receipt))}
 
 
-def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str) -> dict:
+def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str, *, historical_binding=None) -> dict:
     require(preflight.get("schema") == "fullmag.docker-terminal-session-drain-preflight.v1",
             "capture requires a terminal session drain preflight")
     run_id = portable(run_id)
@@ -396,9 +396,22 @@ def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str) -> 
     epoch = live.get("session_epoch")
     require(type(epoch) is int and epoch > 0
             and live.get("session_id") == session_id
-            and live.get("api_instance_id") == preflight.get("api_instance_id")
-            and preflight.get("request_scope_epoch") == f"{live['api_instance_id']}:{epoch}",
+            and isinstance(live.get("api_instance_id"), str) and live["api_instance_id"]
+            and isinstance(preflight.get("api_instance_id"), str)
+            and preflight.get("request_scope_epoch") == f"{preflight['api_instance_id']}:{epoch}",
             "accepted live identity differs")
+    if live.get("api_instance_id") != preflight.get("api_instance_id"):
+        # Only an independently authenticated previous installation can bind
+        # the unchanged RunIntent to the current API after a terminal restore.
+        prior = historical_binding.get("proof", {}) if isinstance(historical_binding, dict) else {}
+        require(isinstance(historical_binding, dict)
+                and historical_binding.get("api_instance_id") == preflight["api_instance_id"]
+                and all(prior.get(key) == expected for key, expected in {
+                    "run_id": run_id, "session_id": session_id, "session_epoch": epoch,
+                    "intent_sha256": sha(intent_raw),
+                    "definition_sha256": snapshot.get("definition_sha256"),
+                    "scene_revision": snapshot.get("definition_revision"),
+                }.items()), "accepted API differs without an authenticated same-intent terminal installation")
     scene_revision = live.get("scene_revision")
     require(type(scene_revision) is int and scene_revision >= 0
             and snapshot.get("definition_revision") == scene_revision,
@@ -419,6 +432,12 @@ def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str) -> 
     catalog_outcome = "completed" if all_succeeded else "failed" if any_failed else None
     require(catalog_outcome == public_status,
             "public run status differs from the terminal catalog outcome")
+    if live.get("api_instance_id") != preflight.get("api_instance_id"):
+        prior = historical_binding["proof"]
+        require(all(prior.get(key) == expected for key, expected in {
+            "project_id": snapshot.get("project_id"), "specification_sha256": intent.get("payload_sha256"),
+            "catalog_sha256": sha(catalog_raw), "catalog_revision": catalog["revision"],
+        }.items()), "previously installed terminal catalog or specification differs")
     if command.get("kind") == "startup_script":
         source_id = portable(live.get("request_idempotency_key"))
         source_sha = digest(live.get("startup_source_sha256"))
@@ -450,8 +469,18 @@ def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str) -> 
     }
 
 
+def _historical_capture_binding(read_control, annotation, *, scope, ready_owner):
+    if annotation is None:
+        return None
+    _validate_terminal_observation_annotation(read_control, annotation, scope, ready_owner)
+    proof_raw, proof = managed(read_control, "runtime-control/terminal-observation/"
+                               + digest(annotation["proof_sha256"]) + "/proof.json")
+    require(sha(proof_raw) == annotation["proof_sha256"], "historical capture proof changed")
+    return {"api_instance_id": annotation["api_instance_id"], "proof": proof}
+
+
 def capture_binding(read_store: Read, preflight: Mapping, evidence: Mapping, native_config_sha256: str,
-                    ready_owner: Mapping) -> dict:
+                    ready_owner: Mapping, *, historical_binding=None) -> dict:
     run_id = portable(preflight.get("run", {}).get("run_id"))
     evidence_sha256 = digest(evidence.get("terminal_evidence_sha256"))
     require(evidence == {
@@ -460,7 +489,7 @@ def capture_binding(read_store: Read, preflight: Mapping, evidence: Mapping, nat
         "mutations_applied": False, "solve_replayed": False,
     } and evidence["mutations_applied"] is False and evidence["solve_replayed"] is False,
         "native terminal capture differs from the requested run or replayed a mutation")
-    binding = _terminal_run_binding(read_store, preflight, run_id)
+    binding = _terminal_run_binding(read_store, preflight, run_id, historical_binding=historical_binding)
     require(type(preflight.get("scene_revision")) is int
             and preflight["scene_revision"] == binding["scene_revision"],
             "the editable scene changed after the run")
@@ -474,12 +503,12 @@ def capture_binding(read_store: Read, preflight: Mapping, evidence: Mapping, nat
     }
 
 
-def capture_terminal_observation(backend_id: str, store_root, preflight: Mapping) -> dict:
+def capture_terminal_observation(backend_id: str, store_root, preflight: Mapping, *, control=None, scope=None) -> dict:
     """Inspect the exact terminal run in the already admitted backend."""
     from docker_build_control import docker_capture
     run_id = portable(preflight.get("run", {}).get("run_id"))
     read_store = _store_reader(store_root)
-    before = _terminal_run_binding(read_store, preflight, run_id)
+    before = {name: read_store(f"runs/{run_id}/{name}") for name in ("run_intent.json", "run_catalog.json")}
     script = r'''import hashlib,json,sys
 sys.path.insert(0, "/opt/fullmag")
 import runtime_service as service
@@ -503,9 +532,22 @@ print(json.dumps({"native_config_sha256": config, "evidence": evidence, "ready_o
     require(set(observed) == {"native_config_sha256", "evidence", "ready_owner"}
             and isinstance(observed["evidence"], dict) and isinstance(observed["ready_owner"], dict)
             and observed["ready_owner"].get("state") == "ready", "native terminal capture result shape differs")
+    historical_binding = None
+    if control is not None:
+        from docker_volume_accepted_reattach import _control_bytes
+        require(isinstance(scope, dict) and set(scope) == {"compose_project", "control_volume", "source_root", "image_id"}
+                and scope["compose_project"] == control.project and scope["control_volume"] == control.volume,
+                "terminal capture requires its exact managed source/group scope")
+        read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
+        process = decode(read_control("runtime-control/runtime-service/process-tree.json"))
+        historical_binding = _historical_capture_binding(read_control, process.get("terminal_observation"),
+            scope=scope, ready_owner=observed["ready_owner"])
+    else:
+        require(scope is None, "terminal capture scope requires its managed control reader")
     capture = capture_binding(read_store, preflight, observed["evidence"],
-                              observed["native_config_sha256"], observed["ready_owner"])
-    require(capture["run_binding_sha256"] == sha(canonical(before)),
+                              observed["native_config_sha256"], observed["ready_owner"],
+                              historical_binding=historical_binding)
+    require(all(read_store(f"runs/{run_id}/{name}") == raw for name, raw in before.items()),
             "terminal run changed during native capture")
     return capture
 
@@ -540,6 +582,67 @@ def build_captured_proof(read_control: Read, read_store: Read, *, iteration: str
         terminal_evidence_sha256=capture["terminal_evidence_sha256"],
         captured_binding_sha256=capture["run_binding_sha256"],
     )
+
+
+def build_stopped_proof(read_control: Read, read_store: Read, *, iteration: str,
+                        stop_sha256: str, development_attempt: str,
+                        config_sha256: str, scope: Mapping[str, str]) -> dict:
+    """Read an exact capture or the retained proof of an already installed run.
+
+    The caller must independently validate this newer stop with
+    validate_empty_stop, including its current installed API and native owner.
+    An invalid capture is never replaced by a historical observation.
+    """
+    require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
+                for value in (iteration, development_attempt)), "Exact stopped/development attempts required")
+    digest(stop_sha256); digest(config_sha256)
+    require(set(scope) == {"compose_project", "control_volume", "source_root", "image_id"},
+            "Exact stopped observation scope required")
+    raw, stopped = managed(read_control, "iteration/attempts/" + iteration + "/terminal.json")
+    inputs = stopped.get("inputs", {})
+    require(sha(raw) == stop_sha256 and stopped.get("schema") == "fullmag.docker-build-operation.v1"
+            and stopped.get("phase") == "iteration" and stopped.get("state") == "succeeded"
+            and stopped.get("attempt") == iteration and stopped.get("idle_backend_stopped") is True
+            and stopped.get("config_sha256") == config_sha256
+            and inputs.get("attempt") == development_attempt
+            and inputs.get("config_sha256") == config_sha256
+            and inputs.get("source_root") == scope["source_root"] and inputs.get("image_id") == scope["image_id"]
+            and all(stopped.get(key) == scope[key] for key in ("compose_project", "control_volume")),
+            "Stopped source observation differs from its exact receipt/scope")
+    if stopped.get("terminal_native_observation_sha256") is not None:
+        return build_captured_proof(read_control, read_store, iteration=iteration, scope=scope)
+    _, parent = managed(read_control, "development/attempts/" + development_attempt + "/terminal.json")
+    parent_inputs = parent.get("inputs", {})
+    require(parent.get("phase") == "development" and parent.get("state") == "succeeded"
+            and parent.get("attempt") == development_attempt and parent.get("config_sha256") == config_sha256
+            and all(parent.get(key) == scope[key] for key in ("compose_project", "control_volume"))
+            and all(parent_inputs.get(key) == scope[key] for key in ("source_root", "image_id")),
+            "Retained observation parent belongs to another development/source/group")
+    metadata = parent.get("terminal_observation")
+    require(type(metadata) is dict, "A stop without capture requires its installed historical observation")
+    proof_sha = digest(metadata.get("proof_sha256"))
+    relative = "terminal-observation/" + proof_sha
+    validate_context({"metadata": metadata, "environment": {
+        REQUEST_ENV: relative + "/request.json", REQUEST_SHA_ENV: metadata.get("request_sha256")}})
+    request_raw, request = managed(read_control, "runtime-control/" + relative + "/request.json")
+    require(sha(request_raw) == metadata["request_sha256"] and request == {
+        "schema": "fullmag.terminal-observation-request.v1",
+        "proof_path": relative + "/proof.json", "proof_sha256": proof_sha},
+        "Retained observation request differs from its parent pin")
+    proof_raw, proof = managed(read_control, "runtime-control/" + relative + "/proof.json")
+    require(sha(proof_raw) == proof_sha and
+            all(proof.get(key) == scope[key] for key in ("compose_project", "control_volume", "source_root")),
+            "Retained observation proof differs from its parent pin/scope")
+    source_scope = {key: proof.get(key) for key in scope}
+    require(type(source_scope["image_id"]) is str and
+            re.fullmatch(r"sha256:[0-9a-f]{64}", source_scope["image_id"]),
+            "Retained observation original image is invalid")
+    rebuilt = build_proof(
+        read_control, read_store, iteration=proof.get("original_iteration"), run_id=proof.get("run_id"),
+        scope=source_scope, native_config_sha256=proof.get("native_config_sha256"),
+        terminal_evidence_sha256=proof.get("terminal_evidence_sha256"))
+    require(proof == rebuilt, "Retained observation differs from authoritative original records")
+    return rebuilt
 
 
 def build_proof(read_control: Read, read_store: Read, *, iteration: str,
@@ -658,11 +761,9 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
     archived = decode(ready_raw)
     require(archived.get("state") == "ready" and owner_identity(archived) == owner_identity(ready),
             "immutable Ready owner differs")
-    if "terminal_observation" in process:
-        _validate_terminal_observation_annotation(
-            read_control, process["terminal_observation"], scope, ready)
-
-    run_binding = _terminal_run_binding(read_store, preflight, run_id)
+    historical_binding = _historical_capture_binding(
+        read_control, process.get("terminal_observation"), scope=scope, ready_owner=ready)
+    run_binding = _terminal_run_binding(read_store, preflight, run_id, historical_binding=historical_binding)
     if captured_binding_sha256 is not None:
         require(sha(canonical(run_binding)) == digest(captured_binding_sha256),
                 "terminal RunIntent or catalog changed after native capture")
@@ -784,6 +885,76 @@ def _validate_diagnostic_stop(read_control, root, current, health, actual, proof
     return probe
 
 
+def _validate_repeated_stop(read_control, root, current, actual, proof):
+    """Keep an installed historical proof distinct from its newer genuine drain."""
+    original = proof.get("original_iteration")
+    require(type(original) is str and re.fullmatch(r"[0-9a-f]{32}", original) is not None,
+            "Repeated observation has no original managed stop")
+    scope = {"compose_project": current["compose_project"], "control_volume": current["control_volume"],
+             "source_root": current["inputs"]["source_root"], "image_id": actual["backend"].get("Image")}
+    require(all(proof.get(key) == scope[key] for key in ("compose_project", "control_volume", "source_root"))
+            and current["inputs"].get("image_id") == scope["image_id"],
+            "Repeated observation belongs to another source/group/image")
+    preflight_raw, preflight = managed(read_control, root + "terminal-session-preflight.json")
+    require(sha(canonical(preflight)) == current.get("terminal_session_preflight_sha256")
+            and preflight.get("schema") == "fullmag.docker-terminal-session-drain-preflight.v1",
+            "Repeated observation preflight CAS/schema differs")
+    source_raw, source = managed(read_control, "iteration/attempts/" + original + "/terminal-session-preflight.json")
+    require(sha(source_raw) == proof.get("preflight_raw_sha256"),
+            "Repeated observation original preflight changed")
+    run = preflight.get("run", {})
+    epoch, scene = proof.get("session_epoch"), proof.get("scene_revision")
+    runtime = preflight.get("runtime_service", {})
+    require(type(epoch) is int and epoch > 0 and type(scene) is int and scene >= 0
+            and preflight.get("session_id") == run.get("session_id") == proof.get("session_id")
+            and run.get("run_id") == proof.get("run_id")
+            and run.get("status") == source.get("run", {}).get("status") in {"completed", "failed"}
+            and run.get("started_at") == source.get("run", {}).get("started_at")
+            and preflight.get("session_epoch") == source.get("session_epoch")
+            and type(preflight.get("scene_revision")) is int and preflight["scene_revision"] == scene
+            and runtime.get("schema_version") == "application_service_status.v1"
+            and runtime.get("configured") is True and runtime.get("state") == "ready",
+            "Repeated observation no longer identifies the same terminal session/scene")
+    queue, source_queue = preflight.get("compute_queue", {}), source.get("compute_queue", {})
+    require(queue.get("schema_version") == "compute_queue.v1" and queue.get("next_cursor") is None
+            and type(queue.get("items")) is list and queue["items"] == source_queue.get("items")
+            and preflight.get("held_run_intent_sha256", {}) == source.get("held_run_intent_sha256", {}),
+            "Repeated observation would discard a changed held queue")
+    _, drain = managed(read_control, root + "backend-drain.json")
+    process = drain.get("process_receipt", {})
+    # PID 1 normally terminates the API with SIGTERM before draining native.
+    # Its -15 return code is distinct from SIGKILL or an API failure.
+    require(process.get("schema") == "fullmag.docker-process-tree.v1" and process.get("state") == "drained"
+            and process.get("accepted_store") == "/state/runs/docker-all/session-store"
+            and type(process.get("api_exit_code")) is int and process["api_exit_code"] in (0, -15)
+            and read_control("runtime-control/runtime-service/process-tree.json") == canonical(process) + b"\n",
+            "Repeated observation has no current successful native drain")
+    ready, terminal = process.get("service_owner", {}), process.get("terminal_service_owner", {})
+    require(ready.get("state") == "ready" and terminal.get("state") == "drained"
+            and owner_identity(ready) == owner_identity(terminal)
+            and all(child.get("status") == "running" for child in ready["children"])
+            and all(child.get("status") == "exited_success" for child in terminal["children"]),
+            "Repeated observation native owner continuity differs")
+    persisted = decode(read_control("runtime-control/runtime-services/OWNER.json"))
+    archived = decode(read_control("runtime-control/runtime-services/docker-client-"
+                                   + portable(ready.get("owner_token")) + ".json"))
+    require(persisted.get("state") == "drained" and archived.get("state") == "ready"
+            and owner_identity(persisted) == owner_identity(terminal) == owner_identity(archived),
+            "Repeated observation persisted or immutable owner differs")
+    annotation = process.get("terminal_observation")
+    _validate_terminal_observation_annotation(read_control, annotation, scope, ready)
+    require(annotation["proof_sha256"] == sha(canonical(proof) + b"\n")
+            and annotation["run_id"] == proof["run_id"] and annotation["session_id"] == proof["session_id"]
+            and annotation["api_instance_id"] == preflight.get("api_instance_id")
+            and preflight.get("request_scope_epoch") == f"{annotation['api_instance_id']}:{epoch}",
+            "Repeated observation installation does not bind this current API/session")
+    installed_raw, installed = managed(read_control, "runtime-control/" + annotation["installed_relative"])
+    require(sha(installed_raw) == annotation["installed_sha256"]
+            and installed.get("terminal_outcome") == run["status"]
+            and sha(read_control("runtime-control/runtime-service/docker-all.json")) == installed["native_config_sha256"],
+            "Repeated observation current native config or installed outcome changed")
+
+
 def validate_empty_stop(read_control, *, project, volume, source_root, attempt, config_sha256, actual,
                         stop_pin=None, source_proof=None):
     if stop_pin is None:
@@ -828,6 +999,9 @@ def validate_empty_stop(read_control, *, project, volume, source_root, attempt, 
     elif health.get("active_session") is False:
         # Preserve the original empty-stop observation path.
         pass
+    elif (health.get("active_session") is True and isinstance(source_proof, dict)
+          and token != source_proof.get("original_iteration")):
+        _validate_repeated_stop(read_control, root, current, actual, source_proof)
     elif health.get("active_session") is True and isinstance(source_proof, dict):
         proof_iteration = source_proof.get("original_iteration")
         if (not isinstance(proof_iteration, str)
@@ -1077,7 +1251,10 @@ def revalidate_context(control, context, *, store_root, source_root, attempt, co
 
 
 def prepare_context(control, *, proof_relative, proof_sha256, store_root, source_root,
-                    attempt, config_sha256, actual):
+                    attempt, config_sha256, actual, stop_pin=None, owned_operation=None):
+    if owned_operation is not None:
+        _owned_operation_identity(control, owned_operation)
+        require(stop_pin is not None, "Owned retained observation requires its exact stopped receipt")
     from docker_volume_accepted_reattach import _control_bytes, _read_store_regular
     read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
     if (not isinstance(proof_relative, str) or not proof_relative
@@ -1104,13 +1281,20 @@ def prepare_context(control, *, proof_relative, proof_sha256, store_root, source
     return _prepare_proof_context(
         control, read_control, proof, raw, source_root=source_root,
         attempt=attempt, config_sha256=config_sha256, actual=actual,
+        stop_pin=stop_pin, owned_operation=owned_operation,
     )
 
 
 def prepare_captured_context(control, *, stop_attempt, store_root, source_root,
-                             attempt, config_sha256, actual):
-    """Use the exact managed stop as the producer, without external proof files."""
+                             attempt, config_sha256, actual, owned_operation=None):
+    """Use the exact managed stop; optionally publish under its live OLD fence.
+
+    Owned mode supports ordinary successful captures in an unnamespaced
+    control root only. The caller authenticates the relocated OLD store path.
+    """
     from docker_volume_accepted_reattach import _control_bytes
+    if owned_operation is not None:
+        _owned_operation_identity(control, owned_operation)
     read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
     proof = build_captured_proof(
         read_control, _store_reader(store_root), iteration=stop_attempt,
@@ -1122,35 +1306,220 @@ def prepare_captured_context(control, *, stop_attempt, store_root, source_root,
         control, read_control, proof, raw, source_root=source_root, attempt=attempt,
         config_sha256=config_sha256, actual=actual,
         stop_pin=(stop_attempt, proof["operation_sha256"]),
+        owned_operation=owned_operation,
     )
 
 
 def _prepare_proof_context(control, read_control, proof, raw, *, source_root,
-                           attempt, config_sha256, actual, stop_pin=None):
+                           attempt, config_sha256, actual, stop_pin=None, owned_operation=None):
     proof_sha256 = sha(raw)
-    stop_attempt, stop_sha256, _ = _observation_stop(
-        control, read_control, source_root=source_root, attempt=attempt,
-        config_sha256=config_sha256, actual=actual, proof=proof,
-        proof_sha256=proof_sha256, stop_pin=stop_pin,
-    )
+    if owned_operation is None:
+        stop_attempt, stop_sha256, _ = _observation_stop(
+            control, read_control, source_root=source_root, attempt=attempt,
+            config_sha256=config_sha256, actual=actual, proof=proof,
+            proof_sha256=proof_sha256, stop_pin=stop_pin,
+        )
+    else:
+        # OLD EX fences are already held. Diagnostic/pre-owner/cold routes
+        # would launch new readers/locks against canonical NEW /state.
+        _owned_operation_identity(control, owned_operation)
+        require(stop_pin is not None, "Owned observation requires an exact captured stop")
+        _, stop = managed(read_control, "iteration/attempts/" + portable(stop_pin[0]) + "/terminal.json")
+        require(stop.get("diagnostic_terminal_stop_sha256") is None,
+                "Owned observation does not support diagnostic stops")
+        _, parent = managed(read_control, "development/attempts/" + portable(attempt) + "/terminal.json")
+        require(parent.get("state") == "succeeded", "Owned observation requires a successful development")
+        backend = actual.get("backend", {}).get("Id")
+        require(isinstance(backend, str) and re.fullmatch("[0-9a-f]{64}", backend),
+                "Owned observation requires the exact stopped backend")
+        from docker_volume_cold_budget_restore import _paths as cold_paths
+        special_paths = ["verification/preowner-drained-stop-" + backend + suffix
+                         for suffix in (".json", ".intent.json")] + list(cold_paths(backend))
+        from docker_volume_accepted_reattach import _control_bytes
+        require(all(_control_bytes(control, path, optional=True, maximum=8 * 1024**2) is None
+                    for path in special_paths), "Owned observation does not support pre-owner/cold stops")
+        stop_attempt, stop_sha256 = validate_empty_stop(
+            read_control, project=control.project, volume=control.volume, source_root=source_root,
+            attempt=attempt, config_sha256=config_sha256, actual=actual,
+            stop_pin=stop_pin, source_proof=proof,
+        )
     private = "terminal-observation/" + proof_sha256
     request = {"schema": "fullmag.terminal-observation-request.v1",
                "proof_path": private + "/proof.json", "proof_sha256": proof_sha256}
     request_raw = canonical(request) + b"\n"
     request_sha = hashlib.sha256(request_raw).hexdigest()
-    _publish_private_records(control, [(private + "/proof.json", raw),
-                                      (private + "/request.json", request_raw)])
+    records = [(private + "/proof.json", raw), (private + "/request.json", request_raw)]
+    if owned_operation is None:
+        _publish_private_records(control, records)
+    else:
+        _publish_private_records(control, records, owned_operation=owned_operation)
     return validate_context({"environment": {REQUEST_ENV: private + "/request.json", REQUEST_SHA_ENV: request_sha},
                             "metadata": {"schema": CONTEXT_SCHEMA, "proof_sha256": proof_sha256,
                                          "request_sha256": request_sha, "stop_attempt": stop_attempt,
                                          "stop_sha256": stop_sha256}})
 
 
-def _publish_private_records(control, records):
+def _owned_operation_identity(control, operation):
+    require(operation is getattr(control, "_active_operation", None) and isinstance(operation, dict)
+            and operation.get("lease_ready") is True and operation.get("daemon_pending") is True,
+            "Exact live owned migration lease and retained native guard required")
+    receipt = operation.get("receipt", {})
+    require(isinstance(receipt, Mapping), "Owned observation receipt is missing")
+    token = receipt.get("attempt")
+    require(isinstance(token, str) and re.fullmatch("[0-9a-f]{32}", token)
+            and receipt.get("phase") == "data-volume-migration"
+            and operation.get("root") == "data-volume-migration/attempts/" + token
+            and receipt.get("compose_project") == control.project
+            and receipt.get("control_volume") == control.volume,
+            "Owned observation operation scope differs")
+    require(getattr(control, "namespace", None) == ""
+            and "control_namespace" not in receipt and "namespace_registry_sha256" not in receipt,
+            "Owned observation requires the unnamespaced control root")
+    return token, operation["root"], control.project, control.volume
+
+
+_OWNED_PUBLISH_SCRIPT = r'''import base64,hashlib,json,os,re,stat,sys
+CONTROL_ROOT = '/control'
+def need(value, message):
+    if not value: raise ValueError(message)
+def unique(pairs):
+    result={}
+    for key,value in pairs:
+        need(key not in result,'duplicate publication field')
+        result[key]=value
+    return result
+raw=sys.stdin.buffer.read(12*1024**2+1)
+need(0<len(raw)<=12*1024**2,'publication input exceeds its bound')
+value=json.loads(raw,object_pairs_hook=unique)
+need(type(value) is dict and set(value)=={'token','proof_sha256','proof_base64','request_base64'},
+     'closed owned publication required')
+token=value['token'];proof_sha=value['proof_sha256']
+need(type(token) is str and re.fullmatch('[0-9a-f]{32}',token),'invalid active token')
+need(type(proof_sha) is str and re.fullmatch('[0-9a-f]{64}',proof_sha),'invalid proof pin')
+proof=base64.b64decode(value['proof_base64'],validate=True)
+request=base64.b64decode(value['request_base64'],validate=True)
+need(0<len(proof)<=8*1024**2 and hashlib.sha256(proof).hexdigest()==proof_sha,'proof pin differs')
+prefix='terminal-observation/'+proof_sha
+expected={'schema':'fullmag.terminal-observation-request.v1',
+          'proof_path':prefix+'/proof.json','proof_sha256':proof_sha}
+need(0<len(request)<=65536 and json.loads(request,object_pairs_hook=unique)==expected,'request scope differs')
+directory_flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC
+file_flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC
+root=os.open(CONTROL_ROOT,directory_flags)
+fds=[root];links=[];files=[]
+root_identity=os.fstat(root)
+def same(left,right): return (left.st_dev,left.st_ino)==(right.st_dev,right.st_ino)
+def read_file(parent,name,maximum):
+    fd=os.open(name,file_flags,dir_fd=parent)
+    try:
+        before=os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink==1 and before.st_dev==root_identity.st_dev
+             and before.st_size<=maximum,'unsafe owned publication file')
+        parts=[];total=0
+        while True:
+            part=os.read(fd,min(65536,maximum+1-total))
+            if not part: break
+            total+=len(part);need(total<=maximum,'owned publication file exceeds bound');parts.append(part)
+        after=os.fstat(fd)
+        need((before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==
+             (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+             and same(after,os.stat(name,dir_fd=parent,follow_symlinks=False)),
+             'owned publication file changed during read')
+        return b''.join(parts),after
+    finally: os.close(fd)
+def check():
+    need(same(root_identity,os.stat(CONTROL_ROOT,follow_symlinks=False)),'control root path changed')
+    for parent,name,child in links:
+        need(same(os.fstat(child),os.stat(name,dir_fd=parent,follow_symlinks=False)),
+             'publication parent path changed')
+    need(read_file(root,'active',64)[0]==(token+'\n').encode(),'owned active token changed')
+    for parent,name,identity,content in files:
+        actual,observed=read_file(parent,name,len(content))
+        need(same(observed,identity) and actual==content,'published record changed')
+try:
+    check()
+    parent=root
+    for name in ('runtime-control','terminal-observation',proof_sha):
+        check()
+        try:
+            os.mkdir(name,0o750,dir_fd=parent);os.fsync(parent)
+        except FileExistsError: pass
+        child=os.open(name,directory_flags,dir_fd=parent)
+        fds.append(child);links.append((parent,name,child))
+        need(os.fstat(child).st_dev==root_identity.st_dev,'publication crosses a filesystem')
+        check();parent=child
+    for name,content in (('proof.json',proof),('request.json',request)):
+        check()
+        try:
+            fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o640,dir_fd=parent)
+        except FileExistsError:
+            existing,identity=read_file(parent,name,len(content))
+            need(existing==content,'existing observation record differs')
+        else:
+            try:
+                identity=os.fstat(fd)
+                check()
+                offset=0
+                while offset<len(content):
+                    written=os.write(fd,content[offset:]);need(written>0,'publication made no progress');offset+=written
+                os.fsync(fd)
+            finally: os.close(fd)
+            os.fsync(parent)
+        files.append((parent,name,identity,content))
+        check()
+    check()
+    print('PUBLISHED',flush=True)
+finally:
+    for fd in reversed(fds): os.close(fd)
+'''
+
+
+def _publish_owned_records(control, records, operation):
+    import base64
+    from docker_build_control import bounded_capture
+    from docker_dev_host import docker_argv
+    identity = _owned_operation_identity(control, operation)
+    require(type(records) in (tuple, list) and len(records) == 2,
+            "Owned observation publishes exactly proof and request")
+    require(all(type(row) in (tuple, list) and len(row) == 2 and type(row[0]) is str
+                and type(row[1]) is bytes for row in records), "Closed owned observation records required")
+    match = re.fullmatch(r"terminal-observation/([0-9a-f]{64})/proof\.json", records[0][0])
+    require(match is not None, "Owned observation proof path differs")
+    proof_sha = match[1]
+    prefix = "terminal-observation/" + proof_sha
+    proof, request = records[0][1], records[1][1]
+    require(0 < len(proof) <= 8 * 1024**2 and sha(proof) == proof_sha
+            and records[1][0] == prefix + "/request.json" and 0 < len(request) <= 65536,
+            "Owned observation record pins differ")
+    require(decode(request) == {"schema": "fullmag.terminal-observation-request.v1",
+                               "proof_path": prefix + "/proof.json", "proof_sha256": proof_sha},
+            "Owned observation request scope differs")
+    helper = control._assert_live_operation_helper(operation)
+    require(type(helper) is str and re.fullmatch("[0-9a-f]{64}", helper), "Exact owned helper ID required")
+    payload = json.dumps({"token": identity[0], "proof_sha256": proof_sha,
+                          "proof_base64": base64.b64encode(proof).decode("ascii"),
+                          "request_base64": base64.b64encode(request).decode("ascii")}).encode()
+    argv = docker_argv("exec", "--interactive", "--user", "65532:65532", helper,
+                       "/usr/local/bin/python3", "-I", "-B", "-c", _OWNED_PUBLISH_SCRIPT)
+    # An exec timeout can leave a partial file or a still-running publisher.
+    # Retain everything and propagate uncertainty; never retry or roll back.
+    try:
+        result = bounded_capture(argv, data=payload, timeout=180)
+    finally:
+        current_helper = control._assert_live_operation_helper(operation)
+        require(_owned_operation_identity(control, operation) == identity and current_helper == helper,
+                "Owned observation lease changed during publication")
+    require(result.returncode == 0 and result.stdout == b"PUBLISHED\n",
+            "Owned observation publication is unconfirmed; partial records retained")
+
+
+def _publish_private_records(control, records, *, owned_operation=None):
     # Same managed control helper and operation mutex as other private inputs.
     # No SessionStore or native owner/admission row is written.
     import base64
     from docker_build_control import bounded_capture
+    if owned_operation is not None:
+        return _publish_owned_records(control, records, owned_operation)
     payload = []
     for relative, raw in records:
         payload.append({"path": control.path("runtime-control/" + relative),

@@ -213,6 +213,17 @@ class RejectedHistoryStorageTests(HistoryStorageTests):
         self.candidate = policy.qualify_rejected_activation(TOKEN, self.files,
             project=PROJECT, volume=VOLUME, namespace="", store_records={}, inventory_paths=[])
 
+    def use_retired_predecessor(self):
+        from test_docker_activation_history_policy import RejectedHistoryTests
+        case = RejectedHistoryTests()
+        files, records, paths, _prefix, _manifest_path = case.retired_predecessor()
+        self.files = files
+        for name, content in files.items():
+            (self.source / name).write_bytes(content)
+        self.candidate = policy.qualify_rejected_activation(TOKEN, files,
+            project=PROJECT, volume=VOLUME, namespace="", store_records=records, inventory_paths=paths)
+        return self.candidate
+
     def test_all_original_paths_read_exact_rejected_bytes(self):
         self.apply(self.plan())
         from docker_build_control import control_read_script
@@ -279,6 +290,72 @@ class RejectedHistoryStorageTests(HistoryStorageTests):
 
         with self.assertRaisesRegex(policy.HistoryError, "protected"):
             self.plan()
+
+    def test_retired_candidate_does_not_need_exception_when_current_is_another_terminal(self):
+        candidate = self.use_retired_predecessor()
+        other_attempt = "f" * 32
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(raw({"attempt": other_attempt, "state": "failed-confirmed",
+                                 "activation_state": "rejected"}))
+
+        plan = self.plan()
+
+        self.assertNotIn("qualified_current_terminal", plan)
+        self.assertEqual(plan["candidates"], [candidate])
+
+    def test_exact_current_retired_rejection_is_pinned_to_authenticated_archive_proof(self):
+        candidate = self.use_retired_predecessor()
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+
+        plan = self.plan()
+
+        self.assertEqual(plan["qualified_current_terminal"]["predecessor_retirement"],
+                         candidate["predecessor_retirement"])
+        self.assertEqual(plan["qualified_current_terminal"]["terminal_sha256"],
+                         candidate["files"]["terminal.json"]["sha256"])
+        self.apply(plan)
+        self.assert_archive()
+
+    def test_retired_current_exception_refuses_missing_or_rebound_proof(self):
+        self.use_retired_predecessor()
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+        proof = self.candidate["predecessor_retirement"]
+        for mutation in ("missing", "prefix", "path", "sha", "store-hash"):
+            with self.subTest(mutation=mutation):
+                candidate = copy.deepcopy(self.candidate)
+                if mutation == "missing":
+                    candidate.pop("predecessor_retirement")
+                elif mutation == "prefix":
+                    candidate["predecessor_retirement"]["prefix"] = "retirements/" + "f" * 32
+                elif mutation == "path":
+                    candidate["predecessor_retirement"]["manifest_path"] = "retirements/foreign/project/retirement-manifest.json"
+                elif mutation == "sha":
+                    candidate["predecessor_retirement"]["manifest_sha256"] = "0" * 64
+                else:
+                    candidate["store_record_hashes"][proof["manifest_path"]] = "0" * 64
+                with self.assertRaises(policy.HistoryError):
+                    storage.make_plan(self.root, [candidate], identity=self.identity,
+                                      external_evidence_sha256=self.evidence, protected=set())
+
+    def test_other_live_pin_and_fresh_external_inventory_still_protect_retired_candidate(self):
+        self.use_retired_predecessor()
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+        verified = self.root / "activation/verified.json"
+        verified.write_bytes(raw({"attempt": TOKEN}))
+        with self.assertRaisesRegex(policy.HistoryError, "protected"):
+            self.plan()
+
+        verified.unlink()
+        plan = self.plan()
+        with self.assertRaisesRegex(policy.HistoryError, "External history evidence"):
+            self.apply(plan, fresh_external_evidence=lambda: "f" * 64)
 
 
 if __name__ == "__main__":

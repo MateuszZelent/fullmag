@@ -52,6 +52,7 @@
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
+#include "gpu/cuda/transfer/transfer_kernels.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 #if FULLMAG_HAS_MFEM_STACK
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
@@ -546,6 +547,7 @@ bool apply_device_demag_tangent_with_potential_f64(
 struct FemSnapshotPayload {
     std::vector<double> data;
     void *host_aos = nullptr;
+    void *device_aos = nullptr;
     size_t host_aos_len_bytes = 0;
     fullmag::fem::FemGpuComponentField staging{};
     void *stream = nullptr;
@@ -569,6 +571,7 @@ void destroy_snapshot_payload(FemSnapshotPayload &snapshot)
         snapshot.pool_slot = fullmag::fem::kFemGpuSnapshotPoolCapacity;
     }
     snapshot.host_aos = nullptr;
+    snapshot.device_aos = nullptr;
     snapshot.host_aos_len_bytes = 0;
     snapshot.staging = {};
     snapshot.stream = nullptr;
@@ -716,12 +719,14 @@ bool schedule_gpu_snapshot_payload(
     snapshot.pool = cuda_runtime.snapshot_pool;
     snapshot.pool_slot = lease.slot_index;
     snapshot.host_aos = lease.host_aos;
+    snapshot.device_aos = lease.device_aos;
     snapshot.staging = lease.staging;
     snapshot.stream = cuda_runtime.io_stream;
     snapshot.ready_event = lease.ready_event;
     snapshot.staging_done_event = lease.staging_done_event;
     snapshot.done_event = lease.done_event;
-    if (cuda_runtime.snapshot_pool->component_bytes != component_bytes ||
+    if (snapshot.host_aos == nullptr || snapshot.device_aos == nullptr ||
+        cuda_runtime.snapshot_pool->component_bytes != component_bytes ||
         cuda_runtime.snapshot_pool->host_aos_bytes != snapshot.host_aos_len_bytes) {
         handle.last_error = "FEM GPU snapshot pool size does not match backend node count";
         destroy_snapshot_payload(snapshot);
@@ -831,38 +836,21 @@ bool schedule_gpu_snapshot_payload(
     err = cudaStreamWaitEvent(compute_stream, staging_done_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(FEM snapshot.staging_done_event)", err);
 
-    auto *host = static_cast<double *>(snapshot.host_aos);
-    const size_t host_pitch = 3u * sizeof(double);
-    err = cudaMemcpy2DAsync(
-        host + 0u,
-        host_pitch,
+    err = fullmag::fem::fullmag_cuda_pack_soa_to_aos(
         snapshot.staging.x,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_x)", err);
-    err = cudaMemcpy2DAsync(
-        host + 1u,
-        host_pitch,
         snapshot.staging.y,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_y)", err);
-    err = cudaMemcpy2DAsync(
-        host + 2u,
-        host_pitch,
         snapshot.staging.z,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
+        static_cast<double *>(snapshot.device_aos),
+        static_cast<int>(node_count),
+        io_stream);
+    if (err != cudaSuccess) return fail("launch FEM snapshot SoA-to-AoS pack", err);
+    err = cudaMemcpyAsync(
+        snapshot.host_aos,
+        snapshot.device_aos,
+        snapshot.host_aos_len_bytes,
         cudaMemcpyDeviceToHost,
         io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_z)", err);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.host_aos)", err);
 
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.done_event)", err);
@@ -5330,6 +5318,30 @@ int fullmag_fem_backend_set_interrupt_poll(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_set_gpu_bb_preconditioner(
+    fullmag_fem_backend *handle, uint32_t policy)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("GPU BB preconditioner setter received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (policy > 2u || handle->context.state.step_count != 0u ||
+        handle->context.relaxation.accepted_steps != 0u) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires a valid policy before the first step");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!handle->context.gpu_state.device.lifecycle.allocated) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires an allocated GPU backend; no CPU fallback");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    auto &state = handle->context.gpu_state.device.relaxation;
+    state.bb_preconditioner_policy = policy;
+    fullmag::fem::gpu_relax_invalidate_accepted_evaluation(state);
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
     int enabled
@@ -6598,6 +6610,140 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_mandatory_control_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope,
+    fullmag_fem_gpu_mandatory_control_counters_v1 *out_counters
+) {
+    if (!handle || !out_counters || scope>1) {
+        fullmag_fem_set_handle_error(handle,"Invalid mandatory control counter handle/output/scope");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_counters=scope==1 ? handle->context.transfer_audit.audit.mandatory_controls_hot_loop
+        : fullmag::fem::gpu_performance_mandatory_controls_snapshot(handle->context.gpu_state.performance_counters);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope, fullmag_fem_poisson_device_pcg_counters_v1 *out_counters
+) {
+    if (handle == nullptr || out_counters == nullptr) {
+        fullmag_fem_set_handle_error(handle,"Poisson device PCG counters require handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (scope != FULLMAG_FEM_POISSON_PCG_SCOPE_PHYSICAL && scope != FULLMAG_FEM_POISSON_PCG_SCOPE_HOT_LOOP) {
+        fullmag_fem_set_handle_error(handle,"Unknown Poisson device PCG counter scope");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_counters=fullmag::fem::demag_poisson_device_pcg_counters(handle->context,scope);
+    return FULLMAG_FEM_OK;
+}
+
+static_assert(sizeof(fullmag_fem_gpu_pcg_control_config_v1) ==
+                  fullmag::fem::kGpuPcgControlConfigStructSize,
+              "GPU PCG control config ABI layout changed");
+static_assert(sizeof(fullmag_fem_gpu_pcg_control_info_v1) ==
+                  fullmag::fem::kGpuPcgControlInfoStructSize,
+              "GPU PCG control info ABI layout changed");
+static_assert(offsetof(fullmag_fem_gpu_pcg_control_info_v1, solve_attempts) == 16u,
+              "GPU PCG control info counter prefix changed");
+static_assert(offsetof(fullmag_fem_gpu_pcg_control_info_v1, hot_loop_amg_apply_calls) == 56u,
+              "GPU PCG control info counter tail changed");
+
+int fullmag_fem_backend_set_gpu_pcg_control_v1(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_gpu_pcg_control_config_v1 *config)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_set_gpu_pcg_control_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (config == nullptr || !fullmag::fem::gpu_pcg_control_config_fields_valid(
+            config->abi_version,
+            config->struct_size,
+            config->status_batch_stride,
+            config->reserved)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_set_gpu_pcg_control_v1 received null or unsupported configuration");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle->context.gpu_pcg_control.first_attempt_started) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_set_gpu_pcg_control_v1 cannot change policy after the first device-scalar PCG attempt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!fullmag::fem::demag_poisson_device_scalar_pcg_amg_ready(handle->context)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "GPU PCG control is available only for a ready native FEM GPU device-scalar PCG/AMG Poisson owner");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    if (!handle->context.gpu_pcg_control.try_set_status_batch_stride(
+            config->status_batch_stride)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_set_gpu_pcg_control_v1 cannot change policy after the first device-scalar PCG attempt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_pcg_control_info_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_pcg_control_info_v1 *out_info)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_pcg_control_info_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_info == nullptr || !fullmag::fem::gpu_pcg_control_info_header_valid(
+            out_info->abi_version, out_info->struct_size)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_pcg_control_info_v1 received null output or unsupported abi_version/struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!fullmag::fem::demag_poisson_device_scalar_pcg_amg_ready(handle->context)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "GPU PCG control info is available only for a ready native FEM GPU device-scalar PCG/AMG Poisson owner");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+
+    const auto &state = handle->context.gpu_pcg_control;
+    fullmag_fem_gpu_pcg_control_info_v1 info{};
+    info.abi_version = fullmag::fem::kGpuPcgControlInfoAbiVersion;
+    info.struct_size = fullmag::fem::kGpuPcgControlInfoStructSize;
+    info.requested_status_batch_stride = state.requested_status_batch_stride;
+    info.resolved_status_batch_stride = state.resolved_status_batch_stride();
+    info.solve_attempts = state.solve_attempts;
+    info.enqueued_iterations = state.enqueued_iterations;
+    info.amg_apply_calls = state.amg_apply_calls;
+    info.hot_loop_solve_attempts = state.hot_loop_solve_attempts;
+    info.hot_loop_enqueued_iterations = state.hot_loop_enqueued_iterations;
+    info.hot_loop_amg_apply_calls = state.hot_loop_amg_apply_calls;
+    *out_info = info;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_poisson_linear_engine_v1(
+    fullmag_fem_backend *handle, uint32_t *out_engine
+) {
+    if (handle == nullptr || out_engine == nullptr) {
+        fullmag_fem_set_handle_error(handle,"Poisson linear engine getter requires handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_engine=fullmag::fem::demag_poisson_resolved_linear_engine(handle->context);
     return FULLMAG_FEM_OK;
 }
 

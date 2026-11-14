@@ -740,6 +740,7 @@ mod tests {
             exit_code: Some(0),
             timed_out: false,
             failure_reason: None,
+            phase_timings: None,
             observed_at: now,
         };
         write_json(fixture.store.root(), &exit.relative_path().unwrap(), &exit);

@@ -38,6 +38,19 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. For `Relaxation(*)`, this label additionally requires an exact source-bound managed receipt. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. For `Relaxation(*)`, this additionally requires an exact source-bound managed receipt. |
 
+### Eksperyment sterowania PCG FEM GPU
+
+Opcjonalny `fem_gpu_pcg_control_experiment` (schema
+`fullmag.fem.gpu.pcg_control_experiment.v1`) ma status `source_visible`;
+nowe wykonanie i przyspieszenie pozostają **NOT VERIFIED**. Zakres v1 to
+jawne FEM/GPU/double time-domain, aktywny Poisson Robin/Dirichlet, jawne
+CG/AMG, brak PBC, stride 4 albo 8. FEM CPU, oba FDM, FEM-BEM, eigensolve
+i automatyczny wybór realizacji odmawiają eksperymentu przed compute.
+Istniejąca legalność trybów strict/extended pozostaje nadrzędna; eksperyment
+nie nadaje nowych uprawnień żadnemu trybowi. Brak metadata zachowuje obecne
+plany i politykę. Szczegóły: [nota 0914](../physics/0914-fem-gpu-pcg-control-experiment.md),
+[ADR 0082](../adr/0082-fem-gpu-pcg-control-experiment.md).
+
 ### Docker accepted Workspace GPU
 
 [ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md) opisuje
@@ -761,6 +774,7 @@ closed. Users do not need to author a backend-specific demag realization to ente
 | LLG stiff time-domain | `unsupported` | `unsupported` | `unsupported` | **`unsupported`** | The existing `Relaxation(tangent_plane_implicit)` is an energy minimizer, not full physical-time LLG. No explicit-to-stiff or GPU-to-CPU fallback is legal. |
 | `Relaxation(llg_overdamped)` | FDM CPU reference executable; CUDA development executable | FEM CPU/GPU development executable | planned | **unvalidated** | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. No exact source-bound managed receipt exists, so it is not production-qualified. |
 | `Relaxation(projected_gradient_bb)` | FDM CPU reference executable; CUDA development executable | FEM CPU/GPU development executable | **planned** | **unvalidated** | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. No exact source-bound managed receipt exists for PG-BB, including demag, so it is not production-qualified. Unsupported heterogeneous cellwise FDM CUDA material fields remain fail-closed. |
+| `FemHintsIR.gpu_bb_preconditioner` | Explicit use rejected | FEM GPU BB only: `auto`, `none`, `exchange_mass`; CPU and other algorithms reject explicit use | **development** | **runtime qualification pending** | Per-context direction policy, carried through typed Python/IR/plan and recorded separately from demag. `auto` resolves to cooperative device PCG/Jacobi; `none` preserves the raw GPU tangent direction. MFEM mass/exchange assembly is unchanged. Missing cooperative CUDA support, iteration limit or failed true residual certificate fails explicitly without CPU fallback. Physical gradient, Armijo, torque and independent Poisson certification remain unchanged. No new hybrid route. See [note 0581](../physics/0581-fem-gpu-direct-minimizer-preconditioning.md). |
 | `Relaxation(nonlinear_cg)` | FDM CPU reference executable; CUDA development executable | FEM CPU/GPU development executable | **planned** | **unvalidated** | PR+ direct minimization uses the same physical energy metric, retraction, and Armijo units as PG-BB. Its accepted line-search step is in `m/A`; it owns no RK or time controls. No exact source-bound managed receipt exists, so it is not production-qualified. |
 | `Relaxation(tangent_plane_implicit)` | unsupported in strict production | CPU/MFEM development-only in extended mode; forced GPU unsupported | **planned** | **unvalidated** | Strict mode rejects TPI. Extended mode may resolve it only to the CPU/MFEM development lane with explicit requested/resolved provenance and warning. Forced GPU rejects; no hidden GPU-to-CPU fallback or GPU capability claim is permitted. No source-bound managed receipt exists. |
 

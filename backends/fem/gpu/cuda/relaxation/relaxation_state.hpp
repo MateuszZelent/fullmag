@@ -14,8 +14,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <utility>
 
 namespace fullmag::fem {
+struct GpuBbExchangeMassWorkspace;
 
 static constexpr std::size_t kFemGpuAcceptedEnergyTermSlots = 18;
 
@@ -44,6 +47,48 @@ inline bool gpu_relax_consume_pgbb_field(
     return reuse;
 }
 
+// Private, single-use guess provenance. Fixed storage avoids hot-loop allocation.
+// Oversized fingerprints are ineligible; this is never an approximate digest.
+struct FemGpuPgbbPotentialKey {
+    FemGpuPgbbFieldKey endpoint;
+    std::array<char, 64> operator_fingerprint{};
+    uintptr_t workspace = 0, solution = 0, stream = 0, hypre_stream = 0;
+    uint64_t rows = 0, fingerprint_size = 0, operator_build = 0, operator_upload = 0, solver_setup = 0;
+    int device = -1;
+    bool operator==(const FemGpuPgbbPotentialKey &b) const noexcept
+    {
+        return endpoint == b.endpoint && fingerprint_size == b.fingerprint_size &&
+            operator_fingerprint == b.operator_fingerprint &&
+            workspace == b.workspace && solution == b.solution && stream == b.stream &&
+            hypre_stream == b.hypre_stream && rows == b.rows && device == b.device &&
+            operator_build == b.operator_build && operator_upload == b.operator_upload &&
+            solver_setup == b.solver_setup;
+    }
+};
+// The Context retains a copyable owner token; only consume() can issue a
+// move-only execution permit. Moving transfers authority and spends the source.
+struct FemGpuPgbbPotentialToken {
+    bool valid = false;
+    FemGpuPgbbPotentialKey key{};
+};
+struct FemGpuPgbbPotentialPermit {
+    bool valid = false;
+    FemGpuPgbbPotentialKey key{};
+    FemGpuPgbbPotentialPermit() = default;
+    FemGpuPgbbPotentialPermit(const FemGpuPgbbPotentialPermit &) = delete;
+    FemGpuPgbbPotentialPermit &operator=(const FemGpuPgbbPotentialPermit &) = delete;
+    FemGpuPgbbPotentialPermit(FemGpuPgbbPotentialPermit &&other) noexcept
+        : valid(std::exchange(other.valid, false)), key(other.key) {}
+    FemGpuPgbbPotentialPermit &operator=(FemGpuPgbbPotentialPermit &&other) noexcept
+    {
+        if (this != &other) {
+            valid = std::exchange(other.valid, false);
+            key = other.key;
+        }
+        return *this;
+    }
+};
+
 struct FemGpuAcceptedEvaluationToken {
     bool valid = false;
     uint64_t accepted_step = 0;
@@ -64,7 +109,18 @@ enum class GpuRelaxNcgFailurePoint : uint32_t {
     DuringAcceptedStatistics = 2,
 };
 
+// Private native-fixture seams, following the existing nonlinear-CG failure seam.
+enum class GpuRelaxPgbbFailurePoint : uint32_t {
+    None = 0, AfterTrialField = 1, DuringAcceptedStatistics = 2, RejectFirstTrial = 3,
+};
+
 struct FemGpuRelaxationDeviceState {
+    uint32_t bb_preconditioner_policy = 0; // auto, none, exchange_mass
+    std::shared_ptr<GpuBbExchangeMassWorkspace> bb_exchange_mass;
+    FemGpuComponentField bb_preconditioned_gradient;
+    uint64_t bb_preconditioner_wall_time_ns = 0;
+    uint32_t bb_preconditioner_cache_hits = 0;
+    uint32_t bb_preconditioner_cache_misses = 0;
     FemGpuComponentField projected_gradient_accepted_h_eff;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
@@ -73,6 +129,8 @@ struct FemGpuRelaxationDeviceState {
     bool nonlinear_cg_direction_valid = false;
     FemGpuAcceptedEvaluationToken accepted_evaluation;
     FemGpuPgbbFieldToken pgbb_accepted_field;
+    FemGpuPgbbPotentialToken pgbb_accepted_potential;
+    GpuRelaxPgbbFailurePoint next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
     uint32_t accepted_evaluation_cache_hits_current_step = 0;
     uint32_t accepted_evaluation_cache_misses_current_step = 0;
     uint32_t accepted_evaluation_invalidations_current_step = 0;
@@ -92,11 +150,15 @@ inline void gpu_relax_invalidate_accepted_evaluation(
     }
     state.accepted_evaluation.valid = false;
     state.pgbb_accepted_field.valid = false;
+    state.pgbb_accepted_potential.valid = false;
 }
 
 inline void gpu_relax_reset_step_diagnostics(
     FemGpuRelaxationDeviceState &state) noexcept
 {
+    state.bb_preconditioner_wall_time_ns = 0;
+    state.bb_preconditioner_cache_hits = 0;
+    state.bb_preconditioner_cache_misses = 0;
     state.accepted_evaluation_cache_hits_current_step = 0;
     state.accepted_evaluation_cache_misses_current_step = 0;
     state.accepted_evaluation_invalidations_current_step = 0;

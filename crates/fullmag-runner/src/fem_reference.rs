@@ -1957,6 +1957,8 @@ mod tests {
 
     fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("meshes/unit_tet.msh".to_string()),
             mesh: MeshIR {
@@ -2332,6 +2334,8 @@ mod tests {
 
     fn make_box_demag_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: "box_40x20x10_coarse".to_string(),
             mesh_source: Some("examples/assets/box_40x20x10_coarse.mesh.json".to_string()),
             mesh: MeshIR {
@@ -2566,6 +2570,8 @@ mod tests {
     fn make_shared_domain_airbox_demag_plan() -> FemPlanIR {
         let mesh = build_structured_shared_domain_airbox_mesh();
         FemPlanIR {
+            gpu_bb_preconditioner: None,
+            gpu_pcg_control_experiment: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -3109,6 +3115,7 @@ mod tests {
                 grid: [0, 0, 0],
                 field_every_n: 2,
                 initial_snapshot: false,
+                initial_native_gpu_fields: false,
                 display_selection: None,
                 interrupt_requested: None,
                 on_step: &mut on_step,

@@ -42,6 +42,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
@@ -106,6 +108,10 @@ jobs:
   terminal-artifact-attestation:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    defaults:
+      run:
+        # Every cargo/python exit must propagate, including on Windows.
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -130,8 +136,11 @@ jobs:
           python -B scripts/test_managed_runtime_artifact_root.py -v
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_docker_startup_script.py -v
-          python -B scripts/test_docker_entrypoint_device_access.py -v
           python -B scripts/test_docker_frontend_dev.py -v
           python -B scripts/test_verify_docker_all_runtime.py -v
           python -B scripts/test_docker_host_ledger.py -v
           python -B scripts/test_bootstrap_docker_toolchain.py -v
+      - name: Verify Linux container entrypoint device policy
+        # This is the Linux image entrypoint, not a native Windows host adapter.
+        if: runner.os == 'Linux'
+        run: python -B scripts/test_docker_entrypoint_device_access.py -v

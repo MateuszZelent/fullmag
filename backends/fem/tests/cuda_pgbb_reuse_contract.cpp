@@ -3,6 +3,7 @@
 #include "gpu/cuda/relaxation/pgbb.hpp"
 #include "gpu/cuda/relaxation/relaxation_state.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "cuda_pgbb_final_energy_overlay_fixture.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -117,6 +118,7 @@ int main()
 {
     exact_one_use_identity();
     upload_and_generation_invalidation();
+    fullmag::fem::test::gpu_pgbb_final_energy_overlay_contract(check);
 #if FULLMAG_HAS_MFEM_STACK
     physical_policy_and_source_identity();
 #endif

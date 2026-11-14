@@ -986,6 +986,7 @@ mod tests {
                 projection_policy: None,
             }),
             fem: Some(FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -6400,6 +6401,9 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fdm_fft_execution,
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
         executed_physics_kinds: if timestep_policy.is_some()
             && (plan.zhang_li_formula_version.is_some()
                 || plan.slonczewski_formula_version.is_some()
@@ -6484,6 +6488,8 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     })
@@ -6514,6 +6520,9 @@ fn cuda_execution_provenance(
         fdm_cpu_state_layout: None,
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
@@ -6618,6 +6627,8 @@ fn cuda_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     })
@@ -6660,6 +6671,9 @@ fn fem_gpu_execution_provenance(
         fdm_fft_execution: None,
         fem_gpu_execution_receipt: None,
         fem_gpu_minimizer_execution_receipt: None,
+        fem_gpu_performance_snapshot: None,
+        hypre_relax7_async_copy: None,
+        fem_gpu_pcg_control_experiment: None,
         fem_eigen_execution_resolution: None,
         fem_eigen_native_execution_attestation: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
@@ -6795,6 +6809,8 @@ fn fem_gpu_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     };
@@ -6803,6 +6819,7 @@ fn fem_gpu_execution_provenance(
         &mut provenance,
         plan.relaxation.as_ref(),
         matches!(native_fem_backend_id(plan), FemBackendId::GpuNative),
+        plan.gpu_bb_preconditioner,
     );
     Ok(provenance)
 }

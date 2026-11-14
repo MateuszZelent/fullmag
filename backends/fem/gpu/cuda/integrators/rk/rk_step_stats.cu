@@ -436,8 +436,14 @@ bool finalize_step_stats_impl(
     bool control_scalar_readback,
     double *tail_scalars,
     size_t tail_count,
+    const std::array<double, kGpuFinalScalarSlots> *energy_term_overlay,
+    const std::array<bool, kGpuFinalScalarSlots> *energy_term_mask,
     std::string &reason)
 {
+    if ((energy_term_overlay == nullptr) != (energy_term_mask == nullptr)) {
+        reason = "GPU RK final energy overlay requires both terms and mask";
+        return false;
+    }
     if (tail_count > 0 &&
         (tail_scalars == nullptr ||
          kGpuFinalScalarSlots + tail_count > FEM_GPU_SCALAR_RESULT_SLOTS)) {
@@ -461,7 +467,8 @@ bool finalize_step_stats_impl(
         return true;
     }
 
-    if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
+    if (energy_term_overlay == nullptr &&
+        !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
         return false;
     }
 
@@ -515,6 +522,11 @@ bool finalize_step_stats_impl(
 
     std::array<double, kGpuFinalScalarSlots> scalars{};
     std::copy_n(scalar_storage.begin(), kGpuFinalScalarSlots, scalars.begin());
+    if (energy_term_overlay != nullptr && energy_term_mask != nullptr &&
+        !gpu_rk_overlay_final_energy_terms(
+            scalars, *energy_term_overlay, *energy_term_mask, reason)) {
+        return false;
+    }
     for (size_t i = 0; i < tail_count; ++i) {
         tail_scalars[i] = scalar_storage[kGpuFinalScalarSlots + i];
     }
@@ -527,7 +539,8 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason)) {
+    if (!finalize_step_stats_impl(
+            ctx, stats, false, nullptr, 0, nullptr, nullptr, reason)) {
         return false;
     }
     gpu_rk_note_completed_final_reductions(ctx);
@@ -539,7 +552,19 @@ bool gpu_rk_finalize_step_stats_control_readback(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, reason);
+    return finalize_step_stats_impl(
+        ctx, stats, true, nullptr, 0, nullptr, nullptr, reason);
+}
+
+bool gpu_rk_finalize_step_stats_control_readback_with_energy_terms(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    const std::array<double, kGpuFinalScalarSlots> &energy_terms,
+    const std::array<bool, kGpuFinalScalarSlots> &energy_term_mask,
+    std::string &reason)
+{
+    return finalize_step_stats_impl(
+        ctx, stats, true, nullptr, 0, &energy_terms, &energy_term_mask, reason);
 }
 
 bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
@@ -549,7 +574,8 @@ bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
     size_t tail_count,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, tail_scalars, tail_count, reason);
+    return finalize_step_stats_impl(
+        ctx, stats, true, tail_scalars, tail_count, nullptr, nullptr, reason);
 }
 
 } // namespace fullmag::fem

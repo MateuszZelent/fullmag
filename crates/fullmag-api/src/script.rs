@@ -773,6 +773,48 @@ pub(crate) fn scene_document_to_authored_problem_ir_with_asset_root(
     )
 }
 
+/// Prepare a concrete solver study without replaying a stage's physical
+/// mutations into the workspace used by Build Mesh or magnetization Apply.
+pub(crate) fn scene_document_to_preparation_problem_ir_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    let problem = scene_document_to_authored_problem_ir_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+    )?;
+    if !fullmag_ir::bb_pipeline::is_gpu_bb_pipeline_carrier(&problem) {
+        return Ok(problem);
+    }
+    let config = scene_document_to_authored_script_config_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+    )?;
+    let stages = materialize_scene_document_stages(config)?;
+    gpu_bb_preparation_study(problem, &stages)
+}
+
+fn gpu_bb_preparation_study(
+    mut problem: fullmag_ir::ProblemIR,
+    stages: &[fullmag_application::script_stage_contract::ResolvedScriptStage],
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    if !fullmag_ir::bb_pipeline::is_gpu_bb_pipeline_carrier(&problem) || stages.is_empty()
+        || stages.iter().any(|stage| stage.action.is_some() || !matches!(
+            &stage.ir.study, fullmag_ir::StudyIR::Relaxation {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+            }
+        ))
+    {
+        return Err(ApiError::unprocessable("GPU BB preparation requires a validated BB-only pipeline"));
+    }
+    // Only study controls are borrowed. In particular, magnetization assignment
+    // payloads captured on the first stage must not change this base model.
+    problem.study = stages[0].ir.study.clone();
+    problem.validate().map_err(|errors| ApiError::unprocessable(errors.join("; ")))?;
+    Ok(problem)
+}
+
 /// Capture the immutable ProblemIR inputs for a canonical StudyPlan.
 ///
 /// A live v2 accepted run must preserve the authored stage identity and its
@@ -1889,6 +1931,38 @@ mod tests {
     use super::*;
     use crate::artifacts::{parse_eigen_dispersion_csv, sanitize_artifact_relative_path};
     use axum::http::StatusCode;
+
+    #[test]
+    fn gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload() {
+        use fullmag_ir::*;
+        let mut base = ProblemIR::bootstrap_example();
+        base.backend_policy.requested_backend = BackendTarget::Fem;
+        base.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap()
+            .gpu_bb_preconditioner = Some(FemGpuBbPreconditionerIR::ExchangeMass);
+        base.problem_meta.entrypoint_kind = "flat_workspace".into();
+        base.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device":"gpu"}));
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json")).unwrap();
+        base.problem_meta.runtime_metadata.insert("study_pipeline".into(), cases[0]["pipeline"].clone());
+        let mut stage = base.clone();
+        stage.study = StudyIR::Relaxation {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, dynamics: None,
+            stop: RelaxStopIR { torque_tolerance_apm: Some(1e-6), energy_tolerance_j: None, max_steps: Some(2), max_relaxation_time_s: None },
+            sampling: base.study.sampling().clone(),
+        };
+        // Model changes on an execution stage cannot leak into preparation.
+        stage.materials[0].saturation_magnetisation *= 2.0;
+        stage.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 99 });
+        if let Some(GeometryEntryIR::Box { size, .. }) = stage.geometry.entries.first_mut() {
+            size[0] *= 2.0;
+        }
+        let stages = vec![fullmag_application::script_stage_contract::ResolvedScriptStage::solver(stage.clone(), 0.0, "flat_relax")];
+        let prepared = gpu_bb_preparation_study(base.clone(), &stages).unwrap();
+        let mut expected = base.clone();
+        expected.study = stage.study;
+        assert_eq!(serde_json::to_value(&prepared).unwrap(), serde_json::to_value(expected).unwrap());
+        assert!(matches!(prepared.study, StudyIR::Relaxation { algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, .. }));
+        assert!(gpu_bb_preparation_study(base, &[]).is_err());
+    }
 
     #[test]
     fn generated_accepted_source_guard_removes_only_its_private_entry() {

@@ -1,0 +1,149 @@
+{
+  "authorization": {
+    "authorization": "explicit_startup_script",
+    "container_script_path": "/opt/fullmag/source/examples/sp4.py",
+    "container_source_root": "/opt/fullmag/source",
+    "request_id": "sp4-history-test",
+    "schema": "fullmag.docker-startup-script.v1",
+    "source_relative": "examples/sp4.py",
+    "source_root": "/source",
+    "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_size_bytes": 123
+  },
+  "binding": {
+    "activation_attempt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "activation_receipt_sha256": "7102e565603bcd577b0a765095458647046648acd0f39f97a7266f66468c0eef",
+    "restored_intent_sha256": "b10089190f19038c29fde9ea800519c11b6ff97ce059eaa925b6d07be5fd907a",
+    "restored_run_id": "run-restored",
+    "schema": "fullmag.terminal-legacy-source-activation.v1",
+    "startup_intent_sha256": "6e589797b07eacaec6ea1df1586de09b1821c66bf5a7d468067dcf23868897a4",
+    "startup_run_id": "run-live-test"
+  },
+  "origin": {
+    "schema": "fullmag.selected-script-origin.v1",
+    "source_relative": "examples/sp4.py",
+    "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_size_bytes": 123
+  },
+  "project": "fullmag-worktree-test",
+  "provenance": {
+    "authorization": "explicit_startup_script",
+    "container_script_path": "/opt/fullmag/source/examples/sp4.py",
+    "container_source_root": "/opt/fullmag/source",
+    "request_id": "sp4-history-test",
+    "schema": "fullmag.docker-startup-script.v1",
+    "source_relative": "examples/sp4.py",
+    "source_root": "/source",
+    "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_size_bytes": 123
+  },
+  "provenance_sha256": "effb06f9fefd4f71dd0736ce59d6ff7dafab131e4191a4a7687d7938b337235d",
+  "receipt": {
+    "activation_state": "activated",
+    "attempt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "compose_project": "fullmag-worktree-test",
+    "control_volume": "fullmag-control-test",
+    "finished_at": 2,
+    "inputs": {
+      "provenance_sha256": "effb06f9fefd4f71dd0736ce59d6ff7dafab131e4191a4a7687d7938b337235d",
+      "request_id": "sp4-history-test",
+      "source_relative": "examples/sp4.py",
+      "source_root": "/source",
+      "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "phase": "activation",
+    "provenance_path": "/opt/fullmag/control/activation/attempts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/startup-provenance.json",
+    "provenance_sha256": "effb06f9fefd4f71dd0736ce59d6ff7dafab131e4191a4a7687d7938b337235d",
+    "request_id": "sp4-history-test",
+    "run_id": "run-live-test",
+    "schema": "fullmag.docker-build-operation.v1",
+    "session_id": "docker-startup-0a687d3db5138cc2b5bb285f622b5ffffa430c7ca561f2d48881386d366ccedf",
+    "source_relative": "examples/sp4.py",
+    "source_root": "/source",
+    "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "started_at": 1,
+    "state": "succeeded"
+  },
+  "restored": {
+    "definition_object_ref": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "idempotency_key": "live-http-a0b607fddf4e9e4313a87dd1f2520c20bffd64c81fc5b5bf36c6613f883864c6",
+    "run_id": "run-restored",
+    "schema_version": "run_intent.v1",
+    "specification": {
+      "parameters": {
+        "live_workspace": {
+          "api_instance_id": "api-current",
+          "command": {
+            "kind": "relax"
+          },
+          "command_id": "sp4-history-test",
+          "execution_input": {
+            "schema_version": "fullmag.scene_execution_input.v1",
+            "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          "request_idempotency_key": "sp4-history-test",
+          "scene_revision": 1,
+          "session_epoch": 2,
+          "session_id": "docker-startup-0a687d3db5138cc2b5bb285f622b5ffffa430c7ca561f2d48881386d366ccedf",
+          "startup_source_sha256": null
+        }
+      },
+      "run_id": "run-restored",
+      "snapshot": {
+        "definition_revision": 1,
+        "definition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "project_id": "project-test"
+      }
+    }
+  },
+  "result": {
+    "request_id": "sp4-history-test",
+    "response": {
+      "request_id": "sp4-history-test",
+      "run_id": "run-live-test",
+      "schema": "fullmag.startup-script-activation.v1",
+      "session_id": "docker-startup-0a687d3db5138cc2b5bb285f622b5ffffa430c7ca561f2d48881386d366ccedf",
+      "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "accepted"
+    },
+    "schema": "fullmag.startup-script-activation.v1",
+    "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "state": "activated"
+  },
+  "source_root": "/source",
+  "startup": {
+    "definition_object_ref": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "idempotency_key": "live-http-a0b607fddf4e9e4313a87dd1f2520c20bffd64c81fc5b5bf36c6613f883864c6",
+    "run_id": "run-live-test",
+    "schema_version": "run_intent.v1",
+    "specification": {
+      "parameters": {
+        "live_workspace": {
+          "api_instance_id": "api-old",
+          "command": {
+            "kind": "startup_script",
+            "request_id": "sp4-history-test",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "command_id": "sp4-history-test",
+          "execution_input": {
+            "schema_version": "fullmag.scene_execution_input.v1",
+            "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          "request_idempotency_key": "sp4-history-test",
+          "scene_revision": 1,
+          "session_epoch": 2,
+          "session_id": "docker-startup-0a687d3db5138cc2b5bb285f622b5ffffa430c7ca561f2d48881386d366ccedf",
+          "startup_source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "run_id": "run-live-test",
+      "snapshot": {
+        "definition_revision": 1,
+        "definition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "project_id": "project-test"
+      }
+    }
+  },
+  "volume": "fullmag-control-test"
+}
