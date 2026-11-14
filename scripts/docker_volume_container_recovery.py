@@ -2417,7 +2417,7 @@ def _group_local_consumer_pin(item):
 
 
 def _assert_no_foreign_group_local_direct_bind_consumers(
-    control, backend, frontend, compose, *, prepared_reference=None
+    control, backend, frontend, compose, *, prepared_reference=None, filesystem_alias_guard=None
 ):
     project = getattr(control, "project", None)
     owned = _group_local_owned_identities(backend, frontend, compose, project)
@@ -2472,6 +2472,14 @@ def _assert_no_foreign_group_local_direct_bind_consumers(
         for kind, identity in identities:
             if kind == "tmpfs":
                 continue
+            if identity[0] == "wsl-alias" and filesystem_alias_guard is not None:
+                # The typed caller may independently qualify a complete kernel
+                # mount closure on another filesystem. Defaults remain strict.
+                decision = filesystem_alias_guard(item, identity[1])
+                if type(decision) is not bool:
+                    _fail("foreign filesystem alias guard returned an invalid decision")
+                if decision:
+                    continue
             canonical_identity = _canonical_direct_identity(
                 identity, state_root, "foreign Docker mount")
             if canonical_identity[0] == "windows":
@@ -2515,7 +2523,7 @@ def _assert_no_foreign_group_local_direct_bind_consumers(
 
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
                                          prove_foreign_disjoint=None, prepared_reference=None,
-                                         consumer_scope=None):
+                                         consumer_scope=None, filesystem_alias_guard=None):
     """Fence every Docker consumer, including stopped containers able to restart."""
     if consumer_scope is not None:
         if consumer_scope != GROUP_LOCAL_DIRECT_BINDS_SCOPE or compose is None:
@@ -2523,7 +2531,10 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
         if prove_foreign_disjoint is not None:
             _fail("group-local direct-bind scope does not accept physical proof callbacks")
         return _assert_no_foreign_group_local_direct_bind_consumers(
-            control, backend, frontend, compose, prepared_reference=prepared_reference)
+            control, backend, frontend, compose, prepared_reference=prepared_reference,
+            filesystem_alias_guard=filesystem_alias_guard)
+    if filesystem_alias_guard is not None:
+        _fail("filesystem alias guard requires the explicit group-local direct-bind scope")
     if prepared_reference is not None and prove_foreign_disjoint is not None:
         _fail("prepared recovery requires the managed physical proof")
     reference = {"prepared_reference": prepared_reference} if prepared_reference is not None else {}

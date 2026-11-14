@@ -1246,6 +1246,7 @@ jobs:
           python -B scripts/test_docker_volume_held_ui_retry_source.py -v
           python -B scripts/test_docker_volume_held_ui_start_retry_lifecycle.py -v
           python -B scripts/test_docker_volume_held_ui_retry_probe.py -v
+          python -B scripts/test_docker_group_local_filesystem_alias.py -v
           python -B scripts/test_runtime_service_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_materialization.py -v
           python -B scripts/test_docker_volume_held_ui_lifecycle.py -v

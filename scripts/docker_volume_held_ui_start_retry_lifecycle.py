@@ -60,13 +60,45 @@ def assert_pointers(context):
 def assert_consumers(context):
     from docker_volume_container_recovery import (
         GROUP_LOCAL_DIRECT_BINDS_SCOPE, _assert_no_foreign_storage_consumers,
+        _group_local_consumer_pin,
     )
+    from docker_group_local_filesystem_alias import prove_alias
     original = context["original_request_context"]
     failed = context["failed_parent"]
-    return _assert_no_foreign_storage_consumers(
+    evidence = context.get("plan", context.get("observation", {}))
+    locks = evidence.get("native_locks", {})
+    require(set(locks) == {"owner", "startup_gate", "launch", "host_inventory_owner"},
+            "consumer qualification has no complete private-filesystem pins")
+    host_boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    require(host_boot == evidence.get("runtime", {}).get("api_pin", {}).get("boot_id"),
+            "host and managed backend do not share the pinned kernel identity")
+    state_before = original["state"].stat()
+    devices = {state_before.st_dev, *(value["device"] for value in locks.values())}
+    proofs = []
+
+    def qualify_alias(container, alias):
+        before = _group_local_consumer_pin(container)
+        rows = json.loads(dev().docker_text("inspect", container["Id"]))
+        require(len(rows) == 1 and _group_local_consumer_pin(rows[0]) == before,
+                "foreign mount incarnation changed before its read-only metadata probe")
+        proof = prove_alias(alias, devices)
+        after = json.loads(dev().docker_text("inspect", container["Id"]))
+        require(len(after) == 1 and _group_local_consumer_pin(after[0]) == before,
+                "foreign mount incarnation changed during its read-only metadata probe")
+        if proof is None:
+            return False
+        proofs.append({"container_id": container["Id"], "proof": proof})
+        return True
+
+    _assert_no_foreign_storage_consumers(
         original["control"], failed["actual"]["backend"], failed["actual"]["frontend"],
         failed["document"], consumer_scope=GROUP_LOCAL_DIRECT_BINDS_SCOPE,
+        filesystem_alias_guard=qualify_alias,
     )
+    state_after = original["state"].stat()
+    require((state_before.st_dev, state_before.st_ino) == (state_after.st_dev, state_after.st_ino),
+            "the retained state filesystem changed during consumer qualification")
+    return proofs
 
 
 def certificate_pin(original, failed):
@@ -199,7 +231,6 @@ def capture(args, controller, *, control=None, operation=None):
                "failed_parent": failed}
     assert_pointers(context)
     d._assert_private_restart_network(actual, {k: v["Id"] for k, v in actual.items()}, control.project)
-    assert_consumers(context)
     for field in ("backend_volumes", "frontend_volume", "private_group_storage",
                   "frontend_generation_id", "frontend_generation_subpath"):
         require(previous.get(field) == original["previous"].get(field),
@@ -215,6 +246,8 @@ def capture(args, controller, *, control=None, operation=None):
                     for k in ("frontend_generation_id", "frontend_generation_subpath")),
             "the original and failed frontend generations differ")
     observed = observe(control, actual["backend"], original["request"])
+    context["observation"] = observed
+    context["consumer_proofs"] = assert_consumers(context)
     released = _released_snapshot(control, actual["backend"])
     require(released.get("active_count") == 0, "native reservations remain active")
     authority = {}
@@ -373,6 +406,7 @@ def apply(args, context):
             retained_frontend_volume=failed["value"]["frontend_volume"],
         )
         control.write(operation["root"] + "/retained-containers.json", actual)
+        control.write(operation["root"] + "/foreign-direct-filesystem-proofs.json", fresh.get("consumer_proofs", []))
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
         # Capture all inputs before any signal. A failed call retains this claim;
         # calling this entry again cannot repeat the stop or remove.
