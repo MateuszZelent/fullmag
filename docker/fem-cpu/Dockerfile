@@ -196,6 +196,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-dev \
     libgl1 \
     libglu1-mesa \
+    libgmp-dev \
+    libmpfr-dev \
     libopenmpi-dev \
     libsm6 \
     libx11-6 \

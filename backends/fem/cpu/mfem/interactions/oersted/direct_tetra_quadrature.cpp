@@ -1,4 +1,5 @@
 #include "cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp"
+#include "cpu/mfem/interactions/oersted/surface_rt0.hpp"
 #include "cpu/mfem/transport/affine_rt0_element.hpp"
 
 #include <mfem.hpp>
@@ -94,7 +95,7 @@ DirectTetraQuadratureResult evaluate_prepared(
     const std::vector<PreparedElement> &elements,
     const std::vector<Point> &target_points,
     const DirectTetraQuadratureOptions &options,
-    WorkBudget &work);
+    WorkBudget &work, const SurfaceRt0ProgressObserver *observer = nullptr);
 
 void validate_pair_budget(std::uint64_t source_count, std::uint64_t target_count,
     const DirectTetraQuadratureOptions &options)
@@ -775,10 +776,11 @@ DirectTetraQuadratureWorkLimits DirectTetraQuadrature::ResolveWorkLimits(
 DirectTetraQuadratureResult DirectTetraQuadrature::Evaluate(
     const fullmag::fem::transport::ConservativeCurrentView &source,
     const std::vector<std::array<double, 3>> &target_points,
-    const DirectTetraQuadratureOptions &options)
+    const DirectTetraQuadratureOptions &options,
+    const SurfaceRt0ProgressObserver *observer)
 {
     auto result = EvaluateField(*source.space().GetMesh(), source.field(),
-        target_points, options);
+        target_points, options, observer);
     result.source_view_identity_digest = source.identity().view_identity_digest;
     return result;
 }
@@ -811,7 +813,7 @@ DirectTetraQuadratureResult evaluate_prepared(
     const std::vector<PreparedElement> &elements,
     const std::vector<Point> &target_points,
     const DirectTetraQuadratureOptions &options,
-    WorkBudget &work)
+    WorkBudget &work, const SurfaceRt0ProgressObserver *observer)
 {
     const auto source_count = static_cast<std::uint64_t>(elements.size());
     const auto target_count = static_cast<std::uint64_t>(target_points.size());
@@ -830,6 +832,7 @@ DirectTetraQuadratureResult evaluate_prepared(
     result.h_xyz_apm.assign(target_points.size() * 3u, 0.0);
     result.target_diagnostics.reserve(target_points.size());
     result.diagnostics.source_target_pairs = source_count * target_count;
+    if (observer) observer->emit(AntennaProgressPhase::evaluating_field, 0, target_count, source_count);
     for (std::size_t target_index = 0; target_index < target_points.size();
             ++target_index) {
         const auto target_result = evaluate_target(elements, target_points[target_index],
@@ -844,6 +847,8 @@ DirectTetraQuadratureResult evaluate_prepared(
             result.h_xyz_apm[3u * target_index +
                 static_cast<std::size_t>(component)] = value;
         }
+        if (observer) observer->emit(AntennaProgressPhase::evaluating_field,
+            target_index + 1, target_count, source_count);
     }
     result.diagnostics.kernel_evaluations = work.kernel_evaluations - initial_samples;
     result.diagnostics.ledger_leaf_visits = work.ledger_leaf_visits - initial_visits;
@@ -856,13 +861,32 @@ DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateField(
     const mfem::Mesh &mesh,
     const mfem::GridFunction &rt0_field,
     const std::vector<std::array<double, 3>> &target_points,
-    const DirectTetraQuadratureOptions &options)
+    const DirectTetraQuadratureOptions &options,
+    const SurfaceRt0ProgressObserver *observer)
 {
     validate_pair_budget(static_cast<std::uint64_t>(mesh.GetNE()),
         static_cast<std::uint64_t>(target_points.size()), options);
     const auto elements = prepare_source(mesh, rt0_field, options);
     WorkBudget work(options);
-    return evaluate_prepared(elements, target_points, options, work);
+    return evaluate_prepared(elements, target_points, options, work, observer);
+}
+
+
+DirectTetraQuadratureResult DirectTetraQuadrature::EvaluateFrozenField(
+    const std::vector<fullmag::fem::transport::AffineRt0Element::FrozenInput> &source,
+    const std::vector<std::array<double, 3>> &target_points,
+    const DirectTetraQuadratureOptions &options,
+    const SurfaceRt0ProgressObserver *observer)
+{
+    validate_pair_budget(static_cast<std::uint64_t>(source.size()),
+        static_cast<std::uint64_t>(target_points.size()), options);
+    std::vector<PreparedElement> elements;
+    elements.reserve(source.size());
+    for (const auto &input : source) {
+        elements.push_back({CurrentElement(input), input.vertices_m});
+    }
+    WorkBudget work(options);
+    return evaluate_prepared(elements, target_points, options, work, observer);
 }
 
 DirectTetraQuadratureDiagnostics DirectTetraQuadrature::ProjectField(

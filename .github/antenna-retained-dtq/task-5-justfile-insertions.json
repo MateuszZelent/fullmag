@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 757696,
+    "sha256": "922ab989904eaa808b5e38277ce209d93cab4e0befb76515fb78059a61e55df2"
+  },
+  "after": {
+    "bytes": 757922,
+    "sha256": "fc32546bb7e963b48b46b84142039edf3228c6e69771f678ec55f7be4763f1fa"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 757696,
+      "text": "\n# Antenna quantities/UI contracts run inside the same audited CI CPU container.\nverify-fem-retained-dtq-quantity-contract:\n    docker compose run --rm --no-deps fem-cpu bash ./scripts/ci/run_retained_dtq_quantity_contract.sh\n"
+    }
+  ]
+}

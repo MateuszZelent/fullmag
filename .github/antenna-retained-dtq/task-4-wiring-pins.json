@@ -1,0 +1,18 @@
+{
+  "task-4-authenticated-acceptance.rs": {
+    "sha256": "421400c964478cb8763380f77dc3ea3b082d3ae8523f2e2c047c6299da3ca210",
+    "bytes": 18228
+  },
+  "run_retained_dtq_publication_contract.sh": {
+    "sha256": "916ecddf516cabea85e112c7a764d4cbabbeac5526b6e1afd74eda645049732c",
+    "bytes": 1726
+  },
+  "apply-justfile-insertions.py": {
+    "bytes": 1957,
+    "sha256": "3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa"
+  },
+  "task-4-justfile-insertions.json": {
+    "bytes": 589,
+    "sha256": "fe79c8f0ade5eee290025657e76fb6007ea9d39c00cd4f7ad1f251c0d7c7f970"
+  }
+}

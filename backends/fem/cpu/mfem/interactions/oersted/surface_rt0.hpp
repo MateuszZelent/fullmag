@@ -62,6 +62,10 @@ struct SurfaceRt0WorkLimits {
     double maximum_target_seconds;
 };
 
+// Shared admission for the kernel and the frozen-source ABI, before reservations.
+void validate_surface_rt0_work_minimums(const SurfaceRt0WorkLimits &limits,
+    std::uint64_t source_count, std::uint64_t target_count);
+
 // Caller-owned reviewed numerical policy, with no implicit numeric defaults.
 // Agreements/roundoff indicators are empirical checks, not error certificates.
 struct SurfaceRt0Tolerances {

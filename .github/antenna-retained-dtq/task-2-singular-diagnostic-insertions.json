@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 27906,
+    "sha256": "37587502803d7378be3fd2267fe259e6724ad6bff5890af6ea386b5ec61b9709"
+  },
+  "after": {
+    "bytes": 36823,
+    "sha256": "944e07cad05345976f293aa129ba7593af21963d809f7ff0eec7d106c94fe430"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 203,
+      "text": "#include <iomanip>\n"
+    },
+    {
+      "offset_bytes": 11722,
+      "text": "    std::cerr << \"OE-F1 CASE singular_targets q8_depth6\\n\";\n"
+    },
+    {
+      "offset_bytes": 12406,
+      "text": "    std::cerr << \"OE-F1 CASE singular_targets bounded_depth0\\n\";\n"
+    },
+    {
+      "offset_bytes": 15231,
+      "text": "    std::cerr << \"OE-F1 CASE singular_targets convergence_depth4\\n\";\n"
+    },
+    {
+      "offset_bytes": 15704,
+      "text": "    std::cerr << \"OE-F1 CASE singular_targets default_options\\n\";\n"
+    },
+    {
+      "offset_bytes": 27265,
+      "text": "// Failure-only test diagnostics; the original contract remains fatal.\nvoid diagnose_singular_targets_after_failure()\n{\n    using Point = std::array<double, 3>;\n    auto mesh = mfem::Mesh::MakeCartesian3D(\n        1, 1, 1, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);\n    mfem::RT_FECollection collection(0, 3);\n    mfem::FiniteElementSpace space(&mesh, &collection);\n    mfem::GridFunction current(&space);\n    mfem::Vector vector(3);\n    vector = 0.0;\n    vector[0] = 4.0;\n    mfem::VectorConstantCoefficient coefficient(vector);\n    current.ProjectCoefficient(coefficient);\n\n    mfem::Array<int> vertices;\n    mesh.GetElementVertices(0, vertices);\n    require(vertices.Size() == 4,\n        \"singular-target fixture must start from a tetrahedron\");\n    std::array<std::array<double, 3>, 4> points{};\n    for (int local = 0; local < 4; ++local) {\n        const auto *coordinate = mesh.GetVertex(vertices[local]);\n        points[local] = {coordinate[0], coordinate[1], coordinate[2]};\n    }\n    const auto average = [&](std::initializer_list<int> indices) {\n        std::array<double, 3> result{0.0, 0.0, 0.0};\n        for (const int index : indices) {\n            for (int component = 0; component < 3; ++component) {\n                result[component] += points[index][component];\n            }\n        }\n        const double scale = 1.0 / static_cast<double>(indices.size());\n        for (double &component : result) component *= scale;\n        return result;\n    };\n\n    const std::vector<std::array<double, 3>> targets{\n        average({0, 1, 2, 3}), // interior\n        average({0, 1, 2}),    // face\n        average({0, 1}),        // edge\n    };\n    DirectTetraQuadratureOptions options;\n    options.base_quadrature_order = 8;\n    options.maximum_subdivision_depth = 6;\n    options.absolute_tolerance_apm = 1.0e-9;\n    options.relative_tolerance = 1.0e-5;\n    require(mesh.GetNE() == 6, \"singular diagnostic requires exactly six source roots\");\n    std::cerr << std::setprecision(std::numeric_limits<double>::max_digits10);\n    const auto print_point = [](const Point &point) {\n        std::cerr << '(' << point[0] << ',' << point[1] << ',' << point[2] << ')';\n    };\n    std::array<std::array<Point, 4>, 6> roots{};\n    for (int source = 0; source < mesh.GetNE(); ++source) {\n        mesh.GetElementVertices(source, vertices);\n        std::cerr << \"OE-F1 DIAGNOSTIC source=\" << source << \" vertices_m=\";\n        for (int local = 0; local < 4; ++local) {\n            const auto *coordinate = mesh.GetVertex(vertices[local]);\n            roots[source][local] = {coordinate[0], coordinate[1], coordinate[2]};\n            print_point(roots[source][local]);\n        }\n        std::cerr << '\\n';\n    }\n    for (const int requested_order : {20, 22}) {\n        const auto &rule = mfem::IntRules.Get(mfem::Geometry::TETRAHEDRON, requested_order);\n        long double sum = 0.0L, sum_abs = 0.0L;\n        double minimum = std::numeric_limits<double>::infinity();\n        for (int sample = 0; sample < rule.GetNPoints(); ++sample) {\n            const double weight = rule.IntPoint(sample).weight;\n            sum += weight;\n            sum_abs += std::abs(weight);\n            minimum = std::min(minimum, weight);\n        }\n        std::cerr << \"OE-F1 DIAGNOSTIC tetra_rule requested_order=\" << requested_order\n                  << \" actual_order=\" << rule.GetOrder() << \" points=\" << rule.GetNPoints()\n                  << \" sum_weights=\" << sum << \" sum_abs_weights=\" << sum_abs\n                  << \" min_weight=\" << minimum << '\\n';\n    }\n    const auto subtract = [](const Point &a, const Point &b) {\n        return Point{a[0] - b[0], a[1] - b[1], a[2] - b[2]};\n    };\n    const auto determinant = [](const Point &a, const Point &b, const Point &c) {\n        return a[0] * (b[1] * c[2] - b[2] * c[1]) +\n            a[1] * (b[2] * c[0] - b[0] * c[2]) +\n            a[2] * (b[0] * c[1] - b[1] * c[0]);\n    };\n    const std::array<const char *, 3> names{{\"interior\", \"face\", \"edge\"}};\n    const auto limits = DirectTetraQuadrature::ResolveWorkLimits(options);\n    for (std::size_t target_index = 0; target_index < targets.size(); ++target_index) {\n        const auto &target = targets[target_index];\n        std::cerr << \"OE-F1 DIAGNOSTIC BEGIN case=\" << names[target_index] << \" target_m=\";\n        print_point(target);\n        std::cerr << \" base_order=\" << options.base_quadrature_order\n                  << \" maximum_depth=\" << options.maximum_subdivision_depth\n                  << \" absolute_tolerance_apm=\" << options.absolute_tolerance_apm\n                  << \" relative_tolerance=\" << options.relative_tolerance\n                  << \" pair_cap=\" << options.maximum_source_target_pairs\n                  << \" kernel_cap=\" << limits.maximum_kernel_evaluations\n                  << \" ledger_cap=\" << limits.maximum_ledger_leaf_visits << '\\n';\n        for (std::size_t source = 0; source < roots.size(); ++source) {\n            const auto &root = roots[source];\n            const auto a = subtract(root[1], root[0]);\n            const auto b = subtract(root[2], root[0]);\n            const auto c = subtract(root[3], root[0]);\n            const auto offset = subtract(target, root[0]);\n            const double denominator = determinant(a, b, c);\n            require(std::isfinite(denominator) && denominator != 0.0,\n                \"singular diagnostic root is degenerate\");\n            const double b1 = determinant(offset, b, c) / denominator;\n            const double b2 = determinant(a, offset, c) / denominator;\n            const double b3 = determinant(a, b, offset) / denominator;\n            const std::array<double, 4> barycentric{{1.0 - b1 - b2 - b3, b1, b2, b3}};\n            const bool contained = std::all_of(barycentric.begin(), barycentric.end(),\n                [](double value) { return std::isfinite(value) && value >= -1.0e-12; });\n            std::cerr << \"OE-F1 DIAGNOSTIC geometry case=\" << names[target_index]\n                      << \" source=\" << source << \" barycentric=(\" << barycentric[0] << ','\n                      << b1 << ',' << b2 << ',' << b3 << \") root_classification=\"\n                      << (contained ? \"closed_simplex\" : \"outside\") << '\\n';\n        }\n        try {\n            // Each public call owns a fresh, unchanged production-default WorkBudget.\n            const auto result = DirectTetraQuadrature::EvaluateField(mesh, current, {target}, options);\n            const auto &diagnostics = result.diagnostics;\n            const auto &record = result.target_diagnostics.at(0);\n            std::cerr << \"OE-F1 DIAGNOSTIC SUCCESS case=\" << names[target_index] << \" h_apm=(\"\n                      << result.h_xyz_apm.at(0) << ',' << result.h_xyz_apm.at(1) << ','\n                      << result.h_xyz_apm.at(2) << \"); estimated_error_apm=\" << record.estimated_error_apm\n                      << \" roundoff_indicator_apm=\" << record.roundoff_indicator_apm\n                      << \" tolerance_apm=\" << record.tolerance_apm\n                      << \" final_leaves=\" << record.final_leaf_count\n                      << \" target_kernels=\" << record.kernel_evaluations\n                      << \" target_visits=\" << record.ledger_leaf_visits\n                      << \" source_target_pairs=\" << diagnostics.source_target_pairs\n                      << \" refined_pairs=\" << diagnostics.refined_pairs\n                      << \" unconverged_pairs=\" << diagnostics.unconverged_pair_count\n                      << \" maximum_pair_error_apm=\" << diagnostics.maximum_pair_error_apm\n                      << \" global_kernels=\" << diagnostics.kernel_evaluations\n                      << \" global_visits=\" << diagnostics.ledger_leaf_visits << '\\n';\n        } catch (const std::exception &error) {\n            std::cerr << \"OE-F1 DIAGNOSTIC REFUSED case=\" << names[target_index]\n                      << \" exception=\" << error.what() << '\\n';\n        }\n    }\n}\n\n"
+    },
+    {
+      "offset_bytes": 27304,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_signed_current_and_budget_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27363,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_explicit_volume_profile_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27420,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_singular_target_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27469,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_consistent_h1_projection_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27527,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_h_refinement_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27573,
+      "text": "        std::cerr << \"OE-F1 CASE direct_tetra_fdm_midpoint_common_limit_contract\\n\";\n"
+    },
+    {
+      "offset_bytes": 27880,
+      "text": "        try {\n            diagnose_singular_targets_after_failure();\n        } catch (const std::exception &diagnostic_error) {\n            std::cerr << \"OE-F1 DIAGNOSTIC SETUP REFUSED exception=\"\n                      << diagnostic_error.what() << '\\n';\n        }\n"
+    }
+  ]
+}

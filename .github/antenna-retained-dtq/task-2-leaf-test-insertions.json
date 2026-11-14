@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "before": {
+    "bytes": 36823,
+    "sha256": "944e07cad05345976f293aa129ba7593af21963d809f7ff0eec7d106c94fe430"
+  },
+  "after": {
+    "bytes": 37443,
+    "sha256": "25fe74b29b8d2a835cf2491f4f1f05d2a4cb5759b30bb587ff217ed126e99525"
+  },
+  "insertions": [
+    {
+      "offset_bytes": 0,
+      "text": "// CI-only private candidate: never apply to production source.\n#define FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC 1\n"
+    },
+    {
+      "offset_bytes": 365,
+      "text": "#ifdef FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC\nnamespace fullmag::fem::oersted {\nvoid enable_dtq_ci_leaf_diagnostics() noexcept;\nvoid consume_dtq_ci_leaf_diagnostics() noexcept;\n}\n#endif\n\n"
+    },
+    {
+      "offset_bytes": 35414,
+      "text": "#ifdef FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC\n            fullmag::fem::oersted::consume_dtq_ci_leaf_diagnostics();\n#endif\n"
+    },
+    {
+      "offset_bytes": 35831,
+      "text": "#ifdef FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC\n        fullmag::fem::oersted::enable_dtq_ci_leaf_diagnostics();\n#endif\n"
+    },
+    {
+      "offset_bytes": 36532,
+      "text": "#ifdef FULLMAG_DTQ_CI_LEAF_DIAGNOSTIC\n        fullmag::fem::oersted::consume_dtq_ci_leaf_diagnostics();\n#endif\n"
+    }
+  ]
+}

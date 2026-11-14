@@ -17,6 +17,7 @@ on:
         default: positive-mass
         options:
           - positive-mass
+          - conservative-current-view
           - floquet-source-moments
           - floquet-modal-slepc
           - generic-modal-slepc

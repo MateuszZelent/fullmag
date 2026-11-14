@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -701,6 +702,11 @@ BigInteger reduce_bareiss_row(
             ? BigInteger(0) : factor_iterator->second;
         budget->add_work(2);
 
+        // Both the integer row and rational RHS are unchanged in this case.
+        if (factor == 0 && pivot == previous_pivot) {
+            continue;
+        }
+
         std::set<std::size_t> affected_columns;
         for (auto iterator = row->coefficients.begin();
                 iterator != row->coefficients.end(); ++iterator) {
@@ -980,21 +986,169 @@ double InconsistentDependentConstraint::residual_a() const noexcept
 void ConservativeConstraintRank::ValidateResourceCounts(
     const ResourceCounts &counts)
 {
-    if (counts.rows > kMaximumRows ||
-            counts.distinct_columns > kMaximumDistinctColumns ||
-            counts.total_nonzeros > kMaximumNonzeros ||
-            counts.maximum_nonzeros_per_row > kMaximumColumnsPerRow ||
-            counts.maximum_intermediate_nonzeros >
-                kMaximumIntermediateNonzeros ||
-            counts.intermediate_storage_bits >
-                kMaximumIntermediateStorageBits ||
-            counts.bareiss_work_units > kMaximumBareissWorkUnits ||
-            counts.maximum_intermediate_bit_length >
-                kMaximumIntermediateBitLength) {
-        throw ConstraintRankResourceLimitExceeded(
-            "constraint-rank resource budget exceeded");
-    }
+    const auto check = [](const char *name, std::uint64_t actual,
+                          std::uint64_t limit) {
+        if (actual > limit) {
+            throw ConstraintRankResourceLimitExceeded(
+                std::string("constraint-rank resource budget exceeded: ") +
+                name + "=" + std::to_string(actual) +
+                "; limit=" + std::to_string(limit));
+        }
+    };
+    check("rows", counts.rows, kMaximumRows);
+    check("distinct columns", counts.distinct_columns, kMaximumDistinctColumns);
+    check("total nonzeros", counts.total_nonzeros, kMaximumNonzeros);
+    check("nonzeros per row", counts.maximum_nonzeros_per_row,
+        kMaximumColumnsPerRow);
+    check("intermediate nonzeros", counts.maximum_intermediate_nonzeros,
+        kMaximumIntermediateNonzeros);
+    check("intermediate storage bits", counts.intermediate_storage_bits,
+        kMaximumIntermediateStorageBits);
+    check("Bareiss work units", counts.bareiss_work_units,
+        kMaximumBareissWorkUnits);
+    check("intermediate bit length", counts.maximum_intermediate_bit_length,
+        kMaximumIntermediateBitLength);
 }
+
+namespace {
+
+// Narrow exact fast path. Unsupported matrices retain fraction-free Bareiss.
+bool try_zero_rhs_signed_incidence(
+    const std::vector<ConservativeConstraintRankRow> &rows,
+    const std::map<std::uint64_t, std::size_t> &column_index,
+    const std::vector<std::size_t> &processing_order,
+    ResourceBudget *budget,
+    ConstraintRankCertificate *certificate)
+{
+    if (rows.size() < 2 || column_index.empty()) return false;
+    for (const auto &row : rows) {
+        budget->add_work(1);
+        if (row.rhs_a != 0.0) return false;
+        for (const auto coefficient : row.incidence_coefficients) {
+            budget->add_work(1);
+            if (coefficient != -1 && coefficient != 1) return false;
+        }
+    }
+    // Analyze validated both cardinalities before this private call. Use
+    // checked accounting before allocating the bounded primitive integer state.
+    const auto row_count = static_cast<std::uint64_t>(rows.size());
+    const auto column_count = static_cast<std::uint64_t>(column_index.size());
+    const auto slots = checked_add(16, checked_add(
+        checked_multiply(row_count, 4, "graph row state"),
+        checked_multiply(column_count, 3, "graph column state"),
+        "graph integer slots"), "graph temporary slots");
+    const auto bytes = checked_add(128, checked_add(
+        checked_multiply(row_count, 10, "graph row bytes"),
+        checked_multiply(column_count, 6, "graph column bytes"),
+        "graph integer bytes"), "graph temporary bytes");
+    budget->observe_exact_state(slots,
+        checked_multiply(bytes, 8, "graph storage bits"), 32);
+    budget->add_work(slots);
+    constexpr auto absent = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint32_t> parent(rows.size());
+    std::vector<std::uint8_t> height(rows.size(), 0);
+    std::vector<std::int8_t> parity(rows.size(), 1);
+    std::vector<std::uint32_t> last(rows.size(), absent);
+    std::vector<std::uint32_t> first(column_index.size(), absent);
+    std::vector<std::int8_t> first_sign(column_index.size(), 0);
+    std::vector<std::uint8_t> occurrences(column_index.size(), 0);
+    std::iota(parent.begin(), parent.end(), std::uint32_t{0});
+    const auto find = [&](std::uint32_t vertex) {
+        int sign = 1;
+        budget->add_work(1);
+        while (parent[vertex] != vertex) {
+            budget->add_work(3);
+            sign *= parity[vertex];
+            vertex = parent[vertex];
+        }
+        return std::make_pair(vertex, sign);
+    };
+    for (std::size_t row = 0; row < rows.size(); ++row) {
+        for (std::size_t entry = 0;
+                entry < rows[row].canonical_column_ids.size(); ++entry) {
+            budget->add_work(6);
+            const auto column = column_index.at(rows[row].canonical_column_ids[entry]);
+            const int sign = static_cast<int>(rows[row].incidence_coefficients[entry]);
+            if (occurrences[column] == 0) {
+                first[column] = static_cast<std::uint32_t>(row);
+                first_sign[column] = static_cast<std::int8_t>(sign);
+                occurrences[column] = 1;
+                continue;
+            }
+            if (occurrences[column] != 1 || first[column] == row) return false;
+            occurrences[column] = 2;
+            auto left = find(first[column]);
+            auto right = find(static_cast<std::uint32_t>(row));
+            const int relation = -static_cast<int>(first_sign[column]) * sign;
+            budget->add_work(5);
+            if (left.first == right.first) {
+                if (right.second != relation * left.second) return false;
+                continue;
+            }
+            if (height[left.first] < height[right.first]) std::swap(left, right);
+            parent[right.first] = left.first;
+            parity[right.first] = static_cast<std::int8_t>(
+                relation * left.second * right.second);
+            if (height[left.first] == height[right.first]) ++height[left.first];
+        }
+    }
+    for (const auto count : occurrences) {
+        budget->add_work(1);
+        if (count != 2) return false;
+    }
+    // Each balanced connected component has exactly one left-null vector
+    // with full support. Every proper subset of its rows is independent.
+    for (const auto row : processing_order) {
+        budget->add_work(1);
+        last[find(static_cast<std::uint32_t>(row)).first] =
+            static_cast<std::uint32_t>(row);
+    }
+    certificate->rows_before = row_count;
+    certificate->rank = row_count;
+    for (const auto row : processing_order) {
+        budget->add_work(2);
+        const bool dependent = last[find(static_cast<std::uint32_t>(row)).first] == row;
+        if (!dependent) {
+            if (is_anchor_candidate(rows[row])) {
+                throw std::runtime_error("closed-component anchor candidate is independent");
+            }
+            continue;
+        }
+        if (rows[row].kind == ConservativeConstraintRankRowKind::ClosedComponentDivergence
+                && !is_anchor_candidate(rows[row])) {
+            throw std::runtime_error("closed-component non-candidate row is dependent");
+        }
+        ConstraintRankOmittedRow omitted;
+        omitted.constraint_id = rows[row].constraint_id;
+        omitted.residual_a = 0.0;
+        if (rows[row].kind == ConservativeConstraintRankRowKind::ClosedComponentDivergence) {
+            omitted.reason = ConstraintOmissionReason::ClosedComponentDivergenceDependency;
+            omitted.closed_component_anchor_element = rows[row].closed_component_anchor_element;
+        } else {
+            omitted.reason = ConstraintOmissionReason::ConsistentLinearDependency;
+            omitted.closed_component_anchor_element = kZeroElementKey;
+        }
+        certificate->omitted_rows.push_back(std::move(omitted));
+        --certificate->rank;
+    }
+    std::uint64_t omission_sort_levels = 0;
+    for (std::size_t width = 1; width < certificate->omitted_rows.size();) {
+        ++omission_sort_levels;
+        if (width > certificate->omitted_rows.size() / 2) break;
+        width *= 2;
+    }
+    budget->add_work(checked_multiply(
+        static_cast<std::uint64_t>(certificate->omitted_rows.size()),
+        checked_add(omission_sort_levels, 1, "graph omission sort levels"),
+        "graph omission sort work"));
+    std::sort(certificate->omitted_rows.begin(), certificate->omitted_rows.end(),
+        [](const auto &left, const auto &right) {
+            return left.constraint_id < right.constraint_id;
+        });
+    return true;
+}
+
+} // namespace
 
 ConstraintRankCertificate ConservativeConstraintRank::Analyze(
     const std::vector<ConservativeConstraintRankRow> &rows,
@@ -1047,6 +1201,10 @@ ConstraintRankCertificate ConservativeConstraintRank::Analyze(
 
     ConstraintRankCertificate certificate;
     certificate.rows_before = static_cast<std::uint64_t>(rows.size());
+    if (try_zero_rhs_signed_incidence(rows, column_index, processing_order,
+            &budget, &certificate)) {
+        return certificate;
+    }
     std::vector<BareissBasisRow> basis;
     ExactStateSize persistent_state;
     for (const auto row_index : processing_order) {

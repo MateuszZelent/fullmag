@@ -1,0 +1,14 @@
+{
+  "run_retained_dtq_quantity_contract.sh": {
+    "bytes": 1431,
+    "sha256": "4bb9a8de4fce3a7ed48c3d6ef49760fca76aba4473b8f855e606eb2a1121b5cb"
+  },
+  "apply-justfile-insertions.py": {
+    "bytes": 1957,
+    "sha256": "3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa"
+  },
+  "task-5-justfile-insertions.json": {
+    "bytes": 571,
+    "sha256": "c03fb1144e379482a2fa79cd0f68c8a8826c6f0fe937c56c5c076bb450541501"
+  }
+}

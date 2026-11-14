@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/mfem/transport/conservative_current_view.hpp"
+#include "cpu/mfem/transport/affine_rt0_element.hpp"
 
 #include <array>
 #include <cstdint>
@@ -13,6 +14,8 @@ class Mesh;
 } // namespace mfem
 
 namespace fullmag::fem::oersted {
+
+struct SurfaceRt0ProgressObserver;
 
 /**
  * CPU/double direct Biot--Savart policy for an affine tetrahedral RT0 source.
@@ -72,13 +75,24 @@ public:
     static DirectTetraQuadratureResult Evaluate(
         const fullmag::fem::transport::ConservativeCurrentView &source,
         const std::vector<std::array<double, 3>> &target_points,
-        const DirectTetraQuadratureOptions &options = {});
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
 
     static DirectTetraQuadratureResult EvaluateField(
         const mfem::Mesh &mesh,
         const mfem::GridFunction &rt0_field,
         const std::vector<std::array<double, 3>> &target_points,
-        const DirectTetraQuadratureOptions &options = {});
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
+
+
+    // Reuse the same quadrature with detached local coefficients. The caller must
+    // authenticate source ownership and closure; this result carries no view digest.
+    static DirectTetraQuadratureResult EvaluateFrozenField(
+        const std::vector<fullmag::fem::transport::AffineRt0Element::FrozenInput> &source,
+        const std::vector<std::array<double, 3>> &target_points,
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
 
     /**
      * Consistent CPU-double L2 projection of the direct field into a vector

@@ -641,6 +641,7 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
     target_include_directories(fem_conservative_current_view_contract PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     if(FULLMAG_OET0_TSAN)
