@@ -9,6 +9,7 @@
 
 #include "gpu/cuda/reductions/object_average.hpp"
 #include "fullmag_fem.h"
+#include "fullmag_time_expression.h"
 
 #include "backend_handle.hpp"
 #include "context.hpp"
@@ -5080,6 +5081,11 @@ int fullmag_fem_get_regional_field_drive_abi_layout(
     return FULLMAG_FEM_OK;
 }
 
+double fullmag_fem_time_expression_eval_v1(const double *code, uint64_t len, double t_s)
+{
+    return fullmag_time_expression_eval(code, len, t_s);
+}
+
 int fullmag_fem_backend_begin_stage_v2(
     fullmag_fem_backend *handle,
     double segment_start_time_s,
@@ -5279,6 +5285,11 @@ int fullmag_fem_backend_step(
             dt_seconds,
             *out_stats,
             handle->last_error);
+    if (status == FULLMAG_FEM_OK && !handle->context.zeeman.host_expression_error.empty()) {
+        // A host-expression drive (mask term) produced a non-finite time factor.
+        fullmag_fem_set_handle_error(handle, handle->context.zeeman.host_expression_error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     if (status == FULLMAG_FEM_OK) {
         apply_demag_solver_policy_to_step_stats(handle->context, *out_stats);
     }

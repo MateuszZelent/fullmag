@@ -2046,7 +2046,7 @@ mod region_shape_bounds_tests {
     }
 }
 
-fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
+pub(crate) fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
         GeometryEntryIR::Translate { base, by, .. } => {
             let nested = top_level_geometry_translation(base);

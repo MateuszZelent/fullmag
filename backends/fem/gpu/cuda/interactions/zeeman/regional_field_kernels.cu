@@ -6,6 +6,8 @@
 
 #include <cuda_runtime.h>
 
+#include <cmath>
+#include <cstdio>
 #include <limits>
 #include <vector>
 
@@ -30,6 +32,7 @@ __global__ void materialize_regional_field_kernel(
     const double *basis_z,
     const double *point_times,
     const double *point_values,
+    RegionalFieldDriveHostMultipliers host_multipliers,
     uint64_t node_count,
     double evaluation_time_s,
     double stage_start_time_s,
@@ -48,7 +51,8 @@ __global__ void materialize_regional_field_kernel(
     double hz = 0.0;
     for (uint64_t drive = 0; drive < drive_count; ++drive) {
         const double multiplier = evaluate_device_time_dependence(
-            descs[drive], point_times, point_values, evaluation_time_s, stage_start_time_s);
+            descs[drive], point_times, point_values, host_multipliers,
+            evaluation_time_s, stage_start_time_s);
         const uint64_t index = drive * node_count + node;
         hx += multiplier * basis_x[index];
         hy += multiplier * basis_y[index];
@@ -66,7 +70,8 @@ __global__ void materialize_regional_field_kernel(
 
 RegionalFieldDriveDeviceDesc pack_waveform(
     const RegionalFieldDriveRuntime &drive,
-    uint64_t point_offset)
+    uint64_t point_offset,
+    uint64_t host_slot)
 {
     RegionalFieldDriveDeviceDesc packed{};
     packed.kind = drive.waveform.kind;
@@ -74,6 +79,9 @@ RegionalFieldDriveDeviceDesc pack_waveform(
     packed.point_offset = point_offset;
     packed.point_count = drive.waveform.points.size();
     switch (drive.waveform.kind) {
+    case FULLMAG_FEM_TIME_HOST_EXPRESSION:
+        packed.point_offset = host_slot;
+        break;
     case FULLMAG_FEM_TIME_SINUSOIDAL:
         packed.p0 = drive.waveform.parameters.sinusoidal.frequency_hz;
         packed.p1 = drive.waveform.parameters.sinusoidal.phase_rad;
@@ -135,13 +143,22 @@ bool gpu_regional_field_drive_upload(Context &ctx, std::string &error)
     std::vector<double> point_times;
     std::vector<double> point_values;
     descs.reserve(drive_count);
+    uint64_t host_slots = 0;
     for (uint64_t drive_index = 0; drive_index < drive_count; ++drive_index) {
         const auto &drive = ctx.zeeman.regional_drives[drive_index];
         if (drive.basis_h_xyz.size() != node_count * 3u) {
             error = "regional field drive GPU upload received an invalid projected basis length";
             return false;
         }
-        descs.push_back(pack_waveform(drive, point_times.size()));
+        const bool host_expression = drive.waveform.kind == FULLMAG_FEM_TIME_HOST_EXPRESSION;
+        if (host_expression && host_slots >= FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES) {
+            error = "mask_too_many_terms: the FEM GPU lane takes at most " +
+                std::to_string(FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES) +
+                " host-expression drives (mask terms) per stage";
+            return false;
+        }
+        descs.push_back(pack_waveform(drive, point_times.size(), host_slots));
+        if (host_expression) ++host_slots;
         for (const auto &point : drive.waveform.points) {
             point_times.push_back(point.time_s);
             point_values.push_back(point.value);
@@ -207,6 +224,30 @@ bool gpu_regional_field_drive_materialize_and_accumulate(
                cuda_ok(cudaMemsetAsync(fields.h_drive.z, 0, node_count * sizeof(double), stream),
                        "clear H_drive z", error);
     }
+    // Host-expression drives (mask terms): one number per drive, evaluated here
+    // at the drive's clock, in the slot order assigned at upload.
+    RegionalFieldDriveHostMultipliers host_multipliers{};
+    uint64_t host_slot = 0;
+    for (const auto &drive : ctx.zeeman.regional_drives) {
+        if (drive.waveform.kind != FULLMAG_FEM_TIME_HOST_EXPRESSION) continue;
+        if (host_slot >= FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES) {
+            error = "regional field drive host-expression slots exceed the uploaded count";
+            return false;
+        }
+        const double time = drive.time_origin == FULLMAG_FEM_TIME_STAGE_LOCAL
+            ? evaluation_time_s - ctx.zeeman.stage_start_time_s : evaluation_time_s;
+        const double value = evaluate_time_dependence(drive.waveform, time);
+        if (!std::isfinite(value)) {
+            char text[160];
+            std::snprintf(text, sizeof(text),
+                "mask_expression_non_finite: host-expression drive %llu gives a non-finite "
+                "time factor at time function argument %.9e s",
+                static_cast<unsigned long long>(host_slot), time);
+            error = text;
+            return false;
+        }
+        host_multipliers.value[host_slot++] = value;
+    }
     const int blocks = (node_count + kBlockSize - 1) / kBlockSize;
     materialize_regional_field_kernel<<<blocks, kBlockSize, 0, stream>>>(
         fields.regional_drive_descs,
@@ -216,6 +257,7 @@ bool gpu_regional_field_drive_materialize_and_accumulate(
         fields.regional_drive_basis.z,
         fields.regional_drive_point_times,
         fields.regional_drive_point_values,
+        host_multipliers,
         node_count,
         evaluation_time_s,
         ctx.zeeman.stage_start_time_s,

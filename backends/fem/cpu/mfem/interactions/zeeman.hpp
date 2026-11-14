@@ -7,6 +7,7 @@
 #include "fullmag_fem.h"
 
 #include <array>
+#include <string>
 #include <vector>
 
 namespace fullmag::fem {
@@ -30,6 +31,9 @@ struct ZeemanRuntimeState {
     double stage_start_time_s = 0.0;
     double last_evaluation_time_s = 0.0;
     uint64_t regional_drive_revision = 0;
+    /* First non-finite value of a host-expression drive; the step entry point
+     * reports it (mask_expression_non_finite). */
+    std::string host_expression_error;
 };
 
 /*

@@ -530,6 +530,7 @@ struct RkStepTransaction::Impl {
         for (const auto &drive : zeeman.regional_drives) {
             add(vector_payload_bytes(drive.target_element_markers));
             add(vector_payload_bytes(drive.waveform.points));
+            add(vector_payload_bytes(drive.waveform.time_program));
             add(vector_payload_bytes(drive.geometry_nodes));
             add(vector_payload_bytes(drive.basis_h_xyz));
         }

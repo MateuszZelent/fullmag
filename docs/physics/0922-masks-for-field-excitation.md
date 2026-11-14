@@ -393,8 +393,8 @@ the time evaluation is the same as on FDM.
 
 | Solver | Device | Status | Boundary |
 |---|---|---|---|
-| FDM | CPU | realized (function masks) | single grid, one magnet; array masks not yet |
-| FDM | GPU | realized (function masks) | single grid; at most 8 mask terms per stage; array masks not yet |
+| FDM | CPU | realized (function and array masks) | single grid, one magnet |
+| FDM | GPU | realized (function and array masks) | single grid; at most 8 mask terms per stage |
 | FEM | CPU | unsupported | explicit rejection; path described in 8.3 |
 | FEM | GPU | unsupported | explicit rejection; path described in 8.3 |
 

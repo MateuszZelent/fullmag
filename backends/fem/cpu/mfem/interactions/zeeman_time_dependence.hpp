@@ -17,6 +17,8 @@ struct OwnedTimeDependence {
     uint32_t kind = FULLMAG_FEM_TIME_CONSTANT;
     fullmag_fem_time_dependence_parameters parameters{};
     std::vector<fullmag_fem_time_point> points;
+    /* FULLMAG_FEM_TIME_HOST_EXPRESSION: fullmag_time_expr.v1 words. */
+    std::vector<double> time_program;
 };
 
 bool copy_time_dependence(

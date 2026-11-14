@@ -311,7 +311,10 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HAnt => fem_plan_has_antenna_field(plan),
-        QuantityId::HDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::HDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
@@ -329,7 +332,10 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
-        QuantityId::EdenDrive => plan.field_drives.iter().any(|drive| drive.enabled),
+        QuantityId::EdenDrive => {
+            plan.field_drives.iter().any(|drive| drive.enabled)
+                || !plan.mask_field_term_bases.is_empty()
+        }
         QuantityId::EdenAni => {
             material_has_uniaxial_anisotropy(&plan.material)
                 || material_has_cubic_anisotropy(&plan.material)
@@ -608,6 +614,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),

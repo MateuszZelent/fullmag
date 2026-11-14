@@ -452,7 +452,7 @@ pub(crate) fn apply_regional_drive_energy(
     }
     for basis in &plan.mask_field_term_bases {
         let local_time_s =
-            crate::fdm::mask_time::mask_term_local_time(plan, basis.time_origin, stats.time);
+            crate::mask_time::mask_term_local_time(&plan.time_stage, basis.time_origin, stats.time);
         let multiplier = fullmag_expr::eval_time_program(&basis.time_program, local_time_s);
         for (index, (m, field)) in magnetization.iter().zip(&basis.field_xyz).enumerate() {
             if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
@@ -857,7 +857,11 @@ pub(crate) fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
-    crate::fdm::mask_time::check_mask_time_programs(plan, until_seconds)?;
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;

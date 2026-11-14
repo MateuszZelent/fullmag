@@ -679,6 +679,7 @@ fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
         solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         time_stage: Default::default(),
         current_modules: Vec::new(),
         charge_transport_plans: Vec::new(),

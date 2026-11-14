@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <unordered_set>
 
 namespace fullmag::fem {
@@ -588,10 +589,18 @@ void materialize_regional_field_drive(Context &ctx, double evaluation_time_s)
         ctx.zeeman.h_drive_xyz.assign(expected, 0.0);
     }
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
-    for (const auto &drive : ctx.zeeman.regional_drives) {
+    for (size_t index = 0; index < ctx.zeeman.regional_drives.size(); ++index) {
+        const auto &drive = ctx.zeeman.regional_drives[index];
         const double time = drive.time_origin == FULLMAG_FEM_TIME_STAGE_LOCAL
             ? evaluation_time_s - ctx.zeeman.stage_start_time_s : evaluation_time_s;
         const double value = evaluate_time_dependence(drive.waveform, time);
+        if (!std::isfinite(value) && ctx.zeeman.host_expression_error.empty()) {
+            char text[160];
+            std::snprintf(text, sizeof(text),
+                "mask_expression_non_finite: regional field drive %zu gives a non-finite "
+                "time factor at time function argument %.9e s", index, time);
+            ctx.zeeman.host_expression_error = text;
+        }
         for (size_t i = 0; i < ctx.zeeman.h_drive_xyz.size(); ++i) {
             ctx.zeeman.h_drive_xyz[i] += value * drive.basis_h_xyz[i];
         }

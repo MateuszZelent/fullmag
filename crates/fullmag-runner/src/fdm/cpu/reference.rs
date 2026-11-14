@@ -1636,7 +1636,11 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 .to_string(),
         });
     }
-    crate::fdm::mask_time::check_mask_time_programs(plan, until_seconds)?;
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: format!(

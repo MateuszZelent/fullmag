@@ -730,8 +730,8 @@ pub struct ResolvedRegionalFieldDriveBasisIR {
 }
 
 /// One term of a mask field drive (`mask_field_drive.v1`, physics note 0922)
-/// resolved on the single FDM grid: the mask in A/m per cell and the time
-/// function as `fullmag_time_expr.v1` bytecode.
+/// resolved on a lane: the mask in A/m per FDM cell or per FEM mesh node, and
+/// the time function as `fullmag_time_expr.v1` bytecode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedMaskFieldTermBasisIR {
     pub drive_id: String,
@@ -743,7 +743,8 @@ pub struct ResolvedMaskFieldTermBasisIR {
     pub time_program: Vec<f64>,
     /// `true` when the time function reads `t`.
     pub time_dependent: bool,
-    /// Immutable cell-wise basis `B_i / mu0` in A/m, zero outside the support.
+    /// Immutable basis `B_i / mu0` in A/m, zero outside the support: one value
+    /// per cell of the FDM grid, or per node of the FEM mesh.
     pub field_xyz: Vec<[f64; 3]>,
     pub projection_signature: String,
 }
@@ -1495,6 +1496,10 @@ pub struct FemPlanIR {
     pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solved_antenna_drive_bases: Vec<ResolvedSolvedAntennaDriveBasisIR>,
+    /// Hand-written mask terms resolved at the mesh nodes (physics note 0922,
+    /// section 8.3); native FEM takes them as pre-projected nodal bases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_term_bases: Vec<ResolvedMaskFieldTermBasisIR>,
     /// Closed geometry trees referenced by regional-drive geometry masks.
     /// Native FEM consumes these descriptors and owns spatial projection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1662,6 +1667,7 @@ impl Default for FemPlanIR {
             field_drives: Vec::new(),
             solved_antenna_drive_bases: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: TimeStageContextIR::default(),
             current_modules: Vec::new(),
             charge_transport_plans: Vec::new(),

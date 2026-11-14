@@ -1,6 +1,8 @@
 /* Closed, allocation-free regional-drive waveform evaluation. */
 #include "cpu/mfem/interactions/zeeman_time_dependence.hpp"
 
+#include "fullmag_time_expression.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -29,8 +31,16 @@ bool copy_time_dependence(
         error = "regional field drive waveform ABI version/size mismatch";
         return false;
     }
-    if (source.kind > FULLMAG_FEM_TIME_SINC_PULSE) {
+    if (source.kind > FULLMAG_FEM_TIME_HOST_EXPRESSION) {
         error = "regional field drive waveform kind is unsupported";
+        return false;
+    }
+    if ((source.time_program_len == 0) != (source.time_program == nullptr)) {
+        error = "regional field drive time program null/length mismatch";
+        return false;
+    }
+    if ((source.kind == FULLMAG_FEM_TIME_HOST_EXPRESSION) != (source.time_program_len != 0)) {
+        error = "regional field drive time program belongs to the host-expression waveform only";
         return false;
     }
     if ((source.point_count == 0) != (source.points == nullptr)) {
@@ -48,6 +58,12 @@ bool copy_time_dependence(
     switch (source.kind) {
     case FULLMAG_FEM_TIME_CONSTANT:
     case FULLMAG_FEM_TIME_PIECEWISE_LINEAR:
+        break;
+    case FULLMAG_FEM_TIME_HOST_EXPRESSION:
+        if (fullmag_time_expression_reads_t(source.time_program, source.time_program_len) < 0) {
+            error = "regional field drive time program is malformed";
+            return false;
+        }
         break;
     case FULLMAG_FEM_TIME_SINUSOIDAL: {
         const auto &parameters = source.parameters.sinusoidal;
@@ -83,6 +99,11 @@ bool copy_time_dependence(
     }
     destination.kind = source.kind;
     destination.parameters = source.parameters;
+    destination.time_program.clear();
+    if (source.time_program_len > 0) {
+        destination.time_program.assign(
+            source.time_program, source.time_program + source.time_program_len);
+    }
     destination.points.clear();
     if (source.point_count > 0) {
         destination.points.assign(source.points, source.points + source.point_count);
@@ -127,6 +148,9 @@ double evaluate_time_dependence(const OwnedTimeDependence &waveform, double time
         const double x = 2.0 * 3.14159265358979323846 * p.cutoff_hz * (time_s - p.t0_s);
         return p.amplitude * stable_sinc(x);
     }
+    case FULLMAG_FEM_TIME_HOST_EXPRESSION:
+        return fullmag_time_expression_eval(
+            waveform.time_program.data(), waveform.time_program.size(), time_s);
     default:
         return 0.0;
     }

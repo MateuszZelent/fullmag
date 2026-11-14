@@ -1581,6 +1581,8 @@ fn append_native_preprojected_drive_descriptor(
             parameters,
             points: optional_slice_ptr(points),
             point_count: points.len() as u64,
+            time_program: std::ptr::null(),
+            time_program_len: 0,
         },
         time_origin: match time_origin {
             fullmag_ir::FieldTimeOriginIR::StageLocal => {
@@ -1604,6 +1606,7 @@ fn pack_native_regional_field_drives(
         Vec<Vec<ffi::fullmag_fem_time_point>>,
         Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
         Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
+        Vec<Vec<f64>>,
         Vec<Vec<f64>>,
     ),
     RunError,
@@ -1884,6 +1887,8 @@ fn pack_native_regional_field_drives(
                 parameters,
                 points: optional_slice_ptr(points),
                 point_count: points.len() as u64,
+                time_program: std::ptr::null(),
+                time_program_len: 0,
             },
             time_origin: match drive.time_origin {
                 FieldTimeOriginIR::StageLocal => 0,
@@ -1994,6 +1999,8 @@ fn pack_native_regional_field_drives(
                 parameters,
                 points: optional_slice_ptr(points),
                 point_count: points.len() as u64,
+                time_program: std::ptr::null(),
+                time_program_len: 0,
             },
             time_origin: match basis.drive.time_origin {
                 FieldTimeOriginIR::StageLocal => 0,
@@ -2064,6 +2071,38 @@ fn pack_native_regional_field_drives(
             plan.mesh.nodes.len() * 3,
         )?;
     }
+    // Hand-written mask terms (ADR 0081): the planner's nodal basis as a
+    // pre-projected drive whose time factor the library evaluates on the host
+    // from the term's time program.
+    let mut time_program_storage: Vec<Vec<f64>> =
+        Vec::with_capacity(plan.mask_field_term_bases.len());
+    for basis in &plan.mask_field_term_bases {
+        let values = basis
+            .field_xyz
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect();
+        append_native_preprojected_drive_descriptor(
+            &mut descriptors,
+            &mut point_storage,
+            &mut basis_storage,
+            &format!("mask_field_term:{}:{}", basis.drive_id, basis.term_index),
+            &fullmag_ir::TimeDependenceIR::Constant,
+            basis.time_origin,
+            values,
+            plan.mesh.nodes.len() * 3,
+        )?;
+        time_program_storage.push(basis.time_program.clone());
+        let program = time_program_storage.last().expect("pushed time program");
+        let waveform = &mut descriptors
+            .last_mut()
+            .expect("pushed mask term descriptor")
+            .waveform;
+        waveform.kind =
+            ffi::fullmag_fem_time_dependence_kind::FULLMAG_FEM_TIME_HOST_EXPRESSION as u32;
+        waveform.time_program = program.as_ptr();
+        waveform.time_program_len = program.len() as u64;
+    }
     Ok((
         descriptors,
         marker_storage,
@@ -2071,7 +2110,41 @@ fn pack_native_regional_field_drives(
         geometry_node_storage,
         geometry_desc_storage,
         basis_storage,
+        time_program_storage,
     ))
+}
+
+/// The library's interpreter of mask-term time programs must agree with the
+/// Rust interpreter that planned and checked them (4 ulp, as on FDM CUDA).
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+fn check_native_fem_time_programs(plan: &fullmag_ir::FemPlanIR) -> Result<(), RunError> {
+    const SAMPLE_TIMES_S: [f64; 5] = [0.0, 1.0e-12, 3.7e-11, 1.0e-9, 2.5e-8];
+    for basis in &plan.mask_field_term_bases {
+        let program = &basis.time_program;
+        for time_s in SAMPLE_TIMES_S {
+            let native = unsafe {
+                ffi::fullmag_fem_time_expression_eval_v1(
+                    program.as_ptr(),
+                    program.len() as u64,
+                    time_s,
+                )
+            };
+            let rust = fullmag_expr::eval_time_program(program, time_s);
+            let scale = native.abs().max(rust.abs());
+            let agree = native == rust
+                || (native.is_nan() && rust.is_nan())
+                || (native - rust).abs() <= 4.0 * f64::EPSILON * scale;
+            if !agree {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM and Rust time interpreters disagree for mask drive '{}' term {} at t = {time_s:e} s: {native:e} vs {rust:e}",
+                        basis.drive_id, basis.term_index
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
@@ -2434,6 +2507,7 @@ fn make_test_plan() -> fullmag_ir::FemPlanIR {
         solved_antenna_drive_bases: Vec::new(),
         field_drives: Vec::new(),
         field_drive_geometry_masks: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         time_stage: Default::default(),
         current_modules: vec![],
         spin_transport_plans: vec![],
@@ -3567,6 +3641,7 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
+        check_native_fem_time_programs(plan)?;
         let (
             regional_field_drive_descs,
             _regional_marker_storage,
@@ -3574,6 +3649,7 @@ impl NativeFemBackend {
             _regional_geometry_node_storage,
             _regional_geometry_desc_storage,
             _regional_preprojected_basis_storage,
+            _regional_time_program_storage,
         ) = pack_native_regional_field_drives(plan)?;
         let (sot_envelope, _sot_envelope_points) = pack_native_sot_envelope(plan)?;
 
@@ -7523,7 +7599,7 @@ mod tests {
             projection_signature: "verified".into(),
         }];
 
-        let (descriptors, _, points, _, _, bases) =
+        let (descriptors, _, points, _, _, bases, _) =
             pack_native_regional_field_drives(&plan).expect("packed solved antenna drive");
         assert_eq!(descriptors.len(), 1);
         assert_eq!(points.len(), 1);
@@ -8890,6 +8966,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],

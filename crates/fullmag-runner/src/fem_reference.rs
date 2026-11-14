@@ -81,6 +81,12 @@ pub(crate) fn execute_reference_fem_with_context(
     live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    if !plan.mask_field_term_bases.is_empty() {
+        // This path applies no prescribed drive terms; never run without the mask.
+        return Err(RunError {
+            message: "mask_field_drive_unsupported_lane:fem_reference: mask antennas are not realized on the Rust FEM reference path (used for statically periodic plans)".to_string(),
+        });
+    }
     execute_reference_fem_impl(
         plan,
         stage_context,
@@ -2021,6 +2027,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -2420,6 +2427,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -2615,6 +2623,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],

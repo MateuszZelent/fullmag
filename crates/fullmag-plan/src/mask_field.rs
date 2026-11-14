@@ -1,18 +1,24 @@
-//! Hand-written masks on the single FDM grid (physics note 0922, section 8.1).
+//! Hand-written masks on the single FDM grid and on the FEM mesh (physics note
+//! 0922, sections 8.1 and 8.3).
 //!
-//! A mask field drive acts on the magnetic cells of its target (global, the
+//! FDM: a mask field drive acts on the magnetic cells of its target (global, the
 //! magnet, or one region of it by the grid's exclusive region marker) whose
 //! centres lie inside its support shape. Each function mask is evaluated once at
-//! the centre of each supported cell (as mumax3 fills a `VectorMask`); each time
-//! function is compiled to `fullmag_time_expr.v1` for the solver.
+//! the centre of each supported cell (as mumax3 fills a `VectorMask`).
+//!
+//! FEM: the drive acts on the nodes of the target's magnetic elements that lie
+//! inside the support shape; each mask is evaluated at those nodes and the
+//! solver interpolates it with the P1 basis.
+//!
+//! Each time function is compiled to `fullmag_time_expr.v1` for the solver.
 
 use std::io::Read;
 
 use base64::Engine;
 use fullmag_expr::{CompiledFunction, FunctionKind};
 use fullmag_ir::{
-    FdmRegionLegendEntryIR, FieldTargetIR, FieldTimeOriginIR, MaskFieldDriveIR, MaskFrameIR,
-    MaskSourceIR, ProblemIR, ResolvedMaskFieldTermBasisIR, SAMPLED_MASK_ENCODING,
+    FdmRegionLegendEntryIR, FemPlanIR, FieldTargetIR, FieldTimeOriginIR, MaskFieldDriveIR,
+    MaskFrameIR, MaskSourceIR, ProblemIR, ResolvedMaskFieldTermBasisIR, SAMPLED_MASK_ENCODING,
 };
 use sha2::{Digest, Sha256};
 
@@ -60,12 +66,25 @@ pub(crate) fn active_mask_field_drives(problem: &ProblemIR) -> Vec<&MaskFieldDri
 }
 
 /// World position of the support's origin: `position_m` in the drive's frame.
-fn frame_origin(drive: &MaskFieldDriveIR, domain: &FdmMaskFieldDomain<'_>) -> [f64; 3] {
+/// `object_translation_m` is the object frame of the target (translation only);
+/// a global target has no object, so its frame is the world frame.
+fn frame_origin(drive: &MaskFieldDriveIR, object_translation_m: [f64; 3]) -> [f64; 3] {
     let object = match (drive.frame, &drive.target) {
         (MaskFrameIR::World, _) | (_, FieldTargetIR::Global {}) => [0.0; 3],
-        (MaskFrameIR::Local, _) => domain.object_translation_m,
+        (MaskFrameIR::Local, _) => object_translation_m,
     };
     std::array::from_fn(|axis| object[axis] + drive.position_m[axis])
+}
+
+/// The points a drive is resolved on: FDM cell centres or FEM mesh nodes.
+struct DriveSamples<'a> {
+    points_m: &'a [[f64; 3]],
+    /// Points of the target that lie inside the placed shape.
+    support: Vec<bool>,
+    /// World position of the support's origin.
+    origin_m: [f64; 3],
+    /// `cell` or `node`, for messages.
+    sample: &'static str,
 }
 
 fn compile(
@@ -161,14 +180,17 @@ fn target_region_marker(
     }
 }
 
-/// Support of one drive: active cells of the target inside the placed shape.
-fn support_mask(
+/// Support of one drive: the candidate points (magnetic cells or nodes of the
+/// target) that lie inside the shape placed at `origin_m`.
+fn shape_support(
     drive: &MaskFieldDriveIR,
-    domain: &FdmMaskFieldDomain<'_>,
+    points_m: &[[f64; 3]],
+    origin_m: [f64; 3],
+    candidate: impl Fn(usize) -> bool,
+    sample: &str,
 ) -> Result<Vec<bool>, PlanError> {
-    let region_marker = target_region_marker(drive, domain)?;
     let transform = AffineTransform3 {
-        translation_m: frame_origin(drive, domain),
+        translation_m: origin_m,
         ..AffineTransform3::identity()
     };
     let predicate = GeometryPredicate::from_region_shape(
@@ -182,13 +204,9 @@ fn support_mask(
             drive.id
         ))
     })?;
-    let mut support = Vec::with_capacity(domain.cell_centres_m.len());
-    for (index, point) in domain.cell_centres_m.iter().enumerate() {
-        let active = domain.active_mask.map_or(true, |mask| mask[index])
-            && region_marker.map_or(true, |marker| {
-                domain.region_mask.get(index) == Some(&marker)
-            });
-        let inside = active
+    let mut support = Vec::with_capacity(points_m.len());
+    for (index, point) in points_m.iter().enumerate() {
+        let inside = candidate(index)
             && predicate.contains(*point).map_err(|error| {
                 plan_error(format!(
                     "mask_shape_invalid: mask drive '{}' shape: {error}",
@@ -199,12 +217,39 @@ fn support_mask(
     }
     if !support.iter().any(|inside| *inside) {
         return Err(plan_error(format!(
-            "mask_support_empty: mask drive '{}' selects no magnetic cell of {} inside its shape",
+            "mask_support_empty: mask drive '{}' selects no magnetic {sample} of {} inside its shape",
             drive.id,
             target_label(&drive.target)
         )));
     }
     Ok(support)
+}
+
+/// FDM support of one drive: active cells of the target inside the placed shape.
+fn fdm_samples<'a>(
+    drive: &MaskFieldDriveIR,
+    domain: &FdmMaskFieldDomain<'a>,
+) -> Result<DriveSamples<'a>, PlanError> {
+    let region_marker = target_region_marker(drive, domain)?;
+    let origin_m = frame_origin(drive, domain.object_translation_m);
+    let support = shape_support(
+        drive,
+        domain.cell_centres_m,
+        origin_m,
+        |index| {
+            domain.active_mask.map_or(true, |mask| mask[index])
+                && region_marker.map_or(true, |marker| {
+                    domain.region_mask.get(index) == Some(&marker)
+                })
+        },
+        "cell",
+    )?;
+    Ok(DriveSamples {
+        points_m: domain.cell_centres_m,
+        support,
+        origin_m,
+        sample: "cell",
+    })
 }
 
 /// A decoded sampled mask: values in tesla, (z, y, x, component) order.
@@ -217,12 +262,21 @@ struct SampledMask {
 
 impl SampledMask {
     /// Value at a world point: the lattice cell that contains it, else zero
-    /// (mumax3 also resamples a VectorMask to the cell centres).
-    fn value_at(&self, point: [f64; 3]) -> [f64; 3] {
+    /// (mumax3 also resamples a VectorMask to the cell centres). `closed`
+    /// counts points on the lattice's outer faces as inside (FEM nodes lie on
+    /// them; FDM cell centres never do).
+    fn value_at(&self, point: [f64; 3], closed: bool) -> [f64; 3] {
+        const FACE_TOLERANCE_CELLS: f64 = 1.0e-6;
         let mut index = [0usize; 3];
         for axis in 0..3 {
-            let coordinate = ((point[axis] - self.origin_m[axis]) / self.cell_m[axis]).floor();
-            if !(0.0..self.size[axis] as f64).contains(&coordinate) {
+            let cells = self.size[axis] as f64;
+            let mut position = (point[axis] - self.origin_m[axis]) / self.cell_m[axis];
+            if closed && (-FACE_TOLERANCE_CELLS..=cells + FACE_TOLERANCE_CELLS).contains(&position)
+            {
+                position = position.clamp(0.0, cells - 0.5);
+            }
+            let coordinate = position.floor();
+            if !(0.0..cells).contains(&coordinate) {
                 return [0.0; 3];
             }
             index[axis] = coordinate as usize;
@@ -309,80 +363,185 @@ pub(crate) fn resolve_fdm_mask_field_terms(
 ) -> Result<Vec<ResolvedMaskFieldTermBasisIR>, PlanError> {
     let mut resolved = Vec::new();
     for drive in active_mask_field_drives(problem) {
-        let support = support_mask(drive, domain)?;
-        let origin = frame_origin(drive, domain);
-        for (term_index, term) in drive.terms.iter().enumerate() {
-            let field_xyz = match &term.mask {
-                MaskSourceIR::Function { function } => {
-                    let mask = compile(drive, term_index, "mask", function, FunctionKind::Mask)?;
-                    let mut field_xyz = vec![[0.0; 3]; domain.cell_centres_m.len()];
-                    for (index, point) in domain.cell_centres_m.iter().enumerate() {
-                        if !support[index] {
-                            continue;
-                        }
-                        let local = match drive.frame {
-                            MaskFrameIR::World => *point,
-                            MaskFrameIR::Local => [
-                                point[0] - origin[0],
-                                point[1] - origin[1],
-                                point[2] - origin[2],
-                            ],
-                        };
-                        let value = mask.eval_mask(local);
-                        if !value.iter().all(|component| component.is_finite()) {
-                            return Err(plan_error(format!(
-                                "mask_expression_non_finite: mask drive '{}' terms[{term_index}].mask at cell {index} ({:.6e}, {:.6e}, {:.6e}) m gives {:?}",
+        let samples = fdm_samples(drive, domain)?;
+        resolve_drive_terms(drive, &samples, domain.stage_start_time_s, &mut resolved)?;
+    }
+    Ok(resolved)
+}
+
+/// Resolve the terms of one drive at its sample points: the mask in A/m at
+/// each supported point (zero elsewhere) and the compiled time program.
+fn resolve_drive_terms(
+    drive: &MaskFieldDriveIR,
+    samples: &DriveSamples<'_>,
+    stage_start_time_s: f64,
+    resolved: &mut Vec<ResolvedMaskFieldTermBasisIR>,
+) -> Result<(), PlanError> {
+    let points = samples.points_m;
+    let support = &samples.support;
+    let origin = samples.origin_m;
+    let sample = samples.sample;
+    for (term_index, term) in drive.terms.iter().enumerate() {
+        let field_xyz = match &term.mask {
+            MaskSourceIR::Function { function } => {
+                let mask = compile(drive, term_index, "mask", function, FunctionKind::Mask)?;
+                let mut field_xyz = vec![[0.0; 3]; points.len()];
+                for (index, point) in points.iter().enumerate() {
+                    if !support[index] {
+                        continue;
+                    }
+                    let local = match drive.frame {
+                        MaskFrameIR::World => *point,
+                        MaskFrameIR::Local => [
+                            point[0] - origin[0],
+                            point[1] - origin[1],
+                            point[2] - origin[2],
+                        ],
+                    };
+                    let value = mask.eval_mask(local);
+                    if !value.iter().all(|component| component.is_finite()) {
+                        return Err(plan_error(format!(
+                                "mask_expression_non_finite: mask drive '{}' terms[{term_index}].mask at {sample} {index} ({:.6e}, {:.6e}, {:.6e}) m gives {:?}",
                                 drive.id, point[0], point[1], point[2], value
                             )));
-                        }
+                    }
+                    field_xyz[index] = [value[0] / MU0, value[1] / MU0, value[2] / MU0];
+                }
+                field_xyz
+            }
+            sampled @ MaskSourceIR::Sampled { .. } => {
+                let mask = decode_sampled_mask(drive, term_index, sampled)?;
+                let mut field_xyz = vec![[0.0; 3]; points.len()];
+                for (index, point) in points.iter().enumerate() {
+                    if support[index] {
+                        let value = mask.value_at(*point, sample == "node");
                         field_xyz[index] = [value[0] / MU0, value[1] / MU0, value[2] / MU0];
                     }
-                    field_xyz
                 }
-                sampled @ MaskSourceIR::Sampled { .. } => {
-                    let mask = decode_sampled_mask(drive, term_index, sampled)?;
-                    let mut field_xyz = vec![[0.0; 3]; domain.cell_centres_m.len()];
-                    for (index, point) in domain.cell_centres_m.iter().enumerate() {
-                        if support[index] {
-                            let value = mask.value_at(*point);
-                            field_xyz[index] = [value[0] / MU0, value[1] / MU0, value[2] / MU0];
-                        }
-                    }
-                    field_xyz
-                }
-            };
-            let (time_expression, time_program, time_dependent) = match &term.time {
-                Some(function) => {
-                    let time = compile(drive, term_index, "time", function, FunctionKind::Time)?;
-                    let start = match drive.time_origin {
-                        FieldTimeOriginIR::StageLocal => 0.0,
-                        FieldTimeOriginIR::Absolute => domain.stage_start_time_s,
-                    };
-                    let first = fullmag_expr::eval_time_program(&time.time_program().code, start);
-                    if !first.is_finite() {
-                        return Err(plan_error(format!(
+                field_xyz
+            }
+        };
+        let (time_expression, time_program, time_dependent) = match &term.time {
+            Some(function) => {
+                let time = compile(drive, term_index, "time", function, FunctionKind::Time)?;
+                let start = match drive.time_origin {
+                    FieldTimeOriginIR::StageLocal => 0.0,
+                    FieldTimeOriginIR::Absolute => stage_start_time_s,
+                };
+                let first = fullmag_expr::eval_time_program(&time.time_program().code, start);
+                if !first.is_finite() {
+                    return Err(plan_error(format!(
                             "mask_expression_non_finite: mask drive '{}' terms[{term_index}].time at t = {start:e} s gives {first}",
                             drive.id
                         )));
-                    }
-                    (
-                        time.canonical_outputs()[0].clone(),
-                        time.time_program().code.clone(),
-                        time.depends_on_variables(),
-                    )
                 }
-                None => ("1.0".to_string(), STATIC_TIME_PROGRAM.to_vec(), false),
-            };
-            resolved.push(ResolvedMaskFieldTermBasisIR {
-                drive_id: drive.id.clone(),
-                term_index: term_index as u32,
-                time_origin: drive.time_origin,
-                projection_signature: signature(drive, term_index, &time_program, &field_xyz),
-                time_expression,
-                time_program,
-                time_dependent,
-                field_xyz,
-            });
+                (
+                    time.canonical_outputs()[0].clone(),
+                    time.time_program().code.clone(),
+                    time.depends_on_variables(),
+                )
+            }
+            None => ("1.0".to_string(), STATIC_TIME_PROGRAM.to_vec(), false),
+        };
+        resolved.push(ResolvedMaskFieldTermBasisIR {
+            drive_id: drive.id.clone(),
+            term_index: term_index as u32,
+            time_origin: drive.time_origin,
+            projection_signature: signature(drive, term_index, &time_program, &field_xyz),
+            time_expression,
+            time_program,
+            time_dependent,
+            field_xyz,
+        });
+    }
+    Ok(())
+}
+
+/// World translation of a FEM target's object frame (zero for a global target).
+fn fem_object_translation(problem: &ProblemIR, target: &FieldTargetIR) -> [f64; 3] {
+    let object_id = match target {
+        FieldTargetIR::Global {} => return [0.0; 3],
+        FieldTargetIR::Object { object_id } | FieldTargetIR::Region { object_id, .. } => object_id,
+    };
+    let geometry_name = problem
+        .magnets
+        .iter()
+        .find(|magnet| {
+            magnet.name == *object_id || magnet.object_id.as_deref() == Some(object_id.as_str())
+        })
+        .map_or(object_id.as_str(), |magnet| magnet.region.as_str());
+    problem
+        .geometry
+        .entries
+        .iter()
+        .find(|entry| entry.name() == geometry_name)
+        .map_or([0.0; 3], crate::fdm::top_level_geometry_translation)
+}
+
+/// Resolve every term of every active mask drive at the nodes of the FEM mesh
+/// of `plan` (its mesh, object segments, mesh parts and materials are final).
+pub(crate) fn resolve_fem_mask_field_terms(
+    problem: &ProblemIR,
+    plan: &FemPlanIR,
+) -> Result<Vec<ResolvedMaskFieldTermBasisIR>, PlanError> {
+    let nodes = &plan.mesh.nodes;
+    let mut resolved = Vec::new();
+    for drive in active_mask_field_drives(problem) {
+        // Magnetic elements of the target, then every node of those elements.
+        let elements =
+            crate::antenna_projection::resolve_fem_antenna_transverse_cell_mask(plan, &drive.target)
+                .map_err(|error| {
+                    plan_error(format!(
+                        "mask_target_unknown: mask drive '{}' targets {}, which has no magnetic elements on this FEM mesh ({})",
+                        drive.id,
+                        target_label(&drive.target),
+                        error.reasons.join("; ")
+                    ))
+                })?;
+        let mut target_nodes = vec![false; nodes.len()];
+        for (element, _) in elements
+            .iter()
+            .enumerate()
+            .filter(|(_, selected)| **selected)
+        {
+            for &node in plan.mesh.cells.item_nodes(element).unwrap_or_default() {
+                if let Some(selected) = target_nodes.get_mut(node as usize) {
+                    *selected = true;
+                }
+            }
+        }
+        let origin_m = frame_origin(drive, fem_object_translation(problem, &drive.target));
+        let support = shape_support(drive, nodes, origin_m, |index| target_nodes[index], "node")?;
+        let first = resolved.len();
+        resolve_drive_terms(
+            drive,
+            &DriveSamples {
+                points_m: nodes,
+                support,
+                origin_m,
+                sample: "node",
+            },
+            plan.time_stage.start_time_s,
+            &mut resolved,
+        )?;
+        // Periodic images are one degree of freedom: the mask must agree on them.
+        for basis in &resolved[first..] {
+            for pair in &plan.mesh.periodic_node_pairs {
+                let (a, b) = (pair.node_a as usize, pair.node_b as usize);
+                let (Some(left), Some(right)) = (basis.field_xyz.get(a), basis.field_xyz.get(b))
+                else {
+                    continue;
+                };
+                let differs = left.iter().zip(right).any(|(lhs, rhs)| {
+                    (lhs - rhs).abs() > 1.0e-12 * lhs.abs().max(rhs.abs()).max(1.0)
+                });
+                if differs {
+                    return Err(plan_error(format!(
+                        "mask_not_periodic: mask drive '{}' terms[{}] differs on the periodic node pair '{}' (nodes {a} and {b}: {:?} and {:?} A/m); a mask on a periodic FEM mesh must be periodic",
+                        drive.id, basis.term_index, pair.pair_id, left, right
+                    )));
+                }
+            }
         }
     }
     Ok(resolved)
