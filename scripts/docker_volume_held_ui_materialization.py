@@ -19,6 +19,7 @@ from pathlib import PurePosixPath
 REQUEST_SCHEMA = "fullmag.held-ui-materialization-request.v1"
 PREFLIGHT_SCHEMA = "fullmag.held-ui-materialization-preflight.v1"
 INVENTORY_SCHEMA = "fullmag.held-ui-materialization-inventory.v1"
+API_QUIESCE_INTENT_SCHEMA = "fullmag.held-ui-materialization-api-quiescence-intent.v1"
 PRIVATE_SCHEMA = "fullmag.development-held-ui-materialization-restore.v1"
 HANDOFF_SCHEMA = "fullmag.docker-held-ui-materialization-handoff.v1"
 PREFLIGHT_CAPTURE_MAX = 3 * 1024 * 1024
@@ -69,6 +70,10 @@ STOP_AUTHORITY_FIELDS = {
     "stop_attempt", "terminal", "preflight", "api_quiescence", "native_drain", "inventory",
 }
 PLAN_FIELDS = {"attempt", "plan_sha256", "maintenance_request_id"}
+API_QUIESCE_INTENT_FIELDS = {
+    "schema", "plan_sha256", "preflight_sha256", "inventory_sha256",
+    "ready_owner_identity", "plan",
+}
 
 
 HELD_READONLY_CAPTURE = r'''import base64,hashlib,json,os,pathlib,re,stat,sys,urllib.error,urllib.parse,urllib.request
@@ -137,12 +142,12 @@ def snapshot():
   parsed[name]=body
   responses[name]={"raw_base64":base64.b64encode(raw).decode("ascii"),"sha256":digest(raw)}
  return {"api_instance_id":api_id,**parsed},responses
-def stable(value):
+def stable(value,scene_sha256):
  status=value["status"]; session=status["session"]; resources=status["resources"]
  run=value["run"]; queue=value["queue"]; commands=value["commands"]; runtime=value["runtime"]
  return {"api_instance_id":value["api_instance_id"],
   "session":{key:session.get(key) for key in ("session_id","session_epoch","created_at","request_scope_epoch")},
-  "scene_revision":resources.get("scene_revision"),"scene_sha256":digest(canon(value["scene"])),
+  "scene_revision":resources.get("scene_revision"),"scene_sha256":scene_sha256,
   "run":{key:run.get(key) for key in ("run_id","session_id","revision","status","started_at")},
   "queue":{"revision":queue.get("revision"),"items":queue.get("items"),"next_cursor":queue.get("next_cursor")},
   "commands":{"revision":commands.get("revision"),"commands":commands.get("commands"),
@@ -167,6 +172,25 @@ def process_pin(pid):
  if argv!=binary.encode()+b"\0" or exe!=str(pathlib.Path(binary).resolve(strict=True)):
   fail("API process image differs")
  return {"pid":pid,"start_token":fields[19],"ppid":int(fields[1]),"argv":[binary],"exe":exe}
+def accepted_store_binding_for(store_path):
+ store_path=pathlib.Path(store_path)
+ try:
+  if store_path.resolve(strict=True)!=store_path: return None
+ except (OSError,RuntimeError): return None
+ text=str(store_path)
+ if not text.startswith("/") or text.endswith("/"): return None
+ return hashlib.sha256(b"fullmag.accepted-store-binding.v1\0"+os.fsencode(text+"/")).hexdigest()
+def process_store_identity_matches(process,store_path,expected_binding):
+ store_path=pathlib.Path(store_path); text=str(store_path)
+ if not isinstance(process,dict): return False
+ bootstrap=process.get("bootstrap")
+ return (accepted_store_binding_for(store_path)==expected_binding
+  and isinstance(expected_binding,str) and re.fullmatch(r"[0-9a-f]{64}",expected_binding) is not None
+  and process.get("accepted_store")==text
+  and process.get("api_diagnostic_only",False) is False
+  and isinstance(bootstrap,dict)
+  and bootstrap.get("schema")=="fullmag.docker-accepted-store-bootstrap.v1"
+  and bootstrap.get("store_root")==text and bootstrap.get("binding")==expected_binding)
 def native_owner():
  value=service._service_status(paths)
  service._validate_terminal_owner(value,state="ready",name="held UI preview Ready owner")
@@ -249,7 +273,7 @@ intent=obj(intent_raw,"accepted RunIntent")
 spec=intent.get("specification"); live=spec.get("parameters",{}).get("live_workspace",{}) if isinstance(spec,dict) else {}
 if (intent.get("schema_version")!="run_intent.v1" or intent.get("run_id")!=run_id
  or not isinstance(spec,dict) or not isinstance(live,dict) or spec.get("run_id")!=run_id
- or hashlib.sha256(canon(spec)).hexdigest()!=intent.get("payload_sha256")):
+ or not isinstance(intent.get("payload_sha256"),str)):
  fail("immutable accepted RunIntent differs")
 session=before["status"].get("session",{}); scene=before["scene"]
 created_at=session.get("created_at")
@@ -284,21 +308,23 @@ accepted={"project_id":spec_snapshot.get("project_id"),"run_id":run_id,"session_
  "old_request_scope_epoch":session["request_scope_epoch"],"scene_revision":live.get("scene_revision"),
  "run_intent_sha256":digest(intent_raw),"run_intent_payload_sha256":intent.get("payload_sha256"),
  "definition_sha256":definition_ref,"study_sha256":study_object_ref,
- "accepted_scene_sha256":digest(canon(scene)),"execution_input_sha256":execution.get("sha256"),
+ "accepted_scene_sha256":responses["scene"]["sha256"],"execution_input_sha256":execution.get("sha256"),
  "command_id":command.get("command_id"),"command_kind":command.get("kind"),
  "client_intent_id":command.get("client_intent_id"),"request_id":receipt.get("request_id"),
  "request_sha256":receipt.get("request_sha256"),"request_key_sha256":receipt.get("key_sha256"),
  "request_receipt_sha256":digest(canon(receipt))}
 owner=native_owner(); process_raw=read_record(service.process_receipt_path(paths),"native process receipt",64*1024)
 process=obj(process_raw,"native process receipt"); config_raw=native_config(); api_pin=process_pin(process.get("api_pid"))
+native_binding=accepted_store_binding_for(paths.store)
 if (process.get("schema")!="fullmag.docker-process-tree.v1" or process.get("state")!="ready"
- or process.get("service_owner") is None or service._owner_fingerprint(process["service_owner"])!=service._owner_fingerprint(owner)):
+ or process.get("service_owner") is None or service._owner_fingerprint(process["service_owner"])!=service._owner_fingerprint(owner)
+ or native_binding is None or not process_store_identity_matches(process,paths.store,native_binding)):
  fail("native Ready process receipt differs")
 identity=owner_identity(owner)
 inventory_before=inventory_side(run_id,intent,live); inventory_after=inventory_side(run_id,intent,live)
 if inventory_before!=inventory_after: fail("accepted store changed during the read-only preview")
 after,after_responses=snapshot()
-if stable(before)!=stable(after): fail("API/session/queue changed during the read-only preview")
+if stable(before,responses["scene"]["sha256"])!=stable(after,after_responses["scene"]["sha256"]): fail("API/session/queue changed during the read-only preview")
 if (responses.keys()!=after_responses.keys() or process_pin(api_pin["pid"])!=api_pin
  or read_record(service.process_receipt_path(paths),"native process receipt",64*1024)!=process_raw
  or native_config()!=config_raw): fail("native API/owner/config changed during preview")
@@ -307,13 +333,182 @@ command_bundle={"ledger":before["commands"],"command":command,"request_receipt":
   "raw_base64":base64.b64encode(detail_raw).decode("ascii"),"sha256":digest(detail_raw)}}
 preflight={"schema":"fullmag.held-ui-materialization-preflight.v1","source_scope":source_scope,
  "api_response":{"responses":responses,"snapshot":before},"commands":command_bundle,
- "native_config_sha256":digest(config_raw),"ready_owner_sha256":digest(canon(identity)),
+ "native_config_sha256":digest(config_raw),"accepted_store_binding":native_binding,
+ "ready_owner_sha256":digest(canon(identity)),
  "process_sha256":digest(process_raw),"api_pin":api_pin,"ready_owner_identity":identity,
  "run_intent_sha256":accepted["run_intent_sha256"],"execution_input_sha256":accepted["execution_input_sha256"]}
 if len(canon(preflight)+b"\n")>MAX: fail("complete preflight proof exceeds its bound")
 inventory={"schema":"fullmag.held-ui-materialization-inventory.v1",
  "before":inventory_before,"after":inventory_after}
 print(json.dumps({"accepted":accepted,"preflight":preflight,"inventory":inventory},sort_keys=True,separators=(",",":")))
+'''
+
+_HELD_READONLY_CAPTURE_MARKER = "input_raw=sys.stdin.buffer.read(MAX_RECORD+1)"
+if HELD_READONLY_CAPTURE.count(_HELD_READONLY_CAPTURE_MARKER) != 1:
+    raise RuntimeError("held read-only capture prelude boundary changed")
+HELD_READONLY_CAPTURE_PRELUDE = HELD_READONLY_CAPTURE.split(
+    _HELD_READONLY_CAPTURE_MARKER, 1,
+)[0]
+
+HELD_API_QUIESCE_CAPTURE_BODY = r'''import signal,socket,time,urllib.error,urllib.parse
+API_BINARY="/opt/fullmag/package/bin/fullmag-api"
+CAUSE="Fullmag API exited unexpectedly (-15)"
+def process_record():
+ raw=read_record(service.process_receipt_path(paths),"held UI quiescence process receipt",64*1024)
+ return raw,obj(raw,"held UI quiescence process receipt")
+def proc_pin(pid): return process_pin(pid)
+def held_api_context(value,scene_sha256):
+ status=value["status"]; session=status["session"]; resources=status["resources"]
+ run=value["run"]; queue=value["queue"]; commands=value["commands"]; runtime=value["runtime"]
+ items=queue.get("items",[])
+ stable_items=[{key:item.get(key) for key in ("item_id","project_id","run_id","state","task_id")}
+  for item in items if isinstance(item,dict)]
+ entries=commands.get("commands",[])
+ stable_commands=[{key:entry.get(key) for key in
+  ("command_id","seq","kind","client_intent_id","request_id","status","target")}
+  for entry in entries if isinstance(entry,dict)]
+ stable_counts={key:commands.get(key) for key in
+  ("pending_count","accepted_count","dispatched_count","running_count","completed_count","rejected_count","failed_count")}
+ return {"api_instance_id":value.get("api_instance_id"),
+  "session":{key:session.get(key) for key in ("session_id","session_epoch","created_at","request_scope_epoch")},
+  "scene_revision":resources.get("scene_revision"),"scene_sha256":scene_sha256,
+  "run":{key:run.get(key) for key in ("run_id","session_id","revision","status","started_at")},
+  "queue":{"revision":queue.get("revision"),"items":stable_items,"next_cursor":queue.get("next_cursor")},
+  "commands":{"revision":commands.get("revision"),"counts":stable_counts,"commands":stable_commands},
+  "runtime":{key:runtime.get(key) for key in ("schema_version","configured","state","reason")},
+  "health":{key:value["health"].get(key) for key in ("status","active_session")}}
+def owner_digest(value): return digest(canon(owner_identity(value)))
+def verify_run_intent(accepted):
+ root=paths.store/"runs"/accepted["run_id"]
+ raw=read_record(root/"run_intent.json","held accepted RunIntent")
+ if digest(raw)!=accepted["run_intent_sha256"]: fail("accepted RunIntent bytes changed")
+ run_intent=obj(raw,"held accepted RunIntent")
+ spec=run_intent.get("specification"); live=spec.get("parameters",{}).get("live_workspace",{}) if isinstance(spec,dict) else {}
+ snapshot_spec=spec.get("snapshot",{}) if isinstance(spec,dict) else {}
+ command=live.get("command"); receipt=live.get("request_receipt")
+ execution=live.get("execution_input")
+ if (run_intent.get("schema_version")!="run_intent.v1" or run_intent.get("run_id")!=accepted["run_id"]
+  or spec.get("run_id")!=accepted["run_id"]
+  or run_intent.get("payload_sha256")!=accepted["run_intent_payload_sha256"]
+  or live.get("session_id")!=accepted["session_id"] or live.get("session_epoch")!=accepted["session_epoch"]
+  or live.get("api_instance_id")!=accepted["old_api_instance_id"]
+  or live.get("scene_revision")!=accepted["scene_revision"]
+  or command!={"command_id":accepted["command_id"],"client_intent_id":accepted["client_intent_id"],
+    "frozen_spins_runtime_plan_binding":command.get("frozen_spins_runtime_plan_binding") if isinstance(command,dict) else None,
+    "initial_state":command.get("initial_state") if isinstance(command,dict) else None,
+    "kind":"relax","precondition":command.get("precondition") if isinstance(command,dict) else None,
+    "reason":command.get("reason") if isinstance(command,dict) else None,
+    "requested_at_unix_ms":command.get("requested_at_unix_ms") if isinstance(command,dict) else None,
+    "created_at_unix_ms":command.get("created_at_unix_ms") if isinstance(command,dict) else None,
+    "seq":0,"target":command.get("target") if isinstance(command,dict) else None}
+  or not isinstance(receipt,dict) or receipt.get("request_id")!=accepted["request_id"]
+  or receipt.get("request_sha256")!=accepted["request_sha256"]
+  or receipt.get("key_sha256")!=accepted["request_key_sha256"]
+  or receipt.get("command_id")!=accepted["command_id"] or receipt.get("command_kind")!="relax"
+  or receipt.get("client_intent_id")!=accepted["client_intent_id"]
+  or digest(canon(receipt))!=accepted["request_receipt_sha256"]
+  or not isinstance(execution,dict) or execution.get("schema_version")!="fullmag.scene_execution_input.v1"
+  or execution.get("sha256")!=accepted["execution_input_sha256"]
+  or run_intent.get("definition_object_ref")!=accepted["definition_sha256"]
+  or run_intent.get("study_object_ref")!=accepted["study_sha256"]
+  or snapshot_spec.get("project_id")!=accepted["project_id"]
+  or snapshot_spec.get("definition_sha256")!=accepted["definition_sha256"]
+  or spec.get("study",{}).get("plan_sha256")!=accepted["study_sha256"]):
+  fail("accepted RunIntent, request receipt, or execution input changed")
+ return run_intent,live
+def detail_is_pinned_404(accepted):
+ path="/v2/sessions/current/simulation/commands/"+urllib.parse.quote(accepted["command_id"],safe="")
+ headers={"Host":"localhost","Accept":"application/json","x-fullmag-api-instance":accepted["old_api_instance_id"]}
+ req=urllib.request.Request("http://127.0.0.1:8081"+path,headers=headers)
+ try:
+  response=urllib.request.urlopen(req,timeout=10); status=response.status; response_headers=response.headers
+  response.read(256*1024+1); response.close()
+ except urllib.error.HTTPError as error:
+  status=error.code; response_headers=error.headers; error.read(256*1024+1); error.close()
+ ids=response_headers.get_all("x-fullmag-api-instance") or []
+ if status!=404 or ids!=[accepted["old_api_instance_id"]]:
+  fail("original HTTP Compute detail is no longer the pinned 404")
+def read_held_authority(intent):
+ plan=intent["plan"]; accepted=plan["accepted"]; native=plan["native"]
+ current,responses=snapshot()
+ if held_api_context(current,responses["scene"]["sha256"])!=plan["current"] or current["status"].get("solver",{}).get("state")!="waiting_for_compute":
+  fail("API/session/request-scope/scene/queue changed after preview")
+ owner=native_owner(); identity=owner_identity(owner)
+ process_raw,process=process_record()
+ config_raw=native_config()
+ native_binding=accepted_store_binding_for(paths.store)
+ if (process.get("schema")!="fullmag.docker-process-tree.v1" or process.get("state")!="ready"
+  or service._owner_fingerprint(process.get("service_owner",{}))!=service._owner_fingerprint(owner)
+  or native_binding is None or native_binding!=native["accepted_store_binding"]
+  or not process_store_identity_matches(process,paths.store,native["accepted_store_binding"])
+  or owner_digest(owner)!=native["ready_owner_sha256"]
+  or digest(process_raw)!=native["process_sha256"]
+  or digest(config_raw)!=native["config_sha256"]):
+  fail("native Ready owner, process receipt, or config changed after preview")
+ api=process_pin(process.get("api_pid"))
+ if api!=native["api_pin"]: fail("pinned API PID or start token changed after preview")
+ run_intent,live=verify_run_intent(accepted)
+ inventory=inventory_side(accepted["run_id"],run_intent,live)
+ if inventory!=plan["inventory"]: fail("accepted-store inventory changed after preview")
+ detail_is_pinned_404(accepted)
+ return {"plan_sha256":intent["plan_sha256"],
+  "source_scope_sha256":digest(canon(plan["source_scope"])),
+  "preflight_sha256":intent["preflight_sha256"],"inventory_sha256":intent["inventory_sha256"],
+  "api_context_sha256":digest(canon(held_api_context(current,responses["scene"]["sha256"]))),
+  "native_config_sha256":digest(config_raw),"accepted_store_binding":native_binding,
+  "process_sha256":digest(process_raw),
+  "api_pin":api,"ready_owner_sha256":owner_digest(owner),
+  "run_intent_sha256":accepted["run_intent_sha256"],
+  "execution_input_sha256":accepted["execution_input_sha256"],
+  "store_id":inventory["store_id"]},owner,identity,inventory
+request_raw=sys.stdin.buffer.read(256*1024+1)
+if len(request_raw)>256*1024: fail("API quiescence intent request exceeds its bound")
+request=obj(request_raw,"API quiescence intent request")
+intent=request.get("intent"); intent_sha=request.get("intent_sha256")
+if digest(canon(intent)+b"\n")!=intent_sha: fail("API quiescence intent digest differs")
+if intent.get("schema")!="fullmag.held-ui-materialization-api-quiescence-intent.v1":
+ fail("held API quiescence intent schema differs")
+plan=intent["plan"]
+if digest(canon(plan))!=intent.get("plan_sha256"): fail("preview plan digest differs")
+accepted=plan["accepted"]; native=plan["native"]
+if len(canon(intent)+b"\n")>256*1024: fail("held API quiescence intent exceeds its bound")
+before_fences,owner,identity,inventory=read_held_authority(intent)
+expected={"plan_sha256":intent["plan_sha256"],
+ "source_scope_sha256":digest(canon(plan["source_scope"])),
+ "preflight_sha256":intent["preflight_sha256"],"inventory_sha256":intent["inventory_sha256"],
+ "api_context_sha256":digest(canon(plan["current"])),
+ "native_config_sha256":native["config_sha256"],
+ "accepted_store_binding":native["accepted_store_binding"],"process_sha256":native["process_sha256"],
+ "api_pin":native["api_pin"],"ready_owner_sha256":native["ready_owner_sha256"],
+ "run_intent_sha256":accepted["run_intent_sha256"],
+ "execution_input_sha256":accepted["execution_input_sha256"],
+ "store_id":plan["inventory"]["store_id"]}
+if before_fences!=expected: fail("held API quiescence pre-signal fences differ")
+def verify_before_signal():
+ fresh, fresh_owner, fresh_identity, fresh_inventory=read_held_authority(intent)
+ if (fresh!=expected or fresh_identity!=identity or fresh_inventory!=inventory
+  or service._owner_fingerprint(fresh_owner)!=service._owner_fingerprint(owner)):
+  fail("held UI API or native authority changed before pidfd signal")
+def signal_api_once(fd,signum,info,flags): signal.pidfd_send_signal(fd,signum,info,flags)
+api=native["api_pin"]
+retained_raw,retained=pidfd_close_api(api,owner,verify_before_signal,signal_api_once)
+fresh_owner=native_owner(); fresh_identity=owner_identity(fresh_owner)
+process_raw_after,process_after=process_record()
+run_intent_after,live_after=verify_run_intent(accepted)
+inventory_after=inventory_side(accepted["run_id"],run_intent_after,live_after)
+if (service._owner_fingerprint(fresh_owner)!=service._owner_fingerprint(owner)
+ or fresh_identity!=identity or digest(native_config())!=native["config_sha256"]
+ or not process_store_identity_matches(process_after,paths.store,native["accepted_store_binding"])
+ or inventory_after!=inventory or process_raw_after!=retained_raw or process_after!=retained):
+ fail("held API closure changed native owner, config, or accepted-store pins")
+receipt={"schema":"fullmag.native-terminal-api-quiescence.v1","intent_sha256":intent_sha,
+ "api_pin":api,"api_closed":True,"signal":"SIGTERM","retained_process":retained,
+ "retained_process_sha256":digest(retained_raw)}
+after_fences={"native_config_sha256":digest(native_config()),
+ "accepted_store_binding":accepted_store_binding_for(paths.store),
+ "inventory_sha256":digest(canon(inventory_after)),"ready_owner_sha256":owner_digest(fresh_owner),
+ "retained_process_sha256":digest(retained_raw)}
+print(json.dumps({"receipt":receipt,"fences":{"before":before_fences,"after":after_fences}},sort_keys=True,separators=(",",":")))
 '''
 
 
@@ -599,12 +794,12 @@ def validate_request(
 def validate_preflight(value: object, accepted: Mapping) -> dict:
     """Validate bounded actual API response and immutable HTTP Compute receipt."""
     _exact(value, {"schema", "source_scope", "api_response", "commands", "native_config_sha256",
-                   "ready_owner_sha256", "process_sha256", "api_pin", "ready_owner_identity",
+                   "accepted_store_binding", "ready_owner_sha256", "process_sha256", "api_pin", "ready_owner_identity",
                    "run_intent_sha256", "execution_input_sha256"}, "preflight")
     _require(value.get("schema") == PREFLIGHT_SCHEMA, "preflight schema differs")
     source_scope = _exact(value.get("source_scope"), SOURCE_SCOPE_FIELDS, "preflight source scope")
     _require(source_scope == value.get("source_scope"), "preflight source scope is malformed")
-    for field in ("native_config_sha256", "ready_owner_sha256", "process_sha256",
+    for field in ("native_config_sha256", "accepted_store_binding", "ready_owner_sha256", "process_sha256",
                   "run_intent_sha256", "execution_input_sha256"):
         _digest(value.get(field), "preflight " + field)
     _require(value["run_intent_sha256"] == accepted.get("run_intent_sha256")
@@ -669,9 +864,10 @@ def validate_preflight(value: object, accepted: Mapping) -> dict:
              and session.get("request_scope_epoch") == accepted.get("old_request_scope_epoch")
              and snapshot["api_instance_id"] == accepted.get("old_api_instance_id"),
              "API/session/request-scope identity differs")
+    # Bind the scene's exact API bytes; Rust and Python may spell the same nm floats differently.
     _require(resources.get("scene_revision") == accepted.get("scene_revision")
              and snapshot["scene"].get("revision") == accepted.get("scene_revision")
-             and sha(canonical(snapshot["scene"])) == accepted.get("accepted_scene_sha256"),
+             and responses["scene"]["sha256"] == accepted.get("accepted_scene_sha256"),
              "accepted scene revision or canonical scene digest differs")
     run = snapshot["run"]
     _require(run.get("run_id") == accepted.get("run_id")
@@ -884,6 +1080,7 @@ def build_preview_plan(*, attempt: str, maintenance_request_id: str, source_scop
         },
         "native": {
             "config_sha256": preflight.get("native_config_sha256"),
+            "accepted_store_binding": preflight.get("accepted_store_binding"),
             "process_sha256": preflight.get("process_sha256"),
             "api_pin": preflight.get("api_pin"),
             "ready_owner_sha256": preflight.get("ready_owner_sha256"),
@@ -893,6 +1090,434 @@ def build_preview_plan(*, attempt: str, maintenance_request_id: str, source_scop
         "inventory": dict(before),
     }
     return plan, sha(canonical(plan))
+
+
+def _quiescence_request_from_plan(plan: Mapping) -> dict:
+    attempt = _token(plan.get("attempt"), "quiescence development attempt")
+    maintenance_id = _uuid(plan.get("maintenance_request_id"), "quiescence maintenance request id")
+    stop_attempt = "0" * 32 if attempt != "0" * 32 else "1" * 32
+    request_root = "held-ui-materialization/" + maintenance_id
+    return {
+        "schema": REQUEST_SCHEMA,
+        "plan": {"attempt": attempt, "plan_sha256": "f" * 64,
+                 "maintenance_request_id": maintenance_id},
+        "source_scope": plan.get("source_scope"),
+        "stop_authority": {
+            "stop_attempt": stop_attempt,
+            "terminal": {"path": "held-ui-materialization-stop/attempts/" + stop_attempt + "/terminal.json",
+                         "sha256": "9" * 64},
+            "preflight": {"path": request_root + "/preflight.json", "sha256": "1" * 64},
+            "api_quiescence": {"path": request_root + "/api-quiescence.json", "sha256": "2" * 64},
+            "native_drain": {"path": request_root + "/native-drain.json", "sha256": "3" * 64},
+            "inventory": {"path": request_root + "/inventory.json", "sha256": "4" * 64},
+        },
+        "accepted": plan.get("accepted"),
+    }
+
+
+def validate_api_quiescence_intent(
+    value: object,
+    *,
+    expected_sha256: str | None = None,
+    expected_plan_sha256: str | None = None,
+) -> dict:
+    """Validate the immutable held-run intent before any API-close signal."""
+    intent = _exact(value, API_QUIESCE_INTENT_FIELDS, "API quiescence intent")
+    _require(intent.get("schema") == API_QUIESCE_INTENT_SCHEMA, "API quiescence intent schema differs")
+    _digest(intent.get("plan_sha256"), "quiescence preview plan digest")
+    if expected_plan_sha256 is not None:
+        _require(intent["plan_sha256"] == _digest(expected_plan_sha256, "expected preview plan digest"),
+                 "approved preview plan changed before API quiescence")
+    _digest(intent.get("preflight_sha256"), "quiescence preflight digest")
+    _digest(intent.get("inventory_sha256"), "quiescence inventory digest")
+    plan = _exact(intent.get("plan"), {
+        "schema", "attempt", "maintenance_request_id", "source_scope", "accepted",
+        "current", "native", "inventory",
+    }, "quiescence preview plan")
+    _require(plan.get("schema") == "fullmag.development-held-ui-materialization-plan.v1",
+             "quiescence preview plan schema differs")
+    _token(plan.get("attempt"), "quiescence development attempt")
+    maintenance_id = _uuid(plan.get("maintenance_request_id"), "quiescence maintenance request id")
+    _require(sha(canonical(plan)) == intent["plan_sha256"], "quiescence preview plan bytes differ")
+    request = validate_request(_quiescence_request_from_plan(plan))
+    accepted = request["accepted"]
+    current = _exact(plan.get("current"), {
+        "api_instance_id", "session", "scene_revision", "scene_sha256", "run",
+        "queue", "commands", "runtime", "health",
+    }, "quiescence API context")
+    api_id = _uuid(current.get("api_instance_id"), "quiescence API identity")
+    _require(api_id == accepted["old_api_instance_id"], "quiescence API identity differs from accepted RunIntent")
+    session = _exact(current.get("session"), {
+        "session_id", "session_epoch", "created_at", "request_scope_epoch",
+    }, "quiescence session scope")
+    _require(session.get("session_id") == accepted["session_id"]
+             and session.get("session_epoch") == accepted["session_id"] + "@"
+                 + str(accepted["session_created_at_unix_ms"])
+             and session.get("created_at") == str(accepted["session_created_at_unix_ms"])
+             and session.get("request_scope_epoch") == accepted["old_request_scope_epoch"],
+             "quiescence session/request-scope identity differs")
+    _require(current.get("scene_revision") == accepted["scene_revision"]
+             and current.get("scene_sha256") == accepted["accepted_scene_sha256"],
+             "quiescence scene basis differs")
+    run = _exact(current.get("run"), {"run_id", "session_id", "revision", "status", "started_at"},
+                 "quiescence public run")
+    _require(run.get("run_id") == accepted["run_id"] and run.get("session_id") == accepted["session_id"]
+             and run.get("status") == "waiting_for_compute", "quiescence public run differs")
+    queue = _exact(current.get("queue"), {"revision", "items", "next_cursor"}, "quiescence queue")
+    items = queue.get("items")
+    _require(queue.get("next_cursor") is None and isinstance(items, list) and len(items) == 1
+             and items[0].get("run_id") == accepted["run_id"]
+             and items[0].get("project_id") == accepted["project_id"]
+             and items[0].get("state") == "pending_materialization" and items[0].get("task_id") is None,
+             "quiescence queue is not the exact held run")
+    commands = _exact(current.get("commands"), {"revision", "counts", "commands"},
+                      "quiescence public command ledger")
+    _require(commands.get("commands") == [] and isinstance(commands.get("counts"), Mapping)
+             and all(commands["counts"].get(name) == 0 for name in (
+                 "pending_count", "accepted_count", "dispatched_count", "running_count")),
+             "quiescence command ledger has another active or published command")
+    runtime = _exact(current.get("runtime"), {"schema_version", "configured", "state", "reason"},
+                     "quiescence runtime status")
+    _require(runtime.get("configured") is True and runtime.get("state") == "ready",
+             "quiescence runtime is not Ready")
+    health = _exact(current.get("health"), {"status", "active_session"}, "quiescence health")
+    _require(health == {"status": "ok", "active_session": True}, "quiescence API health differs")
+
+    native = _exact(plan.get("native"), {
+        "config_sha256", "accepted_store_binding", "process_sha256", "api_pin", "ready_owner_sha256",
+        "run_intent_sha256", "execution_input_sha256",
+    }, "quiescence native pins")
+    for field in ("config_sha256", "accepted_store_binding", "process_sha256", "ready_owner_sha256",
+                  "run_intent_sha256", "execution_input_sha256"):
+        _digest(native.get(field), "quiescence native " + field)
+    _require(native.get("run_intent_sha256") == accepted["run_intent_sha256"]
+             and native.get("execution_input_sha256") == accepted["execution_input_sha256"],
+             "quiescence native RunIntent or execution input differs")
+    api_pin = _exact(native.get("api_pin"), {"pid", "start_token", "ppid", "argv", "exe"},
+                     "quiescence API process pin")
+    _require(type(api_pin.get("pid")) is int and api_pin["pid"] > 1
+             and type(api_pin.get("ppid")) is int and api_pin["ppid"] > 0
+             and isinstance(api_pin.get("start_token"), str)
+             and api_pin["start_token"].isdigit() and int(api_pin["start_token"]) > 0
+             and api_pin.get("argv") == ["/opt/fullmag/package/bin/fullmag-api"]
+             and api_pin.get("exe") == "/opt/fullmag/package/bin/fullmag-api",
+             "quiescence API PID incarnation differs")
+    ready_owner = _exact(intent.get("ready_owner_identity"), {
+        "owner_token", "process_start_token", "pid", "host", "target_id", "protocol",
+        "build_commit", "build_snapshot", "control_address", "compute_pool_generation",
+        "preparation_pool_generation", "compute_pool_id", "preparation_pool_id", "children",
+    }, "quiescence Ready owner identity")
+    _require(sha(canonical(ready_owner)) == native["ready_owner_sha256"],
+             "quiescence Ready owner digest differs")
+    inventory = _exact(plan.get("inventory"), INVENTORY_FIELDS, "quiescence store inventory")
+    validate_inventory({"schema": INVENTORY_SCHEMA, "before": inventory, "after": inventory}, accepted)
+    if expected_sha256 is not None:
+        _require(sha(canonical(intent) + b"\n") == _digest(expected_sha256, "expected intent digest"),
+                 "immutable API quiescence intent digest differs")
+    return dict(intent)
+
+
+def prepare_api_quiescence_intent(*, attempt: str, maintenance_request_id: str,
+                                  plan_sha256: str, source_scope: Mapping, accepted: Mapping,
+                                  preflight: Mapping, inventory: Mapping) -> tuple[dict, bytes, str]:
+    """Prepare an immutable, scope-pinned API-close intent without signaling the backend."""
+    _token(attempt, "quiescence development attempt")
+    _uuid(maintenance_request_id, "quiescence maintenance request id")
+    _digest(plan_sha256, "approved preview plan digest")
+    _exact(source_scope, SOURCE_SCOPE_FIELDS, "quiescence source scope")
+    preflight = validate_preflight(preflight, accepted)
+    inventory = validate_inventory(inventory, accepted)
+    _require(preflight.get("source_scope") == source_scope,
+             "quiescence source scope differs from the captured preflight")
+    plan, actual_plan_sha256 = build_preview_plan(
+        attempt=attempt, maintenance_request_id=maintenance_request_id,
+        source_scope=source_scope, accepted=accepted, preflight=preflight, inventory=inventory,
+    )
+    _require(actual_plan_sha256 == _digest(plan_sha256, "approved preview plan digest"),
+             "API quiescence basis differs from the approved preview plan")
+    intent = {
+        "schema": API_QUIESCE_INTENT_SCHEMA,
+        "plan_sha256": actual_plan_sha256,
+        "preflight_sha256": sha(canonical(preflight) + b"\n"),
+        "inventory_sha256": sha(canonical(inventory) + b"\n"),
+        "ready_owner_identity": preflight["ready_owner_identity"],
+        "plan": plan,
+    }
+    raw = canonical(validate_api_quiescence_intent(intent, expected_plan_sha256=plan_sha256)) + b"\n"
+    _require(len(raw) <= MAX_PROOF_BYTES, "API quiescence intent exceeds its byte limit")
+    return intent, raw, sha(raw)
+
+
+def quiescence_intent_relative(maintenance_request_id: str) -> str:
+    return request_relative(maintenance_request_id).rsplit("/", 1)[0] + "/api-quiescence-intent.json"
+
+
+def quiescence_start_claim_relative(maintenance_request_id: str) -> str:
+    return request_relative(maintenance_request_id).rsplit("/", 1)[0] + "/api-quiescence-start.json"
+
+
+def _publish_immutable_record(control, relative: str, raw: bytes, label: str) -> str:
+    control_path = "runtime-control/" + relative
+    existing = control.read_bytes(control_path, optional=True)
+    if existing is not None:
+        _require(existing == raw, "maintenance request already has different " + label + " bytes")
+    else:
+        control.write_bytes(control_path, raw)
+    return sha(raw)
+
+
+def publish_api_quiescence_inputs(control, maintenance_request_id: str, *, source_scope: Mapping,
+                                  accepted: Mapping, preflight: Mapping,
+                                  inventory: Mapping) -> dict:
+    """Durably pin the actual read-only API and store observations before API closure."""
+    maintenance_id = _uuid(maintenance_request_id, "quiescence maintenance request id")
+    _exact(source_scope, SOURCE_SCOPE_FIELDS, "quiescence source scope")
+    preflight = validate_preflight(preflight, accepted)
+    inventory = validate_inventory(inventory, accepted)
+    _require(preflight.get("source_scope") == source_scope,
+             "quiescence source scope differs from the captured preflight")
+    root = request_relative(maintenance_id).rsplit("/", 1)[0]
+    preflight_raw = canonical(preflight) + b"\n"
+    inventory_raw = canonical(inventory) + b"\n"
+    _require(len(preflight_raw) <= MAX_PROOF_BYTES and len(inventory_raw) <= MAX_PROOF_BYTES,
+             "quiescence API or store input exceeds its proof byte limit")
+    return {
+        "preflight": {"path": root + "/preflight.json",
+                      "sha256": _publish_immutable_record(
+                          control, root + "/preflight.json", preflight_raw, "preflight")},
+        "inventory": {"path": root + "/inventory.json",
+                      "sha256": _publish_immutable_record(
+                          control, root + "/inventory.json", inventory_raw, "inventory")},
+    }
+
+
+def _validate_durable_quiescence_inputs(control, intent: Mapping) -> None:
+    maintenance_id = intent["plan"]["maintenance_request_id"]
+    root = request_relative(maintenance_id).rsplit("/", 1)[0]
+    preflight_raw = control.read_bytes("runtime-control/" + root + "/preflight.json")
+    inventory_raw = control.read_bytes("runtime-control/" + root + "/inventory.json")
+    _require(isinstance(preflight_raw, bytes) and len(preflight_raw) <= MAX_PROOF_BYTES
+             and sha(preflight_raw) == intent["preflight_sha256"],
+             "durable API preflight bytes differ from the quiescence intent")
+    _require(isinstance(inventory_raw, bytes) and len(inventory_raw) <= MAX_PROOF_BYTES
+             and sha(inventory_raw) == intent["inventory_sha256"],
+             "durable store inventory bytes differ from the quiescence intent")
+    preflight = decode(preflight_raw, "durable quiescence preflight", maximum=MAX_PROOF_BYTES)
+    inventory = decode(inventory_raw, "durable quiescence inventory", maximum=MAX_PROOF_BYTES)
+    accepted = intent["plan"]["accepted"]
+    preflight = validate_preflight(preflight, accepted)
+    inventory = validate_inventory(inventory, accepted)
+    _require(preflight_raw == canonical(preflight) + b"\n"
+             and inventory_raw == canonical(inventory) + b"\n",
+             "durable API or store input is not canonical JSON plus LF")
+    _require(preflight.get("source_scope") == intent["plan"]["source_scope"],
+             "durable API preflight source scope differs")
+    plan, plan_sha256 = build_preview_plan(
+        attempt=intent["plan"]["attempt"],
+        maintenance_request_id=maintenance_id,
+        source_scope=intent["plan"]["source_scope"],
+        accepted=accepted, preflight=preflight, inventory=inventory,
+    )
+    _require(plan_sha256 == intent["plan_sha256"] and plan == intent["plan"],
+             "durable API/store inputs no longer reproduce the approved preview plan")
+
+
+def publish_api_quiescence_intent(control, intent: Mapping, *,
+                                  expected_plan_sha256: str) -> tuple[str, str]:
+    """Publish the prepared close intent with immutable request-id CAS semantics."""
+    validated = validate_api_quiescence_intent(intent, expected_plan_sha256=expected_plan_sha256)
+    raw = canonical(validated) + b"\n"
+    _require(len(raw) <= MAX_PROOF_BYTES, "API quiescence intent exceeds its byte limit")
+    _validate_durable_quiescence_inputs(control, validated)
+    relative = quiescence_intent_relative(validated["plan"]["maintenance_request_id"])
+    return relative, _publish_immutable_record(control, relative, raw, "API quiescence intent")
+
+
+def _expected_api_quiescence_fences(intent: Mapping, retained_process_sha256: str | None = None) -> dict:
+    plan = intent["plan"]
+    accepted = plan["accepted"]
+    native = plan["native"]
+    before = {
+        "plan_sha256": intent["plan_sha256"],
+        "source_scope_sha256": sha(canonical(plan["source_scope"])),
+        "preflight_sha256": intent["preflight_sha256"],
+        "inventory_sha256": intent["inventory_sha256"],
+        "api_context_sha256": sha(canonical(plan["current"])),
+        "native_config_sha256": native["config_sha256"],
+        "accepted_store_binding": native["accepted_store_binding"],
+        "process_sha256": native["process_sha256"],
+        "api_pin": native["api_pin"],
+        "ready_owner_sha256": native["ready_owner_sha256"],
+        "run_intent_sha256": accepted["run_intent_sha256"],
+        "execution_input_sha256": accepted["execution_input_sha256"],
+        "store_id": plan["inventory"]["store_id"],
+    }
+    after = {
+        "native_config_sha256": native["config_sha256"],
+        "accepted_store_binding": native["accepted_store_binding"],
+        "inventory_sha256": sha(canonical(plan["inventory"])),
+        "ready_owner_sha256": native["ready_owner_sha256"],
+    }
+    if retained_process_sha256 is not None:
+        after["retained_process_sha256"] = _digest(
+            retained_process_sha256, "retained process digest",
+        )
+    return {"before": before, "after": after}
+
+
+def held_api_quiescence_capture_program() -> str:
+    from docker_volume_native_terminal_stop import quiescence_capture_program
+    return quiescence_capture_program(
+        HELD_API_QUIESCE_CAPTURE_BODY, prelude=HELD_READONLY_CAPTURE_PRELUDE,
+    )
+
+
+def _require_held_stop_operation(control, operation: Mapping) -> str:
+    """Require the group-wide operation lease before creating a spent claim."""
+    receipt = operation.get("receipt") if isinstance(operation, Mapping) else None
+    attempt = receipt.get("attempt") if isinstance(receipt, Mapping) else None
+    _require(isinstance(operation, dict)
+             and getattr(control, "_active_operation", None) is operation
+             and operation.get("lease_ready") is True
+             and operation.get("daemon_pending") is False
+             and isinstance(receipt, dict)
+             and receipt.get("schema") == "fullmag.docker-build-operation.v1"
+             and receipt.get("phase") == "held-ui-materialization-stop"
+             and receipt.get("compose_project") == getattr(control, "project", None)
+             and receipt.get("control_volume") == getattr(control, "volume", None)
+             and receipt.get("control_namespace", "") == getattr(control, "namespace", "")
+             and isinstance(attempt, str) and TOKEN_RE.fullmatch(attempt) is not None
+             and operation.get("root") == "held-ui-materialization-stop/attempts/" + attempt,
+             "API quiescence requires the active group held-stop operation lease")
+    return attempt
+
+
+def _exclusive_start_claim(control, operation: dict, intent: Mapping,
+                           intent_sha256: str) -> dict:
+    """Create a durable no-replay claim with O_EXCL while the group lease is held."""
+    from docker_build_control import docker_capture
+
+    operation_attempt = _require_held_stop_operation(control, operation)
+    plan = intent["plan"]
+    accepted = plan["accepted"]
+    maintenance_id = plan["maintenance_request_id"]
+    relative = quiescence_start_claim_relative(maintenance_id)
+    control_relative = "runtime-control/" + relative
+    _require(control.read_bytes(control_relative, optional=True) is None,
+             "API quiescence start claim already exists; replay is prohibited until typed reconciliation")
+
+    claim = {
+        "schema": "fullmag.held-ui-materialization-api-quiescence-start.v1",
+        "state": "started",
+        "maintenance_request_id": maintenance_id,
+        "plan_sha256": intent["plan_sha256"],
+        "intent_sha256": intent_sha256,
+        "run_id": accepted["run_id"],
+        "run_intent_sha256": accepted["run_intent_sha256"],
+        "backend_container_id": plan["source_scope"]["backend_container_id"],
+        "operation_attempt": operation_attempt,
+    }
+    raw = canonical(claim) + b"\n"
+    _require(len(raw) <= 16 * 1024, "API quiescence start claim exceeds its byte limit")
+    path = control.path(control_relative)
+    program = "\n".join((
+        "import os,sys",
+        "path=" + repr(path),
+        "parent=os.path.dirname(path)",
+        "data=sys.stdin.buffer.read(16385)",
+        "if not data or len(data)>16384: raise SystemExit('claim size differs')",
+        "if not os.path.isdir(parent) or os.path.realpath(parent)!=parent: raise SystemExit('claim parent differs')",
+        "flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0)",
+        "fd=os.open(path,flags,0o640)",
+        "try:",
+        " view=memoryview(data)",
+        " while view:",
+        "  written=os.write(fd,view)",
+        "  if written<=0: raise OSError('claim write made no progress')",
+        "  view=view[written:]",
+        " os.fsync(fd)",
+        "finally: os.close(fd)",
+        "dirfd=os.open(parent,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0))",
+        "try: os.fsync(dirfd)",
+        "finally: os.close(dirfd)",
+        "sys.stdout.write('CLAIMED\\n')",
+    ))
+    import shlex
+    try:
+        result = docker_capture(*control.helper_args(
+            "exec /usr/local/bin/python3 -I -c " + shlex.quote(program),
+        ), data=raw, timeout=90)
+    except Exception as error:
+        raise _error("API quiescence start claim could not be confirmed; no API exec was attempted") from error
+    _require(result.returncode == 0 and result.stdout == b"CLAIMED\n",
+             "API quiescence start claim already exists or was not durably created")
+    _require(control.read_bytes(control_relative, optional=True) == raw,
+             "API quiescence start claim bytes could not be re-read exactly")
+    reference = {"path": relative, "sha256": sha(raw), "operation_attempt": operation_attempt,
+                 "state": "started"}
+    operation["receipt"]["held_ui_api_quiescence_claim"] = reference
+    return reference
+
+
+def capture_held_api_quiescence(control, backend_container_id: str, intent: Mapping, *,
+                                operation: Mapping,
+                                expected_plan_sha256: str,
+                                expected_intent_sha256: str) -> dict:
+    """Close only the pinned API incarnation and return its truthful retained-exit receipt."""
+    from docker_build_control import docker_capture
+    from docker_volume_native_terminal_stop import QUIESCE_SCHEMA, validate_quiescence
+    intent = validate_api_quiescence_intent(
+        intent, expected_sha256=expected_intent_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+    )
+    expected_backend = intent["plan"]["source_scope"]["backend_container_id"]
+    _require(backend_container_id == expected_backend,
+             "API quiescence backend differs from the pinned source service")
+    raw_intent = canonical(intent) + b"\n"
+    relative = quiescence_intent_relative(intent["plan"]["maintenance_request_id"])
+    _validate_durable_quiescence_inputs(control, intent)
+    durable_intent = control.read_bytes("runtime-control/" + relative)
+    _require(durable_intent == raw_intent and sha(durable_intent) == expected_intent_sha256,
+             "API quiescence intent was not durably published with its approved digest")
+    operation_attempt = _require_held_stop_operation(control, operation)
+    claim = _exclusive_start_claim(control, operation, intent, sha(raw_intent))
+    request = canonical({"intent": intent, "intent_sha256": sha(raw_intent)})
+    operation["daemon_pending"] = True
+    try:
+        result = docker_capture(
+            "exec", "-i", backend_container_id, "python3", "-I", "-B", "-c",
+            held_api_quiescence_capture_program(), data=request, timeout=210,
+        )
+        _require(len(result.stdout) <= MAX_PROOF_BYTES,
+                 "held API quiescence output exceeds its byte limit")
+        captured = decode(bytes(result.stdout), "held API quiescence capture", maximum=MAX_PROOF_BYTES)
+        _exact(captured, {"receipt", "fences"}, "held API quiescence capture")
+        receipt = _exact(captured["receipt"], {
+            "schema", "intent_sha256", "api_pin", "api_closed", "signal",
+            "retained_process", "retained_process_sha256",
+        }, "held API quiescence receipt")
+        _require(receipt.get("schema") == QUIESCE_SCHEMA
+                 and receipt.get("intent_sha256") == sha(raw_intent)
+                 and receipt.get("api_pin") == intent["plan"]["native"]["api_pin"]
+                 and receipt.get("api_closed") is True and receipt.get("signal") == "SIGTERM",
+                 "held API quiescence receipt does not bind the exact closure intent")
+        validate_quiescence({
+            "ready_owner": intent["ready_owner_identity"],
+            "api_quiescence": receipt,
+        })
+        expected_fences = _expected_api_quiescence_fences(intent, receipt["retained_process_sha256"])
+        _require(captured.get("fences") == expected_fences,
+                 "held API quiescence scope/config/scene/receipt fences differ")
+    except BaseException:
+        claim["state"] = "outcome-unknown"
+        operation["receipt"]["held_ui_api_quiescence_claim"] = claim
+        raise
+    claim["state"] = "consumed"
+    claim["quiescence_receipt_sha256"] = sha(canonical(receipt) + b"\n")
+    claim["operation_attempt"] = operation_attempt
+    operation["receipt"]["held_ui_api_quiescence_claim"] = claim
+    operation["daemon_pending"] = False
+    return dict(receipt)
 
 
 def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
@@ -927,6 +1552,15 @@ def validate_stop_proofs(request: Mapping, read_control_record) -> dict:
              "quiesced API process identity differs")
     retained_process = quiescence.get("retained_process", {})
     ready_owner = retained_process.get("service_owner")
+    retained_bootstrap = retained_process.get("bootstrap")
+    expected_store_root = "/state/runs/docker-all/session-store"
+    _require(retained_process.get("accepted_store") == expected_store_root
+             and retained_process.get("api_diagnostic_only") is False
+             and isinstance(retained_bootstrap, Mapping)
+             and retained_bootstrap.get("schema") == "fullmag.docker-accepted-store-bootstrap.v1"
+             and retained_bootstrap.get("store_root") == expected_store_root
+             and retained_bootstrap.get("binding") == preflight["accepted_store_binding"],
+             "quiesced process accepted-store path, bootstrap binding, or capability differs")
     from docker_volume_native_terminal_stop import owner_identity
     _require(canonical(owner_identity(ready_owner)) == canonical(preflight["ready_owner_identity"]),
              "quiescence Ready owner differs from preflight")

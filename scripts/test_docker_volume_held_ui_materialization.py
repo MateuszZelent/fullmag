@@ -1,15 +1,18 @@
 """Pure held UI materialization request contracts; no Docker or volume access."""
+import ast
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import docker_volume_held_ui_materialization as subject
 import docker_volume_dev as volume_dev
-from docker_build_control import BuildControlError
+from docker_build_control import BuildControlError, DockerObservationBudgetExceeded
 
 
 MAINTENANCE_ID = "d4764fbb-a48c-4275-a541-39f356285188"
@@ -94,6 +97,61 @@ def canonical(value):
 
 def encoded_record(value):
     return canonical(value) + b"\n"
+
+
+class DurableHeldControl:
+    def __init__(self, records, source_scope):
+        self.project = source_scope["compose_project"]
+        self.volume = source_scope["control_volume"]
+        self.namespace = source_scope["namespace"]
+        self.namespace_registry_sha256 = source_scope["namespace_registry_sha256"]
+        self.records = records
+        self._active_operation = None
+
+    def read_bytes(self, path, optional=False):
+        value = self.records.get(path)
+        if value is None and not optional:
+            raise BuildControlError("missing durable control record")
+        return value
+
+    def helper_args(self, script):
+        return ("CONTROL_HELPER", script)
+
+    @staticmethod
+    def path(relative):
+        return "/control/" + relative
+
+
+def production_held_stop_operation(control, attempt):
+    receipt = {
+        "schema": "fullmag.docker-build-operation.v1",
+        "phase": "held-ui-materialization-stop",
+        "state": "starting",
+        "attempt": attempt,
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "helper_container": "fullmag-control-" + attempt,
+        "inputs": {"maintenance_request_id": MAINTENANCE_ID, "run_id": RUN_ID},
+        "started_at": 1.0,
+        "log_byte_limit": 64 * 1024,
+        "attempt_limit": 8,
+        "build_data_qualification": "NOT VERIFIED",
+        "minimum_free_bytes": 1024 * 1024,
+        "filesystem_before": {"available_bytes": 1024 * 1024},
+    }
+    if control.namespace:
+        receipt.update(control_namespace=control.namespace,
+                       namespace_registry_sha256=control.namespace_registry_sha256)
+    operation = {
+        "receipt": receipt,
+        "root": "held-ui-materialization-stop/attempts/" + attempt,
+        "logger": SimpleNamespace(),
+        "daemon_pending": False,
+        "lease_ready": True,
+        "helper_container_id": "9" * 64,
+    }
+    control._active_operation = operation
+    return operation
 
 
 def owner(state="ready", child_status="running"):
@@ -192,6 +250,9 @@ def valid_proof_chain():
                                 "raw_base64": __import__("base64").b64encode(detail_raw).decode(),
                                 "sha256": hashlib.sha256(detail_raw).hexdigest()}},
         "native_config_sha256": "a" * 64,
+        "accepted_store_binding": hashlib.sha256(
+            b"fullmag.accepted-store-binding.v1\0/state/runs/docker-all/session-store/"
+        ).hexdigest(),
         "process_sha256": "b" * 64,
         "run_intent_sha256": accepted["run_intent_sha256"],
         "execution_input_sha256": accepted["execution_input_sha256"],
@@ -224,6 +285,11 @@ def valid_proof_chain():
                         "error": "Fullmag API exited unexpectedly (-15)",
                         "api_pid": 200, "api_exit_code": -15, "api_diagnostic_only": False,
                         "accepted_store": "/state/runs/docker-all/session-store",
+                        "bootstrap": {
+                            "schema": "fullmag.docker-accepted-store-bootstrap.v1",
+                            "store_root": "/state/runs/docker-all/session-store",
+                            "binding": preflight["accepted_store_binding"],
+                        },
                         "service_owner": ready_owner}
     api_pin = copy.deepcopy(preflight["api_pin"])
     quiescence = {"schema": "fullmag.native-terminal-api-quiescence.v1",
@@ -420,6 +486,23 @@ class CompletedProofContracts(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(BuildControlError):
                 subject.validate_stop_proofs(value, raw.__getitem__)
 
+    def test_retained_process_bootstrap_is_cross_bound_to_preflight(self):
+        for label, mutate in (
+            ("bootstrap binding", lambda process: process["bootstrap"].update(binding="0" * 64)),
+            ("bootstrap store root", lambda process: process["bootstrap"].update(store_root="/state/other")),
+            ("accepted store path", lambda process: process.update(accepted_store="/state/other")),
+            ("diagnostic-only capability", lambda process: process.update(api_diagnostic_only=True)),
+        ):
+            value, proofs = valid_proof_chain()
+            process = proofs["api_quiescence"]["retained_process"]
+            mutate(process)
+            proofs["api_quiescence"]["retained_process_sha256"] = hashlib.sha256(
+                canonical(process) + b"\n").hexdigest()
+            raw = {value["stop_authority"][key]["path"]: encoded_record(proof)
+                   for key, proof in proofs.items()}
+            with self.subTest(label=label), self.assertRaises(BuildControlError):
+                subject.validate_stop_proofs(value, raw.__getitem__)
+
     def test_terminal_must_bind_both_exact_stopped_service_incarnations(self):
         value, proofs = valid_proof_chain()
         proofs["terminal"]["held_ui_stop_services"]["frontend"]["started_at"] = "changed"
@@ -478,6 +561,414 @@ class PreviewPlanContracts(unittest.TestCase):
         self.assertEqual(argv[3:6], ("python3", "-I", "-B"))
         self.assertIn("GET", argv[7])
 
+    def test_raw_scene_sha_is_used_by_preview_and_quiescence_stability_fences(self):
+        import ast
+
+        first_wire = b'{"revision":2,"objects":[{"bounds_max":[4e-9,2e-9,1e-9]}]}'
+        second_wire = b'{"revision":2,"objects":[{"bounds_max":[4e-09,2e-09,1e-09]}]}'
+        parsed_scene = json.loads(first_wire)
+        self.assertEqual(parsed_scene, json.loads(second_wire))
+        first_sha = hashlib.sha256(first_wire).hexdigest()
+        second_sha = hashlib.sha256(second_wire).hexdigest()
+        self.assertNotEqual(first_sha, second_sha)
+        snapshot = {
+            "api_instance_id": OLD_API,
+            "status": {"session": {"session_id": "s", "session_epoch": "s@1",
+                                    "created_at": "1", "request_scope_epoch": OLD_API + ":1"},
+                       "resources": {"scene_revision": 2}},
+            "scene": parsed_scene,
+            "run": {"run_id": RUN_ID, "session_id": "s", "revision": 2,
+                    "status": "waiting_for_compute", "started_at": None},
+            "queue": {"revision": "q", "items": [], "next_cursor": None},
+            "commands": {"revision": 1, "commands": [], "pending_count": 0,
+                         "accepted_count": 0, "dispatched_count": 0, "running_count": 0,
+                         "completed_count": 0, "rejected_count": 0, "failed_count": 0},
+            "runtime": {"schema_version": "r", "configured": True, "state": "ready"},
+            "health": {"status": "ok", "active_session": True},
+        }
+
+        preview_tree = ast.parse(subject.HELD_READONLY_CAPTURE)
+        stable_node = next(node for node in preview_tree.body
+                           if isinstance(node, ast.FunctionDef) and node.name == "stable")
+        preview_namespace = {}
+        exec(compile(ast.Module(body=[stable_node], type_ignores=[]), "held-preview-stable", "exec"),
+             preview_namespace)
+        stable = preview_namespace["stable"]
+        self.assertNotEqual(stable(snapshot, first_sha), stable(snapshot, second_sha))
+        same_wire_sha = hashlib.sha256(bytes(first_wire)).hexdigest()
+        self.assertEqual(stable(snapshot, first_sha), stable(snapshot, same_wire_sha))
+
+        closure_tree = ast.parse(subject.HELD_API_QUIESCE_CAPTURE_BODY)
+        context_node = next(node for node in closure_tree.body
+                            if isinstance(node, ast.FunctionDef) and node.name == "held_api_context")
+        closure_namespace = {}
+        exec(compile(ast.Module(body=[context_node], type_ignores=[]), "held-quiescence-context", "exec"),
+             closure_namespace)
+        context = closure_namespace["held_api_context"]
+        self.assertEqual(context(snapshot, first_sha)["scene_sha256"], first_sha)
+        self.assertNotEqual(context(snapshot, first_sha), context(snapshot, second_sha))
+        self.assertEqual(context(snapshot, first_sha), context(snapshot, same_wire_sha))
+
+    def test_scene_pin_uses_raw_api_bytes_for_nm_exponent_scalars(self):
+        request_value, proofs = valid_proof_chain()
+        # These exact nm exponent lexemes are present in the captured API SceneDocument.
+        raw_scene = (
+            b'{"revision":2,"objects":[{"geometry":{"bounds_max":[4e-9,2e-9,1e-9],'
+            b'"bounds_min":[-4e-9,-2e-9,-1e-9],"geometry_kind":"Box",'
+            b'"geometry_params":{"size":[8e-9,4e-9,2e-9]}},"id":"film",'
+            b'"name":"film","role":"magnet"}]}'
+        )
+        parsed_scene = json.loads(raw_scene)
+        raw_sha = hashlib.sha256(raw_scene).hexdigest()
+        self.assertNotEqual(canonical(parsed_scene), raw_scene)
+        self.assertIn(b"4e-9", raw_scene)
+        self.assertNotIn(b"4e-09", raw_scene)
+
+        response = proofs["preflight"]["api_response"]["responses"]["scene"]
+        response["raw_base64"] = __import__("base64").b64encode(raw_scene).decode("ascii")
+        response["sha256"] = raw_sha
+        proofs["preflight"]["api_response"]["snapshot"]["scene"] = parsed_scene
+        request_value["accepted"]["accepted_scene_sha256"] = raw_sha
+
+        validated = subject.validate_preflight(proofs["preflight"], request_value["accepted"])
+        self.assertEqual(validated["api_response"]["responses"]["scene"]["sha256"], raw_sha)
+        plan, _plan_sha = subject.build_preview_plan(
+            attempt=request_value["plan"]["attempt"],
+            maintenance_request_id=request_value["plan"]["maintenance_request_id"],
+            source_scope=request_value["source_scope"],
+            accepted=request_value["accepted"],
+            preflight=validated,
+            inventory=proofs["inventory"],
+        )
+        self.assertEqual(plan["current"]["scene_sha256"], raw_sha)
+
+        parsed_only_digest = hashlib.sha256(canonical(parsed_scene)).hexdigest()
+        self.assertNotEqual(parsed_only_digest, raw_sha)
+        proofs["preflight"]["api_response"]["responses"]["scene"]["sha256"] = parsed_only_digest
+        with self.assertRaises(BuildControlError):
+            subject.validate_preflight(proofs["preflight"], request_value["accepted"])
+
+
+class ApiQuiescenceIntentContracts(unittest.TestCase):
+    def setUp(self):
+        self.value, self.proofs = valid_proof_chain()
+        self.plan, self.plan_sha256 = subject.build_preview_plan(
+            attempt=self.value["plan"]["attempt"],
+            maintenance_request_id=self.value["plan"]["maintenance_request_id"],
+            source_scope=self.value["source_scope"],
+            accepted=self.value["accepted"],
+            preflight=self.proofs["preflight"],
+            inventory=self.proofs["inventory"],
+        )
+
+    def prepare(self, *, preflight=None, inventory=None, source_scope=None, plan_sha256=None):
+        return subject.prepare_api_quiescence_intent(
+            attempt=self.value["plan"]["attempt"],
+            maintenance_request_id=self.value["plan"]["maintenance_request_id"],
+            plan_sha256=plan_sha256 or self.plan_sha256,
+            source_scope=source_scope or self.value["source_scope"],
+            accepted=self.value["accepted"],
+            preflight=preflight or self.proofs["preflight"],
+            inventory=inventory or self.proofs["inventory"],
+        )
+
+    def test_intent_pins_exact_accepted_scope_and_native_fences(self):
+        intent, raw, digest = self.prepare()
+        validated = subject.validate_api_quiescence_intent(intent, expected_sha256=digest)
+        self.assertEqual(validated, intent)
+        self.assertEqual(raw, subject.canonical(intent) + b"\n")
+        self.assertEqual(subject.sha(raw), digest)
+        self.assertEqual(intent["plan_sha256"], self.plan_sha256)
+        self.assertEqual(intent["plan"]["accepted"]["session_epoch"], 1)
+        self.assertEqual(intent["plan"]["current"]["api_instance_id"], OLD_API)
+        self.assertEqual(intent["plan"]["native"]["api_pin"], self.proofs["preflight"]["api_pin"])
+        self.assertEqual(intent["plan"]["native"]["config_sha256"],
+                         self.proofs["preflight"]["native_config_sha256"])
+        self.assertEqual(intent["plan"]["inventory"], self.proofs["inventory"]["before"])
+
+    def test_intent_rejects_pid_config_scene_receipt_and_source_drift_after_preview(self):
+        cases = []
+        changed_pid = copy.deepcopy(self.proofs["preflight"])
+        changed_pid["api_pin"]["start_token"] = "99999"
+        cases.append(("pid start token", changed_pid, self.proofs["inventory"], self.value["source_scope"]))
+
+        changed_config = copy.deepcopy(self.proofs["preflight"])
+        changed_config["native_config_sha256"] = "e" * 64
+        cases.append(("native config", changed_config, self.proofs["inventory"], self.value["source_scope"]))
+
+        changed_scene = copy.deepcopy(self.proofs["preflight"])
+        changed_scene["api_response"]["snapshot"]["scene"]["objects"].append({"id": "drift"})
+        cases.append(("scene", changed_scene, self.proofs["inventory"], self.value["source_scope"]))
+
+        changed_receipt = copy.deepcopy(self.proofs["preflight"])
+        changed_receipt["commands"]["request_receipt"]["request_id"] = "f" * 36
+        cases.append(("request receipt", changed_receipt, self.proofs["inventory"], self.value["source_scope"]))
+
+        changed_scope = copy.deepcopy(self.value["source_scope"])
+        changed_scope["backend_started_at"] = "2026-11-13T15:00:00Z"
+        cases.append(("source incarnation", self.proofs["preflight"], self.proofs["inventory"], changed_scope))
+
+        for label, preflight, inventory, source_scope in cases:
+            with self.subTest(label=label), self.assertRaises(BuildControlError):
+                self.prepare(preflight=preflight, inventory=inventory, source_scope=source_scope)
+
+    def test_intent_rejects_plan_fence_change_and_noncanonical_mutation(self):
+        with self.assertRaises(BuildControlError):
+            self.prepare(plan_sha256="f" * 64)
+        intent, _raw, digest = self.prepare()
+        mutated = copy.deepcopy(intent)
+        mutated["plan"]["accepted"]["session_epoch"] = 2
+        with self.assertRaises(BuildControlError):
+            subject.validate_api_quiescence_intent(mutated, expected_sha256=digest)
+
+    def test_native_store_and_diagnostic_capability_are_checked_before_pidfd_signal(self):
+        script = subject.held_api_quiescence_capture_program()
+        tree = ast.parse(script)
+        selected = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name in {"accepted_store_binding_for", "process_store_identity_matches"}]
+        self.assertEqual({node.name for node in selected},
+                         {"accepted_store_binding_for", "process_store_identity_matches"})
+        namespace = {"hashlib": hashlib, "os": os, "pathlib": __import__("pathlib"), "re": __import__("re")}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "held-store-identity", "exec"), namespace)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            store = Path(temporary) / "session-store"
+            store.mkdir()
+            binding = namespace["accepted_store_binding_for"](store)
+            self.assertEqual(binding, hashlib.sha256(
+                b"fullmag.accepted-store-binding.v1\0" + os.fsencode(str(store) + "/")
+            ).hexdigest())
+            ready_process = {
+                "accepted_store": str(store),
+                "bootstrap": {
+                    "schema": "fullmag.docker-accepted-store-bootstrap.v1",
+                    "store_root": str(store),
+                    "binding": binding,
+                },
+                # The current ready-process producer omits this false-only capability.
+            }
+            matches = namespace["process_store_identity_matches"]
+            self.assertTrue(matches(ready_process, store, binding))
+
+            changed_store = copy.deepcopy(ready_process)
+            changed_store["accepted_store"] = str(store / "other")
+            changed_binding = copy.deepcopy(ready_process)
+            changed_binding["bootstrap"]["binding"] = "0" * 64
+            with self.subTest(reason="accepted store path"):
+                self.assertFalse(matches(changed_store, store, binding))
+            with self.subTest(reason="accepted store bootstrap binding"):
+                self.assertFalse(matches(changed_binding, store, binding))
+            for diagnostic in (True, 0, None):
+                changed_capability = copy.deepcopy(ready_process)
+                changed_capability["api_diagnostic_only"] = diagnostic
+                with self.subTest(diagnostic=diagnostic):
+                    self.assertFalse(matches(changed_capability, store, binding))
+
+        preview = subject.HELD_READONLY_CAPTURE
+        self.assertIn("process_store_identity_matches(process,paths.store,native_binding)", preview)
+        authority = script.split("def read_held_authority(intent):", 1)[1].split("request_raw=", 1)[0]
+        self.assertIn('process_store_identity_matches(process,paths.store,native["accepted_store_binding"])',
+                      authority)
+        self.assertIn('read_held_authority(intent)', script)
+        self.assertLess(preview.index("process_store_identity_matches(process,paths.store,native_binding)"),
+                        preview.index("preflight={"))
+        self.assertIn("api_diagnostic_only", preview)
+        self.assertLess(authority.index(
+            'process_store_identity_matches(process,paths.store,native["accepted_store_binding"])'),
+            authority.index("detail_is_pinned_404(accepted)"))
+        self.assertLess(script.index('before_fences,owner,identity,inventory=read_held_authority(intent)'),
+                        script.index('retained_raw,retained=pidfd_close_api('))
+
+    def test_publishing_intent_is_immutable_and_idempotent(self):
+        intent, raw, digest = self.prepare()
+
+        class Control:
+            namespace = ""
+            namespace_registry_sha256 = None
+
+            def __init__(self):
+                self.records = {}
+                self.writes = []
+
+            def read_bytes(self, path, optional=False):
+                value = self.records.get(path)
+                if value is None and not optional:
+                    raise BuildControlError("missing control record")
+                return value
+
+            def write_bytes(self, path, data):
+                self.records[path] = data
+                self.writes.append(path)
+
+        control = Control()
+        inputs = subject.publish_api_quiescence_inputs(
+            control, MAINTENANCE_ID,
+            source_scope=self.value["source_scope"], accepted=self.value["accepted"],
+            preflight=self.proofs["preflight"], inventory=self.proofs["inventory"],
+        )
+        self.assertEqual(inputs["preflight"]["sha256"], intent["preflight_sha256"])
+        self.assertEqual(inputs["inventory"]["sha256"], intent["inventory_sha256"])
+        path, written_sha = subject.publish_api_quiescence_intent(
+            control, intent, expected_plan_sha256=self.plan_sha256,
+        )
+        self.assertEqual(written_sha, digest)
+        self.assertEqual(control.records["runtime-control/" + path], raw)
+        self.assertEqual(subject.publish_api_quiescence_intent(
+            control, intent, expected_plan_sha256=self.plan_sha256,
+        ), (path, digest))
+        self.assertEqual(control.writes, [
+            "runtime-control/held-ui-materialization/" + MAINTENANCE_ID + "/preflight.json",
+            "runtime-control/held-ui-materialization/" + MAINTENANCE_ID + "/inventory.json",
+            "runtime-control/" + path,
+        ])
+        changed = copy.deepcopy(intent)
+        changed["plan"]["plan_sha256"] = "0" * 64
+        with self.assertRaises(BuildControlError):
+            subject.publish_api_quiescence_intent(
+                control, changed, expected_plan_sha256=self.plan_sha256,
+            )
+
+    def test_held_capture_reuses_one_pidfd_primitive_without_terminal_catalog_inspection(self):
+        import ast
+
+        script = subject.held_api_quiescence_capture_program()
+        ast.parse(script)
+        self.assertEqual(script.count("signal.pidfd_send_signal("), 1)
+        self.assertIn("pidfd_close_api(", script)
+        self.assertNotIn("service-inspect-terminal-run", script)
+        self.assertIn("request_scope_epoch", script)
+        self.assertIn("run_intent.json", script)
+        self.assertIn("native_config_sha256", script)
+        self.assertIn('run_intent.get("payload_sha256")', script)
+        self.assertNotIn("digest(canon(spec))", script)
+
+    def test_capture_accepts_only_exact_receipt_and_before_after_fences(self):
+        from docker_volume_native_terminal_stop import QUIESCE_SCHEMA
+
+        intent, raw, intent_sha = self.prepare()
+        api_pin = intent["plan"]["native"]["api_pin"]
+        retained = {
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "failed_outcome_retained",
+            "accepted_store": "/state/runs/docker-all/session-store",
+            "api_pid": api_pin["pid"],
+            "api_exit_code": -15,
+            "api_diagnostic_only": False,
+            "error": "Fullmag API exited unexpectedly (-15)",
+            "bootstrap": {
+                "schema": "fullmag.docker-accepted-store-bootstrap.v1",
+                "store_root": "/state/runs/docker-all/session-store",
+                "binding": intent["plan"]["native"]["accepted_store_binding"],
+            },
+            "service_owner": owner(),
+        }
+        retained_sha = hashlib.sha256(canonical(retained) + b"\n").hexdigest()
+        receipt = {
+            "schema": QUIESCE_SCHEMA,
+            "intent_sha256": intent_sha,
+            "api_pin": api_pin,
+            "api_closed": True,
+            "signal": "SIGTERM",
+            "retained_process": retained,
+            "retained_process_sha256": retained_sha,
+        }
+        captured = {
+            "receipt": receipt,
+            "fences": subject._expected_api_quiescence_fences(intent, retained_sha),
+        }
+        expected_backend = self.value["source_scope"]["backend_container_id"]
+        intent_path = "runtime-control/" + subject.quiescence_intent_relative(MAINTENANCE_ID)
+        control_root = "runtime-control/held-ui-materialization/" + MAINTENANCE_ID + "/"
+        durable_records = {
+            control_root + "preflight.json": canonical(self.proofs["preflight"]) + b"\n",
+            control_root + "inventory.json": canonical(self.proofs["inventory"]) + b"\n",
+            intent_path: raw,
+        }
+        durable_control = DurableHeldControl(durable_records, self.value["source_scope"])
+        operation = production_held_stop_operation(durable_control, "c" * 32)
+
+        def capture(*args, **kwargs):
+            if args[0] == "CONTROL_HELPER":
+                self.assertNotIn(control_root + "api-quiescence-start.json", durable_records)
+                durable_records[control_root + "api-quiescence-start.json"] = kwargs["data"]
+                return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
+            self.assertEqual(args[:4], ("exec", "-i", expected_backend, "python3"))
+            return SimpleNamespace(stdout=canonical(captured), returncode=0)
+
+        with patch("docker_build_control.docker_capture", side_effect=capture) as docker:
+            result = subject.capture_held_api_quiescence(
+                durable_control, expected_backend, intent,
+                operation=operation, expected_plan_sha256=self.plan_sha256,
+                expected_intent_sha256=intent_sha,
+            )
+        self.assertEqual(result, receipt)
+        self.assertIn(b"\"intent_sha256\"", docker.call_args_list[-1].kwargs["data"])
+        self.assertEqual(sum(call.args[:2] == ("exec", "-i") for call in docker.call_args_list), 1)
+        self.assertFalse(operation["daemon_pending"])
+        claim = json.loads(durable_records[control_root + "api-quiescence-start.json"])
+        self.assertEqual(claim["state"], "started")
+        self.assertEqual(claim["intent_sha256"], intent_sha)
+        claim_script = docker.call_args_list[0].args[1]
+        self.assertIn("os.O_EXCL", claim_script)
+        self.assertIn("os.fsync", claim_script)
+        self.assertEqual(operation["receipt"]["held_ui_api_quiescence_claim"]["state"],
+                         "consumed")
+
+    def test_timeout_spends_api_quiescence_claim_and_never_replays_signal(self):
+        intent, raw, intent_sha = self.prepare()
+        control_root = "runtime-control/held-ui-materialization/" + MAINTENANCE_ID + "/"
+        durable_records = {
+            control_root + "preflight.json": canonical(self.proofs["preflight"]) + b"\n",
+            control_root + "inventory.json": canonical(self.proofs["inventory"]) + b"\n",
+            "runtime-control/" + subject.quiescence_intent_relative(MAINTENANCE_ID): raw,
+        }
+        control = DurableHeldControl(durable_records, self.value["source_scope"])
+        operation = production_held_stop_operation(control, "c" * 32)
+        api_execs = []
+        claim_helpers = []
+
+        def capture(*args, **kwargs):
+            if args[0] == "CONTROL_HELPER":
+                claim_helpers.append(args)
+                claim_path = control_root + "api-quiescence-start.json"
+                self.assertNotIn(claim_path, durable_records)
+                durable_records[claim_path] = kwargs["data"]
+                return SimpleNamespace(stdout=b"CLAIMED\n", returncode=0)
+            if args[0] == "exec":
+                api_execs.append(args)
+                raise DockerObservationBudgetExceeded("simulated Docker capture timeout")
+            self.fail("unexpected Docker call")
+
+        with patch("docker_build_control.docker_capture", side_effect=capture):
+            with self.assertRaises(BuildControlError):
+                subject.capture_held_api_quiescence(
+                    control, self.value["source_scope"]["backend_container_id"], intent,
+                    operation=operation, expected_plan_sha256=self.plan_sha256,
+                    expected_intent_sha256=intent_sha,
+                )
+            # The timed-out operation remains daemon-pending; even a later
+            # properly admitted operation cannot spend this request's claim again.
+            with self.assertRaisesRegex(BuildControlError, "active group held-stop operation"):
+                subject.capture_held_api_quiescence(
+                    control, self.value["source_scope"]["backend_container_id"], intent,
+                    operation=operation, expected_plan_sha256=self.plan_sha256,
+                    expected_intent_sha256=intent_sha,
+                )
+            recovered_operation = production_held_stop_operation(control, "d" * 32)
+            with self.assertRaisesRegex(BuildControlError, "start claim"):
+                subject.capture_held_api_quiescence(
+                    control, self.value["source_scope"]["backend_container_id"], intent,
+                    operation=recovered_operation, expected_plan_sha256=self.plan_sha256,
+                    expected_intent_sha256=intent_sha,
+                )
+        self.assertEqual(len(claim_helpers), 1)
+        self.assertEqual(len(api_execs), 1)
+        self.assertTrue(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["held_ui_api_quiescence_claim"]["state"],
+                         "outcome-unknown")
+
+
+class PreviewPlanLifecycleContracts(unittest.TestCase):
     def test_apply_fails_before_any_host_or_docker_observation(self):
         args = SimpleNamespace(apply=True, preview=False)
         with patch.object(volume_dev, "require_host") as require_host:

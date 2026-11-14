@@ -526,6 +526,35 @@ def api_binding(value):
   "scene_revision":resources["scene_revision"],"queue":value["queue"],"commands":value["commands"],
   "runtime":value["runtime"],"health":{"status":value["health"]["status"],"active_session":value["health"]["active_session"]}}
 '''
+_PIDFD_CLOSE_COMMON = r'''
+def pidfd_close_api(api, expected_owner, verify_before_signal, signal_api):
+ fd=os.pidfd_open(api["pid"])
+ try:
+  if proc_pin(api["pid"])!=api: raise RuntimeError("API incarnation changed before quiescence")
+  verify_before_signal()
+  signal_api(fd,signal.SIGTERM,None,0)
+ finally: os.close(fd)
+ # No process, owner, worker or scheduler is signalled after this point.
+ deadline=time.monotonic()+15
+ while True:
+  gone=not (pathlib.Path("/proc")/str(api["pid"])).exists()
+  try:
+   with socket.create_connection(("127.0.0.1",8081),timeout=.2): closed=False
+  except ConnectionRefusedError: closed=True
+  if gone and closed: break
+  if time.monotonic()>=deadline: raise RuntimeError("API closure is unconfirmed; backend retained")
+  time.sleep(.05)
+ while True:
+  retained_raw,retained=process_record()
+  if retained.get("state")=="failed_outcome_retained":
+   if (retained.get("api_pid")!=api["pid"] or retained.get("api_exit_code")!=-15
+       or retained.get("api_diagnostic_only") is not False or retained.get("error")!=CAUSE
+       or service._owner_fingerprint(retained.get("service_owner",{}))!=service._owner_fingerprint(expected_owner)):
+    raise RuntimeError("API quiescence cause differs; backend retained")
+   return retained_raw,retained
+  if time.monotonic()>=deadline: raise RuntimeError("API quiescence retention unconfirmed; backend retained")
+  time.sleep(.05)
+'''
 QUIESCE_PREPARE = _QUIESCE_PREFIX + _QUIESCE_COMMON + r'''
 before=snapshot()
 owner=service._service_status(paths)
@@ -544,7 +573,7 @@ if config!=config_digest() or process_raw!=process_record()[0] or proc_pin(api["
 print(json.dumps({"before":before,"after":after,"ready_owner":owner,"native_config_sha256":config,
  "process_sha256":hashlib.sha256(process_raw).hexdigest(),"api_pin":api,"run_pins":pins},sort_keys=True))
 '''
-QUIESCE_CAPTURE = _QUIESCE_PREFIX + _QUIESCE_COMMON + r'''
+QUIESCE_CAPTURE = _QUIESCE_PREFIX + _QUIESCE_COMMON + _PIDFD_CLOSE_COMMON + r'''
 raw=sys.stdin.buffer.read(MAX+1)
 if len(raw)>MAX: raise RuntimeError("API quiescence intent exceeds bound")
 request=json.loads(raw,object_pairs_hook=unique)
@@ -555,45 +584,25 @@ if intent.get("schema")!="fullmag.native-terminal-api-quiescence-intent.v1":
  raise RuntimeError("API quiescence intent schema differs")
 prepared=intent["prepared"]
 preflight=prepared["preflight"]; api=prepared["api_pin"]; run=preflight["run_id"]
-fd=os.pidfd_open(api["pid"])
-try:
+owner=service._service_status(paths)
+service._validate_terminal_owner(owner,state="ready",name="API quiescence Ready owner")
+def verify_before_signal():
  # Revalidate the pinned live API and native owner before the one signal.
- if proc_pin(api["pid"])!=api: raise RuntimeError("API incarnation changed before quiescence")
  for _ in range(2):
   current=snapshot()
   if (api_binding(current)!=preflight or current["status"]["solver"]["state"]!="running"
       or current["status"].get("run",{}).get("run_id")!=run):
    raise RuntimeError("API/session/scene/resources changed before quiescence")
- owner=service._service_status(paths)
- service._validate_terminal_owner(owner,state="ready",name="API quiescence Ready owner")
- if service._owner_fingerprint(owner)!=service._owner_fingerprint(prepared["ready_owner"]):
+ current_owner=service._service_status(paths)
+ service._validate_terminal_owner(current_owner,state="ready",name="API quiescence Ready owner")
+ if service._owner_fingerprint(current_owner)!=service._owner_fingerprint(prepared["ready_owner"]):
   raise RuntimeError("Native owner changed before API quiescence")
  if (config_digest()!=prepared["native_config_sha256"] or run_pins_for(run)!=prepared["run_pins"]
      or hashlib.sha256(process_record()[0]).hexdigest()!=prepared["process_sha256"]
      or proc_pin(api["pid"])!=api):
   raise RuntimeError("Pinned authority changed before API quiescence")
- signal.pidfd_send_signal(fd,signal.SIGTERM,None,0)
-finally: os.close(fd)
-# No process, owner, worker or scheduler is signalled after this point.
-deadline=time.monotonic()+15
-while True:
- gone=not (pathlib.Path("/proc")/str(api["pid"])).exists()
- try:
-  with socket.create_connection(("127.0.0.1",8081),timeout=.2): closed=False
- except ConnectionRefusedError: closed=True
- if gone and closed: break
- if time.monotonic()>=deadline: raise RuntimeError("API closure is unconfirmed; backend retained")
- time.sleep(.05)
-while True:
- retained_raw,retained=process_record()
- if retained.get("state")=="failed_outcome_retained":
-  if (retained.get("api_pid")!=api["pid"] or retained.get("api_exit_code")!=-15
-      or retained.get("api_diagnostic_only") is not False or retained.get("error")!=CAUSE
-      or service._owner_fingerprint(retained.get("service_owner",{}))!=service._owner_fingerprint(owner)):
-   raise RuntimeError("API quiescence cause differs; backend retained")
-  break
- if time.monotonic()>=deadline: raise RuntimeError("API quiescence retention unconfirmed; backend retained")
- time.sleep(.05)
+def signal_api_once(fd,signum,info,flags): signal.pidfd_send_signal(fd,signum,info,flags)
+retained_raw,retained=pidfd_close_api(api,owner,verify_before_signal,signal_api_once)
 if config_digest()!=prepared["native_config_sha256"] or run_pins_for(run)!=prepared["run_pins"]:
  raise RuntimeError("Native pins changed after API closure; backend retained")
 evidence=service._run_cli(paths,["runtime","service-inspect-terminal-run","--config",str(paths.config),
@@ -607,6 +616,21 @@ if (service._owner_fingerprint(owner)!=service._owner_fingerprint(fresh_owner)
 print(json.dumps({"evidence":evidence,"run_pins":prepared["run_pins"],"retained_process":retained,
  "retained_process_sha256":hashlib.sha256(retained_raw).hexdigest(),"api_closed":True},sort_keys=True))
 '''
+
+
+def quiescence_capture_program(mode_specific_capture_body: str, *, prelude: str | None = None) -> str:
+    """Build a capture with the same pinned API/pidfd primitives for a distinct admission mode."""
+    require(isinstance(mode_specific_capture_body, str) and mode_specific_capture_body.strip(),
+            "mode-specific API quiescence capture body is empty")
+    capture_prelude = _QUIESCE_PREFIX + _QUIESCE_COMMON if prelude is None else prelude
+    require(isinstance(capture_prelude, str) and capture_prelude.strip(),
+            "mode-specific API quiescence prelude is empty")
+    return capture_prelude + _PIDFD_CLOSE_COMMON + mode_specific_capture_body
+
+
+def pidfd_close_primitive_script() -> str:
+    """Return the neutral one-API pidfd-close primitive for a fixed capture script."""
+    return _PIDFD_CLOSE_COMMON
 
 
 def _record_pins(binding):
