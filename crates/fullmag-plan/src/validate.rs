@@ -789,7 +789,7 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if name == "H_drive" && !enable_regional_field_drive {
                     errors.push(
-                        "field output 'H_drive' requires at least one RegionalFieldDrive"
+                        "field output 'H_drive' requires at least one RegionalFieldDrive or mask antenna"
                             .to_string(),
                     );
                 } else if mechanical_fields.contains(&name.as_str()) {
@@ -828,7 +828,7 @@ pub(crate) fn validate_executable_outputs(
                     );
                 } else if name == "E_drive" && !enable_regional_field_drive {
                     errors.push(
-                        "scalar output 'E_drive' requires at least one RegionalFieldDrive"
+                        "scalar output 'E_drive' requires at least one RegionalFieldDrive or mask antenna"
                             .to_string(),
                     );
                 } else if name == "E_mel" && !enable_magnetoelastic {

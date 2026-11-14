@@ -1,7 +1,9 @@
 //! CUDA FDM artifact and field-output helpers.
 
 use crate::artifact_pipeline::ArtifactRecorder;
-use crate::fdm::cpu::reference::resolved_antenna_zeeman_field_for_count;
+use crate::fdm::cpu::reference::{
+    resolved_antenna_zeeman_field_for_count, resolved_drive_field_for_count,
+};
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::preview::build_grid_preview_field;
 use crate::quantities::normalized_quantity_name;
@@ -30,6 +32,60 @@ fn capture_cuda_field_snapshot_after_pool_drain<T>(
 pub(crate) fn is_antenna_field_quantity(name: &str) -> bool {
     let base = name.split_once('.').map_or(name, |(base, _)| base);
     normalized_quantity_name(base).ok() == Some("H_ant")
+}
+
+pub(crate) fn is_drive_field_quantity(name: &str) -> bool {
+    let base = name.split_once('.').map_or(name, |(base, _)| base);
+    normalized_quantity_name(base).ok() == Some("H_drive")
+}
+
+/// Fields resolved on the host from the plan's immutable bases (`H_ant`,
+/// `H_drive`); the native ABI has no observable for them.
+pub(crate) fn is_host_resolved_field_quantity(name: &str) -> bool {
+    is_antenna_field_quantity(name) || is_drive_field_quantity(name)
+}
+
+pub(super) fn copy_resolved_host_field(
+    plan: &FdmPlanIR,
+    name: &str,
+    cell_count: usize,
+    solver_time_seconds: f64,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if is_drive_field_quantity(name) {
+        copy_resolved_drive_field(plan, name, cell_count, solver_time_seconds)
+    } else {
+        copy_resolved_antenna_field(plan, name, cell_count, solver_time_seconds)
+    }
+}
+
+/// `H_drive` (regional, solved-antenna and mask drive terms) at the solver time.
+pub(super) fn copy_resolved_drive_field(
+    plan: &FdmPlanIR,
+    name: &str,
+    cell_count: usize,
+    solver_time_seconds: f64,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    let physical_time_seconds = super::canonical_fdm_time(plan, solver_time_seconds);
+    let values = resolved_drive_field_for_count(plan, cell_count, physical_time_seconds)?;
+    let Some((_, component)) = name.split_once('.') else {
+        return Ok(values);
+    };
+    let index = match component {
+        "x" => 0,
+        "y" => 1,
+        "z" => 2,
+        other => {
+            return Err(RunError {
+                message: format!(
+                    "unsupported CUDA drive snapshot component '{other}' in '{name}'"
+                ),
+            });
+        }
+    };
+    Ok(values
+        .into_iter()
+        .map(|value| [value[index], 0.0, 0.0])
+        .collect())
 }
 
 pub(super) fn copy_resolved_antenna_field(
@@ -80,7 +136,7 @@ pub(crate) fn copy_cuda_live_preview_field(
     active_mask: Option<&[bool]>,
     time_seconds: f64,
 ) -> Result<LivePreviewField, RunError> {
-    if !is_antenna_field_quantity(&request.quantity) {
+    if !is_host_resolved_field_quantity(&request.quantity) {
         return backend.copy_live_preview_field(request, original_grid, active_mask);
     }
     let cell_count = original_grid
@@ -198,7 +254,7 @@ pub(crate) fn capture_initial_cuda_fields(
     );
 
     for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
             artifacts.record_field_snapshot(FieldSnapshot {
@@ -346,7 +402,7 @@ pub(crate) fn record_cuda_due_outputs(
         artifacts.due_accepted_step_fields(stats.step, false),
     );
     for name in capture_ledger.uncaptured_names(due_field_names, stats.step, stats.time) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values =
                 copy_cuda_field_snapshot_with_plan(backend, plan, &name, cell_count, stats.time)?;
             artifacts.record_field_snapshot(FieldSnapshot {
@@ -438,7 +494,7 @@ pub(crate) fn record_cuda_final_outputs(
         latest_stats.step,
         latest_stats.time,
     ) {
-        if is_antenna_field_quantity(&name) {
+        if is_host_resolved_field_quantity(&name) {
             let values = copy_cuda_field_snapshot_with_plan(
                 backend,
                 plan,
@@ -521,8 +577,8 @@ pub(crate) fn copy_cuda_field_snapshot_with_plan(
     cell_count: usize,
     time_seconds: f64,
 ) -> Result<Vec<[f64; 3]>, RunError> {
-    if is_antenna_field_quantity(name) {
-        return copy_resolved_antenna_field(plan, name, cell_count, time_seconds);
+    if is_host_resolved_field_quantity(name) {
+        return copy_resolved_host_field(plan, name, cell_count, time_seconds);
     }
     copy_cuda_field_snapshot(backend, name, cell_count)
 }

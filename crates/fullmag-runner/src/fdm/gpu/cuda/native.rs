@@ -105,11 +105,11 @@ impl CudaSnapshotObservable {
 }
 
 pub(crate) fn can_materialize_preview_quantity(id: QuantityId) -> bool {
-    // H_ant is materialized by the runner from the immutable per-cell basis;
-    // the native ABI intentionally has no separate antenna observable ID.
+    // H_ant and H_drive are materialized by the runner from the immutable
+    // per-cell bases; the native ABI intentionally has no observable IDs for them.
     matches!(
         id,
-        QuantityId::HAnt | QuantityId::Torque | QuantityId::FrozenSpins
+        QuantityId::HAnt | QuantityId::HDrive | QuantityId::Torque | QuantityId::FrozenSpins
     ) || CudaSnapshotObservable::from_quantity(id).is_some()
 }
 

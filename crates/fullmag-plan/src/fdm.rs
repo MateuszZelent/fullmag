@@ -2774,7 +2774,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
-        !problem.field_drives.is_empty(),
+        !problem.field_drives.is_empty() || !problem.mask_field_drives.is_empty(),
         // Transport field outputs are study-level declarations.  A stage may
         // deliberately disable the complete charge->spin->torque pipeline
         // (for example during zero-current relaxation), so validation must

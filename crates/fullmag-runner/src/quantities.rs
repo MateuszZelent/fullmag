@@ -932,19 +932,19 @@ mod tests {
         let mut fdm = fdm_plan();
         fdm.field_drives.push(drive.clone());
 
-        assert!(
+        assert_eq!(
             active_fdm_preview_quantities(
                 FdmEngine::CpuReference,
                 &fdm,
                 &["H_drive", "eden_drive"],
-            )
-            .is_empty(),
-            "CPU FDM must not advertise drive quantities missing from its preview dispatcher"
+            ),
+            vec!["H_drive"],
+            "CPU FDM advertises exactly the drive quantities of its preview dispatcher"
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &["H_drive", "eden_drive"],),
-            vec!["eden_drive"],
-            "CUDA FDM must follow its native snapshot-observable dispatcher"
+            vec!["H_drive", "eden_drive"],
+            "CUDA FDM resolves H_drive on the host and eden_drive natively"
         );
 
         let mut fem = fem_plan();

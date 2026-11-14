@@ -570,6 +570,38 @@ pub(crate) fn resolved_regional_field_drives(
     drives
 }
 
+/// `H_drive` of a lane that keeps the drive bases on the device: the plan's
+/// regional, solved-antenna and mask drive terms at `time_seconds`, with the
+/// terms and clock of `ExchangeLlgProblem::regional_drive_field_at_time`.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) fn resolved_drive_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Result<Vec<Vector3>, RunError> {
+    let mut field = vec![[0.0, 0.0, 0.0]; sample_count];
+    for term in resolved_regional_field_drives(plan, plan.time_stage.start_time_s)
+        .into_iter()
+        .filter(|term| term.enabled)
+    {
+        if term.basis_field.len() != sample_count {
+            return Err(RunError {
+                message: format!(
+                    "resolved drive basis has {} samples; expected {sample_count}",
+                    term.basis_field.len()
+                ),
+            });
+        }
+        let multiplier = term.multiplier_at(time_seconds);
+        for (total, basis) in field.iter_mut().zip(&term.basis_field) {
+            total[0] += multiplier * basis[0];
+            total[1] += multiplier * basis[1];
+            total[2] += multiplier * basis[2];
+        }
+    }
+    Ok(field)
+}
+
 fn resolved_solved_antenna_drives(
     plan: &FdmPlanIR,
     stage_start_time_s: f64,
@@ -4964,6 +4996,7 @@ fn direct_field_values_available(name: &str) -> bool {
             | "H_oe"
             | "H_OE"
             | "H_ant"
+            | "H_drive"
             | "H_eff"
             | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
@@ -4999,6 +5032,7 @@ struct DirectFieldSnapshotCache<'a> {
     rotated_dmi_field: Option<Vec<Vector3>>,
     oersted_field: Option<Vec<Vector3>>,
     antenna_field_cache: Option<Vec<Vector3>>,
+    drive_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
     oersted_field_override: Option<&'a [Vector3]>,
@@ -5031,6 +5065,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             rotated_dmi_field: None,
             oersted_field: None,
             antenna_field_cache: None,
+            drive_field: None,
             effective_field: None,
             torque_field: None,
             oersted_field_override,
@@ -5245,6 +5280,16 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     .antenna_field_cache
                     .as_deref()
                     .expect("cached antenna field"))
+            }
+            // Regional drives, solved-antenna drives and mask terms (ADR 0081).
+            "H_drive" => {
+                if self.drive_field.is_none() {
+                    self.drive_field = Some(
+                        self.problem
+                            .regional_drive_field_at_time(self.state.time_seconds),
+                    );
+                }
+                Ok(self.drive_field.as_deref().expect("cached drive field"))
             }
             "H_eff" => self.observable_effective_field(name),
             "torque" => self.torque_field(name),

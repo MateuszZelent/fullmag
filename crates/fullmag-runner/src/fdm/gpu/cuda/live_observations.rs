@@ -124,7 +124,8 @@ struct ObservationSnapshot {
 
 enum ObservationFieldSnapshot {
     Native(NativeFdmPreviewSnapshot),
-    Antenna {
+    /// `H_ant` or `H_drive`, resolved on the host from the plan's bases.
+    Resolved {
         basis: Arc<FdmPlanIR>,
         request: LivePreviewRequest,
         grid: [u32; 3],
@@ -136,11 +137,11 @@ impl ObservationFieldSnapshot {
     fn into_live_preview_field(self, mask: Option<&[bool]>) -> Result<LivePreviewField, RunError> {
         match self {
             Self::Native(snapshot) => snapshot.into_live_preview_field(mask),
-            Self::Antenna { basis, request, grid, time } => {
+            Self::Resolved { basis, request, grid, time } => {
                 let count = grid.into_iter().try_fold(1usize, |n, extent| {
                     n.checked_mul(extent as usize)
                 }).ok_or_else(|| RunError { message: "antenna observation grid overflow".into() })?;
-                let values = super::artifacts::copy_resolved_antenna_field(
+                let values = super::artifacts::copy_resolved_host_field(
                     &basis, &request.quantity, count, time,
                 )?;
                 Ok(crate::preview::build_grid_preview_field(&request, &values, grid, mask))
@@ -403,7 +404,7 @@ fn requested_observation_demand(
 }
 
 pub(crate) struct FdmLiveObservationScheduler {
-    antenna_basis: Arc<FdmPlanIR>,
+    resolved_basis: Arc<FdmPlanIR>,
     original_grid: [u32; 3],
     active_mask: Option<Vec<bool>>,
     supported: BTreeSet<String>,
@@ -451,9 +452,11 @@ impl FdmLiveObservationScheduler {
             ),
         };
         Self {
-            antenna_basis: Arc::new(FdmPlanIR {
+            resolved_basis: Arc::new(FdmPlanIR {
                 antenna_zeeman_masks: plan.antenna_zeeman_masks.clone(),
                 solved_antenna_drive_bases: plan.solved_antenna_drive_bases.clone(),
+                regional_field_drive_bases: plan.regional_field_drive_bases.clone(),
+                mask_field_term_bases: plan.mask_field_term_bases.clone(),
                 time_stage: plan.time_stage.clone(),
                 relaxation: plan.relaxation.clone(),
                 ..FdmPlanIR::default()
@@ -759,7 +762,7 @@ impl FdmLiveObservationScheduler {
         let identity = ObservationJobIdentity {
             request_revision: demand.revision,
             source_step: capture_step,
-            source_time_bits: super::canonical_fdm_publication_time(&self.antenna_basis, capture_time).to_bits(),
+            source_time_bits: super::canonical_fdm_publication_time(&self.resolved_basis, capture_time).to_bits(),
             quantities: demand.quantities.clone(),
         };
         timings.submit_descriptor_wall_time_ns = elapsed_ns(descriptor_started);
@@ -795,9 +798,9 @@ impl FdmLiveObservationScheduler {
         for quantity in &demand.quantities {
             let request = full_grid_request(display_state, quantity, self.original_grid);
             let started = Instant::now();
-            let snapshot = if super::artifacts::is_antenna_field_quantity(quantity) {
-                Ok(ObservationFieldSnapshot::Antenna {
-                    basis: Arc::clone(&self.antenna_basis),
+            let snapshot = if super::artifacts::is_host_resolved_field_quantity(quantity) {
+                Ok(ObservationFieldSnapshot::Resolved {
+                    basis: Arc::clone(&self.resolved_basis),
                     request,
                     grid: self.original_grid,
                     time: capture_time,
@@ -1127,9 +1130,9 @@ mod tests {
             },
         });
         let scheduler = super::FdmLiveObservationScheduler::new(&plan, [1,1,1]);
-        assert_eq!(scheduler.antenna_basis.relaxation, plan.relaxation);
+        assert_eq!(scheduler.resolved_basis.relaxation, plan.relaxation);
         assert_eq!(crate::fdm::gpu::cuda::canonical_fdm_publication_time(
-            &scheduler.antenna_basis, 3e-12),
+            &scheduler.resolved_basis, 3e-12),
             crate::fdm::gpu::cuda::canonical_fdm_publication_time(&plan, 3e-12));
     }
 
@@ -1203,7 +1206,7 @@ mod tests {
             ..fullmag_ir::FdmPlanIR::default()
         });
         for (time, sign) in [(0.25, 1.0), (0.75, -1.0)] {
-            let snapshot = super::ObservationFieldSnapshot::Antenna {
+            let snapshot = super::ObservationFieldSnapshot::Resolved {
                 basis: std::sync::Arc::clone(&basis),
                 request: full_grid_request(&DisplaySelectionState::default(), "H_ant", [2, 1, 1]),
                 grid: [2, 1, 1],
