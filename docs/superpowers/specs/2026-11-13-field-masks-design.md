@@ -1,6 +1,6 @@
 # Masks for field excitation — design
 
-Date: 2026-11-14 (rev. 7). Source: `~/git/fullmag` master `438d917ff`.
+Date: 2026-11-14 (rev. 8; adopts parts of Mateusz's V4, see `docs/superpowers/specs/2026-11-14-field-masks-comparison-with-v4.md`). Source: `~/git/fullmag` master `438d917ff`.
 Plan: `docs/superpowers/plans/2026-11-13-field-masks.md`.
 
 Scope: masks as a field excitation (antenna) only, no material parameters.
@@ -55,9 +55,9 @@ def antenna_mask(x, y, z, B01, wavelength, fwhm_y, xs):
 def antenna_time(t, frequency, t0):
     return sin(2 * pi * frequency * (t - t0))
 
-antenna = study.add_simpleantenna.mask(
-    target=sample, shape=fm.Box(6000 * nm, 1000 * nm, 45 * nm), position=(0, 0, -15 * nm),
-    frame="world", name="Antenna",
+antenna = sample.add_simpleantenna.arbitrary_mask(          # or region.add_simpleantenna...,
+    shape=fm.Box(6000 * nm, 1000 * nm, 45 * nm),               # or study.add_simpleantenna.arbitrary_mask(target=...)
+    position=(0, 0, -15 * nm), frame="world", name="Antenna",
 )
 field = fm.mask(antenna_mask, B01=0.2 * mT, wavelength=279 * nm, fwhm_y=240 * nm, xs=6000 * nm / 2.3)
 drive = fm.time(antenna_time, frequency=3.6 * GHz, t0=0.0)
@@ -131,6 +131,13 @@ ready antennas, edits their arguments, and the backend calls the function again
 to rebuild the terms. This holds for loop-style ready antennas too. A script
 exported from the UI contains the import and the call.
 
+Scoped factories (one implementation owner): `study.add_simpleantenna.arbitrary_mask(target=..., ...)`
+needs an explicit target (a magnet, a region of a magnet, or `"global"`);
+`magnet.add_simpleantenna.*` binds the magnet and `region.add_simpleantenna.*` binds the region;
+a scoped factory rejects `target=` with `scoped_target_override_not_allowed`. `position` and `frame`
+keep their meaning in every form. Terms may be named: `antenna.add(field, drive, name="left")`;
+names are unique within the antenna and address the term in an Update.
+
 Rules for mask and time **functions** (restricted Python, transpiled to equations;
 the solver never calls Python):
 
@@ -141,7 +148,8 @@ the solver never calls Python):
   `fm.time(function, name=value, …)`. A missing or unknown name is an error.
   A default in the `def` is allowed but not needed. Parameters stay named and
   editable in the IR and the UI.
-- Body: assignments `name = expression`, then `return`. Expressions: numbers,
+- Body: assignments `name = expression` (a name may be reassigned, also with `+= -= *= /= **=`;
+  the transpiler renames versions, SSA style), then `return`. Expressions: numbers,
   parameters, earlier locals, `pi`, `+ - * / **`, unary minus, and
   `sin cos tan asin acos atan atan2 sinh cosh tanh exp log sqrt abs min max`
   (bare or `math.`). Free names that resolve to a number in the function's
@@ -168,8 +176,10 @@ Rules for **array** masks (loop style):
 
 Common rules:
 
-- `target`: the magnet. `shape` + `position`: the support of all terms of this
-  antenna, intersected with the target's magnetic cells (cell centres).
+- `target`: global, a magnet, or a region of a magnet. `shape` + `position`: the
+  support of all terms, intersected with the target's magnetic cells (cell centres).
+  A region target follows the FDM region membership (exclusive, by priority); the shape
+  is independent of regions.
   `frame="world"`: `x, y, z` and `position` are world coordinates.
   `frame="local"`: `x, y, z` of mask functions are measured from `position`, given
   in the target's object frame (translation only in v1). Array masks are always in
@@ -179,7 +189,7 @@ Common rules:
   start of every run stage in which the drive is active; `"absolute"` — the
   simulation time, i.e. `t` of mumax3. Relaxation stages must not advance the
   absolute clock (note 0530); the plan verifies it.
-- Stages: creating an antenna (`study.add_simpleantenna.mask(...)`) only authors
+- Stages: creating an antenna (`study.add_simpleantenna.arbitrary_mask(...)`) only authors
   it. It enters the physics at a pipeline point with
   `study.stages.add_field_drive(antenna, stage_id=...)` (Mateusz's form) or for the
   whole study with `study.field_drives.add(antenna)`;
@@ -193,13 +203,14 @@ Common rules:
 ProblemIR.mask_field_drives: Vec<MaskFieldDriveIR>      # serde default, skipped when empty
 MaskFieldDriveIR {
   schema_version: "mask_field_drive.v1", id, name, enabled: bool,
-  target_object_id: String,
+  target: FieldTargetIR,                                  # reused: global | object | region
   shape: RegionShapeIR, position_m: [f64; 3], frame: "world" | "local",
   terms: Vec<MaskTermIR>,                                 # 1..=8
   time_origin: FieldTimeOriginIR,                         # reused: stage_local | absolute
   activation: DriveActivationIR,                          # reused
 }
-MaskTermIR { mask: MaskSourceIR, time: Option<FunctionIR>,   # time absent = 1
+MaskTermIR { name: Option<String>,                         # unique within the drive
+             mask: MaskSourceIR, time: Option<FunctionIR>,   # time absent = 1
              origin: Option<LibraryCallIR> }                 # set when a ready antenna produced the term
 LibraryCallIR { function: String,                          # e.g. "fullmag.antennas.gaussian_k_source"
                 arguments: BTreeMap<String, f64>, call_index: u32, output_index: u32 }
@@ -228,6 +239,7 @@ byte-identically.
 |---|---|---|
 | `add_field_drive` (exists) | `drive: RegionalFieldDriveIR` | unchanged |
 | **`add_mask_field_drive`** (new) | `drive: MaskFieldDriveIR` | pushed to `ProblemIR.mask_field_drives` |
+| **`update_mask_field_drive`** (new) | `drive_id`, `term` (name or index; may be omitted for one term), `mask_parameters`, `time_parameters` | replaces parameter values of the active instance; atomic |
 | `remove_field_drive` (exists) | `drive_id` | removes the drive with that id from either list |
 
 - Both add actions are pipeline-input configuration stages: no solver work, a
@@ -236,6 +248,14 @@ byte-identically.
   for a `RegionalFieldDrive` and `add_mask_field_drive` for a mask antenna, so the
   user writes the same call for both.
 - Ids are unique across `field_drives` and `mask_field_drives`.
+- Update (adopted from Mateusz's V4 §3): the id must be active; unknown parameter
+  names, a missing term selector on a multi-term antenna or a non-finite value reject
+  the whole action; omitted values keep the current instance; the patch belongs to the
+  stage, not to the antenna's definition, so Remove followed by Add installs the base
+  definition again. Add of an active id is not an upsert. Update and Remove do not step
+  the dynamics, change `m` or move time.
+- Python: `study.stages.update_field_drive(antenna_or_id, mask_parameters={...},
+  time_parameters={...}, term=None, stage_id=...)`.
 - Control Room: the "Add Antenna" stage offers both antenna types; the mask type
   opens the mask antenna editor (section 7).
 
@@ -261,7 +281,8 @@ code (`native/include/fullmag_time_expression.h`). For L2 the crate later gains
 ```
 FdmPlanIR.mask_field_term_bases: Vec<ResolvedMaskFieldTermBasisIR>
 ResolvedMaskFieldTermBasisIR {
-  drive_id, term_index: u32, time_expression: String, time_program: Vec<f64>,
+  drive_id, term_index: u32, time_origin, time_expression: String, time_program: Vec<f64>,
+  time_dependent: bool,
   field_xyz: Vec<[f64; 3]>,          # A/m (B/μ0), one per cell, zero outside the support
   projection_signature: String,
 }
@@ -269,7 +290,9 @@ ResolvedMaskFieldTermBasisIR {
 
 | Lane | Realization |
 |---|---|
-| FDM planner | support = target ∩ shape at `position` (cell centres, through the existing selection compiler); a function mask is evaluated once at the centre of each supported active cell; an array mask is copied or resampled to the cell centres (as mumax3). Errors: `mask_support_empty`, `mask_expression_non_finite`; the time program is sampled at 4097 points of the stage horizon. |
+| FDM planner | support = target ∩ shape at `position` (cell centres, through the existing selection compiler); a function mask is evaluated once at the centre of each supported active cell; an array mask is copied or resampled to the cell centres (as mumax3). Errors: `mask_support_empty`, `mask_expression_non_finite`; the time program is checked at the stage start (the stage horizon is not part of ProblemIR). |
+| Runner (all lanes) | checks every host evaluation of a time program and stops with `mask_expression_non_finite` and the time. |
+| `H_drive` readback | FDM CPU and CUDA publish `H_drive` including mask terms (today `H_ext` does not contain drives on CUDA). |
 | FDM CUDA | waveform kind `FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5`: before each field build the host evaluates each term's time program (one number per term) and passes the values to the kernels by value (at most 8); the kernel does `h += multiplier[i] · basis[i][cell]`. No equation per cell, no upload per step. Built-in waveform kinds untouched. Capability bit. |
 | FDM CPU | `DriveTimeFunction::Expression(program)` with the Rust interpreter. |
 | Multilayer FDM, FEM | planning fails with `mask_field_drive_unsupported_lane:<lane>`. |
@@ -309,6 +332,15 @@ stored as ordinary L0 terms. A function that does not separate →
 
 ## 9. Later
 
+Adopted from Mateusz as later work: conditionals with lazy branches (`if`/`select`),
+dimension checks through unit literals that carry a dimension, linking mask parameters to
+the study parameter library (`parameter_library.v1`, sweeps), `projection="cell_average"`
+beside the default cell centre, FEM L2 projection with native quadrature points evaluated
+by the Rust planner (one evaluator), a general non-separable tier that evaluates the same
+bytecode per cell on the device, the five-kind catalog (gaussian, microstrip, point,
+dispersion matched, arbitrary mask), the Explorer and Add/Update/Remove/Run inspectors of
+V3/V4, and the four-lane acceptance matrix (V3 §18.9).
+
 FEM lanes; array masks loaded from OVF files; more ready antennas; a per-cell evaluation
 mode for non-separable L2 functions; a backend-evaluated preview; masks for ABC,
 material parameters and table averages; conditional expressions; rotation of the
@@ -331,7 +363,7 @@ demag="truncated_images", images=(4,256,0))` with CUDA double, no thermal step.
 3. `frame="local"`: coordinates from `position` in the target's frame; `"world"` also
    available. (assumed)
 4. Masks exist next to `RegionalFieldDrive`; nothing is removed. (assumed)
-5. Names: `study.add_simpleantenna.mask(...)`, `.add(mask, time)`, `fm.mask(f, …)`,
+5. Names: `study.add_simpleantenna.arbitrary_mask(...)`, `.add(mask, time)`, `fm.mask(f, …)`,
    `fm.time(g, …)`, `study.new_vector_mask()` for L0; `arbitrary_mask(function=…)` for L2. (proposed)
 6. The user's own loop-style masks are authored in the script only; the UI shows and
    keeps them. Ready antennas of `fullmag.antennas` (either style) are editable in the

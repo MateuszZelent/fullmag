@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (new `fullmag-expr`; `fullmag-ir`, `-plan`, `-runner`, `-engine`, `-authoring`, `-api`), C/CUDA (`native/include`, `backends/fdm`), Python (`packages/fullmag-py`), TypeScript (`apps/control-room`), mumax3 v3.12.21 as the reference.
 
-**Spec:** `docs/superpowers/specs/2026-11-13-field-masks-design.md` (rev. 7). § numbers refer to it.
+**Spec:** `docs/superpowers/specs/2026-11-13-field-masks-design.md` (rev. 8). § numbers refer to it.
 
 ## Global Constraints
 
@@ -172,7 +172,7 @@ class MaskAntenna:
     terms: tuple[tuple[MaskFunction | VectorMask, TimeFunction | None], ...]
     def add(self, mask: MaskFunction | VectorMask, time: TimeFunction | None = None) -> "MaskAntenna"
     def to_ir(self, *, activation: DriveActivation, asset_dir) -> dict[str, object]
-# study.add_simpleantenna.mask(target, shape, position=(0, 0, 0), frame="local",
+# study.add_simpleantenna.arbitrary_mask(target, shape, position=(0, 0, 0), frame="local",
 #     time_origin="stage_local", name=None, id=None) -> MaskAntenna   # authoring only
 # study.field_drives.add(antenna)                         # active for the whole study (activation)
 # study.new_vector_mask(size=None, cell=None, origin=None) -> VectorMask   # default: the study's FDM grid
@@ -200,6 +200,19 @@ class MaskAntenna:
 - [ ] **Step 5: Implement.** Source lookup: `inspect.getsource`; fallback: the `FunctionDef` in `script_source` found by name and `__code__.co_firstlineno`. Parse with `ast`; defaults are evaluated by Python, their text taken with `ast.get_source_segment`; closure cells and globals resolve free names.
 - [ ] **Step 6: Run** the four files and `test_regional_field_drive.py` — pass.
 - [ ] **Step 7: Commit** `feat(py): add hand-written function and array masks, time functions and a ready antenna`.
+
+### Task 4b: Adopted from Mateusz's V4 (IR, Python)
+
+**Files:**
+- Modify: `crates/fullmag-ir/src/mask_field_drive.rs` (`target: FieldTargetIR` replaces `target_object_id`; `MaskTermIR.name`; validation of region targets and term names), `crates/fullmag-ir/tests/mask_field_drive_tests.rs`
+- Modify: `packages/fullmag-py/src/fullmag/model/mask_function.py` (SSA renaming of reassigned locals, augmented assignment), `model/mask_field_drive.py` (target, term names, `with_parameters`), `world.py` (`StudySimpleAntennaFactory.arbitrary_mask`, scoped factories on `MagnetHandle` and `ObjectRegion`, `stages.update_field_drive`)
+- Test: `packages/fullmag-py/tests/test_mask_function.py`, `test_mask_antenna.py`
+
+**Interfaces:**
+- Produces: `study.add_simpleantenna.arbitrary_mask(target, shape, position=(0, 0, 0), *, frame="local", time_origin="stage_local", activation=None, name=None, id=None)`; `magnet.add_simpleantenna.arbitrary_mask(shape, ...)`; `region.add_simpleantenna.arbitrary_mask(shape, ...)` (`target=` rejected: `scoped_target_override_not_allowed`); `antenna.add(mask, time=None, *, name=None)`; `study.stages.update_field_drive(antenna_or_id, *, mask_parameters=None, time_parameters=None, term=None, stage_id=None)` emitting `{"kind": "update_mask_field_drive", "drive_id", "term", "mask_parameters", "time_parameters"}`.
+
+- [ ] **Step 1: Tests:** reassignment `g = ...; g = g * ...` transpiles to locals `g`, `g_2` and outputs use `g_2`; `g *= 2` works; `region.add_simpleantenna.arbitrary_mask` gives target `{"kind": "region", ...}`; `film.add_simpleantenna...` gives `{"kind": "object", ...}`; scoped `target=` rejected; duplicate term names rejected; Update: patched instance in the following stages, base antenna unchanged, re-Add after Remove installs the base values, unknown parameter / inactive id / missing term selector rejected; Rust IR tests for region target, unknown region, duplicate term names.
+- [ ] **Step 2: Implement.** **Step 3:** run Python tests (pytest, repo venv) and `cargo check -p fullmag-ir`. **Step 4: Commit** `feat: adopt scoped factories, region targets, term names, SSA and Update`.
 
 ### Task 5: FDM planner
 
@@ -247,6 +260,8 @@ The support selector of a drive is `and(in_object(target), inside_geometry(shape
 | `regional_unchanged` | existing `RegionalFieldDrive` script | plan JSON equals the master plan; no `mask_field_term_bases` key |
 | `empty_support` | shape outside the film | fails, `mask_support_empty` |
 | `non_finite_time` | time `log(t)` | fails, `mask_expression_non_finite` |
+| `region_target` | `region.add_simpleantenna...`, region `a` covering x<0 | non-zero cells = the cells whose `region_mask` is region `a` |
+| `global_target` | `target="global"` | every active cell inside the shape |
 | `fem` | `uniform_static` with `engine("fem")` | fails, `mask_field_drive_unsupported_lane:fem` |
 | `multilayer` | `uniform_static` with a second magnet | fails, `mask_field_drive_unsupported_lane:fdm_multilayer` |
 
@@ -266,6 +281,7 @@ The support selector of a drive is `and(in_object(target), inside_geometry(shape
 - Consumes: `ResolvedMaskFieldTermBasisIR`; `fullmag_expr::{eval_time_program, TIME_PROGRAM_VERSION}`.
 - Produces: `pub enum DriveTimeFunction { Waveform(TimeDependenceIR), Expression(Vec<f64>) }`, `fn multiplier_at(&self, local_time_s: f64) -> f64`. Clock: `local_time = absolute_time − origin`, origin = absolute start of the stage that added the antenna (the `waveform_origin_time_s` mechanism of descriptor v2).
 
+- [ ] **Step 0:** Publish `H_drive` (FDM CPU and CUDA) including mask terms; add it to the device evidence of Task 9.
 - [ ] **Step 1:** Add `const _: () = assert!(fullmag_expr::TIME_PROGRAM_VERSION == 1);` beside the binding of `FULLMAG_TIME_EXPRESSION_VERSION`; the runner refuses mask terms when the capability bit is missing or when more than 8 host-multiplier terms are active (`mask_too_many_terms`).
 - [ ] **Step 2: Implement.** Built-in waveform cases in `regional_field_drive_multiplier` stay as they are.
 - [ ] **Step 3: Check:** rebuild the worktree backend — the `phase: development` receipt reports success; `just check-api-source` exit 0.
@@ -274,7 +290,7 @@ The support selector of a drive is `and(in_object(target), inside_geometry(shape
 ### Task 7: Stage pipeline, scene, script and API round trip
 
 **Files:**
-- Modify (stage pipeline): `crates/fullmag-application/src/script_stage_contract.rs` (`ScriptExecutionStageAction::AddMaskFieldDrive { drive: MaskFieldDriveIR }`, `ResolvedScriptStageAction::AddMaskFieldDrive`), `crates/fullmag-application/src/script_stage_materialization.rs` (materialize the action and the pipeline payload, `ensure_mask_field_drive_can_be_added`, `remove_field_drive` searches both lists, transition metadata = continue in place), `crates/fullmag-application/src/script_pipeline_compilation.rs` (authored-configuration check), `crates/fullmag-cli/src/orchestrator.rs` (synthetic stage record `add_mask_field_drive`), `crates/fullmag-cli/src/control_room.rs` (stage kind lists), `crates/fullmag-authoring/src/builder.rs` (`StudyPrimitiveStageKind::AddMaskFieldDrive`, pipeline-input configuration), `crates/fullmag-api/src/openapi_v2.rs` (stage kind enum)
+- Modify (stage pipeline): `crates/fullmag-application/src/script_stage_contract.rs` (`ScriptExecutionStageAction::AddMaskFieldDrive { drive: MaskFieldDriveIR }`, `UpdateMaskFieldDrive { drive_id, term, mask_parameters, time_parameters }` and the resolved variants), `crates/fullmag-application/src/script_stage_materialization.rs` (materialize the action and the pipeline payload, `ensure_mask_field_drive_can_be_added`, `remove_field_drive` searches both lists, transition metadata = continue in place), `crates/fullmag-application/src/script_pipeline_compilation.rs` (authored-configuration check), `crates/fullmag-cli/src/orchestrator.rs` (synthetic stage record `add_mask_field_drive`), `crates/fullmag-cli/src/control_room.rs` (stage kind lists), `crates/fullmag-authoring/src/builder.rs` (`StudyPrimitiveStageKind::AddMaskFieldDrive`, pipeline-input configuration), `crates/fullmag-api/src/openapi_v2.rs` (stage kind enum)
 - Modify (Python): `packages/fullmag-py/src/fullmag/runtime/script_builder.py` (stage rendering `study.stages.add_field_drive(<antenna>, stage_id=...)` for both kinds; label "Add Antenna"), `runtime/scene_document.py`, `runtime/loader.py` (introduced drive ids for `add_mask_field_drive`), `crates/fullmag-authoring/src/{scene.rs,validation.rs,adapters.rs}`, `crates/fullmag-api/src/schemas/authoring.rs` (`MaskFieldDriveResource`), `crates/fullmag-api/src/router_v2/handlers/model/authoring.rs` (CRUD like field drives)
 - Regenerate: OpenAPI + TS types (`just docker-dev-codegen "$PWD"`), Python client models
 - Test: `packages/fullmag-py/tests/test_script_builder_roundtrip.py`, `test_scene_document_problem_ir.py`; Rust round-trip test beside the field-drive one
@@ -290,7 +306,7 @@ def <id>_mask_<n>(x, y, z, <name>, ...):
 def <id>_time_<n>(t, <name>, ...):
     return <expression>
 
-<id> = study.add_simpleantenna.mask(target=<target>, shape=<shape>, position=<position>,
+<id> = study.add_simpleantenna.arbitrary_mask(target=<target>, shape=<shape>, position=<position>,
                                     frame=<frame>, name=<name>, id=<id>)
 <id>.add(fm.mask(<id>_mask_<n>, <name>=<source or repr(value)>, ...),
          fm.time(<id>_time_<n>, <name>=<source or repr(value)>, ...))   # one per term; no fm.time for a static term
@@ -307,6 +323,7 @@ for field, drive in <function>(study, <name>=<value>, ...):                     
 - [ ] **Step 2: Run** the Python tests — the first five fail.
 - [ ] **Step 3: Implement**, regenerate API artifacts (diff shows additions only).
 - [ ] **Step 4: Run** the tests (pass) and `just check-api-source` (exit 0).
+- [ ] **Step 4a: Update** materializes atomically in `script_stage_materialization.rs` (patch the active `ProblemIR.mask_field_drives` entry; reject inactive id, unknown parameter, missing term selector); scenario Add → Run → Update → Run → Remove → Run → Add → Run plans to the expected bases and time programs in each run (base values again after the second Add).
 - [ ] **Step 4b: Stage probe** (extends Task 5's probe): a script `run 10 ps → add_field_drive(antenna) → run 10 ps → run 10 ps → remove_field_drive → run 10 ps` plans to: no `mask_field_term_bases` in run 1, one basis in runs 2 and 3, none in run 4. With `time_origin="absolute"`, the planned `time_stage.start_time_s` of run 2 equals 10 ps; with a relaxation stage inserted before run 2 it still equals 10 ps (note 0530). If the relaxation advances it, record the measured value as a finding; do not change the clock in this task.
 - [ ] **Step 5: Commit** `feat(stages): add and remove mask antennas in the study pipeline`.
 
@@ -314,6 +331,7 @@ for field, drive in <function>(study, <name>=<value>, ...):                     
 
 **Files:**
 - Create: `apps/control-room/src/modules/inspector/panels/mask/MaskAntennaPanel.tsx`, `MaskAntennaPanelModel.ts`, `MaskAntennaPanelModel.test.ts`, `MaskAntennaPanel.dom.test.tsx`
+- Follow Mateusz's V3 §12–14 and V4 §6 for the Explorer (antenna under its object/region), the Add/Update/Remove inspectors and the Run inspector's active set, as far as they fit this panel; the five-kind catalog is later work.
 - Modify: the inspector registry that lists `RegionalFieldDrivePanel`; resource hooks (typed client only); the study pipeline: `apps/control-room/src/modules/explorer/builders/study/` (node for `add_mask_field_drive`), `inspector/panels/StudyStageAuthoringModel.ts`, `studyPipelineStageDrafts.ts`, `StudyStageInspectorRouter.tsx` (the "Add Antenna" stage offers both antenna types; the mask type embeds `MaskAntennaPanel`)
 
 **Interfaces:**
@@ -412,3 +430,4 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 5. Thermal step left out on both sides; the quirks of the mumax3 script are reproduced as they are.
 6. Later plans: array masks from OVF files, more ready antennas (the user will send examples), FEM lanes.
 7. Design §11 points 1–5: assumed, to be confirmed with the co-author.
+8. 2026-11-14: keep our core (explicit terms, host scalar time, one Rust evaluator, text equations, cell-centre default, loop masks); adopt from Mateusz's V4: Update stage action with term names, scoped factories and region targets, `arbitrary_mask` naming, SSA reassignment, `H_drive` readback, the four-lane acceptance matrix as the target, and the UI design (`docs/superpowers/specs/2026-11-14-field-masks-comparison-with-v4.md`).
