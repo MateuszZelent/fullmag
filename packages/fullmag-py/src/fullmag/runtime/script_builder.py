@@ -122,6 +122,29 @@ class PinnedFemMeshSourceOutsideRoot(ValueError):
     """A pinned domain mesh cannot be carried by this source script."""
 
 
+class MaskAntennasNotInScene(ValueError):
+    """The builder and the SceneDocument cannot carry mask antennas yet."""
+
+
+_MASK_STAGE_ACTIONS = frozenset({"add_mask_field_drive", "update_mask_field_drive"})
+
+
+def _reject_mask_antennas(loaded: LoadedProblem) -> None:
+    """Fail closed: a scene without the script's mask antennas would run without them."""
+    problems = [loaded.problem, loaded.workspace_problem]
+    problems.extend(stage.problem for stage in loaded.stages)
+    if any(problem is not None and problem.mask_field_drives for problem in problems) or any(
+        isinstance(stage.action, Mapping) and stage.action.get("kind") in _MASK_STAGE_ACTIONS
+        for stage in loaded.stages
+    ):
+        raise MaskAntennasNotInScene(
+            "mask_field_drive_unsupported_lane:scene: mask antennas are not carried by the "
+            "Control Room scene yet, so the managed API and the Control Room would run this "
+            "script without its antenna; run it with the fullmag CLI "
+            "(fullmag --headless script.py) until scene support lands"
+        )
+
+
 def _is_exact_max_err_policy(policy: AdaptiveTimestep) -> bool:
     return (
         policy._tolerance_mode == "max_error"
@@ -279,6 +302,7 @@ def export_builder_draft(
     *,
     replay_initial_magnetization: bool = True,
 ) -> dict[str, object]:
+    _reject_mask_antennas(loaded)
     base_problem = loaded.pipeline_base_problem(
         loaded.workspace_problem or loaded.problem,
         replay_initial_magnetization=replay_initial_magnetization,
