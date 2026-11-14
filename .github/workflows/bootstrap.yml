@@ -139,7 +139,32 @@ jobs:
         run: |
           python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-native-green
           python -B .github/antenna-retained-dtq/apply-task2-source.py --verify
+      - name: Apply exact test-only singular-target diagnostics
+        run: |
+          python -B - <<'PYCI'
+          import hashlib
+          from pathlib import Path
+          data = Path('.github/antenna-retained-dtq')
+          expected = {
+              'apply-justfile-insertions.py': (1957, '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'),
+              'task-2-singular-diagnostic-insertions.json': (10251, '22a3b4d561ed80f379371638fd86288461e0b96d4b502ef581e2eaf126538b01'),
+          }
+          checked = {}
+          for name, (size, digest) in expected.items():
+              raw = (data / name).read_bytes()
+              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+                  raise ValueError('Diagnostic transport pin mismatch: ' + name)
+              checked[name] = raw
+          namespace = {'__name__': 'ci_test_insertions'}
+          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
+          namespace['apply_insertions'](
+              Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'),
+              checked['task-2-singular-diagnostic-insertions.json'],
+          )
+          PYCI
       - name: Verify GREEN C++ numerical and ABI contracts
+        id: native-green
+        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
@@ -216,6 +241,11 @@ jobs:
         run: |
           set -o pipefail
           just verify-fem-retained-dtq-quantity-contract 2>&1 | tee antenna-retained-dtq-task5-quantity-ui-contracts.log
+      - name: Require the full native quadrature contract
+        if: always()
+        env:
+          NATIVE_GREEN_OUTCOME: ${{ steps.native-green.outcome }}
+        run: test "$NATIVE_GREEN_OUTCOME" = success
       - name: Preserve exact source pins and RED/GREEN logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -224,6 +254,7 @@ jobs:
           path: |
             antenna-retained-dtq-*.log
             .github/antenna-retained-dtq/task-2-ci-source-pins.json
+            .github/antenna-retained-dtq/task-2-singular-diagnostic-insertions.json
             .github/antenna-retained-dtq/task-3-source-pins.json
             .github/antenna-retained-dtq/task-3-wiring-pins.json
             .github/antenna-retained-dtq/task-4-source-pins.json
@@ -232,3 +263,4 @@ jobs:
             .github/antenna-retained-dtq/task-5-ui-baseline-pins.json
             .github/antenna-retained-dtq/task-5-wiring-pins.json
           if-no-files-found: error
+          include-hidden-files: true
