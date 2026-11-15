@@ -110,6 +110,7 @@ export function CrossSectionSettingsEditor({
           />
           <input
             aria-label="Position slider"
+            aria-valuetext={`${value.positionPercent}%`}
             className="fm-inspector-range-slider"
             max={100}
             min={0}
@@ -137,6 +138,7 @@ export function CrossSectionSettingsEditor({
           />
           <input
             aria-label="Rotation slider"
+            aria-valuetext={`${value.rotationDegrees} degrees`}
             className="fm-inspector-range-slider"
             max={180}
             min={-180}

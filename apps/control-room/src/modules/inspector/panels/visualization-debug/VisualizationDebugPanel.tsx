@@ -213,7 +213,7 @@ export function VisualizationDebugPanelView({
             <FieldRow label="Complex view / phase" value={query?.view ? `${query.view} / ${query.phaseRad ?? "default"}` : "none"} />
           </div>
         ))}
-        <div className="fm-visualization-debug-table-wrap">
+        <div aria-label="Matched field transport requests (scrollable)" className="fm-visualization-debug-table-wrap" role="region" tabIndex={0}>
           <table className="fm-visualization-debug-table" aria-label="Matched field transport requests">
             <thead><tr><th scope="col">Request</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Duration</th><th scope="col">Wire bytes</th><th scope="col">ETag</th><th scope="col">Timestamp</th></tr></thead>
             <tbody>{model.transport.slice(0, 8).map((entry) => (
@@ -257,7 +257,7 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
 
       <InspectorGroup title="Statistics">
-        <div className="fm-visualization-debug-table-wrap">
+        <div aria-label="Statistics by evidence source (scrollable)" className="fm-visualization-debug-table-wrap" role="region" tabIndex={0}>
           <table className="fm-visualization-debug-table" aria-label="Statistics by evidence source">
             <thead><tr><th scope="col">Carrier</th><th scope="col">Source</th><th scope="col">Min</th><th scope="col">Max</th><th scope="col">Mean</th><th scope="col">p01 / p99</th><th scope="col">Unit</th><th scope="col">Finite / non-finite / zero</th></tr></thead>
             <tbody>{statisticsRows(observations).map((row) => <tr key={row.key}><th scope="row">{row.carrierId}</th><td>{row.source}</td><td>{formatScientific(row.min)}</td><td>{formatScientific(row.max)}</td><td>{formatScientific(row.mean)}</td><td>{`${formatScientific(row.p01)} / ${formatScientific(row.p99)}`}</td><td>{row.unit}</td><td>{row.counts}</td></tr>)}</tbody>

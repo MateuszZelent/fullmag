@@ -202,6 +202,7 @@ export function SavedResultsPlaybackInspector() {
                 if (next !== undefined) selectFrame(next);
               }}
               step={1}
+              valueText={(v) => `Frame ${v + 1} of ${frameCount}`}
               value={[frameIndex]}
             />
             <p className="fm-saved-results-playback-inspector__time">

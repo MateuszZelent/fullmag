@@ -50,6 +50,7 @@ import {
   primitiveMonoColorForRole,
 } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -1051,16 +1052,24 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
                 Edit Geometry
               </Button>
               <span className="fm-inspector-toolbar__spacer" />
-              <Button
-                disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
-                size="sm"
-                type="button"
-                variant="danger"
-                title={sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined)}
-                onClick={() => void deleteObject()}
-              >
-                Delete
-              </Button>
+              {(() => {
+                const deleteDisabledReason =
+                  sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined);
+                const deleteButton = (
+                  <Button
+                    disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
+                    size="sm"
+                    type="button"
+                    variant="danger"
+                    onClick={() => void deleteObject()}
+                  >
+                    Delete
+                  </Button>
+                );
+                return deleteDisabledReason ? (
+                  <DisabledReason reason={deleteDisabledReason}>{deleteButton}</DisabledReason>
+                ) : deleteButton;
+              })()}
             </>
           )}
         </div>

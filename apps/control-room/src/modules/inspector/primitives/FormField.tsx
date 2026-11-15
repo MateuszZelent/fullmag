@@ -1,5 +1,5 @@
 import { HelpCircle } from "lucide-react";
-import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { homeView } from "@/kernel/layout/homeView";
 import {
@@ -177,6 +177,53 @@ function FormFieldHelpButton({
   );
 }
 
+let errorAnnouncer: HTMLElement | null = null;
+let errorAnnounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * One polite live region shared by every FormField on the page. Errors are not
+ * live regions themselves: a shown (rather than changed) live region is not
+ * announced reliably, and per-field assertive alerts interrupt the user.
+ */
+function announceFieldError(message: string) {
+  if (typeof document === "undefined") return;
+  if (!errorAnnouncer || !errorAnnouncer.isConnected) {
+    errorAnnouncer = document.createElement("div");
+    errorAnnouncer.setAttribute("aria-live", "polite");
+    errorAnnouncer.className = "sr-only";
+    errorAnnouncer.dataset.slot = "form-field-error-announcer";
+    document.body.append(errorAnnouncer);
+  }
+  const region = errorAnnouncer;
+  clearTimeout(errorAnnounceTimer);
+  region.textContent = "";
+  // Let the screen reader finish announcing the newly focused control first.
+  errorAnnounceTimer = setTimeout(() => {
+    region.textContent = message;
+  }, 500);
+}
+
+/**
+ * Announces an error once, and only after the user has interacted with the
+ * field (blur or change), so errors present on first render stay silent.
+ */
+function useFieldErrorAnnouncement(label: string, error: string | undefined) {
+  const interactedRef = useRef(false);
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!error) {
+      announcedRef.current = null;
+      return;
+    }
+    if (!interactedRef.current || announcedRef.current === error) return;
+    announcedRef.current = error;
+    announceFieldError(`${label}: ${error}`);
+  }, [error, label]);
+  return () => {
+    interactedRef.current = true;
+  };
+}
+
 /**
  * Compatibility form API for Inspector panels.
  * New label/control geometry is owned by InspectorPropertyRow. The fm-inspector-*
@@ -186,6 +233,7 @@ export function FormField(props: FormFieldProps) {
   const { label, unit, unitControl, hint, error, help, inline = true, disabled, invalid } =
     props;
   const fieldId = useId();
+  const markInteracted = useFieldErrorAnnouncement(label, error);
   const hintText = error ?? hint;
   const feedbackId = hintText
     ? `${fieldId}-${error ? "error" : "hint"}`
@@ -200,12 +248,7 @@ export function FormField(props: FormFieldProps) {
     ? "fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
     : "fm-inspector-form-field__hint";
   const feedback = hintText ? (
-    <span
-      aria-live={error ? "assertive" : undefined}
-      className={hintClass}
-      id={feedbackId}
-      role={error ? "alert" : undefined}
-    >
+    <span className={hintClass} id={feedbackId}>
       {hintText}
     </span>
   ) : null;
@@ -222,7 +265,7 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout={layout}
       >
-        <div className="fm-inspector-form-field__control w-full">
+        <div onBlurCapture={markInteracted} onChangeCapture={markInteracted} onInputCapture={markInteracted} className="fm-inspector-form-field__control w-full">
           <input
             id={fieldId}
             aria-label={label}
@@ -258,7 +301,7 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout={layout}
       >
-        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+        <div onBlurCapture={markInteracted} onChangeCapture={markInteracted} onInputCapture={markInteracted} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <select
             {...(rest as object)}
             id={fieldId}
@@ -302,7 +345,7 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout="stacked"
       >
-        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+        <div onBlurCapture={markInteracted} onChangeCapture={markInteracted} onInputCapture={markInteracted} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <textarea
             {...(rest as object)}
             id={fieldId}
@@ -358,7 +401,7 @@ export function FormField(props: FormFieldProps) {
         ) : undefined)
       }
     >
-      <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+      <div onBlurCapture={markInteracted} onChangeCapture={markInteracted} onInputCapture={markInteracted} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
         <input
           {...(rest as object)}
           id={fieldId}

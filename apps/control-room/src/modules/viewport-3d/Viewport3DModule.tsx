@@ -3867,6 +3867,7 @@ function Viewport3DOrbitDebugSlider({
       <output>{value.toFixed(3)}</output>
       <input
         aria-label={label}
+        aria-valuetext={value.toFixed(3)}
         max={max}
         min={min}
         step="0.001"
