@@ -1,5 +1,12 @@
 # BuckyBall — relaksacja w zerowym polu
 
+Aktualna decyzja użytkownika: świeży start zamiast implementowania recovery starej instancji. Nie powstał kod rozszerzający recovery. Stara grupa pozostaje zatrzymana z zachowanym unknown shutdown i helperem utrzymującym jej lease; nie resetować jej ownera, ledgeru ani receiptów.
+
+1. Utworzyć nowy zarządzany worktree z istniejącego commita zadania i niezależną grupę Compose, prywatny control/ledger oraz nowy SessionStore. Port nowego UI: 3348. Zachować istniejące obrazy i współdzielone zależności.
+2. Skopiować zweryfikowane wejścia siatki 32 nm i dokładny skrypt do osobnych danych nowej grupy na E; porównać SHA256. Wymiary, materiał i requested FEM GPU double pozostają bez zmian.
+3. Zbudować i uruchomić tę grupę wyłącznie oficjalnym launcherem. Aktywować skrypt jeden raz, sprawdzić rzeczywistą pamięć GPU, zbieżność oraz readback zapisanego stanu.
+4. Stare zasoby pozostawić jako odrębnie opisany, niezakończony cleanup. Nie przedstawiać nowego startu jako naprawy lub graceful drain starej instancji. Integracja PR nadal wymaga właściwych kontroli i review.
+
 Cel zatwierdzony przez użytkownika: geometria z examples/buckyball, FEM GPU double, B_ext=0; zapis stanu po potwierdzonej relaksacji. Dynamika FMR i mody są kolejnym etapem. Właściciel: codex:01a1e067-64b2-7291-9742-63bdcf0c74ad. Baza: 4c9424ca0f04135e0c724c095a94fbafba3b1752.
 
 - [x] Odczytać params.txt i STL: Ms=400000 A/m, A=8e-12 J/m, największy wymiar=5e-6 m. Zachować dostarczony STL, bez rekonstrukcji z obrazka.
