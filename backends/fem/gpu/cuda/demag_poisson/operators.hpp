@@ -9,6 +9,7 @@
  * remain in poisson.hpp.
  */
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -92,6 +93,10 @@ struct GpuDemagPoissonWorkspace {
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_ess_tdofs = nullptr;
     HypreStreamInterop stream_interop{};
+    // Persistent two-pass certificate scratch: four doubles per reduction
+    // block. Prepared with operators, never allocated by a physical solve.
+    double *validation_norm_pair_partials = nullptr;
+    size_t validation_norm_pair_partial_doubles = 0;
 #endif
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     HYPRE_BigInt row_starts[2] = {0, 0};

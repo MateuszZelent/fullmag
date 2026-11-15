@@ -15,13 +15,253 @@
 #include <HYPRE_utilities.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace fullmag::fem::test {
+
+static_assert(demag_validation_norm_pair_blocks(1) == 0);
+static_assert(demag_validation_norm_pair_blocks(2) == 1);
+static_assert(demag_validation_norm_pair_blocks(4095) == 1);
+static_assert(demag_validation_norm_pair_blocks(4096) == 2);
+static_assert(demag_validation_norm_pair_blocks(193155) == 95);
+static_assert(demag_validation_norm_pair_blocks(524289) == 256);
+static_assert(demag_validation_norm_pair_blocks(std::numeric_limits<int>::max()) == 256);
+static_assert(demag_validation_norm_pair_scratch_doubles(4095) == 0);
+static_assert(demag_validation_norm_pair_scratch_doubles(4096) == 8);
+static_assert(demag_validation_norm_pair_scratch_doubles(524289) == 1024);
+
+inline void check_parallel_norm_pair_wrapper(
+    void (*check)(bool, const char *), cudaStream_t stream)
+{
+    constexpr int multi_rows = 193155;
+    constexpr int grid_cap_rows = 524289;
+    constexpr int max_rows = grid_cap_rows;
+    const size_t max_bytes = static_cast<size_t>(max_rows) * sizeof(double);
+    const size_t partial_doubles = demag_validation_norm_pair_scratch_doubles(max_rows);
+    const size_t multi_partial_doubles =
+        demag_validation_norm_pair_scratch_doubles(multi_rows);
+
+    double *rhs_device = nullptr;
+    double *residual_device = nullptr;
+    double *device_pair = nullptr;
+    double *partials = nullptr;
+    check(cudaMalloc(reinterpret_cast<void **>(&rhs_device), max_bytes) == cudaSuccess &&
+              cudaMalloc(reinterpret_cast<void **>(&residual_device), max_bytes) == cudaSuccess &&
+              cudaMalloc(reinterpret_cast<void **>(&device_pair), 2 * sizeof(double)) == cudaSuccess &&
+              cudaMalloc(reinterpret_cast<void **>(&partials),
+                         partial_doubles * sizeof(double)) == cudaSuccess,
+          "parallel paired norm fixture allocates bounded device vectors and scratch");
+
+    std::vector<double> rhs(max_rows);
+    std::vector<double> residual(max_rows);
+    auto fill_pattern = [&](int rows, int exponent) {
+        const double scale = std::ldexp(1.0, exponent);
+        for (int i = 0; i < rows; ++i) {
+            rhs[static_cast<size_t>(i)] =
+                static_cast<double>((i % 13) - 6) * scale;
+            residual[static_cast<size_t>(i)] =
+                static_cast<double>((i % 17) - 8) * scale;
+        }
+        // A unique far-tail value makes omission of the final partial visible.
+        rhs[static_cast<size_t>(rows - 1)] = -9.0 * scale;
+        residual[static_cast<size_t>(rows - 1)] = 11.0 * scale;
+    };
+    auto upload = [&](int rows) {
+        const size_t bytes = static_cast<size_t>(rows) * sizeof(double);
+        check(cudaMemcpyAsync(rhs_device, rhs.data(), bytes, cudaMemcpyHostToDevice, stream) == cudaSuccess &&
+                  cudaMemcpyAsync(residual_device, residual.data(), bytes,
+                                  cudaMemcpyHostToDevice, stream) == cudaSuccess,
+              "parallel paired norm fixture uploads both input vectors");
+    };
+    auto reference_norm = [](const std::vector<double> &values, int rows) {
+        long double norm = 0.0L;
+        for (int i = 0; i < rows; ++i) {
+            norm = std::hypot(
+                norm, static_cast<long double>(values[static_cast<size_t>(i)]));
+        }
+        return norm;
+    };
+    auto matches_reference = [](double actual, long double expected) {
+        if (!std::isfinite(actual)) return false;
+        if (expected == 0.0L) return actual == 0.0;
+        const long double tolerance =
+            2048.0L * std::numeric_limits<double>::epsilon() * expected;
+        return std::abs(static_cast<long double>(actual) - expected) <= tolerance;
+    };
+    auto check_pair_matches = [&](const double *norms, int rows, const char *message) {
+        check(matches_reference(norms[0], reference_norm(rhs, rows)) &&
+                  matches_reference(norms[1], reference_norm(residual, rows)),
+              message);
+    };
+    auto invoke_parallel = [&](int rows, double *output, double *host_pair,
+                               size_t capacity) {
+        return fullmag_cuda_demag_validation_norm_pair_parallel(
+            rhs_device, residual_device, rows, output, host_pair,
+            partials, capacity, stream);
+    };
+
+    double norms[2]{};
+    double legacy_norms[2]{};
+    fill_pattern(multi_rows, 665);
+    upload(multi_rows);
+    check(invoke_parallel(multi_rows, device_pair, norms, multi_partial_doubles) == cudaSuccess,
+          "parallel paired norm reduces a multi-block vector with a partial tail");
+    check_pair_matches(norms, multi_rows,
+                       "parallel paired norm matches long-double hypot reference at large scale");
+    check(fullmag_cuda_demag_validation_norm_pair(
+              rhs_device, residual_device, multi_rows, device_pair,
+              legacy_norms, stream) == cudaSuccess &&
+              matches_reference(legacy_norms[0], reference_norm(rhs, multi_rows)) &&
+              matches_reference(legacy_norms[1], reference_norm(residual, multi_rows)) &&
+              std::abs(norms[0] - legacy_norms[0]) <=
+                  2048.0 * std::numeric_limits<double>::epsilon() * legacy_norms[0] &&
+              std::abs(norms[1] - legacy_norms[1]) <=
+                  2048.0 * std::numeric_limits<double>::epsilon() * legacy_norms[1],
+          "parallel paired norm agrees with the legacy one-block wrapper");
+
+    fill_pattern(multi_rows, -665);
+    upload(multi_rows);
+    check(invoke_parallel(multi_rows, device_pair, norms, multi_partial_doubles) == cudaSuccess,
+          "parallel paired norm accepts very small finite inputs");
+    check_pair_matches(norms, multi_rows,
+                       "parallel paired norm matches long-double hypot reference at small scale");
+
+    fill_pattern(multi_rows, 665);
+    for (int alias = 0; alias < 2; ++alias) {
+        upload(multi_rows);
+        double aliased_norms[2]{};
+        check(invoke_parallel(multi_rows, alias == 0 ? rhs_device : residual_device,
+                              aliased_norms, multi_partial_doubles) == cudaSuccess,
+              "parallel paired norm permits output aliasing either input's first two values");
+        check_pair_matches(aliased_norms, multi_rows,
+                           "parallel paired norm finishes input reads before its aliased output");
+    }
+
+    std::fill(rhs.begin(), rhs.begin() + multi_rows, 0.0);
+    std::fill(residual.begin(), residual.begin() + multi_rows, 0.0);
+    upload(multi_rows);
+    check(invoke_parallel(multi_rows, device_pair, norms, multi_partial_doubles) == cudaSuccess &&
+              norms[0] == 0.0 && norms[1] == 0.0,
+          "parallel paired norm preserves the exact zero-vector result");
+
+    fill_pattern(multi_rows, 0);
+    for (int invalid = 0; invalid < 4; ++invalid) {
+        if (invalid == 0) {
+            rhs[static_cast<size_t>(multi_rows - 1)] =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+        if (invalid == 1) {
+            rhs[static_cast<size_t>(multi_rows - 1)] =
+                std::numeric_limits<double>::infinity();
+        }
+        if (invalid == 2) {
+            residual[static_cast<size_t>(multi_rows - 1)] =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+        if (invalid == 3) {
+            residual[static_cast<size_t>(multi_rows - 1)] =
+                std::numeric_limits<double>::infinity();
+        }
+        upload(multi_rows);
+        double invalid_norms[2]{};
+        check(invoke_parallel(multi_rows, device_pair, invalid_norms, multi_partial_doubles) == cudaSuccess,
+              "parallel paired norm completes with a nonfinite value in a distant block");
+        check((invalid < 2 ? !std::isfinite(invalid_norms[0]) && std::isfinite(invalid_norms[1])
+                           : std::isfinite(invalid_norms[0]) && !std::isfinite(invalid_norms[1])),
+              "parallel paired norm propagates NaN and infinity independently per vector");
+        fill_pattern(multi_rows, 0);
+    }
+
+    fill_pattern(grid_cap_rows, -665);
+    upload(grid_cap_rows);
+    check(invoke_parallel(grid_cap_rows, device_pair, norms, partial_doubles) == cudaSuccess,
+          "parallel paired norm handles a partial tail beyond the 256-block grid cap");
+    check_pair_matches(norms, grid_cap_rows,
+                       "grid-capped paired norm matches long-double reference including the final row");
+
+    fill_pattern(multi_rows, 0);
+    upload(multi_rows);
+    double rejected_host_pair[2]{};
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+              partials, multi_partial_doubles - 1, stream) == cudaErrorInvalidValue,
+          "parallel paired norm rejects insufficient scratch capacity");
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+              partials, std::numeric_limits<size_t>::max(), stream) == cudaErrorInvalidValue,
+          "parallel paired norm rejects overflowing scratch address ranges");
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              nullptr, residual_device, multi_rows, device_pair, rejected_host_pair,
+              partials, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, nullptr, multi_rows, device_pair, rejected_host_pair,
+                  partials, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, nullptr, rejected_host_pair,
+                  partials, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, nullptr,
+                  partials, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+                  nullptr, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+                  partials, multi_partial_doubles, nullptr) == cudaErrorInvalidValue,
+          "parallel paired norm rejects null data, result, scratch, and stream pointers");
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, 1, device_pair, rejected_host_pair,
+              partials, multi_partial_doubles, stream) == cudaErrorInvalidValue,
+          "parallel paired norm rejects a zero-block one-row pair");
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+              rhs_device, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+                  residual_device, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+                  reinterpret_cast<double *>(reinterpret_cast<std::uintptr_t>(rhs_device) + sizeof(double)),
+                  multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, partials, rejected_host_pair,
+                  partials, multi_partial_doubles, stream) == cudaErrorInvalidValue &&
+              fullmag_cuda_demag_validation_norm_pair_parallel(
+                  rhs_device, residual_device, multi_rows, device_pair, rejected_host_pair,
+                  reinterpret_cast<double *>(rejected_host_pair),
+                  multi_partial_doubles, stream) == cudaErrorInvalidValue,
+          "parallel paired norm rejects scratch overlap with either input and both outputs");
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, multi_rows,
+              reinterpret_cast<double *>(reinterpret_cast<std::uintptr_t>(rhs_device) + sizeof(double)),
+              rejected_host_pair, partials, multi_partial_doubles, stream) == cudaErrorInvalidValue,
+          "parallel paired norm rejects an output alias outside the first two input values");
+
+    fill_pattern(257, 665);
+    upload(257);
+    double small_norms[2]{};
+    double small_legacy_norms[2]{};
+    check(fullmag_cuda_demag_validation_norm_pair_parallel(
+              rhs_device, residual_device, 257, device_pair, small_norms,
+              nullptr, 0, stream) == cudaSuccess &&
+              fullmag_cuda_demag_validation_norm_pair(
+                  rhs_device, residual_device, 257, device_pair,
+                  small_legacy_norms, stream) == cudaSuccess &&
+              small_norms[0] == small_legacy_norms[0] &&
+              small_norms[1] == small_legacy_norms[1],
+          "parallel paired norm delegates small inputs to the unchanged legacy wrapper");
+
+    check(cudaFree(partials) == cudaSuccess && cudaFree(device_pair) == cudaSuccess &&
+              cudaFree(residual_device) == cudaSuccess && cudaFree(rhs_device) == cudaSuccess,
+          "parallel paired norm fixture frees its bounded device buffers");
+}
 
 inline void check_gpu_hypre_demag_residual(
     void (*check)(bool, const char *),
@@ -266,6 +506,7 @@ inline void check_gpu_hypre_demag_residual(
             }
         }
     }
+    check_parallel_norm_pair_wrapper(check, stream);
     const double singleton = std::ldexp(1.0, -665);
     check(cudaMemcpyAsync(strided_device, &singleton, sizeof(singleton),
                           cudaMemcpyHostToDevice, stream) == cudaSuccess &&

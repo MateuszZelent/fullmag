@@ -182,7 +182,8 @@ native FEM; test GPU/runtime pozostaje **PENDING / NOT VERIFIED**.
 Stride 4 zwiększa częstość synchronizacji. Korzyść może być zerowa lub ujemna.
 Ta nota nie zawiera nowych niepublicznych wyników pomiaru i nie stwierdza
 kwalifikacji produkcyjnej. Dotychczasowy pełny SP4 jest baseline, a porównanie
-nowego wariantu pozostaje do wykonania.
+nowego wariantu pozostaje do wykonania. Osobny wewnętrzny wariant równoległej
+redukcji tych samych norm opisuje [nota o normach certyfikatu Poissona](0915-fem-gpu-poisson-parallel-certificate-norms.md); nie dodaje on nowego parametru Python ani ProblemIR.
 
 (scientific-bibliography)=
 ## Źródła

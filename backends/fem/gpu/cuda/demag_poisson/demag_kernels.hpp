@@ -6,6 +6,29 @@
  */
 #pragma once
 
+#include <stddef.h>
+
+namespace fullmag::fem {
+
+/// Number of reduction blocks used by the independent Poisson norm pair.
+/// Small pairs keep the legacy single-block path; larger pairs use a bounded grid.
+constexpr int demag_validation_norm_pair_blocks(int rows) noexcept
+{
+    if (rows < 2) return 0;
+    if (rows < 4096) return 1;
+    const int required = 1 + (rows - 1) / 2048;
+    return required < 256 ? required : 256;
+}
+
+/// Persistent scratch size for the two-pass paired reduction, in doubles.
+constexpr size_t demag_validation_norm_pair_scratch_doubles(int rows) noexcept
+{
+    const int blocks = demag_validation_norm_pair_blocks(rows);
+    return blocks > 1 ? 4 * static_cast<size_t>(blocks) : 0;
+}
+
+} // namespace fullmag::fem
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #include <cstdint>
@@ -25,6 +48,13 @@ cudaError_t fullmag_cuda_demag_validation_norm(
 cudaError_t fullmag_cuda_demag_validation_norm_pair(
     const double *rhs, const double *residual, int rows,
     double *device_pair, double *host_pair, cudaStream_t stream);
+
+/// Two-pass scaled pair for large vectors. Scratch holds four doubles per block
+/// and must not overlap inputs or outputs; small vectors use the legacy wrapper.
+cudaError_t fullmag_cuda_demag_validation_norm_pair_parallel(
+    const double *rhs, const double *residual, int rows,
+    double *device_pair, double *host_pair,
+    double *partials, size_t partial_double_count, cudaStream_t stream);
 
 /// Device Poisson demag RHS: b = Bx mx + By my + Bz mz.
 void fullmag_cuda_demag_rhs_csr(

@@ -882,8 +882,13 @@ bool validate_demag_poisson_hypre_device_solve(
             }
             if (paired_norms) {
                 double norms[2]{};
-                const auto status = fullmag_cuda_demag_validation_norm_pair(
-                    rhs_data, scratch, rows, scratch, norms, stream);
+                const auto status = demag_validation_norm_pair_blocks(rows) > 1
+                    ? fullmag_cuda_demag_validation_norm_pair_parallel(
+                        rhs_data, scratch, rows, scratch, norms,
+                        workspace.validation_norm_pair_partials,
+                        workspace.validation_norm_pair_partial_doubles, stream)
+                    : fullmag_cuda_demag_validation_norm_pair(
+                        rhs_data, scratch, rows, scratch, norms, stream);
                 if (status != cudaSuccess) {
                     return reject_queued_work(std::string("GPU Poisson demag paired norms failed: ") +
                                               cudaGetErrorString(status));

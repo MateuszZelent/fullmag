@@ -1,0 +1,248 @@
+{
+  "document": {
+    "path": "docs/physics/0915-fem-gpu-poisson-parallel-certificate-norms.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Existing CPU norm realization remains unchanged."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "No HYPRE Poisson owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "No HYPRE Poisson owner."
+    }
+  ],
+  "sources": [
+    {
+      "id": "legacy-pair",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair",
+      "responsibility": "Existing scaled pair and one readback.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "certificate",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "validate_demag_poisson_hypre_device_solve",
+      "responsibility": "Independent actual residual and existing acceptance criterion.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "scratch-upload",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "upload_demag_poisson_operators",
+      "responsibility": "Existing owner to prepare persistent reduction scratch.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "scratch-destroy",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.hpp",
+      "symbol": "destroy_demag_poisson_operators",
+      "responsibility": "Existing owner to release reduction scratch.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "python-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Unchanged public solver policy.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "parallel-wrapper",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair_parallel",
+      "responsibility": "Two-pass scaled pair, explicit scratch validation and one16B readback/fence.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "parallel-partials",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "demag_validation_norm_pair_partials_kernel",
+      "responsibility": "Read both vectors and create independent scaled pairs per block.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "parallel-finish",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "demag_validation_norm_pair_finish_kernel",
+      "responsibility": "Merge bounded partial pairs before writing a possibly aliased result.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "parallel-grid",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.hpp",
+      "symbol": "demag_validation_norm_pair_blocks",
+      "responsibility": "Bounded grid choice with overflow-safe row arithmetic.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "parallel-reference",
+      "path": "backends/fem/tests/cuda_demag_residual_fixture.hpp",
+      "symbol": "check_gpu_hypre_demag_residual",
+      "responsibility": "Independent long-double/hypot oracle for direct multi-block wrapper regression; native pending.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "K",
+      "latex": "K",
+      "meaning": "Macierz Poissona",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "Potencjał skalarny",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "vectors",
+      "latex": "b,r,v",
+      "meaning": "RHS, residuum lub wektor redukcji",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "scales",
+      "latex": "s,s_a,s_b",
+      "meaning": "Skala akumulatora",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "sums",
+      "latex": "q,q_a,q_b",
+      "meaning": "Skalowana suma kwadratów",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta",
+      "meaning": "Raportowana względna norma dla niezerowego RHS",
+      "si_unit": "1"
+    },
+    {
+      "id": "rows",
+      "latex": "n",
+      "meaning": "Liczba lokalnych stopni swobody potencjału",
+      "si_unit": "1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-parallel-certificate-system",
+      "symbols": [
+        "K",
+        "phi",
+        "vectors",
+        "eta"
+      ],
+      "sources": [
+        "certificate"
+      ]
+    },
+    {
+      "id": "eq-parallel-certificate-scaled",
+      "symbols": [
+        "vectors",
+        "scales",
+        "sums"
+      ],
+      "sources": [
+        "legacy-pair",
+        "parallel-partials",
+        "parallel-finish"
+      ]
+    },
+    {
+      "id": "eq-parallel-certificate-merge",
+      "symbols": [
+        "scales",
+        "sums"
+      ],
+      "sources": [
+        "parallel-partials",
+        "parallel-finish"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "str",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "CG lub GMRES",
+        "meaning": "Solver liniowy",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "str",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "AMG, JACOBI lub NONE",
+        "meaning": "Preconditioner",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "Dodatnia skończona wartość",
+        "meaning": "Względna tolerancja",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "float lub None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m}",
+        "validation": "None lub dodatnia skończona wartość",
+        "meaning": "Tolerancja bezwzględna",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "Co najmniej 1",
+        "meaning": "Limit iteracji",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "Wartość nieujemna",
+        "meaning": "Poziom logowania",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.print_level"
+      }
+    ]
+  }
+}

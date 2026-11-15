@@ -9,6 +9,7 @@
  */
 
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 
 #include "context.hpp"
@@ -1223,6 +1224,10 @@ bool upload_demag_poisson_operators(
     std::string &error)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
+    if (workspace.rhs.rows > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = "GPU Poisson certificate row count exceeds the CUDA kernel range";
+        return false;
+    }
     if (!upload_triple(workspace.rhs, device_bytes, error) ||
         !upload_scalar(workspace.recovery_x, device_bytes, "cudaMalloc/upload demag recovery x CSR", error) ||
         !upload_scalar(workspace.recovery_y, device_bytes, "cudaMalloc/upload demag recovery y CSR", error) ||
@@ -1239,6 +1244,20 @@ bool upload_demag_poisson_operators(
             error)) {
         destroy_demag_poisson_operators(workspace);
         return false;
+    }
+    const size_t partial_doubles = demag_validation_norm_pair_scratch_doubles(
+        static_cast<int>(workspace.rhs.rows));
+    if (partial_doubles != 0) {
+        const size_t partial_bytes = partial_doubles * sizeof(double);
+        if (!cuda_ok(cudaMalloc(
+                reinterpret_cast<void **>(&workspace.validation_norm_pair_partials),
+                partial_bytes), "cudaMalloc GPU Poisson certificate norm scratch", error)) {
+            workspace.validation_norm_pair_partials = nullptr;
+            destroy_demag_poisson_operators(workspace);
+            return false;
+        }
+        workspace.validation_norm_pair_partial_doubles = partial_doubles;
+        device_bytes += static_cast<uint64_t>(partial_bytes);
     }
     workspace.operator_upload_count += 1u;
     return true;
@@ -1264,6 +1283,8 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     destroy_scalar(workspace.visual_recovery_z);
     destroy_scalar(workspace.robin_boundary_mass);
     free_device_array(workspace.d_ess_tdofs);
+    free_device_array(workspace.validation_norm_pair_partials);
+    workspace.validation_norm_pair_partial_doubles = 0;
 #else
     (void)workspace;
 #endif

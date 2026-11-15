@@ -8,6 +8,9 @@
 #include <cub/cub.cuh>
 #include <math_constants.h>
 
+#include <cstdint>
+#include <limits>
+
 namespace fullmag::fem {
 
 static constexpr int kBlockSize = 256;
@@ -90,6 +93,81 @@ __global__ void demag_validation_norm_pair_kernel(
     }
 }
 
+__global__ void demag_validation_norm_pair_partials_kernel(
+    const double *rhs, const double *residual, int rows, double *partials)
+{
+    ScaledNorm rhs_local{0.0, 0.0}, residual_local{0.0, 0.0};
+    const MergeScaledNorm merge;
+    const int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+    for (int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         i < rows; i += stride) {
+        const double rhs_magnitude = fabs(rhs[i]);
+        const double residual_magnitude = fabs(residual[i]);
+        rhs_local = merge(rhs_local,
+                          {isfinite(rhs_magnitude) ? rhs_magnitude : CUDART_INF, 1.0});
+        residual_local = merge(
+            residual_local,
+            {isfinite(residual_magnitude) ? residual_magnitude : CUDART_INF, 1.0});
+    }
+
+    using BlockReduce = cub::BlockReduce<ScaledNorm, kBlockSize>;
+    __shared__ BlockReduce::TempStorage storage;
+    const ScaledNorm rhs_norm = BlockReduce(storage).Reduce(rhs_local, merge);
+    __syncthreads(); // Reuse CUB storage only after the first reduction completes.
+    const ScaledNorm residual_norm = BlockReduce(storage).Reduce(residual_local, merge);
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const int offset = static_cast<int>(blockIdx.x) * 4;
+        partials[offset + 0] = rhs_norm.scale;
+        partials[offset + 1] = rhs_norm.sum_squares;
+        partials[offset + 2] = residual_norm.scale;
+        partials[offset + 3] = residual_norm.sum_squares;
+    }
+}
+
+__global__ void demag_validation_norm_pair_finish_kernel(
+    const double *partials, int blocks, double *device_pair)
+{
+    ScaledNorm rhs_local{0.0, 0.0}, residual_local{0.0, 0.0};
+    const MergeScaledNorm merge;
+    for (int block = threadIdx.x; block < blocks; block += kBlockSize) {
+        const int offset = block * 4;
+        rhs_local = merge(rhs_local, {partials[offset + 0], partials[offset + 1]});
+        residual_local = merge(residual_local, {partials[offset + 2], partials[offset + 3]});
+    }
+
+    using BlockReduce = cub::BlockReduce<ScaledNorm, kBlockSize>;
+    __shared__ BlockReduce::TempStorage storage;
+    const ScaledNorm rhs_norm = BlockReduce(storage).Reduce(rhs_local, merge);
+    __syncthreads(); // Reuse CUB storage only after the first reduction completes.
+    const ScaledNorm residual_norm = BlockReduce(storage).Reduce(residual_local, merge);
+    // All partial and input reads finish before a possibly aliased pair is stored.
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        device_pair[0] = rhs_norm.scale * sqrt(rhs_norm.sum_squares);
+        device_pair[1] = residual_norm.scale * sqrt(residual_norm.sum_squares);
+    }
+}
+
+struct AddressRange {
+    std::uintptr_t begin;
+    std::uintptr_t end;
+};
+
+bool make_address_range(const void *pointer, size_t bytes, AddressRange &range)
+{
+    if (pointer == nullptr || bytes == 0) return false;
+    const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(pointer);
+    if (bytes > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
+    range = {begin, begin + bytes};
+    return true;
+}
+
+bool address_ranges_overlap(AddressRange a, AddressRange b)
+{
+    return a.begin < b.end && b.begin < a.end;
+}
+
 } // namespace
 
 cudaError_t fullmag_cuda_demag_validation_norm(
@@ -128,6 +206,72 @@ cudaError_t fullmag_cuda_demag_validation_norm_pair(
     }
     const cudaError_t copy_status = cudaMemcpyAsync(
         host_pair, device_pair, 2 * sizeof(double), cudaMemcpyDeviceToHost, stream);
+    return copy_status == cudaSuccess ? cudaStreamSynchronize(stream) : copy_status;
+}
+
+cudaError_t fullmag_cuda_demag_validation_norm_pair_parallel(
+    const double *rhs, const double *residual, int rows,
+    double *device_pair, double *host_pair,
+    double *partials, size_t partial_double_count, cudaStream_t stream)
+{
+    const int blocks = demag_validation_norm_pair_blocks(rows);
+    if (blocks <= 0) return cudaErrorInvalidValue;
+    if (blocks == 1) {
+        return fullmag_cuda_demag_validation_norm_pair(
+            rhs, residual, rows, device_pair, host_pair, stream);
+    }
+    if (rhs == nullptr || residual == nullptr || device_pair == nullptr ||
+        host_pair == nullptr || partials == nullptr || stream == nullptr ||
+        partial_double_count < demag_validation_norm_pair_scratch_doubles(rows) ||
+        static_cast<size_t>(rows) > std::numeric_limits<size_t>::max() / sizeof(double) ||
+        partial_double_count > std::numeric_limits<size_t>::max() / sizeof(double)) {
+        return cudaErrorInvalidValue;
+    }
+
+    const size_t input_bytes = static_cast<size_t>(rows) * sizeof(double);
+    const size_t pair_bytes = 2 * sizeof(double);
+    const size_t partial_bytes = partial_double_count * sizeof(double);
+    AddressRange rhs_range{}, residual_range{}, device_pair_range{}, host_pair_range{}, partial_range{};
+    if (!make_address_range(rhs, input_bytes, rhs_range) ||
+        !make_address_range(residual, input_bytes, residual_range) ||
+        !make_address_range(device_pair, pair_bytes, device_pair_range) ||
+        !make_address_range(host_pair, pair_bytes, host_pair_range) ||
+        !make_address_range(partials, partial_bytes, partial_range) ||
+        reinterpret_cast<std::uintptr_t>(rhs) % alignof(double) != 0 ||
+        reinterpret_cast<std::uintptr_t>(residual) % alignof(double) != 0 ||
+        reinterpret_cast<std::uintptr_t>(device_pair) % alignof(double) != 0 ||
+        reinterpret_cast<std::uintptr_t>(host_pair) % alignof(double) != 0 ||
+        reinterpret_cast<std::uintptr_t>(partials) % alignof(double) != 0) {
+        return cudaErrorInvalidValue;
+    }
+
+    // The first two elements of either input remain legal output storage.
+    const bool device_pair_overlaps_rhs = address_ranges_overlap(device_pair_range, rhs_range);
+    const bool device_pair_overlaps_residual = address_ranges_overlap(device_pair_range, residual_range);
+    if ((device_pair_overlaps_rhs && device_pair_range.begin != rhs_range.begin) ||
+        (device_pair_overlaps_residual && device_pair_range.begin != residual_range.begin) ||
+        address_ranges_overlap(partial_range, rhs_range) ||
+        address_ranges_overlap(partial_range, residual_range) ||
+        address_ranges_overlap(partial_range, device_pair_range) ||
+        address_ranges_overlap(partial_range, host_pair_range) ||
+        address_ranges_overlap(host_pair_range, rhs_range) ||
+        address_ranges_overlap(host_pair_range, residual_range) ||
+        address_ranges_overlap(host_pair_range, device_pair_range)) {
+        return cudaErrorInvalidValue;
+    }
+
+    demag_validation_norm_pair_partials_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        rhs, residual, rows, partials);
+    const cudaError_t partials_status = cudaGetLastError();
+    if (partials_status != cudaSuccess) return partials_status;
+
+    demag_validation_norm_pair_finish_kernel<<<1, kBlockSize, 0, stream>>>(
+        partials, blocks, device_pair);
+    const cudaError_t finish_status = cudaGetLastError();
+    if (finish_status != cudaSuccess) return finish_status;
+
+    const cudaError_t copy_status = cudaMemcpyAsync(
+        host_pair, device_pair, pair_bytes, cudaMemcpyDeviceToHost, stream);
     return copy_status == cudaSuccess ? cudaStreamSynchronize(stream) : copy_status;
 }
 
