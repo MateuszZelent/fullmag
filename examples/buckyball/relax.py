@@ -17,6 +17,7 @@ relax_projected_gradient_bb.py. No eigenmode or subsequent field stage.
 
 # %% Parameters (SI)
 from pathlib import Path
+import sys
 
 import fullmag as fm
 
@@ -43,6 +44,17 @@ study.device("gpu", precision="double")
 study.mode("strict")
 study.interactive(True)
 study.wait_for_solve(True)
+
+# Explicit absolute storage keeps results and scratch on the admitted E: ext4 volume.
+# This path is the private user-data bind of this task's Compose group.
+RUN_DIR = Path("/user-data/buckyball-zero-field-20261115")
+study.storage(
+    output_dir=str(RUN_DIR / "relax.zarr"),
+    temp_dir=str(RUN_DIR / "scratch"),
+    data_format="zarr",
+    cleanup="never",
+    existing_output="error",
+)
 
 # %% Exterior domain for open-boundary demagnetization
 study.universe(
@@ -71,9 +83,26 @@ body.mesh(maximum_element_size=MAGNETIC_MESH_M, order=1)
 
 study.demag(realization="poisson_robin")
 study.b_ext(0.0, 0.0, 0.0)
-study.build_domain_mesh()
+study.fem_demag_solver(
+    solver="CG", preconditioner="AMG", rtol=1e-10, max_iterations=1000,
+)
+# The supplied STL has nested exterior/cavity shells. Mesh the walls and both
+# air domains explicitly instead of treating each shell as a magnetic solid.
+sys.path.insert(0, str(SCRIPT_DIR))
+from build_hollow_mesh import build_hollow_mesh
+
+mesh_path = build_hollow_mesh(
+    STL_PATH, RUN_DIR / "relax.msh", magnetic_size_m=MAGNETIC_MESH_M,
+)
+study.mesh.import_(
+    mesh_path, region_map={"buckyball": 1},
+    boundary_map={"outer": 1, "magnetic_air": 2}, coordinate_unit="um",
+)
+study.mesh.save_or_load(RUN_DIR / "relax.fullmag-mesh")
 
 # %% Relax and retain energy/torque diagnostics plus the final magnetization
+# A saved candidate is an equilibrium only after the terminal stop reason and
+# max_torque_T have been checked; exhausting MAX_STEPS does not prove convergence.
 study.stages.add_relax(
     stage_id="relax_zero_field",
     algorithm="projected_gradient_bb",
@@ -92,7 +121,7 @@ study.stages.add_relax(
     )
 )
 study.stages.add_save_state(
-    artifact_name="buckyball_relaxed_m.zarr",
+    artifact_name="buckyball_final_candidate_m.zarr",
     format="zarr",
     dataset="m",
 )
