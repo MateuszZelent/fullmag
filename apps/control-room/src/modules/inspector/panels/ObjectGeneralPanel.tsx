@@ -1087,7 +1087,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Fetch state" value={validation.status} />
         {validationMessages.length > 0 ? (
           <ul className="fm-inspector-validation-list">
-            {validationMessages.map((message) => (
+            {[...new Set(validationMessages)].map((message) => (
               <li key={message}>{message}</li>
             ))}
           </ul>

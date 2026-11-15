@@ -1171,7 +1171,7 @@ function ValidationSection({
       <FieldRow label="Fetch state" value={status} />
       {messages.length > 0 ? (
         <ul className="fm-inspector-validation-list">
-          {messages.map((message) => (
+          {[...new Set(messages)].map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>
