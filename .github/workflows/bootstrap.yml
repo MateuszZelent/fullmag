@@ -1,346 +1,92 @@
-name: bootstrap
-on:
-  pull_request:
-permissions:
-  contents: read
-concurrency:
-  group: antenna-retained-dtq-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-jobs:
-  native-retained-dtq-contracts:
-    timeout-minutes: 90
-    runs-on: ubuntu-latest
-    env:
-      CARGO_BUILD_JOBS: 2
-      RUST_MIN_STACK: 8388608
-    steps:
-      - name: Checkout exact CI snapshot
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: packages/fullmag-py/pyproject.toml
-
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3
-        with:
-          just-version: '1.51.0'
-
-      - name: Install Python runtime and mesh preparation dependencies
-        id: install-python-runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libglu1-mesa
-          python -m pip install -e 'packages/fullmag-py[meshing]'
-
-      - name: Resolve storage for API artifact fixtures
-        run: |
-          python -B - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-
-          result = subprocess.run(
-              [sys.executable, "-B", "scripts/fullmag_storage.py", "resolve",
-               "--profile", "ci-rust-contracts", "--create"],
-              check=True, capture_output=True, text=True,
-          )
-          layout = json.loads(result.stdout)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              environment.write(
-                  f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
-              )
-          PY
-
-      - name: Apply pinned worktree source delta
-        run: |
-          python -B - <<'PY'
-          import gzip,hashlib,subprocess
-          from pathlib import Path
-          packed=Path('.github/antenna-completed-receipt/source.patch.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == 'cd81f2c884805ac0b10790c9af6d116155b5fbffa07f6471dd46a8ff66723032'
-          patch=gzip.decompress(packed)
-          assert len(patch) == 1509276
-          assert hashlib.sha256(patch).hexdigest() == 'fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7'
-          subprocess.run(['git','apply','--check','--whitespace=nowarn','-'],input=patch,check=True)
-          subprocess.run(['git','apply','--whitespace=nowarn','-'],input=patch,check=True)
-          print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
-          PY
-
-      - name: Apply exact artifact GREEN source snapshot
-        run: |
-          python -B - <<'PYCI'
-          import gzip,hashlib,io,tarfile
-          from pathlib import Path
-          packed=Path('.github/antenna-retained-dtq/task-1-source.tar.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == '34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad'
-          allowed=('crates/fullmag-antenna-artifacts/','crates/fullmag-ir/','crates/fullmag-quantities/')
-          with tarfile.open(fileobj=io.BytesIO(gzip.decompress(packed)),mode='r:') as archive:
-              members=archive.getmembers()
-              assert len(members)==121
-              for entry in members:
-                  name=entry.name
-                  assert entry.isfile() and not name.startswith('/') and '..' not in Path(name).parts
-                  assert name in ('Cargo.toml','Cargo.lock') or name.startswith(allowed)
-                  data=archive.extractfile(entry).read()
-                  target=Path(name)
-                  target.parent.mkdir(parents=True,exist_ok=True)
-                  target.write_bytes(data)
-          print('Exact Task 1 GREEN source overlay: 34aa5fbaf7a6617b65eedb221bdac40992cf9f606cb78cb6c6815a1f74c399ad')
-          PYCI
-      - name: Apply reviewed literal historical v1 hash assertion
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          data=Path('.github/antenna-retained-dtq/task-1-fix1-tests.rs').read_bytes()
-          assert hashlib.sha256(data).hexdigest()=='3b89b8424b5eeb86e885bc5101716c7b13be4247b2140bd73d81e30d403712ea'
-          Path('crates/fullmag-antenna-artifacts/src/retained_current/tests_v2.rs').write_bytes(data)
-          PYCI
-      - name: Apply exact Task 2 Rust adapter snapshot
-        run: python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-rust-green
-      - name: Apply preserved pre-ABI RED snapshot
-        run: python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-native-red
-      - name: Apply pinned minimal Task 2 recipe insertion
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          data = Path('.github/antenna-retained-dtq')
-          expected = {'apply-justfile-insertions.py': {'bytes': 1957, 'sha256': '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'}, 'task-2-justfile-insertions.json': {'bytes': 559, 'sha256': 'd2045b46ea17a0b1510a72220f293d489f261d462cfa2ef318dbdd43c568a24f'}}
-          checked = {}
-          for name, pin in expected.items():
-              raw = (data / name).read_bytes()
-              if len(raw) != pin['bytes'] or hashlib.sha256(raw).hexdigest() != pin['sha256']:
-                  raise ValueError('Recipe transport pin mismatch: ' + name)
-              checked[name] = raw
-          namespace = {'__name__': 'ci_recipe_insertions'}
-          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
-          namespace['apply_insertions'](Path('justfile'), checked['task-2-justfile-insertions.json'])
-          PYCI
-      - name: Prove RED from missing numeric C ABI through container-backed just
-        shell: bash
-        run: |
-          set +e
-          just verify-fem-oersted-oef1-cpu-contract > antenna-retained-dtq-red.log 2>&1
-          result=$?
-          set -e
-          cat antenna-retained-dtq-red.log
-          test "$result" -ne 0
-          grep -E 'error:.*(fullmag_fem_frozen_rt0_direct_(request|result)_v1|fullmag_fem_evaluate_frozen_rt0_direct_observed_v1)' antenna-retained-dtq-red.log
-          printf 'Task 2 RED: missing new ABI confirmed; exit=%s\n' "$result"
-      - name: Apply exact reviewed GREEN native snapshot
-        run: |
-          python -B .github/antenna-retained-dtq/apply-task2-source.py task-2-native-green
-          python -B .github/antenna-retained-dtq/apply-task2-source.py --verify
-      - name: Apply exact test-only singular-target diagnostics
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          data = Path('.github/antenna-retained-dtq')
-          expected = {
-              'apply-justfile-insertions.py': (1957, '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'),
-              'task-2-singular-diagnostic-insertions.json': (10251, '22a3b4d561ed80f379371638fd86288461e0b96d4b502ef581e2eaf126538b01'),
+{
+  "name": "PR425 surface reference only; production DTQ gate FAIL",
+  "on": {
+    "pull_request": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "pr425-surface-reference-${{ github.event.pull_request.number }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "surface-reference-only": {
+      "name": "Four mathematical controls; production DTQ remains FAIL",
+      "if": "${{ github.event.pull_request.number == 425 }}",
+      "runs-on": "ubuntu-latest",
+      "container": "python:3.11-slim",
+      "timeout-minutes": 10,
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "steps": [
+        {
+          "name": "Read PR425 source without credentials or overlays",
+          "id": "checkout",
+          "uses": "actions/checkout@v4",
+          "with": {
+            "fetch-depth": 1,
+            "persist-credentials": false
           }
-          checked = {}
-          for name, (size, digest) in expected.items():
-              raw = (data / name).read_bytes()
-              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
-                  raise ValueError('Diagnostic transport pin mismatch: ' + name)
-              checked[name] = raw
-          namespace = {'__name__': 'ci_test_insertions'}
-          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
-          namespace['apply_insertions'](
-              Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'),
-              checked['task-2-singular-diagnostic-insertions.json'],
-          )
-          PYCI
-      - name: Apply bounded CI-only leaf replay diagnostics
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          data = Path('.github/antenna-retained-dtq')
-          expected = {'apply-justfile-insertions.py': (1957, '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'), 'task-2-leaf-dtq-insertions.json': (15612, '7291b040b9ec33c3bab60dc43a474790053b2a89b151fb94258ee751f717ef3a'), 'task-2-leaf-test-insertions.json': (1206, '1799b145b692b96830fda0db3c29a9a300d8954fb5bb7f46b6bb483f0c4cf2eb')}
-          checked = {}
-          for name, (size, digest) in expected.items():
-              raw = (data / name).read_bytes()
-              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
-                  raise ValueError('Bounded leaf diagnostic pin mismatch: ' + name)
-              checked[name] = raw
-          namespace = {'__name__': 'ci_leaf_insertions'}
-          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
-          namespace['apply_insertions'](Path('backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp'), checked['task-2-leaf-dtq-insertions.json'])
-          namespace['apply_insertions'](Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'), checked['task-2-leaf-test-insertions.json'])
-          PYCI
-      - name: Apply exact private regular-Stroud experiment
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          data = Path('.github/antenna-retained-dtq')
-          expected = {'apply-justfile-insertions.py': (1957, '3a9da2aa9db80d86767319d6811f8d26192ee41772f446d2b679afe52bf41bfa'), 'task-2-stroud-dtq-insertions.json': (1070, 'c4650d377d241b5e6d3121906a5c255de37cc08e5860ad0c0b190c5ab5f98463'), 'task-2-stroud-test-insertions.json': (10703, 'cbc177d732f03f1a2a39c83e9bd5b18fb0eb7e3daf08affa87b4902295d27b82'), 'task-2-stroud-experiment-pins.json': (1524, 'a1623389069ec55f1a660e07f6100131c73d55aa87fb5b4d3a2073d14403ea8c')}
-          checked = {}
-          for name, (size, digest) in expected.items():
-              raw = (data / name).read_bytes()
-              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
-                  raise ValueError('Private Stroud experiment pin mismatch: ' + name)
-              checked[name] = raw
-          namespace = {'__name__': 'ci_private_stroud_insertions'}
-          exec(compile(checked['apply-justfile-insertions.py'], 'apply-justfile-insertions.py', 'exec'), namespace)
-          namespace['apply_insertions'](Path('backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp'), checked['task-2-stroud-dtq-insertions.json'])
-          namespace['apply_insertions'](Path('backends/fem/tests/oersted_direct_tetra_contract.cpp'), checked['task-2-stroud-test-insertions.json'])
-          PYCI
-      - name: Verify GREEN C++ numerical and ABI contracts
-        id: native-green
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-oersted-oef1-cpu-contract 2>&1 | tee antenna-retained-dtq-green-native.log
-      - name: Preserve early native leaf diagnostic evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: antenna-retained-dtq-native-leaf-diagnostic
-          include-hidden-files: true
-          path: |
-            antenna-retained-dtq-green-native.log
-            .github/antenna-retained-dtq/task-2-ci-source-pins.json
-            .github/antenna-retained-dtq/task-2-singular-diagnostic-insertions.json
-            .github/antenna-retained-dtq/task-2-leaf-dtq-insertions.json
-            .github/antenna-retained-dtq/task-2-leaf-test-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-dtq-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-test-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-experiment-pins.json
-      - name: Verify Rust adapter against the same CPU shared library in container
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-rust-cpu-contract 2>&1 | tee antenna-retained-dtq-green-rust.log
-      - name: Install pinned Task 3 CI contracts
-        run: python -B .github/antenna-retained-dtq/apply-task3-source.py install-contract-tests
-      - name: Independently verify historical v7 serializer bytes
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-public-contract baseline-v7 2>&1 | tee antenna-retained-dtq-task3-v7-baseline.log
-      - name: Apply preserved corrected RED tests against old producer
-        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-red-corrected.tar.gz
-      - name: Prove missing typed producer in the historical source
-        shell: bash
-        run: |
-          set +e
-          just verify-fem-retained-dtq-public-contract red > antenna-retained-dtq-task3-red.log 2>&1
-          result=$?
-          set -e
-          cat antenna-retained-dtq-task3-red.log
-          test "$result" -ne 0
-          grep -E 'error\[E(0425|0433|0599)\]' antenna-retained-dtq-task3-red.log
-          grep -E '(AntennaRetainedDirectFieldInspection|validate_retained_direct_field_operation)' antenna-retained-dtq-task3-red.log
-          printf 'Task 3 reconstructed RED: old producer rejects new test; exit=%s\n' "$result"
-      - name: Apply exact reviewed Task 3 GREEN source and fixture emitter
-        run: |
-          python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-green.tar.gz
-          python -B .github/antenna-retained-dtq/apply-task3-source.py append-real-backend-fixture
-      - name: Verify public producer, typed v7 output and exhaustive consumers
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-public-contract green 2>&1 | tee antenna-retained-dtq-task3-green.log
-      - name: Restore exact historical IR parser
-        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-historical-ir.tar.gz
-      - name: Verify historical real parser rejects the generated new backend plan
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-public-contract historical-parser 2>&1 | tee antenna-retained-dtq-task3-historical-parser.log
-          emitted="$(sed -n 's/^DTQ_REAL_BACKEND_FIXTURE_SHA256=//p' antenna-retained-dtq-task3-green.log)"
-          rejected="$(sed -n 's/^DTQ_OLD_REAL_PARSER_REJECTED_SHA256=//p' antenna-retained-dtq-task3-historical-parser.log)"
-          test -n "$emitted"
-          test "$emitted" = "$rejected"
-      - name: Restore reviewed Task 3 sources after the historical parser gate
-        run: python -B .github/antenna-retained-dtq/apply-task3-source.py task-3-green.tar.gz
-      - name: Apply reviewed publication sources and compile-contract module
-        run: |
-          python -B .github/antenna-retained-dtq/apply-task4-source.py task-4-green
-          python -B .github/antenna-retained-dtq/apply-task4-source.py install-compile-contract-module
-      - name: Verify portable publication contracts and compile authenticated harness without executing it
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-publication-contract 2>&1 | tee antenna-retained-dtq-task4-source-contracts.log
-      - name: Recheck numerical Rust adapter after the portable binder move
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-rust-cpu-contract 2>&1 | tee antenna-retained-dtq-task4-native-binder-integration.log
-      - name: Install exact existing frontend dependency baseline and reviewed Task 5 changes
-        run: |
-          python -B .github/antenna-retained-dtq/apply-task5-source.py ui-baseline
-          python -B .github/antenna-retained-dtq/apply-task5-source.py task-5-green
-          python -B .github/antenna-retained-dtq/apply-task5-source.py install-wiring
-      - name: Verify canonical quantities and raw-field UI contracts in the existing CPU container
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-quantity-contract 2>&1 | tee antenna-retained-dtq-task5-quantity-ui-contracts.log
-      - name: Install pinned source-only Task 4 authenticated fixture wiring
-        run: |
-          python -B - <<'PYCI'
-          import hashlib
-          from pathlib import Path
-          path = Path('.github/antenna-retained-dtq/apply-task4-fixture-ci.py')
-          raw = path.read_bytes()
-          if len(raw) != 3567 or hashlib.sha256(raw).hexdigest() != '89bb95e4d93b912c7e886742ddac59dfc5b0081170d3c15d0b598968e0e352bc':
-              raise ValueError('Exact Task4 fixture CI applier pin differs')
-          namespace = {'__name__': 'ci_fixture_wiring'}
-          exec(compile(raw, str(path), 'exec'), namespace)
-          import sys
-          sys.argv = [str(path), 'install']
-          namespace['__file__'] = str(path.resolve())
-          namespace['main']()
-          PYCI
-      - name: Verify authenticated publication completion and cold read using source-only fixture
-        shell: bash
-        run: |
-          set -o pipefail
-          just verify-fem-retained-dtq-authenticated-fixture-contract 2>&1 | tee antenna-retained-dtq-task4-authenticated-fixture.log
-      - name: Require the full native quadrature contract
-        if: always()
-        env:
-          NATIVE_GREEN_OUTCOME: ${{ steps.native-green.outcome }}
-        run: test "$NATIVE_GREEN_OUTCOME" = success
-      - name: Preserve exact source pins and RED/GREEN logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: antenna-retained-dtq-plan-source-contracts
-          path: |
-            antenna-retained-dtq-*.log
-            .github/antenna-retained-dtq/task-2-ci-source-pins.json
-            .github/antenna-retained-dtq/task-2-singular-diagnostic-insertions.json
-            .github/antenna-retained-dtq/task-2-leaf-dtq-insertions.json
-            .github/antenna-retained-dtq/task-2-leaf-test-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-dtq-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-test-insertions.json
-            .github/antenna-retained-dtq/task-2-stroud-experiment-pins.json
-            .github/antenna-retained-dtq/task-3-source-pins.json
-            .github/antenna-retained-dtq/task-3-wiring-pins.json
-            .github/antenna-retained-dtq/task-4-source-pins.json
-            .github/antenna-retained-dtq/task-4-wiring-pins.json
-            .github/antenna-retained-dtq/task-5-source-pins.json
-            .github/antenna-retained-dtq/task-5-ui-baseline-pins.json
-            .github/antenna-retained-dtq/task-5-wiring-pins.json
-            .github/antenna-retained-dtq/task-4-fixture/task-4-fixture-ci-inputs.json
-            .github/antenna-retained-dtq/task-4-fixture/task-4-fix3-source-pins.json
-            .github/antenna-retained-dtq/task-4-fixture/task-4-fixture-justfile-insertions.json
-          if-no-files-found: error
-          include-hidden-files: true
+        },
+        {
+          "name": "Record Python/platform and enforce three source byte pins",
+          "id": "pins",
+          "shell": "sh",
+          "run": "python -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json,os,platform,sys\nroot=Path('.'); output=root/'surface-reference-evidence'; output.mkdir(exist_ok=True)\nbase=root/'.github/antenna-retained-dtq/surface-reference'\nexpected={'reference.py': '68a705c2749cf1c150f156d2a8f20ea683009ad1fbe9591e64d5a2ec2f1d1c66', 'verify_inputs.py': '276e34b5eb563f1d5a5f82db17e1a5d69c85142996b715256f8f3bd75e977bd5', 'fixture.json': '1e1d38a360a47f69bd1fdee804231f93f851b69101c15a74f6bd246806c4d891'}\nreport={'python':sys.version,'platform':platform.platform(),'github_sha':os.environ.get('GITHUB_SHA'),'workflow_ref':os.environ.get('GITHUB_WORKFLOW_REF'),'expected_sha256':expected,'actual':{}}\nok=True\nfor name,digest in expected.items():\n    p=base/name\n    actual=hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None\n    report['actual'][name]=actual\n    ok=ok and actual==digest\nreport['status']='PASS' if ok else 'REFUSED'\n(output/'source-pins.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nraise SystemExit(0 if ok else 2)\nPY\n"
+        },
+        {
+          "name": "Check exact fixture reconstruction and refusal self-checks (stdlib only)",
+          "id": "inputs",
+          "shell": "sh",
+          "run": "python -B .github/antenna-retained-dtq/surface-reference/verify_inputs.py > surface-reference-evidence/input-readback.log 2>&1\n"
+        },
+        {
+          "name": "Download exactly one original mpmath wheel; no install or retry",
+          "id": "wheel",
+          "shell": "sh",
+          "run": "set -eu\nmkdir surface-reference-evidence/dependency\npython -m pip download --disable-pip-version-check --no-cache-dir --no-deps --only-binary=:all: --retries 0 --timeout 45 --dest surface-reference-evidence/dependency mpmath==1.3.0 > surface-reference-evidence/dependency-download.log 2>&1\npython -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json\nout=Path('surface-reference-evidence'); files=list((out/'dependency').iterdir())\nreport={'status':'REFUSED','expected_filename':'mpmath-1.3.0-py3-none-any.whl','expected_sha256':'a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c','files':[p.name for p in files]}\nok=len(files)==1 and files[0].is_file() and files[0].name==report['expected_filename']\nif ok:\n    report['actual_sha256']=hashlib.sha256(files[0].read_bytes()).hexdigest()\n    ok=report['actual_sha256']==report['expected_sha256']\nreport['status']='PASS' if ok else 'REFUSED'\n(out/'dependency-pin.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nraise SystemExit(0 if ok else 2)\nPY\n"
+        },
+        {
+          "name": "Four existing-oracle calls; reference-only PASS permitted",
+          "id": "reference",
+          "if": "${{ always() && steps.checkout.outcome == 'success' && steps.pins.outcome == 'success' && steps.inputs.outcome == 'success' && steps.wheel.outcome == 'success' }}",
+          "shell": "sh",
+          "run": "python -B .github/antenna-retained-dtq/surface-reference/reference.py > surface-reference-evidence/reference.log 2>&1\n"
+        },
+        {
+          "name": "Always record missing/refused reference status and production limitation",
+          "if": "${{ always() }}",
+          "shell": "sh",
+          "env": {
+            "CHECKOUT": "${{ steps.checkout.outcome }}",
+            "PINS": "${{ steps.pins.outcome }}",
+            "INPUTS": "${{ steps.inputs.outcome }}",
+            "WHEEL": "${{ steps.wheel.outcome }}",
+            "REFERENCE": "${{ steps.reference.outcome }}"
+          },
+          "run": "python -B - <<'PY'\nfrom pathlib import Path\nimport json,os\nout=Path('surface-reference-evidence'); out.mkdir(exist_ok=True)\nreference=out/'reference.json'\nreport={'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','qualification':'NOT VERIFIED','steps':{key:os.environ[key] for key in ('CHECKOUT','PINS','INPUTS','WHEEL','REFERENCE')},'reference_json_exists':reference.is_file(),'reference_status':json.loads(reference.read_text())['status'] if reference.is_file() else 'NOT RUN: prerequisite or process failure; no field result','prior_production_commit':'099621f654299c7d20911be85e57c4782de967dd','prior_production_run':43647488516}\n(out/'terminal-state.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nPY\n"
+        },
+        {
+          "name": "Always upload reference logs, JSON and source/dependency pins",
+          "if": "${{ always() }}",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "pr425-surface-reference-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "surface-reference-evidence/*.log\nsurface-reference-evidence/*.json",
+            "if-no-files-found": "error",
+            "retention-days": 14
+          }
+        },
+        {
+          "name": "PRODUCTION DTQ GATE REMAINS FAIL (independent of reference status)",
+          "if": "${{ always() }}",
+          "shell": "sh",
+          "run": "python -B - <<'PY'\nprint('PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516', flush=True)\nraise SystemExit(1)\nPY\n"
+        }
+      ]
+    }
+  }
+}
