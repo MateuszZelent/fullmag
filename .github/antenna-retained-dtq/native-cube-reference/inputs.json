@@ -1,0 +1,310 @@
+{
+  "operator_version": "fem_oersted_rt0_surface.mpfr128_160_rndn_etoff.inspection.v1",
+  "precision_digits10": [
+    null,
+    128,
+    160
+  ],
+  "logical_precision_names": [
+    "binary64",
+    "80",
+    "120"
+  ],
+  "policy": {
+    "policy_version": "caller_supplied_rt0_surface.inspection.v1",
+    "limits": {
+      "total": [
+        4000000,
+        48000000,
+        48000000,
+        144000000,
+        200000000000,
+        800000000000,
+        200000000000,
+        20000000000,
+        16777216,
+        134217728,
+        4000000000,
+        4000000000,
+        4000000000,
+        4000000000
+      ],
+      "per_target": [
+        40000,
+        480000,
+        480000,
+        1440000,
+        2000000000,
+        8000000000,
+        2000000000,
+        200000000,
+        4194304,
+        4194304,
+        40000000,
+        40000000,
+        40000000,
+        40000000
+      ],
+      "maximum_raw_integer_bits": 8192,
+      "maximum_reduced_fraction_bits": 8192,
+      "maximum_lifetime_peak_rss_bytes": 6442450944,
+      "guard_interval_events": 256,
+      "maximum_total_seconds": 180.0,
+      "maximum_target_seconds": 90.0
+    },
+    "tolerances": {
+      "absolute_field_apm": 1e-09,
+      "relative_field": 1e-05,
+      "cancellation_floor_apm": 1e-06,
+      "scalar_relative_80": 1e-45,
+      "scalar_relative_120": 1e-55,
+      "angle_relative_80": 1e-45,
+      "angle_relative_120": 1e-55,
+      "binary_scalar_epsilon_factor": 64.0,
+      "binary_roundoff_epsilon_factor": 64.0,
+      "binary_cancellation_limit": 100000000.0,
+      "highprecision_cancellation_limit": 1e+40
+    }
+  },
+  "policy_source": "examples/antenna_universe/rt0_profile_180s/fem_antenna_rt0_four_target_180s.py",
+  "schema": "private.native-cube-reference-input.v1",
+  "qualification": "NOT VERIFIED",
+  "scope": "one kernel diagnostic; same ordered six MFEM RT0 Tet4 cube and three targets; no accepted-source authentication",
+  "mesh_constructor": "mfem::Mesh::MakeCartesian3D(1,1,1,TETRAHEDRON,1,1,1)",
+  "source_count": 6,
+  "volume_m3_exact": "1",
+  "requested_J_apm2": [
+    4,
+    0,
+    0
+  ],
+  "required_exported_affine_a_apm2_exact": [
+    "4",
+    "0",
+    "0"
+  ],
+  "required_exported_affine_b_apm3_exact": "0",
+  "source_vertices_hex": [
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ]
+    ],
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x0.0p+0",
+        "0x1.0000000000000p+0"
+      ]
+    ],
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x0.0p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x1.0000000000000p+0"
+      ]
+    ],
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x1.0000000000000p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x0.0p+0"
+      ]
+    ],
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x1.0000000000000p+0",
+        "0x0.0p+0"
+      ]
+    ],
+    [
+      [
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x1.0000000000000p+0"
+      ],
+      [
+        "0x0.0p+0",
+        "0x1.0000000000000p+0",
+        "0x1.0000000000000p+0"
+      ]
+    ]
+  ],
+  "targets": [
+    {
+      "id": "interior",
+      "xyz_m_hex": [
+        "0x1.8000000000000p-1",
+        "0x1.0000000000000p-1",
+        "0x1.0000000000000p-2"
+      ],
+      "reference_H_apm_decimal": [
+        "0.0",
+        "0.3221687800576061",
+        "0.0"
+      ],
+      "reference_H_apm_hex": [
+        "0x0.0p+0",
+        "0x1.49e69cd88efc8p-2",
+        "0x0.0p+0"
+      ]
+    },
+    {
+      "id": "face",
+      "xyz_m_hex": [
+        "0x1.5555555555555p-1",
+        "0x1.5555555555555p-1",
+        "0x1.5555555555555p-2"
+      ],
+      "reference_H_apm_decimal": [
+        "0.0",
+        "0.21031957139483323",
+        "0.21031957139483337"
+      ],
+      "reference_H_apm_hex": [
+        "0x0.0p+0",
+        "0x1.aebc0706cbdebp-3",
+        "0x1.aebc0706cbdf0p-3"
+      ]
+    },
+    {
+      "id": "edge",
+      "xyz_m_hex": [
+        "0x1.0000000000000p-1",
+        "0x1.0000000000000p-1",
+        "0x1.0000000000000p-1"
+      ],
+      "reference_H_apm_decimal": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "reference_H_apm_hex": [
+        "0x0.0p+0",
+        "0x0.0p+0",
+        "0x0.0p+0"
+      ]
+    }
+  ],
+  "reference_gate": "norm(H-Href) <= 1e-12*(1+norm(Href)) A/m; Href is preregistered binary64 rectangular-surface reference",
+  "prerequisite": "Exact exported J=(4,0,0), b=0 and geometry are checked before the sole field call; failure is source-setup refusal, not field-integral failure",
+  "source_references": {
+    ".superpowers/sdd/2026-11-13-retained-dtq-public-field-proposal/ci-leaf-43615353978-final/antenna-retained-dtq-green-native.log": {
+      "bytes": 84156,
+      "sha256": "de41a8fe24eab0498bfb6194a461553b72fbbd66fe6398115ad8a304ae1cef6f"
+    },
+    ".superpowers/sdd/2026-11-13-retained-dtq-public-field-proposal/task-2-cube-analytical-reference-readback.json": {
+      "bytes": 2721,
+      "sha256": "011f5bb1694b276962e5d7b1ab60e7059fc7635d6a91b2eda778dcf45a99f9a6"
+    },
+    ".superpowers/sdd/2026-11-14-dtq-regular-stroud-ci-probe/oersted_direct_tetra_contract-stroud-insertions.json": {
+      "bytes": 10703,
+      "sha256": "cbc177d732f03f1a2a39c83e9bd5b18fb0eb7e3daf08affa87b4902295d27b82"
+    },
+    ".superpowers/sdd/2026-11-13-retained-dtq-public-field-proposal/task-2-native-surface-reference-ci-20261115/inputs.json": {
+      "bytes": 10219,
+      "sha256": "ece0416744904b4de36c4085b638933c57cbaa048dc266cfaf61c6e9acf629db"
+    },
+    "backends/fem/tests/oersted_direct_tetra_contract.cpp": {
+      "bytes": 36823,
+      "sha256": "944e07cad05345976f293aa129ba7593af21963d809f7ff0eec7d106c94fe430"
+    },
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.hpp": {
+      "bytes": 1888,
+      "sha256": "e73301980084e7871c92a98c7165d0f2cecfd4c8f7a6783a66b1cb0c699cdca8"
+    },
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp": {
+      "bytes": 12826,
+      "sha256": "0f8402d1302139fa16d57069998587f4518d31108d5d60df950ecac8e11ab3e5"
+    }
+  },
+  "synthetic_caller_digest": "85fe50fbdaa901d91163b6bc49a96753d643c0f1d864271c3fc797577334e096"
+}
