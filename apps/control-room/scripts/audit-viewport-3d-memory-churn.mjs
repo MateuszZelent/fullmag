@@ -2602,12 +2602,20 @@ function assertComparable2DViewportLayout(first, final) {
 }
 
 async function waitForDiagnostics(viewport) {
-  const trigger = viewport.getByRole("button", { name: "Render details", exact: true });
-  if (await trigger.getAttribute("aria-expanded") !== "true") {
-    await trigger.click();
+  const page = viewport.page();
+  // Render diagnostics is portalled from the View layers popover.
+  const details = page.getByRole("dialog", { name: "Render diagnostics", exact: true });
+  if (!(await details.isVisible())) {
+    const layers = page.getByRole("dialog", { name: "View layers", exact: true });
+    if (!(await layers.isVisible())) {
+      await viewport.getByRole("button", { name: "Layers", exact: true }).click();
+      await layers.waitFor({ state: "visible", timeout: 15_000 });
+    }
+    const trigger = layers.getByRole("button", { name: "Render details", exact: true });
+    if (await trigger.getAttribute("aria-expanded") !== "true") {
+      await trigger.click();
+    }
   }
-  // PopoverContent is portalled outside the viewport root.
-  const details = viewport.page().getByRole("dialog", { name: "Render diagnostics", exact: true });
   await details.waitFor({ state: "visible", timeout: 15_000 });
   await waitForCondition(
     async () => (await details.textContent())?.includes("geo:"),

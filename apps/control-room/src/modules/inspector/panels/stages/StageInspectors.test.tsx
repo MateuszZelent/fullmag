@@ -305,12 +305,28 @@ function renderedFieldState(
       (element) => element.getAttribute("id") === controlId,
       `FormField control for '${labelText}'`,
     );
+    if (control.getAttribute("aria-label") !== labelText) {
+      throw new Error(`FormField '${labelText}' has no matching accessible name.`);
+    }
     const field = control.closest(".fm-inspector-form-field");
     if (!field) throw new Error(`FormField '${labelText}' has no field wrapper.`);
+    const unitElement = field.querySelector(".fm-inspector-form-field__unit");
+    const unit = unitElement?.textContent.trim() ?? null;
+    if (unitElement) {
+      const unitId = unitElement.getAttribute("id")?.trim();
+      if (!unitId) throw new Error(`FormField '${labelText}' unit has no ID.`);
+      const describedBy =
+        control
+          .getAttribute("aria-describedby")
+          ?.split(/\s+/)
+          .filter(Boolean) ?? [];
+      if (!describedBy.includes(unitId)) {
+        throw new Error(`FormField '${labelText}' does not describe its unit.`);
+      }
+    }
     return {
       disabled: control.disabled,
-      unit:
-        field.querySelector(".fm-inspector-form-field__unit")?.textContent.trim() ?? null,
+      unit,
     };
   } finally {
     dom.restore();
