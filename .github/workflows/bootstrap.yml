@@ -1,5 +1,5 @@
 {
-  "name": "PR425 existing native surface reference; production DTQ remains FAIL",
+  "name": "PR425 authenticated publication and cold read; production DTQ remains FAIL",
   "on": {
     "pull_request": {}
   },
@@ -7,19 +7,21 @@
     "contents": "read"
   },
   "concurrency": {
-    "group": "pr425-native-surface-${{ github.event.pull_request.number }}",
+    "group": "pr425-authenticated-r1-${{ github.event.pull_request.number }}",
     "cancel-in-progress": false
   },
   "jobs": {
-    "native-surface-reference-only": {
-      "name": "Four native toy-Tet controls; production DTQ FAIL",
+    "authenticated-r1": {
+      "name": "Authenticated R1; production DTQ FAIL",
       "if": "${{ github.event.pull_request.number == 425 }}",
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 90,
       "env": {
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
-        "NATIVE_SURFACE_EXPECTED_HEAD": "${{ github.event.pull_request.head.sha }}"
+        "CARGO_BUILD_JOBS": "2",
+        "RUST_MIN_STACK": "8388608",
+        "R1_EXPECTED_HEAD": "${{ github.event.pull_request.head.sha }}"
       },
       "steps": [
         {
@@ -33,16 +35,16 @@
           }
         },
         {
-          "name": "Enforce reviewed private payload byte pins",
+          "name": "Pin all reviewed R1 inputs before materialization",
           "id": "pins",
           "shell": "bash",
-          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json\nbase=Path('.github/antenna-retained-dtq/native-surface-reference')\nraw=(base/'payload-pins.json').read_bytes()\nassert hashlib.sha256(raw).hexdigest() == 'cc437a28e3d6102641f37f55ddd42ccd5aedda33c2c637ec8e89a04ae8a034a9'\nfor name,pin in json.loads(raw).items():\n    data=(base/name).read_bytes()\n    assert len(data)==pin['bytes'] and hashlib.sha256(data).hexdigest()==pin['sha256'],name\nprint('NATIVE_SURFACE_PAYLOAD_PINS_PASS')\nPY\n"
+          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json\npath=Path('.github/antenna-retained-dtq/authenticated-r1/ci-pins.json')\nraw=path.read_bytes()\nassert len(raw)==61572 and hashlib.sha256(raw).hexdigest()=='29bb940d5f13c59a814ac9e1ea24554b6fa1384eb9ed7b7d50a6176dd6859a0c'\npins=json.loads(raw)\nfor name,pin in pins['inputs'].items():\n    p=Path(name)\n    assert not p.is_symlink() and p.resolve().is_relative_to(Path.cwd().resolve()),name\n    data=p.read_bytes()\n    assert len(data)==pin['bytes'] and hashlib.sha256(data).hexdigest()==pin['sha256'],name\nprint('TASK4_AUTHENTICATED_CI_INPUT_PINS_PASS')\nPY\n"
         },
         {
-          "name": "Apply only pinned base delta, native GREEN and private test harness",
+          "name": "Compose only reviewed source dependencies of R1; no UI or diagnostics",
           "id": "materialize",
           "shell": "bash",
-          "run": "mkdir -p native-surface-reference-evidence\npython3 -B .github/antenna-retained-dtq/native-surface-reference/materialize_ci.py > native-surface-reference-evidence/materialization.log 2>&1\n"
+          "run": "mkdir -p task4-authenticated-evidence\npython3 -B .github/antenna-retained-dtq/authenticated-r1/materialize_ci.py > task4-authenticated-evidence/materialization.log 2>&1\n"
         },
         {
           "name": "Resolve existing CI storage profile",
@@ -59,45 +61,46 @@
           }
         },
         {
-          "name": "Existing OE-F1 container recipe; four surface calls plus unchanged OE-T0",
-          "id": "native",
+          "name": "Existing Task4 CPU recipe: library compile only, then unchanged exact R1",
+          "id": "r1",
           "shell": "bash",
-          "run": "set -o pipefail\njust verify-fem-oersted-oef1-cpu-contract 2>&1 | tee native-surface-reference-evidence/native.log\n"
+          "run": "set -o pipefail\njust verify-fem-retained-dtq-authenticated-fixture-contract 2>&1 | tee task4-authenticated-evidence/authenticated-r1.log\n"
         },
         {
-          "name": "Read exact native outputs and preregistered reference/bounds",
+          "name": "Independently require exact listed/executed test and restore receipts",
           "id": "readback",
           "if": "${{ always() && steps.checkout.outcome == 'success' && steps.pins.outcome == 'success' }}",
           "shell": "bash",
-          "run": "mkdir -p native-surface-reference-evidence\npython3 -B .github/antenna-retained-dtq/native-surface-reference/assess_ci.py > native-surface-reference-evidence/readback.log 2>&1\n"
+          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport json\nout=Path('task4-authenticated-evidence');out.mkdir(exist_ok=True)\nlog=out/'authenticated-r1.log'\ntext=log.read_text(errors='replace') if log.exists() else ''\nname='task4_authenticated_acceptance::dtq_v2_publication_completion_cold_read_same_bytes'\nrecords=[]\nfor line in text.splitlines():\n    try: row=json.loads(line)\n    except ValueError: continue\n    if isinstance(row,dict): records.append(row)\ncompleted=[r for r in records if r.get('executed_test')==name and r.get('exit')==0 and r.get('production_23_pins_restored') is True]\nrestored=[r for r in records if r.get('hook_exit')==0 and r.get('production_23_pins_restored') is True]\nlisted=text.splitlines().count(name+': test')==1\nmarker=text.splitlines().count('TASK4_AUTHENTICATED_R1_PUBLICATION_COLD_READ_PASS')==1\npassed=len(completed)==1 and len(restored)==1 and listed and marker\nreport={'schema':'fullmag.task4.authenticated_ci_result.v1','status':'PASS' if passed else 'NOT VERIFIED: test absent or failed','exact_test':name,'exact_list_seen':listed,'hook_success_receipts':len(completed),'restore_receipts':len(restored),'shell_success_marker':marker,'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','qualification':'NOT VERIFIED','raw_fixture_receipts':'NOT RETAINED: unchanged Rust TempDir RAII cleanup'}\n(out/'r1-result.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nif not passed: raise SystemExit(1)\nprint('TASK4_AUTHENTICATED_R1_ACCEPTANCE_PASS')\nPY\n"
         },
         {
-          "name": "Always retain native status separately from production DTQ refusal",
+          "name": "Always record R1 separately from production DTQ failure",
           "if": "${{ always() }}",
           "shell": "bash",
           "env": {
             "CHECKOUT": "${{ steps.checkout.outcome }}",
             "PINS": "${{ steps.pins.outcome }}",
             "MATERIALIZE": "${{ steps.materialize.outcome }}",
+            "STORAGE": "${{ steps.storage.outcome }}",
             "JUST": "${{ steps.just.outcome }}",
-            "NATIVE": "${{ steps.native.outcome }}",
+            "R1": "${{ steps.r1.outcome }}",
             "READBACK": "${{ steps.readback.outcome }}"
           },
-          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport json,os\nout=Path('native-surface-reference-evidence');out.mkdir(exist_ok=True)\np=out/'native-result.json'\nresult=json.loads(p.read_text()) if p.exists() else {'status':'NOT RUN: prerequisite or process failure'}\nreport={'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','prior_production_run':43647488516,'qualification':'NOT VERIFIED','steps':{k:os.environ.get(k) for k in ('CHECKOUT','PINS','MATERIALIZE','JUST','NATIVE','READBACK')},'native_status':result['status'],'github_sha':os.environ.get('GITHUB_SHA'),'event_head':os.environ.get('NATIVE_SURFACE_EXPECTED_HEAD')}\n(out/'terminal-state.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nPY\n"
+          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport json,os\nout=Path('task4-authenticated-evidence');out.mkdir(exist_ok=True)\npath=out/'r1-result.json'\nresult=json.loads(path.read_text()) if path.exists() else {'status':'NOT RUN: prerequisite/process failure'}\nreport={'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','prior_production_run':43647488516,'qualification':'NOT VERIFIED','steps':{k:os.environ.get(k) for k in ('CHECKOUT','PINS','MATERIALIZE','STORAGE','JUST','R1','READBACK')},'r1_status':result['status'],'github_sha':os.environ.get('GITHUB_SHA'),'event_head':os.environ.get('R1_EXPECTED_HEAD')}\n(out/'terminal-state.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nPY\n"
         },
         {
-          "name": "Always upload raw precision/work/phase/RSS and source pins",
+          "name": "Always upload raw R1/list/compiler logs, audits, sourcepins and execution receipts",
           "if": "${{ always() }}",
           "uses": "actions/upload-artifact@v4",
           "with": {
-            "name": "pr425-native-surface-reference-${{ github.run_id }}-${{ github.run_attempt }}",
-            "path": "native-surface-reference-evidence/*.json\nnative-surface-reference-evidence/*.log",
+            "name": "pr425-authenticated-r1-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "task4-authenticated-evidence/*.json\ntask4-authenticated-evidence/*.log",
             "if-no-files-found": "error",
             "retention-days": 14
           }
         },
         {
-          "name": "PRODUCTION DTQ GATE REMAINS FAIL; native marker never promotes the full gate",
+          "name": "PRODUCTION DTQ GATE REMAINS FAIL; R1 does not qualify the method",
           "if": "${{ always() }}",
           "shell": "bash",
           "run": "printf '%s\\n' PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516\nexit 1\n"
