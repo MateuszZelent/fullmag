@@ -84,7 +84,11 @@ def qualification(device: str) -> dict[str, object]:
                 }
             ]
         },
-        "relax_to_run": {"endpoint_m": [1.0, 0.0, 0.0]},
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [1.0, 0.0, 0.0],
+            "endpoint_m": [1.0, 0.0, 0.0],
+        },
     }
     if device == "gpu":
         document["qualification_mode"] = "strict"
@@ -137,6 +141,14 @@ class ComparatorBehaviorTests(unittest.TestCase):
             (self.tmp_path / "parity.json").read_text(encoding="utf-8")
         )
         self.assertEqual(output["gpu_execution_receipt"], execution_receipt())
+        self.assertEqual(output["relax_to_run_common_time_increment_difference"], 0.0)
+
+    def test_cli_rejects_relax_to_run_at_different_physical_times(self) -> None:
+        cpu, gpu = qualification("cpu"), qualification("gpu")
+        gpu["relax_to_run"]["accepted_dt_s"] = 2.0e-15
+        result = run_cli(self.tmp_path, cpu, gpu)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("common physical time", result.stdout + result.stderr)
 
     def test_function_accepts_complete_versioned_receipt(self) -> None:
         gpu = qualification("gpu")
