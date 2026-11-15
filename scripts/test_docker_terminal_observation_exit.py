@@ -164,7 +164,11 @@ class ManagedStop(unittest.TestCase):
                 entered = [stack.enter_context(p) for p in patchers]
                 terminal = stack.enter_context(patch.object(dev, "_terminal_session_restart_probe", return_value=probe))
                 dev.stop_idle(fixture.args)
-                terminal.assert_called_once_with(existing.BACKEND_ID, allow_prepared=True)
+                terminal.assert_called_once_with(
+                    existing.BACKEND_ID, allow_prepared=True,
+                    helper_source_binding=None,
+                    selected_source=Path(fixture.args.source_root).resolve(),
+                )
                 entered[-1].assert_not_called()  # _finish
                 entered[-2].assert_not_called()  # recreate
 
@@ -322,7 +326,11 @@ class ManagedIdleRestart(unittest.TestCase):
                 new_start = stack.enter_context(patch.object(dev, "start"))
                 try:
                     dev.restart_idle(fixture.args)
-                    terminal.assert_called_once_with(existing.BACKEND_ID, allow_prepared=True)
+                    terminal.assert_called_once_with(
+                        existing.BACKEND_ID, allow_prepared=True,
+                        helper_source_binding=None,
+                        selected_source=Path(fixture.args.source_root).resolve(),
+                    )
                     entered[-1].assert_called_once()
                 finally:
                     self.assertEqual(dev.canonical(fixture.document), before)

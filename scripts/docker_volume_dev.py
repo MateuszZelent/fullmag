@@ -3463,18 +3463,110 @@ def _assert_private_restart_network(actual, ids, project):
         raise BuildControlError("Idle restart bridge has unknown consumers; no backend will be stopped")
 
 
-def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False):
+def _terminal_source_origin_helper_bootstrap(helper_source_binding, selected_source):
+    """Load the origin helper from the pinned helper commit, never the app checkout."""
+    if helper_source_binding is None:
+        return (
+            'sys.path.insert(0,"/opt/fullmag/source/scripts")\n'
+            'from docker_terminal_source_origin import capture_source_origin,revalidate_source_origin\n'
+        )
+
+    import docker_helper_source as helper_source
+
+    try:
+        binding = helper_source.validate_binding_record(helper_source_binding)
+    except helper_source.HelperSourceError as error:
+        raise BuildControlError("Terminal source-origin helper pin is invalid: " + str(error)) from error
+    if selected_source is None:
+        raise BuildControlError("Pinned terminal source-origin helper requires the selected app checkout")
+    try:
+        selected_root = Path(selected_source).resolve(strict=True)
+        bound_app_root = Path(binding["app_source_root"]).resolve(strict=True)
+    except (OSError, ValueError) as error:
+        raise BuildControlError("Cannot resolve the app checkout for the pinned terminal helper") from error
+    if selected_root != bound_app_root:
+        raise BuildControlError("Pinned terminal source-origin helper belongs to another app checkout")
+
+    relative = "scripts/docker_terminal_source_origin.py"
+    entry = next((item for item in binding["files"] if item["path"] == relative), None)
+    if entry is None:
+        raise BuildControlError("Pinned helper manifest omits docker_terminal_source_origin.py")
+
+    return (
+        "HELPER_SOURCE_COMMIT=" + repr(binding["commit"]) + "\n"
+        + "HELPER_SOURCE_GIT_BLOB=" + repr(entry["git_blob"]) + "\n"
+        + "HELPER_SOURCE_SHA256=" + repr(entry["sha256"]) + "\n"
+        + r'''HELPER_SOURCE_PATH="scripts/docker_terminal_source_origin.py"
+HELPER_SOURCE_GIT_DIR=Path("/opt/fullmag/source-git")
+try:
+    helper_git_metadata=HELPER_SOURCE_GIT_DIR.lstat()
+except OSError as error:
+    raise RuntimeError("pinned helper source Git mount is unavailable") from error
+if (not stat.S_ISDIR(helper_git_metadata.st_mode)
+        or HELPER_SOURCE_GIT_DIR.is_symlink()
+        or os.path.realpath(str(HELPER_SOURCE_GIT_DIR))!=str(HELPER_SOURCE_GIT_DIR)):
+    raise RuntimeError("pinned helper source Git mount is not a canonical directory")
+helper_git_environment={key:value for key,value in os.environ.items()
+    if not key.startswith("GIT_")}
+helper_git_environment.update(GIT_OPTIONAL_LOCKS="0",GIT_TERMINAL_PROMPT="0",
+    GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL=os.devnull)
+def helper_git(*arguments):
+    try:
+        completed=subprocess.run(["git","--no-replace-objects","--git-dir",
+            str(HELPER_SOURCE_GIT_DIR),*arguments],stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,timeout=20,
+            env=helper_git_environment)
+    except (OSError,subprocess.TimeoutExpired) as error:
+        raise RuntimeError("pinned helper source Git query failed") from error
+    if completed.returncode!=0:
+        raise RuntimeError("pinned helper source Git query failed")
+    return completed.stdout
+resolved_helper_blob=helper_git("rev-parse","--verify",
+    HELPER_SOURCE_COMMIT+":"+HELPER_SOURCE_PATH).decode("ascii","strict").strip()
+if resolved_helper_blob!=HELPER_SOURCE_GIT_BLOB:
+    raise RuntimeError("pinned helper commit:path differs from its Git blob")
+helper_source_size_raw=helper_git("cat-file","-s",HELPER_SOURCE_GIT_BLOB)
+if re.fullmatch(rb"[0-9]{1,16}\n",helper_source_size_raw) is None:
+    raise RuntimeError("pinned helper source size is malformed")
+helper_source_size=int(helper_source_size_raw[:-1])
+if not 0<helper_source_size<=1024*1024:
+    raise RuntimeError("pinned helper source exceeds its byte bound")
+helper_source_bytes=helper_git("cat-file","blob",HELPER_SOURCE_GIT_BLOB)
+if (len(helper_source_bytes)!=helper_source_size
+        or hashlib.sha256(helper_source_bytes).hexdigest()!=HELPER_SOURCE_SHA256):
+    raise RuntimeError("pinned helper source bytes differ from their SHA-256 binding")
+helper_module=types.ModuleType("docker_terminal_source_origin")
+helper_module.__file__="git:"+HELPER_SOURCE_COMMIT+":"+HELPER_SOURCE_PATH
+helper_module.__package__=""
+sys.modules[helper_module.__name__]=helper_module
+try:
+    exec(compile(helper_source_bytes,helper_module.__file__,"exec"),helper_module.__dict__)
+except BaseException:
+    sys.modules.pop(helper_module.__name__,None)
+    raise
+capture_source_origin=helper_module.capture_source_origin
+revalidate_source_origin=helper_module.revalidate_source_origin
+'''
+    )
+
+
+def _terminal_session_restart_probe(
+    backend_id, *, allow_prepared=False, startup_enabled=False,
+    helper_source_binding=None, selected_source=None,
+):
     """Allow drain after a terminal task or an exact pre-acceptance failure.
 
     Called only with the private frontend stopped and the group control lease
     held. This is admission to graceful drain, not proof of process absence:
     the existing native drain receipt remains mandatory before restart.
     """
+    helper_bootstrap = _terminal_source_origin_helper_bootstrap(
+        helper_source_binding, selected_source
+    )
     script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
-        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,sys,urllib.error,urllib.request
+        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,subprocess,sys,types,urllib.error,urllib.request
 from pathlib import Path
-sys.path.insert(0,"/opt/fullmag/source/scripts")
-from docker_terminal_source_origin import capture_source_origin,revalidate_source_origin
+''' + helper_bootstrap + r'''
 SOURCE_ROOT=Path("/opt/fullmag/source")
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
@@ -8305,6 +8397,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                             raise BuildControlError("Backend has an active session; idle restart refused")
                         terminal_session = _terminal_session_restart_probe(
                             ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                            helper_source_binding=helper_source_binding, selected_source=selected,
                         )
                         if terminal_session is not None:
                             terminal_session = _terminal_legacy_source_preflight(
@@ -8342,6 +8435,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     )
                     fresh_terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                        helper_source_binding=helper_source_binding, selected_source=selected,
                     )
                     if fresh_terminal_session is not None:
                         fresh_terminal_session = _terminal_legacy_source_preflight(

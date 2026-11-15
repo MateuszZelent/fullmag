@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import hashlib
 import json
@@ -15,6 +16,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_volume_dev
+import docker_helper_source
 
 
 class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
@@ -173,6 +175,220 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
         self.assertIn('"solver_profile_sha256"', script)
         self.assertIn('"invalid_solver_profile"', script)
         self.assertIn('"accepted_solver_profile_unsupported"', script)
+
+    @staticmethod
+    def _pinned_helper_fixture(root):
+        app_root = root / "old-app"
+        (app_root / "scripts").mkdir(parents=True)
+        (app_root / "selected.py").write_text("value = 7\n")
+
+        helper_root = root / "helper"
+        helper_scripts = helper_root / "scripts"
+        helper_scripts.mkdir(parents=True)
+        origin_path = Path(__file__).resolve().with_name("docker_terminal_source_origin.py")
+        (helper_scripts / origin_path.name).write_bytes(origin_path.read_bytes())
+        (helper_scripts / "docker_startup_script.py").write_bytes(b"# pinned startup helper\n")
+        (helper_scripts / "fullmag_storage.py").write_bytes(b"# pinned storage helper\n")
+
+        def git(*arguments):
+            return subprocess.run(
+                ["git", "-C", str(helper_root), *arguments],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+            ).stdout.strip()
+
+        subprocess.run(
+            ["git", "init", "--quiet", str(helper_root)],
+            check=True,
+            env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+        )
+        git("config", "user.name", "Codex Test")
+        git("config", "user.email", "codex-test@example.invalid")
+        git("add", "scripts")
+        git("commit", "--quiet", "-m", "fixture")
+        commit = git("rev-parse", "HEAD")
+        files = []
+        for relative in (
+            "scripts/docker_startup_script.py",
+            "scripts/docker_terminal_source_origin.py",
+            "scripts/fullmag_storage.py",
+        ):
+            path = helper_root / relative
+            data = path.read_bytes()
+            files.append({
+                "path": relative,
+                "mode": "100644",
+                "git_blob": git("rev-parse", f"{commit}:{relative}"),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            })
+        binding = {
+            "schema": docker_helper_source.SCHEMA,
+            "root": str(helper_root.resolve()),
+            "app_source_root": str(app_root.resolve()),
+            "commit": commit,
+            "files": files,
+            "startup_helper_hashes": {
+                "docker_startup_script.py": files[0]["sha256"],
+                "fullmag_storage.py": files[2]["sha256"],
+            },
+        }
+        binding["manifest_sha256"] = docker_helper_source._binding_manifest_sha256(commit, files)
+        return app_root, helper_root, binding, git
+
+    @staticmethod
+    def _restart_probe_script(**kwargs):
+        captured = {}
+
+        def capture(*args, **_kwargs):
+            captured["args"] = args
+            return subprocess.CompletedProcess(args, 0, b"null\n", b"")
+
+        with patch.object(docker_volume_dev, "docker_capture", side_effect=capture):
+            docker_volume_dev._terminal_session_restart_probe("e" * 64, **kwargs)
+        return captured["args"][-1]
+
+    @staticmethod
+    def _run_probe_bootstrap(script, source_git):
+        bootstrap = script.split("def unique_object", 1)[0]
+        bootstrap = bootstrap.replace(
+            'Path("/opt/fullmag/source-git")', f"Path({str(source_git)!r})"
+        )
+        return subprocess.run(
+            [sys.executable, "-I", "-B", "-c", bootstrap],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+    def test_restart_probe_uses_pinned_helper_for_historical_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root, helper_root, binding, _git = self._pinned_helper_fixture(Path(temporary))
+            script = self._restart_probe_script(
+                helper_source_binding=binding, selected_source=app_root,
+            )
+            prefix = script.split("def unique_object", 1)[0]
+            prefix = prefix.replace(
+                'Path("/opt/fullmag/source-git")', f"Path({str((helper_root / '.git').resolve())!r})"
+            )
+            prefix += (
+                "origin=capture_source_origin({'origin':'user_file','path':"
+                + repr(str(app_root / "selected.py"))
+                + "},source_root=Path(" + repr(str(app_root)) + "))\n"
+                + "print(json.dumps({'module':sys.modules['docker_terminal_source_origin'].__file__,"
+                "'origin':origin},sort_keys=True))\n"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", prefix],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = json.loads(result.stdout)
+            self.assertEqual(
+                observed["module"],
+                "git:" + binding["commit"] + ":scripts/docker_terminal_source_origin.py",
+            )
+            self.assertEqual(observed["origin"]["source_relative"], "selected.py")
+            self.assertFalse((app_root / "scripts/docker_terminal_source_origin.py").exists())
+
+    def test_restart_probe_rejects_helper_binding_mismatch_and_missing_git_mount(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root, helper_root, binding, git = self._pinned_helper_fixture(Path(temporary))
+            helper_source = "scripts/docker_terminal_source_origin.py"
+            original_blob = next(item["git_blob"] for item in binding["files"]
+                                 if item["path"] == helper_source)
+
+            changed_source = helper_root / helper_source
+            changed_source.write_bytes(changed_source.read_bytes() + b"\n# second commit\n")
+            git("add", helper_source)
+            git("commit", "--quiet", "-m", "second")
+            second_commit = git("rev-parse", "HEAD")
+
+            mismatches = []
+            wrong_commit = json.loads(json.dumps(binding))
+            wrong_commit["commit"] = second_commit
+            wrong_commit["manifest_sha256"] = docker_helper_source._binding_manifest_sha256(
+                wrong_commit["commit"], wrong_commit["files"]
+            )
+            mismatches.append(("commit:path", wrong_commit,
+                               "pinned helper commit:path differs from its Git blob"))
+
+            wrong_blob = json.loads(json.dumps(binding))
+            origin_entry = next(item for item in wrong_blob["files"] if item["path"] == helper_source)
+            origin_entry["git_blob"] = next(
+                item["git_blob"] for item in binding["files"]
+                if item["path"] == "scripts/docker_startup_script.py"
+            )
+            wrong_blob["manifest_sha256"] = docker_helper_source._binding_manifest_sha256(
+                wrong_blob["commit"], wrong_blob["files"]
+            )
+            mismatches.append(("git_blob", wrong_blob,
+                               "pinned helper commit:path differs from its Git blob"))
+
+            wrong_sha = json.loads(json.dumps(binding))
+            origin_entry = next(item for item in wrong_sha["files"] if item["path"] == helper_source)
+            origin_entry["sha256"] = "0" * 64
+            wrong_sha["manifest_sha256"] = docker_helper_source._binding_manifest_sha256(
+                wrong_sha["commit"], wrong_sha["files"]
+            )
+            mismatches.append(("SHA-256", wrong_sha,
+                               "pinned helper source bytes differ from their SHA-256 binding"))
+
+            for label, invalid_binding, expected_error in mismatches:
+                with self.subTest(binding=label):
+                    script = self._restart_probe_script(
+                        helper_source_binding=invalid_binding, selected_source=app_root,
+                    )
+                    result = self._run_probe_bootstrap(script, helper_root / ".git")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected_error, result.stderr)
+            self.assertNotEqual(original_blob, git("rev-parse", f"{second_commit}:{helper_source}"))
+
+            script = self._restart_probe_script(
+                helper_source_binding=binding, selected_source=app_root,
+            )
+            missing_git = Path(temporary) / "missing-source-git"
+            result = self._run_probe_bootstrap(script, missing_git)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("pinned helper source Git mount is unavailable", result.stderr)
+
+    def test_restart_probe_without_helper_keeps_app_source_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            old_source_scripts = Path(temporary) / "old-app" / "scripts"
+            old_source_scripts.mkdir(parents=True)
+            origin_path = Path(__file__).resolve().with_name("docker_terminal_source_origin.py")
+            (old_source_scripts / origin_path.name).write_bytes(origin_path.read_bytes())
+            script = self._restart_probe_script()
+            bootstrap = script.split("def unique_object", 1)[0]
+            bootstrap = bootstrap.replace("/opt/fullmag/source/scripts", str(old_source_scripts))
+            bootstrap += "print(sys.modules['docker_terminal_source_origin'].__file__)\n"
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", bootstrap],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(old_source_scripts / origin_path.name))
+            self.assertNotIn("HELPER_SOURCE_GIT_DIR", bootstrap)
+
+    def test_retained_restart_probe_passes_authenticated_helper_binding(self):
+        source = inspect.getsource(docker_volume_dev._retained_operation)
+        tree = ast.parse(source)
+        calls = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name)
+                 and node.func.id == "_terminal_session_restart_probe"]
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            with self.subTest(line=call.lineno):
+                self.assertTrue({"helper_source_binding", "selected_source"}.issubset(
+                    {keyword.arg for keyword in call.keywords}
+                ))
 
     def test_restart_probe_authenticates_cuda_trace_refusal_marker_at_runtime(self):
         request_id = "cuda-trace-refusal"
