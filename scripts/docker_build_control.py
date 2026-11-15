@@ -29,6 +29,9 @@ from docker_dev_host import docker_argv, readonly_source_volume, require_host, v
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_LOG_BYTES = 32 * 1024 * 1024
 MAX_ATTEMPTS = 64
+PROFILE_RUN_PRODUCER_PHASE = "profile-run-producer"
+PROFILE_RUN_PRODUCER_ATTEMPT_LIMIT = 256
+ATTEMPT_LIMIT_POLICY_VERSION = "fullmag.docker-build-attempt-limit.v1"
 MIN_FREE_BUILD_BYTES = 32 * 1024**3
 # A cache-only operation can retain one bounded log and up to six bounded
 # control documents per attempt. Keep room for a conservative retry window,
@@ -44,6 +47,13 @@ LABEL_SCHEMA = "fullmag.build-control.v1"
 
 class BuildControlError(RuntimeError):
     pass
+
+
+def attempt_limit_for_phase(phase):
+    """Return the closed attempt-history budget for one exact operation phase."""
+    if phase == PROFILE_RUN_PRODUCER_PHASE:
+        return PROFILE_RUN_PRODUCER_ATTEMPT_LIMIT
+    return MAX_ATTEMPTS
 
 
 def canonical(value):
@@ -717,6 +727,7 @@ class BuildControl:
             raise BuildControlError("Invalid build phase")
         if not re.fullmatch(r"[0-9a-f]{32}", token):
             raise BuildControlError("Invalid operation token")
+        attempt_limit = attempt_limit_for_phase(phase)
         path = self.path(f"{phase}/attempts/{token}")
         admission = "umask 027; exec 9>/control/operation.lock; flock -n 9; "
         if self.namespace:
@@ -731,7 +742,7 @@ class BuildControl:
                 "test ! -e /control/active; "
                 f"mkdir -p /control/{phase}/attempts; "
                 f"test \"$(readlink -f /control/{phase}/attempts)\" = '/control/{phase}/attempts'; "
-                f"test $(find /control/{phase}/attempts -mindepth 1 -maxdepth 1 -type d | wc -l) -lt {MAX_ATTEMPTS}; "
+                f"test $(find /control/{phase}/attempts -mindepth 1 -maxdepth 1 -type d | wc -l) -lt {attempt_limit}; "
                 f"mkdir '{path}'; printf '%s\\n' '{token}' > /control/active; "
                 "sync /control; printf 'READY\\n'; "
                 f"{{ head -c {MAX_LOG_BYTES}; cat > /dev/null; }} > '{path}/build.log'; "
@@ -780,10 +791,13 @@ class BuildControl:
                    "state": "starting", "attempt": token, "compose_project": self.project,
                    "control_volume": self.volume, "helper_container": name,
                    "inputs": inputs, "started_at": time.time(),
-                   "log_byte_limit": MAX_LOG_BYTES, "attempt_limit": MAX_ATTEMPTS,
+                   "log_byte_limit": MAX_LOG_BYTES,
+                   "attempt_limit": attempt_limit_for_phase(phase),
                    "build_data_qualification": "NOT VERIFIED",
                    "minimum_free_bytes": minimum_free_bytes,
                    "filesystem_before": space_before}
+        if phase == PROFILE_RUN_PRODUCER_PHASE:
+            receipt["attempt_limit_policy_version"] = ATTEMPT_LIMIT_POLICY_VERSION
         if self.namespace:
             receipt.update(control_namespace=self.namespace,
                            namespace_registry_sha256=self.namespace_registry_sha256)

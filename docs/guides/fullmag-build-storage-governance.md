@@ -526,6 +526,17 @@ Szczegółowy moment usunięcia compiler outputs `.fullmag-build`, cache-hit i
 failed-generation retention określa ADR 0076; zachowanie treści tego kontraktu
 nie potwierdza automatyki w runtime.
 
+Historia `profile-run-producer` dopuszcza do 256 katalogów prób, aby pomieścić
+długą kampanię z wieloma project/prepare/validate i pełnym porównaniem oraz
+parami BB; limit 128 nie pokrywa tego planu. Jest to większy budżet historii,
+nie retencja: nie archiwizuj ani nie usuwaj istniejących katalogów. Same limity
+logów pozwalają zachować do 8 GiB (256 × 32 MiB), obok metadanych prób. Tylko
+ta dokładna faza otrzymuje limit 256 i wersję polityki w nowych receiptach; nie
+ma nadpisania przez env ani CLI. Zapisane wcześniej receipty z limitem 64
+pozostają czytelne i bez zmian. Wszystkie pozostałe fazy, w tym buildy,
+zachowują limit 64. Rezerwa 32 GiB oraz sprawdzanie `active`, `closing`,
+`flock`, registry i wolnego miejsca pozostają bez zmian.
+
 Po publikacji pakietu, zakończeniu etapu także błędem/anulowaniem, zwykłym
 zatrzymaniu po drain i domknięciu zadania wykonaj kwalifikowaną retencję;
 preview nie zamyka operacji. Uzgodnij historyczne i obecne identity oraz
