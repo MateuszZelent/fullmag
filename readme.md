@@ -16,6 +16,10 @@
   <p>
     <a href="https://fullmag.mzelent.pl/"><strong>Documentation</strong></a>
     ·
+    <a href="https://pypi.org/project/fullmag/"><strong>PyPI</strong></a>
+    ·
+    <a href="https://fullmag.mzelent.pl/getting-started/interactive-python.html">Live Python</a>
+    ·
     <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">Control Room</a>
     ·
     <a href="https://fullmag.mzelent.pl/python-api/index.html">Python API</a>
@@ -48,8 +52,35 @@ and interactive 2D/3D analysis in one workflow.
   <a href="https://fullmag.mzelent.pl/frontend/control-room/index.html">
     <img src="public_docs/site/_static/images/ui/control-room-workspace-overview.png" alt="FullMag Control Room workspace" width="1200" />
   </a>
-  <p><sub>Control Room: model authoring, mesh and field inspection, 2D/3D visualization, live analysis, runtime status, and Python export.</sub></p>
+  <p><sub>Control Room (Catppuccin Mocha dark theme): model authoring, mesh and field inspection, 2D/3D visualization, live analysis, runtime status, and Python export.</sub></p>
 </div>
+
+<details>
+<summary><strong>Explore more Control Room &amp; Live Python screenshots</strong></summary>
+
+| Catppuccin Latte Light Theme | Start Screen Hub &amp; Templates |
+|---|---|
+| ![Control Room Latte Light Theme](public_docs/site/_static/images/ui/control-room-light-latte-overview.png) | ![Start Screen Hub Overview](public_docs/site/_static/images/ui/start-screen-hub-overview.png) |
+| **Benchmark Templates Browser** | **Active Live Python Session (`fm.connect()`)** |
+| ![Start Screen Model Templates](public_docs/site/_static/images/ui/start-screen-model-templates.png) | ![Start Screen Python Live Connect](public_docs/site/_static/images/ui/start-screen-python-live-connect.png) |
+| **Multi-Instance Session Tabs** | **Command Search (`Ctrl+Shift+P`)** |
+| ![Multi-Instance Session Tabs](public_docs/site/_static/images/ui/multi-instance-session-tabs.png) | ![Command Search Palette](public_docs/site/_static/images/ui/command-palette-ctrl-k.png) |
+| **3D Viewport &amp; Magnetization Glyphs** | **FEM Mesh &amp; Poisson Airbox Boundary** |
+| ![Interactive 3D Viewport](public_docs/site/_static/images/ui/viewport-3d-interactive.png) | ![3D FEM Mesh and Airbox](public_docs/site/_static/images/ui/viewport-3d-fem-mesh-airbox.png) |
+| **2D Planar Field Map &amp; Sections** | **Live Time-Series Telemetry** |
+| ![2D Planar Field Map](public_docs/site/_static/images/ui/planar-2d-field-map-overview.png) | ![Live Time-Series Charts](public_docs/site/_static/images/ui/charts-live-time-series.png) |
+| **Hysteresis Loop Playback** | **Spin-Wave Dispersion &amp; FMR Spectra** |
+| ![Hysteresis Loop Playback](public_docs/site/_static/images/ui/charts-hysteresis-loop-playback.png) | ![Dispersion and FMR Spectrum](public_docs/site/_static/images/ui/charts-dispersion-and-fmr-spectrum.png) |
+| **Geometry Ribbon Tab** | **Physics &amp; Interactions Ribbon Tab** |
+| ![Geometry Ribbon Tab](public_docs/site/_static/images/ui/ribbon-tabs-geometry.png) | ![Physics Ribbon Tab](public_docs/site/_static/images/ui/ribbon-tabs-physics.png) |
+| **Canonical Python Script Export (`File` Menu)** | **Semantic Model Explorer Tree** |
+| ![Control Room File menu Save canonical copy as](public_docs/site/_static/images/ui/ribbon-tabs-automation-python.png) | ![Explorer Tree Structure](public_docs/site/_static/images/ui/explorer-tree-structure.png) |
+| **Inspector Draft Isolation** | **Primitive Geometry Inspector** |
+| ![Inspector Draft Mode](public_docs/site/_static/images/ui/inspector-panel-draft.png) | ![Primitive Geometry Inspector](public_docs/site/_static/images/ui/inspector-geometry-and-csg.png) |
+| **Study Stages &amp; Interactive Re-Execution** | **Footer Status &amp; Governance Bar** |
+| ![Study Stages and Rerun Inspector](public_docs/site/_static/images/ui/inspector-study-stages-and-rerun.png) | ![Footer Status Bar](public_docs/site/_static/images/ui/status-bar-footer.png) |
+
+</details>
 
 <a id="numerical-engines"></a>
 
@@ -111,13 +142,12 @@ and is not treated as scientific validation.
 
 ## Quick start
 
-The commands in this section install and smoke-test the authoring/runtime
-packages. For daily application development with source HMR and persistent
-Docker state, use the [Docker development workspace](#docker-development-workspace)
-below.
+The commands in this section install the published Python package, connect interactively from a
+Python REPL or script, and run simulations inside the
+[Docker development workspace](#docker-development-workspace).
 
-Install the Python authoring layer from PyPI (available once the first release is
-published; until then use the source checkout below):
+Install the Python authoring package and live HTTP/WebSocket client from
+[PyPI (`fullmag`)](https://pypi.org/project/fullmag/):
 
 ```bash
 pip install fullmag
@@ -126,36 +156,78 @@ uv add fullmag          # in a uv project
 uv pip install fullmag  # in an existing environment
 ```
 
-The PyPI package is the pure-Python DSL and live API client (`fm.connect()`); it does not
-contain the FDM/FEM solvers, which run in the Docker DEV group or a native build. From a source
-checkout:
+Optional extras add FEM geometry/meshing (`meshing`: `gmsh`, `manifold3d`, `meshio`, `scipy`,
+`trimesh`), image textures (`figures`: `Pillow`), and Jupyter notebook live monitoring (`jupyter`:
+`ipython`, `matplotlib`):
+
+```bash
+pip install "fullmag[meshing,figures,jupyter]"
+```
+
+The PyPI package is pure Python (`fm.study(...)`, `ProblemIR` serialization, and the live API
+client `fm.connect()`); it does not bundle the native FDM/FEM solvers, which run inside the
+Docker Compose DEV workspace. From a source checkout, install locally with:
 
 ```bash
 git clone https://github.com/MateuszZelent/fullmag
 cd fullmag
-python -m pip install ./packages/fullmag-py
+python -m pip install "./packages/fullmag-py[meshing,jupyter]"
 ```
 
-Install optional geometry and meshing dependencies when needed:
+### Interactive Live Python (`fm.connect()`)
 
-```bash
-python -m pip install "./packages/fullmag-py[meshing]"   # PyPI: pip install "fullmag[meshing]"
+Once a Docker DEV group is running (`just docker-dev "$PWD"`), attach directly from any terminal,
+Python script, or Jupyter notebook while watching the Control Room update in real time:
+
+```python
+import fullmag as fm
+
+fm.connect("http://127.0.0.1:3197")  # or read $FULLMAG_URL
+fm.engine("fdm")
+fm.device("cpu", precision="double")
+fm.cell(5e-9, 5e-9, 10e-9)
+fm.solver(fix_dt=1e-13)
+
+film = fm.geometry(fm.Box(200e-9, 100e-9, 10e-9, name="film"), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.5
+film.m = fm.texture.uniform(1, 1, 0)
+
+fm.relax(dt=1e-13, tolT=1e-4, max_steps=1_000)
+
+with fm.transaction():
+    film.alpha = 0.02
+    fm.b_ext(0.05, 0.0, 0.0)
+
+fm.run_until(
+    lambda s: s.table("scalars", columns=("mx",)).column("mx")[-1] < 0.5,
+    chunk_time=10e-12,
+    max_time=500e-12,
+)
+m = fm.field("m").to_numpy()       # (point_count, 3) binary FMVP readback
+grid = fm.field("m").as_grid()     # structured FDM grid readback
+script_py = fm.export_script()     # canonical Python export from live session
+fm.disconnect()
 ```
 
-Run the repository-owned FDM CPU smoke scenario:
+See the [Interactive Live Python &amp; REPL guide](https://fullmag.mzelent.pl/getting-started/interactive-python.html)
+and [`examples/live`](examples/live) (`fm.on`, `fullmag.live.jupyter.monitor`, `fm.sweep`).
+
+### Running tracked scripts in Docker DEV
+
+Run the repository-owned FDM CPU smoke scenario in your checkout's Docker Compose DEV group:
 
 ```bash
-just run-headless examples/fdm_cpu_relax_smoke.py
+just fullmag-dev-container examples/fdm_cpu_relax_smoke.py
+# Or in an already-running empty workspace started by `just docker-dev`:
+just docker-dev-script examples/fdm_cpu_relax_smoke.py
 ```
 
 This smoke test verifies the execution path; it is not a convergence or scientific qualification
-benchmark. Native FEM/MFEM/hypre/libCEED/CUDA builds use the managed container recipes owned by the
-repository `justfile`:
-
-```bash
-just ensure-managed-fem-runtime
-```
-
+benchmark. Container toolchain preparation (`just docker-dev-toolchain`) includes CMake, MFEM,
+hypre, libCEED, and CUDA headers (`docker/fem-gpu/Dockerfile`); dedicated release and scientific
+qualification FEM gates preserve their own managed `justfile` recipes (`just fem-managed-headless`).
 Platform-specific setup is documented in the
 [installation guide](https://fullmag.mzelent.pl/getting-started/installation.html).
 
@@ -239,19 +311,22 @@ docker ps -a --filter "label=com.docker.compose.project=<compose-project>" --for
 
 **4. Finish a task.** A stopped group still pins its cache volumes (often
 10–20 GB) and a running frontend keeps watching the checkout. Before removing
-the worktree, save the project, finish simulations, then:
+the worktree, save the project, finish simulations, inspect the group's mounts, then:
 
 ```bash
 docker stop -t 75 <frontend> <backend>          # drains the backend
 docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' <backend> <frontend>
 docker rm <frontend> <backend>
-docker volume rm <fullmag-backend-v2-…-build> <fullmag-backend-v2-…-package> <fullmag-dev-frontend-v1-…>
+docker volume rm <group-cache-volumes-from-inspect>
 git -C ~/git/fullmag/fullmag worktree remove ../worktrees/<task>
 ```
 
-Remove only the group's `-build`, `-package` and `fullmag-dev-frontend-v1-*`
-cache volumes. Keep `fullmag-build-control-*` (receipts and provenance) and any
-`host-ledger` volume, and never remove storage with sessions and results.
+Keep control/provenance records (`fullmag-build-control-*`), any `host-ledger` volume, and
+configured user storage intact. [ADR 0076](docs/adr/0076-single-private-volume-per-dev-group.md)
+specifies consolidating each group's private mutable state (`private/backend`, `private/frontend`,
+and `private/ledger`) into a single group-private named volume (`BuildControl.volume`) alongside
+shared `fullmag-shared-*` caches; confirm exact container mounts via `docker inspect` before
+removing any cache volume, as legacy groups retain separate cache volumes until explicitly migrated.
 
 **5. Resources.** Each group has static caps from the main `.env`
 (`FULLMAG_DEV_BACKEND_CPUS`, `FULLMAG_DEV_BACKEND_MEMORY_GIB`,
@@ -698,8 +773,8 @@ solver, mesh, and workload scope.
 
 ## Citation and authors
 
-Until a versioned release with a persistent identifier is available, cite the repository and the
-exact commit used for the reported result:
+Cite the published PyPI package version ([`fullmag`](https://pypi.org/project/fullmag/)) and the
+exact repository commit used for the reported result until an archival DOI identifier is assigned:
 
 > M. Zelent, M. Gołebiewski, U. Makartsou, and P. Pirro, *FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics*, research software, 2026. Repository: [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag). Documentation: [fullmag.mzelent.pl](https://fullmag.mzelent.pl/).
 
