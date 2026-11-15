@@ -201,7 +201,7 @@ export async function assertNoUiErrors(page, label) {
   }
 }
 
-export async function assertWebGLCanvasHealthy(page, label, { requireWebGL = true, minBuckets = 10 } = {}) {
+export async function assertWebGLCanvasHealthy(page, label, { requireWebGL = true } = {}) {
   const stats = await page.evaluate(
     ({ requireWebGL }) => {
       const canvases = [...document.querySelectorAll("canvas")].filter((canvas) => {

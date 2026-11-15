@@ -190,7 +190,6 @@ function generatePlanarSliceData(nu = 96, nv = 96, plane = "xy", q = 0.5, mode =
   for (let j = 0; j < nySeg; j += 1) {
     for (let i = 0; i < nxSeg; i += 1) {
       const n00 = j * (nxSeg + 1) + i;
-      const n10 = n00 + 1;
       const n01 = n00 + (nxSeg + 1);
       const n11 = n01 + 1;
       const u0 = verts[n00 * 2];
@@ -319,16 +318,6 @@ export function createDocsFixtureContext({
     tableValues[base + 5] = -4.2e-18 * (1 + 0.35 * (1 - env));
     tableValues[base + 6] = 1.8e-18 * (0.4 + 0.6 * env);
   }
-  const fmtbBuffer = encodeFmtbV1({
-    revision: 12,
-    schemaRevision: 3,
-    cursorStart: 0,
-    cursorEnd: tableRowCount,
-    totalRows: tableRowCount,
-    rowCount: tableRowCount,
-    columnCount: tableColCount,
-    values: tableValues,
-  });
 
   // Mutable session visualization state conforming to OpenAPI VisualizationStateResource (schema_version: 5)
   let vizRevision = 5;
