@@ -362,7 +362,7 @@ bool context_step_explicit_rk_mfem(
                 norm_weights = &ctx.mesh.node_volumes;
             }
             AdaptiveErrorNormMetrics norm_metrics{};
-            double err_norm = compute_adaptive_error_norm_mass_weighted(
+            double err_norm = compute_adaptive_error_norm_with_mass_metrics(
                 ws.err,
                 ctx.state.m_xyz,
                 ws.m_candidate,
@@ -414,7 +414,7 @@ bool context_step_explicit_rk_mfem(
                 tab.order_est,
             });
             auto &attempt_record = ctx.stepper.attempt_trace.records.back();
-            attempt_record.error_norm_type = 2u; // mass_weighted_rms
+            attempt_record.error_norm_type = FULLMAG_FEM_SOLVER_ERROR_NORM_MAX;
             attempt_record.active_node_count = norm_metrics.active_node_count;
             attempt_record.active_measure = norm_metrics.active_measure;
             attempt_record.normalization_denominator =

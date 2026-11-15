@@ -267,6 +267,27 @@ double compute_adaptive_error_norm_mass_weighted(
     return rms;
 }
 
+double compute_adaptive_error_norm_with_mass_metrics(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    const std::vector<double> &node_weights,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
+    double atol,
+    double rtol,
+    AdaptiveErrorNormMetrics *metrics)
+{
+    AdaptiveErrorNormMetrics measured{};
+    const double rms = compute_adaptive_error_norm_mass_weighted(
+        err, m_old, m_new, node_weights, magnetic_node_mask, frozen_node_mask,
+        atol, rtol, &measured);
+    if (metrics != nullptr) {
+        *metrics = measured;
+    }
+    return std::isfinite(rms) ? measured.max_scaled_error : rms;
+}
+
 bool compute_adaptive_attempt_guard_metric(
     const AdaptiveDtRuntimeState &policy,
     double embedded_error_metric,

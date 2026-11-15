@@ -737,8 +737,10 @@ FastModeResult qualify_fast_mode(const ExchangeModeDefinition &mode)
         "fast-mode v2 attempt receipt ABI is incompatible");
     if (!g_use_gpu) {
         require(
-            accepted_v2.error_norm_type == FULLMAG_FEM_SOLVER_ERROR_NORM_MASS_WEIGHTED_RMS,
-            "CPU fast-mode attempt receipt must identify mass-weighted RMS");
+            accepted_v2.error_norm_type == FULLMAG_FEM_SOLVER_ERROR_NORM_MAX,
+            "CPU fast-mode attempt receipt must identify maximum-error acceptance");
+        require(accepted_v2.max_scaled_error <= 1.0,
+            "CPU fast-mode accepted attempt exceeds the maximum nodewise error budget");
         require(accepted_v2.active_node_count > 0, "CPU fast-mode receipt has no active nodes");
         require(
             std::isfinite(accepted_v2.active_measure) && accepted_v2.active_measure > 0.0 &&

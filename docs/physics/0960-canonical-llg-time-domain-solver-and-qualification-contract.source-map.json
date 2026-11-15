@@ -53,12 +53,12 @@
     {
       "id": "eq-maximum-vector-error",
       "symbols": ["eta-i", "m-i-hi", "m-i-lo", "max-err", "eta"],
-      "sources": ["adaptive-norm"]
+      "sources": ["adaptive-norm", "adaptive-norm-production-cpu"]
     },
     {
       "id": "eq-advanced-vector-error",
       "symbols": ["eta-i", "e-i", "m-i-n", "m-i-hi", "atol", "rtol"],
-      "sources": ["adaptive-norm"]
+      "sources": ["adaptive-norm", "adaptive-norm-production-cpu"]
     },
     {
       "id": "eq-adaptive-controller-startup",
@@ -318,6 +318,12 @@
       "symbol": "DOC-ANCHOR:planned-tangent-plane-weak-form",
       "responsibility": "Own the future tangent-plane formulation and retraction requirements; this is not an implementation source.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "adaptive-norm-production-cpu",
+      "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp",
+      "symbol": "compute_adaptive_error_norm_with_mass_metrics",
+      "responsibility": "Use the maximum active-node scaled error for CPU acceptance while preserving weighted RMS and FEM-measure diagnostics."
     }
   ],
   "tests": [
@@ -340,6 +346,16 @@
       "path": "packages/fullmag-py/tests/test_llg_solver_contract.py",
       "symbol": "test_adaptive_policy_preserves_omitted_initial",
       "scope": "Lossless preservation of omitted adaptive initial timestep intent."
+    },
+    {
+      "path": "backends/fem/tests/adaptive_dt_contract.cpp",
+      "symbol": "adaptive_max_error_does_not_dilute_localized_error",
+      "scope": "Reject a localized max_err violation even when its weighted RMS is below one; FEM measure cannot dilute acceptance."
+    },
+    {
+      "path": "backends/fem/tests/adaptive_dt_contract.cpp",
+      "symbol": "adaptive_max_error_retains_advanced_scale_and_mask_rules",
+      "scope": "Preserve advanced atol/rtol scaling, inactive/frozen masks and fail-closed measure validation under maximum acceptance."
     }
   ]
 }

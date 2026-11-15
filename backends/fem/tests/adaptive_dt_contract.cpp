@@ -592,6 +592,59 @@ void adaptive_mass_weighted_error_norm_uses_fem_measure() {
     check_near(metrics.weighted_rms_error, weighted, 0.0, "weighted RMS receipt reports RMS");
 }
 
+void adaptive_max_error_does_not_dilute_localized_error() {
+    const std::vector<double> error{
+        2.0e-7, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+    };
+    const std::vector<double> state{1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    fullmag::fem::AdaptiveErrorNormMetrics metrics{};
+    const double maximum = fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+        error, state, state, {1.0, 99.0}, {1u, 1u}, {}, 1.0e-7, 0.0, &metrics);
+
+    check_near(maximum, 2.0, 0.0, "localized max_err violation remains above tolerance");
+    check_near(metrics.weighted_rms_error, 0.2, 1e-15, "weighted RMS is retained as a diagnostic");
+    check(metrics.weighted_rms_error < 1.0, "the RMS counterexample alone would accept");
+    const auto decision = fullmag::fem::cpu_adaptive_step_decision(
+        canonical_policy(4), {1.0e-12, maximum, 1.0, false});
+    check(
+        decision.kind == fullmag::fem::adaptive::AdaptiveDecisionKind::retry,
+        "CPU must reject a localized violation even when the weighted RMS is below one");
+
+    check_near(
+        fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+            error, state, state, {99.0, 1.0}, {1u, 1u}, {}, 1.0e-7, 0.0),
+        maximum, 0.0, "redistributing FEM measure cannot change the maximum-error decision");
+    check_near(
+        fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+            error, state, state, {1.0e-27, 99.0e-27}, {1u, 1u}, {}, 1.0e-7, 0.0),
+        maximum, 0.0, "scaling physical volume units cannot dilute a local violation");
+}
+
+void adaptive_max_error_retains_advanced_scale_and_mask_rules() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const std::vector<double> error{0.62, 0.0, 0.0, 0.0, 0.0, 0.0, nan, nan, nan};
+    const std::vector<double> old_state{2.0, 0.0, 0.0, 1.0, 0.0, 0.0, nan, nan, nan};
+    const std::vector<double> high_state{3.0, 0.0, 0.0, 1.0, 0.0, 0.0, nan, nan, nan};
+    fullmag::fem::AdaptiveErrorNormMetrics metrics{};
+    const double maximum = fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+        error, old_state, high_state, {1.0, 99.0, nan}, {1u, 1u, 0u}, {},
+        0.01, 0.1, &metrics);
+    check(std::isfinite(maximum), "advanced maximum error must remain finite for valid active data");
+    check_near(maximum, 2.0, 1e-15, "advanced tolerances retain the old/high-order vector scale");
+    check_near(metrics.weighted_rms_error, 0.2, 1e-15, "advanced RMS remains separate from acceptance");
+    check(metrics.active_node_count == 2u, "inactive air data are excluded from both diagnostics");
+    check_near(
+        fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+            error, old_state, high_state, {1.0, 99.0, nan}, {1u, 1u, 0u}, {1u, 0u, 0u},
+            0.01, 0.1),
+        0.0, 0.0, "frozen nodes are excluded before reading their local error");
+    check(
+        !std::isfinite(fullmag::fem::compute_adaptive_error_norm_with_mass_metrics(
+            error, old_state, high_state, {0.0, 99.0, nan}, {1u, 1u, 0u}, {}, 0.01, 0.1)),
+        "invalid active FEM measure still fails closed instead of bypassing diagnostic validation");
+}
+
 void adaptive_mass_weighted_error_norm_excludes_airbox_and_frozen_nodes() {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const std::vector<double> err{
@@ -1059,6 +1112,8 @@ int main() {
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_uses_nodewise_vector_l2_scale();
     adaptive_mass_weighted_error_norm_uses_fem_measure();
+    adaptive_max_error_does_not_dilute_localized_error();
+    adaptive_max_error_retains_advanced_scale_and_mask_rules();
     adaptive_mass_weighted_error_norm_excludes_airbox_and_frozen_nodes();
     adaptive_mass_weighted_error_norm_fails_closed_on_invalid_measure();
     adaptive_relative_only_error_ignores_inactive_airbox_nodes();

@@ -2,7 +2,7 @@
 
 - Status: approved for implementation
 - Owners: Fullmag core
-- Last updated: 2026-07-31
+- Last updated: 2026-11-15
 - Related audit:
   - `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
 - Related ADRs:
@@ -238,6 +238,14 @@ pre-attempt state and `m_hi` is the unnormalized high-order candidate. Neither
 post-normalization state alone nor an artificial unit floor may replace this
 scale. Invalid sizes, nonfinite values, or a nonpositive resolved scale fail
 the attempt closed.
+
+FEM CPU and GPU use the maximum of these active, non-frozen nodewise errors
+for the acceptance decision. Lumped magnetic volume weights may additionally
+produce a weighted RMS diagnostic, but that diagnostic must not replace the
+maximum in either tolerance mode. A localized error above the requested
+budget requires rejection even when its node has a small integration weight.
+The native FEM CPU attempt trace identifies the executed acceptance norm as
+`max`; the separately reported weighted RMS remains diagnostic.
 
 ### 3.3 Order-aware adaptive controller
 
@@ -904,12 +912,15 @@ increment, while each relaxation must independently hold a strict certificate.
 | `backends/fem/cpu/mfem/interactions/effective_field.cpp` | `compute_effective_fields_for_magnetization` | Assemble the FEM CPU effective field consumed by the time integrator. |
 | `backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu` | `gpu_rk_compute_effective_field_for_magnetization` | Assemble the FEM GPU effective field for a magnetization state. |
 | `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm` | Compute the maximum active-node scaled embedded error. |
+| `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | `compute_adaptive_error_norm_with_mass_metrics` | Use maximum-error CPU acceptance while retaining FEM-measure weighted RMS diagnostics. |
 | `native/include/fullmag_adaptive_step_decision.hpp` | `decide` | Implement the shared order-aware scalar adaptive timestep decision. |
 | `crates/fullmag-ir/src/study.rs` | `AdaptiveTimeStepIR` | Preserve requested adaptive-timestep policy in ProblemIR. |
 | `crates/fullmag-ir/src/validation.rs` | `validate_adaptive_timestep` | Reject invalid adaptive settings and incompatible integrators. |
 | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Expose the public study-level solver authoring API. |
 | `backends/fem/tests/llg_rhs_contract.cpp` | `llg_rhs_uses_llg_gilbert_form_and_nodewise_damping` | Check the FEM LLG RHS convention and nodewise damping behavior. |
 | `backends/fem/tests/adaptive_dt_contract.cpp` | `adaptive_error_norm_uses_nodewise_vector_l2_scale` | Check the adaptive vector-error norm against nodewise golden expectations. |
+| `backends/fem/tests/adaptive_dt_contract.cpp` | `adaptive_max_error_does_not_dilute_localized_error` | Reject a localized tolerance violation even when its weighted RMS would accept. |
+| `backends/fem/tests/adaptive_dt_contract.cpp` | `adaptive_max_error_retains_advanced_scale_and_mask_rules` | Preserve advanced scaling, masks, and fail-closed diagnostics under maximum acceptance. |
 | `backends/fem/tests/adaptive_dt_contract.cpp` | `shared_golden_vectors_match_cpu_and_gpu_host_adapters` | Check shared adaptive-controller decisions across CPU and GPU host adapters. |
 | `packages/fullmag-py/tests/test_llg_solver_contract.py` | `test_adaptive_policy_preserves_omitted_initial` | Check that omitted initial timestep intent survives Python-to-IR lowering. |
 | `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md` | `DOC-ANCHOR:planned-dissipation-invariant` | Scientific dissipation requirement only; it does not claim production qualification. |

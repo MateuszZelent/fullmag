@@ -106,8 +106,8 @@ adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
 
 /*
  * Compute the maximum nodewise vector-normalized error for an adaptive explicit
- * RK step. This remains available as an explicit max-error/legacy reduction;
- * production adaptive FEM steps use the mass-weighted reduction below.
+ * RK step. Production adaptive FEM steps use the same maximum criterion with
+ * additional FEM-measure diagnostics through the wrapper below.
  *
  * Inputs are AoS magnetization vectors. For each active, non-frozen node, the
  * scale is `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is
@@ -134,6 +134,25 @@ double compute_adaptive_error_norm(
  * back to the unweighted maximum.
  */
 double compute_adaptive_error_norm_mass_weighted(
+    const std::vector<double> &err,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_new,
+    const std::vector<double> &node_weights,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    const std::vector<uint8_t> &frozen_node_mask,
+    double atol,
+    double rtol,
+    AdaptiveErrorNormMetrics *metrics = nullptr);
+
+/*
+ * Compute the production maximum scaled nodewise error while retaining the
+ * FEM-measure weighted RMS and active-measure diagnostics. The RMS is never
+ * the acceptance metric: a local violation cannot be diluted by a small
+ * integration weight. Invalid diagnostic inputs still fail the attempt
+ * closed. Both absolute max_err lowering and advanced atol/rtol use this
+ * maximum criterion; no tolerance mode is inferred from rtol.
+ */
+double compute_adaptive_error_norm_with_mass_metrics(
     const std::vector<double> &err,
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,

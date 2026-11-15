@@ -186,18 +186,18 @@ void rk_workspace_is_owned_by_integrator_module() {
             rk_explicit_step.find("fallback_attempt_cache") == std::string::npos,
         "adaptive RK step execution must not allocate a compatibility checkpoint");
     check(
-        rk_explicit_step.find("compute_adaptive_error_norm_mass_weighted(") !=
+        rk_explicit_step.find("compute_adaptive_error_norm_with_mass_metrics(") !=
             std::string::npos &&
             rk_explicit_step.find("ctx.integration_weights.mfem_lumped_mass") !=
                 std::string::npos &&
             rk_explicit_step.find("ctx.mesh.node_volumes") != std::string::npos,
-        "adaptive RK production path must consume canonical FEM measure weights");
+        "adaptive RK production maximum must retain canonical FEM measure diagnostics");
     check(
-        rk_explicit_step.find("error_norm_type = 2u") != std::string::npos &&
+        rk_explicit_step.find("error_norm_type = FULLMAG_FEM_SOLVER_ERROR_NORM_MAX") != std::string::npos &&
             rk_explicit_step.find("active_node_count = norm_metrics.active_node_count") !=
                 std::string::npos &&
             rk_explicit_step.find("normalization_denominator") != std::string::npos,
-        "adaptive RK production path must publish the native weighted-norm receipt");
+        "adaptive RK production path must report maximum acceptance with separate weighted diagnostics");
 }
 
 void integrator_source_files_document_module_boundaries() {
@@ -851,8 +851,10 @@ void cpu_stage_oersted_callback_rolls_back_adaptive_retries()
     check(!ctx.stepper.attempt_trace.records.empty(),
         "adaptive RK must retain an attempt record for the accepted retry");
     const auto &accepted_attempt = ctx.stepper.attempt_trace.records.back();
-    check(accepted_attempt.error_norm_type == 2u,
-        "adaptive RK attempt receipt must identify mass-weighted RMS");
+    check(accepted_attempt.error_norm_type == FULLMAG_FEM_SOLVER_ERROR_NORM_MAX,
+        "adaptive RK attempt receipt must identify maximum-error acceptance");
+    check(accepted_attempt.max_scaled_error <= 1.0,
+        "accepted RK retry must satisfy the maximum nodewise error budget");
     check(accepted_attempt.active_node_count == 1u,
         "adaptive RK attempt receipt must publish active node count");
     check_near(accepted_attempt.active_measure, 1.0, 0.0,
