@@ -32,6 +32,8 @@ CONTRACT_TARGETS = {
     "fem-cpu-pgbb-reuse": "fem_pgbb_accepted_cache_contract",
     "fem-cuda-object-average": "fem_cuda_object_average_contract",
     "fem-cpu-threads": "fem_cpu_threads_contract",
+    "fem-adaptive-dt": "fem_adaptive_dt_contract",
+    "fem-rk-explicit": "fem_rk_explicit_contract",
 }
 ALLOWED_CONTRACTS = frozenset(CONTRACT_TARGETS)
 PACKAGE_LIBRARY_ARTIFACT_PATH = "lib/libfullmag_fem.so"

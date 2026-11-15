@@ -107,8 +107,14 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
             docker_volume_dev._native_contracts(["fem-demag-poisson"]),
             ("fem-demag-poisson",),
         )
+        for contract_id in ("fem-adaptive-dt", "fem-rk-explicit"):
+            with self.subTest(contract_id=contract_id):
+                self.assertEqual(
+                    docker_volume_dev._native_contracts([contract_id]),
+                    (contract_id,),
+                )
         for values in (
-            ["unknown-contract"],
+            ["fem-arbitrary-target"],
             ["fem-cuda-activity-trace", "fem-demag-poisson"],
             ["fem-cuda-activity-trace", "fem-cuda-activity-trace"],
             "fem-cuda-activity-trace",

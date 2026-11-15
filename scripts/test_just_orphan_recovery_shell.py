@@ -130,6 +130,7 @@ class DockerDevelopmentShellBoundaryTests(unittest.TestCase):
                     self.assertEqual(json.loads(result.stdout)[-2:],
                                      ["--native-contract", "fem-demag-poisson"])
         for suffix in (" --native-contract 'unknown-contract'",
+                       " --native-contract 'fem-arbitrary-target'",
                        " --native-contract 'fem-demag-poisson'; printf injected",
                        " --native-contract 'fem-demag-poisson' --native-contract 'fem-demag-poisson'"):
             with self.subTest(suffix=suffix):
@@ -143,6 +144,15 @@ class DockerDevelopmentShellBoundaryTests(unittest.TestCase):
             suffix=" --native-contract '" + contract + "'"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)[-2:], ["--native-contract", contract])
+
+    def test_adaptive_dt_and_rk_explicit_contracts_dispatch_as_fixed_argv(self):
+        for contract in ("fem-adaptive-dt", "fem-rk-explicit"):
+            with self.subTest(contract=contract):
+                result = self.dispatch(self.recipe(source_root="/selected/worktree",
+                    suffix=" --native-contract '" + contract + "'"))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)[-2:],
+                                 ["--native-contract", contract])
 
     def test_rejects_retired_host_receipt_recreate_recipe(self):
         recipe = ('python "/ignored/checkout/scripts/docker_dev.py" --repo-root "/ignored/checkout" '

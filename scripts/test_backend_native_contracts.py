@@ -184,6 +184,14 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-cuda-snapshot", "fem_cuda_snapshot_contract")
 
+    def test_adaptive_dt_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-adaptive-dt", "fem_adaptive_dt_contract")
+
+    def test_rk_explicit_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-rk-explicit", "fem_rk_explicit_contract")
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):
@@ -308,8 +316,11 @@ class BackendNativeContractsTests(unittest.TestCase):
         self.assertEqual(normalize_contracts(None), ())
         self.assertEqual(normalize_contracts([]), ())
         self.assertEqual(normalize_contracts([FEM_DEMAG_POISSON]), (FEM_DEMAG_POISSON,))
+        for contract_id in ("fem-adaptive-dt", "fem-rk-explicit"):
+            with self.subTest(contract_id=contract_id):
+                self.assertEqual(normalize_contracts([contract_id]), (contract_id,))
         with self.assertRaisesRegex(ValueError, "unknown native contract"):
-            normalize_contracts(["fem-other"])
+            normalize_contracts(["fem-arbitrary-target"])
         with self.assertRaisesRegex(ValueError, "duplicate native contract"):
             normalize_contracts([FEM_DEMAG_POISSON, FEM_DEMAG_POISSON])
         with self.assertRaisesRegex(ValueError, "sequence"):
