@@ -28,6 +28,9 @@ LEGACY_KINDS = ("driver_api", "runtime_api", "kernel", "memcpy", "memset", "sync
 KINDS = (*LEGACY_KINDS, "cuda_event_metadata")
 LOSS_FIELDS = ("dropped_records", "buffer_starvations", "unknown_records", "truncated_names", "incomplete_records", "limit_flags")
 COUNTERS = (*LOSS_FIELDS, "records_written", "bytes_written", "api_errors", "io_errors")
+WINDOW_REASONS = {"completed", "start_boundary_missed", "invalid_observation", "start_failed",
+    "stop_failed", "solver_finished_before_start", "solver_finished_before_end"}
+PRESTART_REASONS = {"start_boundary_missed", "solver_finished_before_start"}
 
 
 class TraceError(ValueError):
@@ -86,6 +89,111 @@ def document(path):
         return value
 
 
+def trace_receipt(root):
+    candidates = [
+        (root / "worker_cuda_trace.v1.json", "worker_cuda_trace.v1"),
+        (root / "worker_cuda_trace.v2.json", "worker_cuda_trace.v2"),
+    ]
+    present = [(path, version) for path, version in candidates if os.path.lexists(path)]
+    require(len(present) == 1, "expected exactly one trace receipt (v1 or v2)")
+    path, version = present[0]
+    receipt = document(path)
+    require(receipt.get("schema_version") == version, "trace receipt filename/schema mismatch")
+    return receipt, version
+
+
+def validate_v2_window(receipt, config, status, errors):
+    requested = config["accepted_step_window"]
+    window = receipt.get("accepted_step_window")
+    fields = {"start_after_step", "end_after_step", "observed_start_step", "observed_end_step",
+        "observed_start_time_s", "observed_end_time_s", "completed", "completion_reason",
+        "capture_wall_seconds"}
+    require(isinstance(window, dict) and set(window) == fields, "invalid accepted-step window receipt")
+    start_after = uint(window["start_after_step"], "window start step")
+    end_after = uint(window["end_after_step"], "window end step")
+    require(start_after == requested["start_after_step"] and end_after == requested["end_after_step"],
+        "accepted-step window differs from config")
+    require(start_after >= 1 and start_after < end_after and end_after - start_after <= 1000,
+        "invalid accepted-step window bounds")
+    observed_start = window["observed_start_step"]
+    observed_end = window["observed_end_step"]
+    if observed_start is not None:
+        observed_start = uint(observed_start, "observed start step")
+    if observed_end is not None:
+        observed_end = uint(observed_end, "observed end step")
+    observed_start_time = window["observed_start_time_s"]
+    observed_end_time = window["observed_end_time_s"]
+    for label, step, value in (("start", observed_start, observed_start_time),
+                               ("end", observed_end, observed_end_time)):
+        if value is not None:
+            require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
+                f"invalid observed {label} time")
+        require((step is None) == (value is None), f"observed {label} step/time must both be null or present")
+    if observed_start is not None:
+        require(observed_start == start_after, "observed start step does not match requested boundary")
+    if observed_end is not None:
+        require(observed_start is not None and observed_end == end_after,
+            "observed end boundary does not match requested window")
+        require(observed_end_time >= observed_start_time, "observed end time precedes start time")
+    completed = window["completed"]
+    require(type(completed) is bool, "invalid accepted-step completion flag")
+    reason = window["completion_reason"]
+    require(isinstance(reason, str) and reason in WINDOW_REASONS, "invalid accepted-step completion reason")
+    capture_wall = window["capture_wall_seconds"]
+    require(type(capture_wall) in (float, int) and math.isfinite(capture_wall) and capture_wall >= 0,
+        "invalid capture wall time")
+    if completed:
+        require(reason == "completed" and observed_start == start_after and observed_end == end_after
+            and observed_start_time is not None and observed_end_time is not None,
+            "completed window does not have exact observed start/end boundaries")
+    else:
+        require(reason != "completed", "incomplete window has completed reason")
+    if reason in PRESTART_REASONS or reason == "start_failed":
+        require(observed_start is None and observed_end is None and capture_wall == 0,
+            "pre-start outcome contains observed boundaries or capture time")
+    if reason == "invalid_observation":
+        if observed_start is None:
+            require(observed_end is None and capture_wall == 0 and status == "partial",
+                "pre-start invalid observation has inconsistent outcome")
+        else:
+            require(observed_start == start_after and observed_start_time is not None
+                and observed_end is None and status == "partial",
+                "invalid observation after native start has inconsistent window bounds")
+    if reason == "solver_finished_before_end":
+        require(observed_start == start_after and observed_start_time is not None and observed_end is None
+            and status == "partial", "early-end window has inconsistent observed bounds/status")
+    if reason == "start_failed":
+        require(status == "failed" and bool(errors), "failed start must have failed status and errors")
+    if reason == "stop_failed":
+        require(status == "failed" and bool(errors) and observed_start == start_after
+            and observed_start_time is not None and observed_end is None,
+            "failed stop must preserve only its successful start boundary and errors")
+    if reason in PRESTART_REASONS:
+        require(status == "partial", "pre-start partial capture has inconsistent outcome")
+    if observed_start is None:
+        require(capture_wall == 0, "capture wall time is nonzero without a successful native start")
+    return window
+
+
+def hash_trace_without_analysis(path, size, expected_sha256, max_bytes):
+    digest = hashlib.sha256()
+    total = 0
+    with regular(path, max_bytes) as (stream, actual_size):
+        require(actual_size == size, "trace size mismatch")
+        before = os.fstat(stream.fileno())
+        while raw := stream.read(1024 * 1024):
+            total += len(raw)
+            require(total <= size, "trace changed during reading")
+            digest.update(raw)
+        require(total == size, "trace changed while reading")
+        after = os.fstat(stream.fileno())
+        require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+            "trace changed while reading")
+    require(digest.hexdigest() == expected_sha256, "trace hash mismatch")
+    return digest.hexdigest()
+
+
 def union_ns(intervals):
     total = 0
     end = 0
@@ -98,9 +206,8 @@ def union_ns(intervals):
 
 def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uuid: str):
     root = Path(root)
-    receipt = document(root / "worker_cuda_trace.v1.json")
+    receipt, receipt_version = trace_receipt(root)
     started = document(root / "worker_execution_started.v1.json")
-    require(receipt.get("schema_version") == "worker_cuda_trace.v1", "unsupported trace receipt")
     identity = receipt.get("identity")
     require(isinstance(identity, dict) and identity == started.get("identity"), "trace belongs to a different started attempt")
     require(identity.get("schema_version") == "fullmag.accepted_worker_execution.v1", "unsupported attempt identity")
@@ -109,16 +216,93 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     require(type(worker_pid) is int and worker_pid > 0 and receipt.get("worker_pid") == worker_pid, "unexpected worker PID")
     require(bool(gpu_uuid) and receipt.get("gpu_uuid") == gpu_uuid, "unexpected GPU UUID")
     config = receipt.get("config")
-    require(isinstance(config, dict) and set(config) == {"schema_version", "max_bytes", "max_duration_ms"}, "invalid trace config")
-    require(config["schema_version"] == "accepted_cuda_trace.v1", "unsupported trace config")
+    if receipt_version == "worker_cuda_trace.v1":
+        require("accepted_step_window" not in receipt, "v1 trace receipt cannot contain an accepted-step window")
+        require(isinstance(config, dict) and set(config) == {"schema_version", "max_bytes", "max_duration_ms"},
+            "invalid trace config")
+        require(config["schema_version"] == "accepted_cuda_trace.v1", "unsupported trace config")
+        window = None
+    else:
+        require(isinstance(config, dict) and set(config) == {
+            "schema_version", "max_bytes", "max_duration_ms", "accepted_step_window"}, "invalid trace config")
+        require(config["schema_version"] == "accepted_cuda_trace.v2", "unsupported trace config")
+        requested_window = config["accepted_step_window"]
+        require(isinstance(requested_window, dict) and set(requested_window) == {
+            "start_after_step", "end_after_step"}, "invalid accepted-step window config")
+        requested_start = uint(requested_window["start_after_step"], "window start step")
+        requested_end = uint(requested_window["end_after_step"], "window end step")
+        require(requested_start >= 1 and requested_start < requested_end
+            and requested_end - requested_start <= 1000, "invalid accepted-step window bounds")
     require(4096 <= uint(config["max_bytes"], "max_bytes") <= MAX_BYTES, "invalid byte budget")
     require(1 <= uint(config["max_duration_ms"], "max_duration_ms") <= 120000, "invalid time budget")
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     require(receipt.get("config_sha256") == config_hash, "trace config digest mismatch")
+    status = receipt.get("status")
+    solver_outcome = receipt.get("solver_outcome")
+    require(isinstance(status, str) and status in {"complete", "partial", "failed"}, "invalid capture status")
+    require(isinstance(solver_outcome, str)
+        and solver_outcome in {"completed", "cancelled", "failed", "aborted", "not_started"},
+        "invalid solver outcome")
+    errors = receipt.get("errors")
+    require(isinstance(errors, list) and all(isinstance(error, str) for error in errors), "invalid capture errors")
+    if receipt_version == "worker_cuda_trace.v2":
+        window = validate_v2_window(receipt, config, receipt["status"], errors)
     require(receipt.get("trace_file") == "worker_cuda_trace.v1.ndjson", "unexpected trace filename")
     size = uint(receipt.get("trace_size_bytes"), "trace_size_bytes")
     require(size <= config["max_bytes"], "trace exceeds its budget")
+    if receipt_version == "worker_cuda_trace.v2":
+        require("native" in receipt, "missing native trace result")
     native = receipt.get("native")
+    if receipt_version == "worker_cuda_trace.v2" and (
+        window["completion_reason"] in PRESTART_REASONS
+        or window["completion_reason"] == "start_failed"
+        or (window["completion_reason"] == "invalid_observation" and window["observed_start_step"] is None)
+    ):
+        require(native is None, "pre-start window must have a null native result")
+    timing = {}
+    for key in ("start_wall_seconds", "stop_wall_seconds", "total_wall_seconds"):
+        value = receipt.get(key)
+        require(type(value) in (float, int) and math.isfinite(value) and value >= 0, "invalid host timing")
+        timing[key] = value
+    if receipt_version == "worker_cuda_trace.v2":
+        timing["capture_wall_seconds"] = window["capture_wall_seconds"]
+    if native is None:
+        require(receipt_version == "worker_cuda_trace.v2", "missing native trace result")
+        reason = window["completion_reason"]
+        require(reason in PRESTART_REASONS or reason == "start_failed"
+            or reason == "stop_failed"
+            or (reason == "invalid_observation" and window["observed_start_step"] is None),
+            "native result is null outside a pre-start outcome")
+        trace_digest = hash_trace_without_analysis(root / receipt["trace_file"], size,
+            receipt.get("trace_sha256"), config["max_bytes"])
+        if reason in PRESTART_REASONS or reason == "invalid_observation":
+            require(receipt["status"] == "partial" and size == 0
+                and trace_digest == hashlib.sha256(b"").hexdigest(),
+                "pre-start partial must contain an empty authenticated trace")
+        else:
+            require(receipt["status"] == "failed" and bool(errors),
+                "native start/stop failure must preserve failed status and errors")
+        scope = {"kind": "accepted_step_window", **window}
+        no_native_reason = "native_stop_failed" if reason == "stop_failed" else "native_capture_not_started"
+        interpretation = ("Native stop failed; trace bytes are authenticated but no GPU metrics are derived."
+            if reason == "stop_failed" else
+            "No native capture started; trace bytes are authenticated but no GPU metrics are derived.")
+        return {"schema_version": "accepted_cuda_trace_analysis.v1", "identity": identity,
+            "gpu_uuid": gpu_uuid, "worker_pid": worker_pid, "trace_sha256": trace_digest,
+            "config_sha256": config_hash, "status": receipt["status"],
+            "solver_outcome": receipt["solver_outcome"], "capture_scope": scope,
+            "capture_window_ns": None, "records": None, "clipped_records": None,
+            "timing_qualification": {"status": "not_verified", "clock_source": None,
+                "reasons": ["capture_not_complete", no_native_reason],
+                "evidence": {"capture_status": receipt["status"],
+                    "timestamp_callback_registered": None, "capture_duration_ns": None,
+                    "capture_wall_seconds": window["capture_wall_seconds"],
+                    "duration_tolerance_ns": 1_000_000, "out_of_bounds_timed_records": None,
+                    "max_before_ns": None, "max_after_ns": None, "invalid_timed_records": None}},
+            "native": None, "errors": errors, "host_timing": timing, "kinds": None, "names": None,
+            "observed_gpu_union_ns": None, "observed_gpu_union_by_device_ns": None,
+            "host_api_union_ns": None,
+            "interpretation": interpretation}
     require(isinstance(native, dict) and isinstance(native.get("stats"), dict), "missing native trace result")
     stats = native["stats"]
     api_version = stats.get("cupti_version")
@@ -130,19 +314,13 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     start = uint(stats.get("start_timestamp_ns"), "capture start")
     end = uint(stats.get("end_timestamp_ns"), "capture end")
     require(0 < start <= end, "invalid capture window")
-    require(receipt.get("status") in {"complete", "partial", "failed"}, "invalid capture status")
-    require(receipt.get("solver_outcome") in {"completed", "cancelled", "failed", "aborted", "not_started"}, "invalid solver outcome")
-    errors = receipt.get("errors")
-    require(isinstance(errors, list) and all(isinstance(error, str) for error in errors), "invalid capture errors")
     if receipt["status"] == "complete":
         require(not errors and native.get("status_code") == 0 and not stats["api_errors"] and not stats["io_errors"]
             and not any(stats[key] for key in LOSS_FIELDS) and stats["records_written"] > 0
             and receipt["solver_outcome"] not in {"aborted", "not_started"}, "complete trace contains loss or failure")
-    timing = {}
-    for key in ("start_wall_seconds", "stop_wall_seconds", "total_wall_seconds"):
-        value = receipt.get(key)
-        require(type(value) in (float, int) and math.isfinite(value) and value >= 0, "invalid host timing")
-        timing[key] = value
+        if receipt_version == "worker_cuda_trace.v2":
+            require(stats["cupti_version"] == 28 and window["completed"],
+                "complete v2 capture requires API28 and completed accepted-step window")
 
     intervals = defaultdict(list)
     names = defaultdict(dict)
@@ -269,30 +447,40 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
         timing_reasons.append("timed_records_outside_capture_window")
     if invalid:
         timing_reasons.append("invalid_timed_records")
-    if capture_duration_ns > timing["total_wall_seconds"] * 1_000_000_000 + duration_tolerance_ns:
+    host_window_seconds = (timing["total_wall_seconds"] if receipt_version == "worker_cuda_trace.v1"
+        else window["capture_wall_seconds"])
+    if capture_duration_ns > host_window_seconds * 1_000_000_000 + duration_tolerance_ns:
         timing_reasons.append("capture_duration_exceeds_host_window")
+    timing_evidence = {"capture_status": receipt["status"],
+        "timestamp_callback_registered": timestamp_callback_registered,
+        "capture_duration_ns": capture_duration_ns,
+        "duration_tolerance_ns": duration_tolerance_ns,
+        "out_of_bounds_timed_records": out_of_bounds,
+        "max_before_ns": max_before_ns, "max_after_ns": max_after_ns,
+        "invalid_timed_records": invalid}
+    if receipt_version == "worker_cuda_trace.v1":
+        timing_evidence["total_wall_seconds"] = timing["total_wall_seconds"]
+        capture_scope = {"kind": "whole_runner"}
+    else:
+        timing_evidence["capture_wall_seconds"] = window["capture_wall_seconds"]
+        capture_scope = {"kind": "accepted_step_window", **window}
     timing_qualification = {"status": "passed" if not timing_reasons else "not_verified",
-        "clock_source": clock_source, "reasons": timing_reasons,
-        "evidence": {"capture_status": receipt["status"],
-            "timestamp_callback_registered": timestamp_callback_registered,
-            "capture_duration_ns": capture_duration_ns,
-            "total_wall_seconds": timing["total_wall_seconds"],
-            "duration_tolerance_ns": duration_tolerance_ns,
-            "out_of_bounds_timed_records": out_of_bounds,
-            "max_before_ns": max_before_ns, "max_after_ns": max_after_ns,
-            "invalid_timed_records": invalid}}
+        "clock_source": clock_source, "reasons": timing_reasons, "evidence": timing_evidence}
     for kind, record in counts.items():
         record["union_ns"] = union_ns(intervals[kind])
+    interpretation = "Observed interval unions are not hardware utilization. API, GPU and synchronization times overlap. Activity time aggregates remain clipped to the native capture window and are unqualified unless timing_qualification.status is 'passed'; consumers must gate on that status. Host timings exclude callback overhead; measure it with matched on/off runs."
+    if receipt_version == "worker_cuda_trace.v2":
+        interpretation += " capture_scope identifies the accepted-step window; timing uses capture_wall_seconds, not wrapper total time."
     return {"schema_version": "accepted_cuda_trace_analysis.v1", "identity": identity,
         "gpu_uuid": gpu_uuid, "worker_pid": worker_pid, "trace_sha256": digest.hexdigest(),
         "config_sha256": config_hash, "status": receipt["status"], "solver_outcome": receipt["solver_outcome"],
-        "capture_window_ns": end-start, "records": count, "clipped_records": clipped,
+        "capture_scope": capture_scope, "capture_window_ns": end-start, "records": count, "clipped_records": clipped,
         "timing_qualification": timing_qualification,
         "native": native, "errors": errors, "host_timing": timing, "kinds": dict(counts), "names": dict(names),
         "observed_gpu_union_ns": union_ns(pair for values in devices.values() for pair in values),
         "observed_gpu_union_by_device_ns": {str(device): union_ns(values) for device, values in devices.items()},
         "host_api_union_ns": union_ns(intervals["runtime_api"] + intervals["driver_api"]),
-        "interpretation": "Observed interval unions are not hardware utilization. API, GPU and synchronization times overlap. Activity time aggregates remain clipped to the native capture window and are unqualified unless timing_qualification.status is 'passed'; consumers must gate on that status. Host timings exclude callback overhead; measure it with matched on/off runs."}
+        "interpretation": interpretation}
 
 
 def main(argv=None):

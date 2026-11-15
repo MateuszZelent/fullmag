@@ -57,7 +57,9 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         (self.root / "worker_execution_started.v1.json").write_bytes(encoded({"identity": self.identity}))
 
     def save_receipt(self):
-        (self.root / "worker_cuda_trace.v1.json").write_bytes(encoded(self.receipt))
+        version = self.receipt["schema_version"]
+        name = "worker_cuda_trace.v2.json" if version == "worker_cuda_trace.v2" else "worker_cuda_trace.v1.json"
+        (self.root / name).write_bytes(encoded(self.receipt))
 
     def read(self, **overrides):
         return analyze(self.root, **({"run_id": "run-1", "attempt_id": "attempt-1", "worker_pid": 42, "gpu_uuid": "GPU-test"} | overrides))
@@ -65,9 +67,41 @@ class AcceptedCudaTraceTests(unittest.TestCase):
     def use_attested_clock(self, clock_source="clock_monotonic"):
         self.receipt["native"]["stats"]["cupti_version"] = 28
         self.header["cupti_api_version"] = 28
-        self.header["activity_kinds"].append("cuda_event_metadata")
+        if "cuda_event_metadata" not in self.header["activity_kinds"]:
+            self.header["activity_kinds"].append("cuda_event_metadata")
         self.header["clock_source"] = clock_source
         self.header["timestamp_callback_registered"] = True
+
+    def configure_v2(self):
+        window = {"start_after_step": 16, "end_after_step": 32}
+        config = {"schema_version": "accepted_cuda_trace.v2", "max_bytes": 67108864,
+                  "max_duration_ms": 60000, "accepted_step_window": window}
+        self.receipt["schema_version"] = "worker_cuda_trace.v2"
+        self.receipt.update(status="complete", solver_outcome="completed", errors=[])
+        self.receipt["config"] = config
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(config)).hexdigest()
+        self.receipt["accepted_step_window"] = {
+            **window, "observed_start_step": 16, "observed_end_step": 32,
+            "observed_start_time_s": 1.0e-12, "observed_end_time_s": 2.0e-12,
+            "completed": True, "completion_reason": "completed", "capture_wall_seconds": 1.2,
+        }
+        self.receipt["native"] = {"status_code": 0, "stats": {
+            "schema_version": 1, "cupti_version": 28, "start_timestamp_ns": 1_000_000_000,
+            "end_timestamp_ns": 2_000_000_000,
+            **{key: 0 for key in ("records_written", "bytes_written", "dropped_records",
+                "buffer_starvations", "unknown_records", "truncated_names", "incomplete_records",
+                "api_errors", "io_errors", "limit_flags")}}}
+        self.use_attested_clock()
+        self.receipt["start_wall_seconds"] = 0.1
+        self.receipt["stop_wall_seconds"] = 0.1
+        self.receipt["total_wall_seconds"] = 2.0
+
+    def publish_without_capture(self, trace_bytes=b""):
+        (self.root / self.receipt["trace_file"]).write_bytes(trace_bytes)
+        self.receipt["trace_size_bytes"] = len(trace_bytes)
+        self.receipt["trace_sha256"] = hashlib.sha256(trace_bytes).hexdigest()
+        self.save_receipt()
+        (self.root / "worker_execution_started.v1.json").write_bytes(encoded({"identity": self.identity}))
 
     def set_capture_window(self, start, end, total_wall_seconds):
         self.receipt["native"]["stats"].update(start_timestamp_ns=start, end_timestamp_ns=end)
@@ -77,6 +111,14 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.publish([self.event("kernel", 110, 180)])
         api24 = self.read()
         self.assertEqual(api24["status"], "complete")
+        self.assertEqual(api24["capture_scope"], {"kind": "whole_runner"})
+        self.assertEqual(set(api24["host_timing"]), {"start_wall_seconds", "stop_wall_seconds", "total_wall_seconds"})
+        self.assertEqual(api24["interpretation"], (
+            "Observed interval unions are not hardware utilization. API, GPU and synchronization times overlap. "
+            "Activity time aggregates remain clipped to the native capture window and are unqualified unless "
+            "timing_qualification.status is 'passed'; consumers must gate on that status. Host timings exclude "
+            "callback overhead; measure it with matched on/off runs."
+        ))
         self.assertEqual(api24["timing_qualification"]["status"], "not_verified")
         self.assertIsNone(api24["timing_qualification"]["clock_source"])
 
@@ -86,6 +128,7 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.publish([self.event("kernel", 110, 180)])
         api28 = self.read()
         self.assertEqual(api28["status"], "complete")
+        self.assertEqual(api28["capture_scope"], {"kind": "whole_runner"})
         self.assertEqual(api28["timing_qualification"]["status"], "not_verified")
         self.assertIsNone(api28["timing_qualification"]["clock_source"])
 
@@ -359,6 +402,215 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.receipt["native"]["stats"]["incomplete_records"] = 1
         self.receipt["status"] = "partial"; self.save_receipt()
         self.assertEqual(self.read()["observed_gpu_union_ns"], 0)
+
+    def test_v2_complete_window_is_explicit_and_uses_capture_wall_denominator(self):
+        self.configure_v2()
+        self.receipt["accepted_step_window"]["capture_wall_seconds"] = 0.5
+        self.receipt["native"]["stats"].update(start_timestamp_ns=1_000_000_000,
+                                                  end_timestamp_ns=2_000_000_000)
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+
+        result = self.read()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["capture_scope"], {
+            "kind": "accepted_step_window", "start_after_step": 16, "end_after_step": 32,
+            "observed_start_step": 16, "observed_end_step": 32,
+            "observed_start_time_s": 1.0e-12, "observed_end_time_s": 2.0e-12,
+            "completed": True, "completion_reason": "completed", "capture_wall_seconds": 0.5,
+        })
+        self.assertEqual(result["host_timing"]["total_wall_seconds"], 2.0)
+        self.assertEqual(result["host_timing"]["capture_wall_seconds"], 0.5)
+        self.assertEqual(result["timing_qualification"]["status"], "not_verified")
+        self.assertIn("capture_duration_exceeds_host_window", result["timing_qualification"]["reasons"])
+        self.assertEqual(result["timing_qualification"]["evidence"]["capture_wall_seconds"], 0.5)
+        self.assertNotIn("total_wall_seconds", result["timing_qualification"]["evidence"])
+        self.assertEqual(result["records"], 1)
+
+    def test_v2_partial_before_window_with_native_null_has_no_gpu_metrics(self):
+        self.configure_v2()
+        self.receipt.update(status="partial", native=None)
+        self.receipt["accepted_step_window"].update(
+            observed_start_step=None, observed_end_step=None,
+            observed_start_time_s=None, observed_end_time_s=None,
+            completed=False, completion_reason="solver_finished_before_start", capture_wall_seconds=0.0,
+        )
+        self.publish_without_capture()
+
+        result = self.read()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["capture_scope"]["kind"], "accepted_step_window")
+        self.assertEqual(result["timing_qualification"]["status"], "not_verified")
+        self.assertIsNone(result["native"])
+        self.assertIsNone(result["records"])
+        self.assertIsNone(result["kinds"])
+        self.assertIsNone(result["names"])
+        self.assertIsNone(result["observed_gpu_union_ns"])
+
+        self.configure_v2()
+        self.receipt.update(status="partial", native=None, errors=["invalid step clock"])
+        self.receipt["accepted_step_window"].update(
+            observed_start_step=None, observed_end_step=None,
+            observed_start_time_s=None, observed_end_time_s=None,
+            completed=False, completion_reason="invalid_observation", capture_wall_seconds=0.0,
+        )
+        self.publish_without_capture()
+        result = self.read()
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["errors"], ["invalid step clock"])
+        self.assertIsNone(result["records"])
+
+    def test_v2_early_end_or_invalid_observation_after_start_remains_partial(self):
+        for reason in ("solver_finished_before_end", "invalid_observation"):
+            with self.subTest(reason=reason):
+                self.configure_v2()
+                self.receipt.update(status="partial")
+                self.receipt["accepted_step_window"].update(
+                    observed_end_step=None, observed_end_time_s=None,
+                    completed=False, completion_reason=reason, capture_wall_seconds=0.25,
+                )
+                self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+                result = self.read()
+                self.assertEqual(result["status"], "partial")
+                self.assertEqual(result["capture_scope"]["completion_reason"], reason)
+                self.assertEqual(result["records"], 1)
+                self.assertEqual(result["timing_qualification"]["status"], "not_verified")
+
+    def test_v2_failed_native_start_authenticates_bytes_without_gpu_claims(self):
+        self.configure_v2()
+        self.receipt.update(status="failed", native=None, errors=["native start failed"])
+        self.receipt["accepted_step_window"].update(
+            observed_start_step=None, observed_end_step=None,
+            observed_start_time_s=None, observed_end_time_s=None,
+            completed=False, completion_reason="start_failed", capture_wall_seconds=0.0,
+        )
+        self.publish_without_capture(b"partial initialization evidence")
+
+        result = self.read()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["errors"], ["native start failed"])
+        self.assertIsNone(result["records"])
+        self.assertIsNone(result["observed_gpu_union_ns"])
+
+    def test_v2_failed_native_stop_null_stats_reports_scope_without_gpu_metrics(self):
+        self.configure_v2()
+        self.receipt.update(status="failed", native=None, errors=["native stop failed"])
+        self.receipt["accepted_step_window"].update(
+            observed_end_step=None, observed_end_time_s=None,
+            completed=False, completion_reason="stop_failed", capture_wall_seconds=0.25,
+        )
+        self.publish_without_capture(b"partial trace bytes from failed stop")
+
+        result = self.read()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["capture_scope"]["observed_start_step"], 16)
+        self.assertIsNone(result["capture_scope"]["observed_end_step"])
+        self.assertEqual(result["capture_scope"]["capture_wall_seconds"], 0.25)
+        self.assertIn("native_stop_failed", result["timing_qualification"]["reasons"])
+        self.assertEqual(result["errors"], ["native stop failed"])
+        self.assertIsNone(result["native"])
+        self.assertIsNone(result["records"])
+        self.assertIsNone(result["observed_gpu_union_ns"])
+
+        trace_path = self.root / self.receipt["trace_file"]
+        trace_path.write_bytes(b"x" * len(b"partial trace bytes from failed stop"))
+        with self.assertRaisesRegex(TraceError, "trace hash mismatch"):
+            self.read()
+
+    def test_v2_rejects_config_window_digest_and_duplicate_receipt_mismatches(self):
+        self.configure_v2()
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        self.receipt["accepted_step_window"]["end_after_step"] = 33
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "window differs from config"):
+            self.read()
+
+        self.configure_v2()
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        self.receipt["config"]["accepted_step_window"]["end_after_step"] = 33
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "config digest mismatch"):
+            self.read()
+
+        self.configure_v2()
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        (self.root / "worker_cuda_trace.v1.json").write_bytes(encoded(self.receipt))
+        with self.assertRaisesRegex(TraceError, "exactly one trace receipt"):
+            self.read()
+
+    def test_v2_config_and_capture_wall_reject_open_fields_and_noninteger_bounds(self):
+        cases = [
+            ({"config_extra": True}, "invalid trace config"),
+            ({"window_extra": True}, "invalid accepted-step window config"),
+            ({"receipt_window_extra": True}, "invalid accepted-step window receipt"),
+            ({"receipt_window_missing": True}, "invalid accepted-step window receipt"),
+            ({"start_after_step": True}, "invalid window start step"),
+            ({"end_after_step": 32.0}, "invalid window end step"),
+            ({"end_after_step": 16}, "invalid accepted-step window bounds"),
+            ({"end_after_step": 1017}, "invalid accepted-step window bounds"),
+            ({"capture_wall_seconds": True}, "invalid capture wall time"),
+            ({"observed_end_step": True}, "invalid observed end step"),
+            ({"observed_start_time_s": True}, "invalid observed start time"),
+            ({"completed": 1}, "invalid accepted-step completion flag"),
+            ({"completion_reason": []}, "invalid accepted-step completion reason"),
+        ]
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                self.configure_v2()
+                self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+                config = self.receipt["config"]
+                window = self.receipt["accepted_step_window"]
+                if "config_extra" in changes:
+                    config["unexpected"] = changes["config_extra"]
+                elif "window_extra" in changes:
+                    config["accepted_step_window"]["unexpected"] = changes["window_extra"]
+                elif "receipt_window_extra" in changes:
+                    window["unexpected"] = changes["receipt_window_extra"]
+                elif "receipt_window_missing" in changes:
+                    window.pop("observed_end_time_s")
+                elif any(key in {"capture_wall_seconds", "observed_end_step", "observed_start_time_s",
+                                 "completed", "completion_reason"} for key in changes):
+                    window.update(changes)
+                else:
+                    config["accepted_step_window"].update(changes)
+                self.receipt["config_sha256"] = hashlib.sha256(encoded(config)).hexdigest()
+                self.save_receipt()
+                with self.assertRaisesRegex(TraceError, expected):
+                    self.read()
+
+    def test_v1_config_continues_to_forbid_an_accepted_step_window(self):
+        self.publish([self.event("kernel", 110, 180)])
+        self.receipt["config"]["accepted_step_window"] = {"start_after_step": 16, "end_after_step": 32}
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(self.receipt["config"])).hexdigest()
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "invalid trace config"):
+            self.read()
+
+        self.receipt["config"] = {"schema_version": "accepted_cuda_trace.v1",
+            "max_bytes": 67108864, "max_duration_ms": 60000}
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(self.receipt["config"])).hexdigest()
+        self.receipt["accepted_step_window"] = {"start_after_step": 16, "end_after_step": 32}
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "v1 trace receipt cannot contain"):
+            self.read()
+
+    def test_v2_complete_with_missed_boundary_or_trace_loss_is_rejected(self):
+        self.configure_v2()
+        self.receipt["accepted_step_window"]["observed_end_step"] = 31
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        with self.assertRaisesRegex(TraceError, "end boundary"):
+            self.read()
+
+        self.configure_v2()
+        self.receipt["native"]["stats"]["dropped_records"] = 1
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        with self.assertRaisesRegex(TraceError, "complete trace contains loss or failure"):
+            self.read()
+
+        self.configure_v2()
+        self.receipt["native"]["stats"]["cupti_version"] = 24
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+        with self.assertRaisesRegex(TraceError, "complete v2 capture requires API28"):
+            self.read()
 
     def test_long_escaped_kernel_names_fit_bounded_lines(self):
         name = "\x01" * 2048

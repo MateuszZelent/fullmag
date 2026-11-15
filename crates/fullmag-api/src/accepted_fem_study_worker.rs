@@ -202,6 +202,9 @@ pub(crate) fn execute_accepted_fem_attempt(
         interrupt_requested,
         initial_observation_policy(&prepared.resolved_device, field_sampling_interval),
         |update| {
+            if let Some(capture) = &mut cuda_trace {
+                capture.observe_accepted_step(&update.stats);
+            }
             profile.observe(&update.stats);
             live_observation.observe(&update);
             StepAction::Continue
@@ -796,6 +799,28 @@ mod source_contract_tests {
         assert!(source.contains("AcceptedFemExecutionOutcome::Cancelled"));
         assert!(source.contains("FemStaticPbcLane attestation"));
         assert!(!source.contains("runner was cancelled before final-state publication"));
+    }
+
+    #[test]
+    fn accepted_cuda_window_observes_step_before_profile_and_live_publication() {
+        let source = include_str!("accepted_fem_study_worker.rs")
+            .split_once("#[cfg(test)]")
+            .expect("source contracts follow the production execution adapter")
+            .0;
+        let callback = source
+            .split_once("|update| {")
+            .expect("runner update callback is present")
+            .1;
+        let observe = callback
+            .find("capture.observe_accepted_step(&update.stats)")
+            .expect("accepted CUDA window observes the physical callback stats");
+        let profile = callback
+            .find("profile.observe(&update.stats)")
+            .expect("step profile retains its existing observation");
+        let live = callback
+            .find("live_observation.observe(&update)")
+            .expect("live writer retains its existing observation");
+        assert!(observe < profile && observe < live);
     }
 
     #[test]
