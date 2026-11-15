@@ -1,0 +1,34 @@
+{
+  "assess_ci.py": {
+    "bytes": 17302,
+    "sha256": "6e5925e4a58259824b26af1ee7c002b7897b3301c592251c0b531b6b2d715e26"
+  },
+  "caller-bindings.json": {
+    "bytes": 14218,
+    "sha256": "e71c8f99780ac6cac5710f68fa7a163c1479eb74be76665be6fba92f5c5ae62f"
+  },
+  "inputs.json": {
+    "bytes": 16074,
+    "sha256": "b48b542e56dd0da9564b027f688671f1534771fe527947ca589aac86d366fb8e"
+  },
+  "materialize_ci.py": {
+    "bytes": 8709,
+    "sha256": "0d956b3fe9cfba407e7d39a98272439c1862f8bee7052c4b6e123f798177772b"
+  },
+  "native_surface_inputs.hpp": {
+    "bytes": 7658,
+    "sha256": "1f5c42f45fbdde7d28e83069f36d186353e60a4b31d10d80dfb29e07a1d47059"
+  },
+  "native_surface_reference.cpp": {
+    "bytes": 12220,
+    "sha256": "832102eb81904df536806d8dbbedf03d888c25e96e17aee53e1d5660f336c9c6"
+  },
+  "reference-inputs.json": {
+    "bytes": 7614,
+    "sha256": "5a4f994df8d778fa6de045d8ef4e5af6a57036dba4f583f86dbcf90b069a29ee"
+  },
+  "source-pins.json": {
+    "bytes": 7601,
+    "sha256": "9ae61bd3e024bff620896566bea9ec7168c5c0264ad7f8a5adc8dc1c799ba265"
+  }
+}

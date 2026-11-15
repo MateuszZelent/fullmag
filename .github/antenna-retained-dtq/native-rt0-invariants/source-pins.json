@@ -1,0 +1,176 @@
+{
+  "schema": "private.native-rt0-invariants-source-pins.v1",
+  "prior_helper_head": "5954d4d94f31893f48a2776f3d2d362374440dbb",
+  "source_patch_gz": {
+    "bytes": 300172,
+    "sha256": "cd81f2c884805ac0b10790c9af6d116155b5fbffa07f6471dd46a8ff66723032"
+  },
+  "source_patch": {
+    "bytes": 1509276,
+    "sha256": "fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7"
+  },
+  "native_green": {
+    "bytes": 172928,
+    "sha256": "12d55d5b775c558ff3b2b221a4da75e33a2a76b4a3fd1bf7dc4cf0ec283ec757",
+    "files": {
+      "backends/fem/CMakeLists.txt": {
+        "bytes": 88453,
+        "sha256": "6a25821047c101abb0c046e9530e3f5e6d7fce42fbde7b4fcec7021127985ce3"
+      },
+      "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp": {
+        "bytes": 51915,
+        "sha256": "c7663a5656f244a0b16cb8b9ffa2cddb0bc0eeef715fd10f9ad666c2b7d3b68f"
+      },
+      "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp": {
+        "bytes": 203089,
+        "sha256": "5d230d4f8a3f404612e69450daf36dd64e93e97c2318bec373e9dbfaed4f7186"
+      },
+      "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp": {
+        "bytes": 2448,
+        "sha256": "280c53aa3a985698e8f4ebed887ecc0d20aa9e82e9c5f7318e75b769169b13ba"
+      },
+      "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp": {
+        "bytes": 10803,
+        "sha256": "bd00ddfaeae6b8cb18f9435902ab909e6834644928083386e316f0943bf016c0"
+      },
+      "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_surface_rt0.cpp": {
+        "bytes": 11367,
+        "sha256": "ebf4e98c2f74a7cdb98575cc44e7a810675fd91277648a87cb6fcc4b7573f10f"
+      },
+      "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.cpp": {
+        "bytes": 12559,
+        "sha256": "c882a1b75d875585f3234665390dcff548f36576d7e940a29720fbcf22d6a50c"
+      },
+      "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.hpp": {
+        "bytes": 1255,
+        "sha256": "cadb09a2a586514c4386ecd2487a94699704780664a58f857745fc9fc59552ea"
+      },
+      "backends/fem/tests/conservative_constraint_rank_contract.cpp": {
+        "bytes": 34525,
+        "sha256": "b0403a5f81a77eb6c41a49a997e63f10d15142cfce30ca0f16c3974890fa4a47"
+      },
+      "backends/fem/tests/conservative_current_view_contract.cpp": {
+        "bytes": 334259,
+        "sha256": "34943da88ccaa748982899920f7771f8e6dc76c7dd4b2c2b937faf28755c8abe"
+      },
+      "backends/fem/tests/oersted_direct_tetra_contract.cpp": {
+        "bytes": 27906,
+        "sha256": "37587502803d7378be3fd2267fe259e6724ad6bff5890af6ea386b5ec61b9709"
+      },
+      "native/include/fullmag_fem.h": {
+        "bytes": 179648,
+        "sha256": "04c4547cf7016f82b92a24f313dd03125d77868b04f1f966435fef19efdbeb63"
+      }
+    }
+  },
+  "protected_final_sources": {
+    "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp": {
+      "bytes": 51915,
+      "sha256": "c7663a5656f244a0b16cb8b9ffa2cddb0bc0eeef715fd10f9ad666c2b7d3b68f"
+    },
+    "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.hpp": {
+      "bytes": 6360,
+      "sha256": "e4132bd8b702a8ddff5d0db7f3e7db86b8b9251419ff3a80c03c52c8c7d83824"
+    },
+    "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp": {
+      "bytes": 41526,
+      "sha256": "6698e75e56c2e0a96c28afc33eef49a6e331aafb2571fac596a1131f4932d356"
+    },
+    "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp": {
+      "bytes": 3924,
+      "sha256": "36e49847fe3812dcf8e11db9e2ec72097071205ae4db1bae9feab7b4ed85c166"
+    },
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp": {
+      "bytes": 12826,
+      "sha256": "0f8402d1302139fa16d57069998587f4518d31108d5d60df950ecac8e11ab3e5"
+    },
+    "backends/fem/cpu/mfem/transport/affine_rt0_element.hpp": {
+      "bytes": 1888,
+      "sha256": "e73301980084e7871c92a98c7165d0f2cecfd4c8f7a6783a66b1cb0c699cdca8"
+    },
+    "scripts/run_fem_cpu_only_contract.sh": {
+      "bytes": 7968,
+      "sha256": "bcaa53e0576e556afd8f4eda2b8ab171376450317e40ef11a36d0dd86d7fd518"
+    },
+    "scripts/just_storage_shell.sh": {
+      "bytes": 103547,
+      "sha256": "f59c608f7ee5c2d9681a3325e54e0dd94df5aea5ef0c5e23777927e3f5de85a5"
+    },
+    "scripts/audit_fem_cpu_only_runtime.py": {
+      "bytes": 14103,
+      "sha256": "ba4e9dbadf8e749328d17ebcad70da92d939a0e1a293cd7311b36bc07d2bcbe9"
+    },
+    "scripts/fullmag_storage.py": {
+      "bytes": 79598,
+      "sha256": "d2e4467b1a90454f302236a0584eff4a159b01035ee45835e268b33ae17f35d2"
+    },
+    "compose.yaml": {
+      "bytes": 12153,
+      "sha256": "2c842cc01ecfd3b3865ecca171b050a20b12093ab76e9f9d220de11e20a5a30e"
+    },
+    "docker/fem-cpu/Dockerfile": {
+      "bytes": 13584,
+      "sha256": "783a29dd5e5d6c82d6036749f6496e63ebccec13e983f3ad580c5d45292f7e62"
+    },
+    "native/CMakeLists.txt": {
+      "bytes": 2559,
+      "sha256": "f1582f57fc1bfa0ca05a35a78987dc2e491edd4fe272e7743463916ddcdf1252"
+    },
+    "backends/fem/CMakeLists.txt": {
+      "bytes": 88453,
+      "sha256": "6a25821047c101abb0c046e9530e3f5e6d7fce42fbde7b4fcec7021127985ce3"
+    }
+  },
+  "archive_final_sources": {
+    "backends/fem/CMakeLists.txt": {
+      "bytes": 88453,
+      "sha256": "6a25821047c101abb0c046e9530e3f5e6d7fce42fbde7b4fcec7021127985ce3"
+    },
+    "backends/fem/cpu/mfem/interactions/oersted/surface_rt0.cpp": {
+      "bytes": 51915,
+      "sha256": "c7663a5656f244a0b16cb8b9ffa2cddb0bc0eeef715fd10f9ad666c2b7d3b68f"
+    },
+    "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp": {
+      "bytes": 203089,
+      "sha256": "5d230d4f8a3f404612e69450daf36dd64e93e97c2318bec373e9dbfaed4f7186"
+    },
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_surface_rt0.cpp": {
+      "bytes": 2448,
+      "sha256": "280c53aa3a985698e8f4ebed887ecc0d20aa9e82e9c5f7318e75b769169b13ba"
+    },
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_direct_rt0.cpp": {
+      "bytes": 10803,
+      "sha256": "bd00ddfaeae6b8cb18f9435902ab909e6834644928083386e316f0943bf016c0"
+    },
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/frozen_surface_rt0.cpp": {
+      "bytes": 11367,
+      "sha256": "ebf4e98c2f74a7cdb98575cc44e7a810675fd91277648a87cb6fcc4b7573f10f"
+    },
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.cpp": {
+      "bytes": 12559,
+      "sha256": "c882a1b75d875585f3234665390dcff548f36576d7e940a29720fbcf22d6a50c"
+    },
+    "backends/fem/cpu/mfem/workflows/antenna_field_solve/surface_rt0_io.hpp": {
+      "bytes": 1255,
+      "sha256": "cadb09a2a586514c4386ecd2487a94699704780664a58f857745fc9fc59552ea"
+    },
+    "backends/fem/tests/conservative_constraint_rank_contract.cpp": {
+      "bytes": 34525,
+      "sha256": "b0403a5f81a77eb6c41a49a997e63f10d15142cfce30ca0f16c3974890fa4a47"
+    },
+    "backends/fem/tests/conservative_current_view_contract.cpp": {
+      "bytes": 334259,
+      "sha256": "34943da88ccaa748982899920f7771f8e6dc76c7dd4b2c2b937faf28755c8abe"
+    },
+    "native/include/fullmag_fem.h": {
+      "bytes": 179648,
+      "sha256": "04c4547cf7016f82b92a24f313dd03125d77868b04f1f966435fef19efdbeb63"
+    }
+  },
+  "selected_recipe": "verify-fem-oersted-oef1-cpu-contract:\n    docker compose build fem-cpu\n    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oef1\n",
+  "prerequisites": {
+    "accepted_source_authentication": false,
+    "exported_current": "synthetic FrozenInput; general affine RT0; nonzero divergence; no transport source qualification"
+  },
+  "prior_helper_tree": "0093d6e31d5c8a23dc0557b5638f4efd8fbcf24e"
+}
