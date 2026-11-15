@@ -365,7 +365,7 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 - [ ] **Step 3:** Run in the worktree backend: `python3 scripts/benchmarks/run_fdm_mask_parity.py --output /tmp/mask-parity --with-overhead` — 12 parity rows `PASS`, overhead criterion met, exit 0.
 - [ ] **Step 4:** Copy evidence to `~/git/simulations/fullmag/field_masks/parity/`; commit `test(fdm): qualify hand-written masks on CPU and CUDA`.
 
-### Task 10: Antenna milestone — inputs equal to mumax3 — PARTIAL (2026-11-14, function and loop style: every criterion met, the loop style equals the dump to 2.7e-20 T; report `~/git/simulations/compare_racetrack_antenna.md`; open: the 240 ABC regions; findings: `export-run-config` fails for action stages when `study.storage(...)` is set, also on master; the FDM grid follows the geometry extent, so the YIG box is placed on cell faces)
+### Task 10: Antenna milestone — inputs equal to mumax3 — DONE 2026-11-15 (function and loop style: every criterion met, the loop style equals the dump to 2.7e-20 T; the absorbing boundary is written with the mumax3 loop as one box region per cell column and row (340 regions, 204 damping values) and the planned alpha equals the dump in every active cell; report `~/git/simulations/compare_racetrack_antenna.md`; open for Task 11: PBC images; findings: `export-run-config` fails for action stages when `study.storage(...)` is set, also on master; the FDM grid follows the geometry extent, so the YIG box is placed on cell faces)
 
 **Files:**
 - Create: `~/git/simulations/fullmag/racetrack_3.6GHz.py`, `~/git/simulations/compare_racetrack_antenna.py`, output `compare_racetrack_antenna.md`

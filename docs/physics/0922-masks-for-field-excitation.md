@@ -516,7 +516,9 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   the absolute clock and the time factor equals mumax3's `B_ext` to 5.4e-8; Ms,
   Aex and m0 are identical (report `~/git/simulations/compare_racetrack_antenna.md`).
   Written as the mumax3 loop (`study.new_vector_mask()` + `set_vector`, float32), the
-  same antenna has the dump's support exactly and equals it to 2.7e-20 T.
+  same antenna has the dump's support exactly and equals it to 2.7e-20 T. With the
+  absorbing boundary of the script (damping regions), the planned $\alpha$ equals
+  the dump in every active cell (204 values).
 
 Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
 (untouched cells, energy closed form) and the trajectory of item 4 are open.
