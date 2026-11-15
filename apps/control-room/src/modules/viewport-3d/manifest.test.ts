@@ -4,7 +4,9 @@ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { ALL_MODULES } from "@/modules/registry";
 
+import { registerViewport3DProjectionOwner } from "./viewport3dCameraCommands";
 import { viewport3dManifest } from "./manifest";
+import { getViewport3DInspectorSnapshot, setViewport3DInspectorContext } from "./viewport3dInspectorState";
 import { viewport3dStore } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 
@@ -66,7 +68,12 @@ describe("viewport3dManifest", () => {
     }
 
     await registry.execute("viewport-3d.open-settings", { source: "test" });
-    expect(viewport3dStore.getSnapshot().widgets.settingsDialogOpen).toBe(true);
+    expect(getViewport3DInspectorSnapshot().context).toBe("view");
+    await registry.execute("viewport-3d.open-camera-dialog", { source: "test" });
+    expect(getViewport3DInspectorSnapshot().section).toBe("view");
+    await registry.execute("viewport-3d.toggle-settings", { source: "test" });
+    expect(getViewport3DInspectorSnapshot().context).toBe("selection");
+    setViewport3DInspectorContext("selection");
 
     viewport3dStore.setAppearance({ backgroundMode: "solid" });
     await registry.execute("viewport-3d.reset-appearance-background", {
@@ -225,55 +232,34 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.scaleUnitMode).toBe("nm");
   });
 
-  it("keeps projection changes local while recording the camera registry patch", async () => {
+  it("sends projection to the mounted camera owner without a separate live registry write", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
-    const patchCamera = vi.fn();
-
-    await expect(
-      registry.execute("view-projection", {
-        source: "test",
-        cameraRegistry: { patchCamera } as never,
-      }),
-    ).resolves.toMatchObject({ status: "completed" });
-
-    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
-      "orthographic",
-    );
-    expect(patchCamera).toHaveBeenCalledWith({ projection: "orthographic" });
+    const patchOwner = vi.fn();
+    const patchLiveCamera = vi.fn();
+    const release = registerViewport3DProjectionOwner("perspective", patchOwner);
+    try {
+      await expect(registry.execute("view-projection", { source: "test", cameraRegistry: { patchCamera: patchLiveCamera } as never })).resolves.toMatchObject({ status: "completed" });
+      expect(patchOwner).toHaveBeenCalledWith({ projection: "orthographic" });
+      expect(patchLiveCamera).not.toHaveBeenCalled();
+      expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe("perspective");
+    } finally { release(); }
   });
 
-  it("toggles projection from the local store when resource data is stale", async () => {
+  it("toggles the active owner repeatedly even when resource data is stale", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();
-    const patchCamera = vi.fn();
-    const context = {
-      source: "test",
-      resourceData: {
-        [VISUALIZATION_STATE_PATH]: {
-          camera: { projection: "perspective" },
-        },
-      },
-      cameraRegistry: { patchCamera },
-    } as never;
-
-    await registry.execute("view-projection", context);
-    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
-      "orthographic",
-    );
-    expect(registry.isActive("view-projection", context)).toBe(true);
-
-    await registry.execute("view-projection", context);
-    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
-      "perspective",
-    );
-    expect(registry.isActive("view-projection", context)).toBe(false);
-    expect(patchCamera).toHaveBeenNthCalledWith(1, {
-      projection: "orthographic",
-    });
-    expect(patchCamera).toHaveBeenNthCalledWith(2, {
-      projection: "perspective",
-    });
+    const patchOwner = vi.fn();
+    const release = registerViewport3DProjectionOwner("perspective", patchOwner);
+    const context = { source: "test", resourceData: { [VISUALIZATION_STATE_PATH]: { camera: { projection: "perspective" } } } } as never;
+    try {
+      await registry.execute("view-projection", context);
+      expect(registry.isActive("view-projection", context)).toBe(true);
+      await registry.execute("view-projection", context);
+      expect(registry.isActive("view-projection", context)).toBe(false);
+      expect(patchOwner.mock.calls).toEqual([[{ projection: "orthographic" }], [{ projection: "perspective" }]]);
+    } finally { release(); }
+    expect(registry.get("view-projection")?.isEnabled?.(context)).toBe(false);
   });
 
   it("contributes visual quality profile commands", async () => {

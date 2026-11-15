@@ -910,3 +910,19 @@
   outline: none;
   box-shadow: inset var(--fm-focus-ring);
 }
+
+/* Quick actions, then quiet source/status information. */
+.fm-viewport-3d__hud { display: grid; gap: 0; padding: 0; overflow: visible; max-height: none; }
+.fm-viewport-3d__status { display: flex; align-items: center; gap: var(--fm-space-2); flex-wrap: wrap; min-width: 0; padding: var(--fm-space-1) var(--fm-space-2); border-top: 1px solid var(--fm-border-subtle); font-size: var(--fm-font-size-xs); }
+.fm-viewport-3d__status .fm-viewport-3d__hud-info { min-width: 0; }
+.fm-viewport-3d__status .fm-viewport-3d__hud-info > span { border: 0; background: none; backdrop-filter: none; border-radius: 0; padding: 0; max-width: 14rem; }
+.fm-viewport-3d__status .fm-viewport-3d__hud-info > span + span { border-left: 1px solid var(--fm-border-subtle); padding-left: var(--fm-space-2); }
+.fm-viewport-3d__layers { display: grid; gap: var(--fm-space-3); min-width: 0; }
+.fm-viewport-3d__layers .fm-viewport-3d__region-modes { flex-wrap: wrap; }
+.fm-viewport-camera-editor { display: grid; gap: var(--fm-space-3); min-width: 0; }
+.fm-viewport-camera-editor > h3 { margin: 0; font-size: var(--fm-font-size-control); }
+.fm-viewport-camera-editor > p { margin: 0; color: var(--fm-text-secondary); font-size: var(--fm-font-size-xs); line-height: 1.5; }
+.fm-viewport-camera-editor .fm-viewport-camera-dialog__body { padding: 0; }
+.fm-viewport-camera-editor .fm-viewport-camera-dialog__live { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fm-viewport-camera-editor .fm-viewport-camera-dialog__form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fm-viewport-camera-editor .fm-viewport-camera-dialog__vector { grid-column: 1 / -1; }

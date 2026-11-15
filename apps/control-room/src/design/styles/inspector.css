@@ -1659,3 +1659,14 @@
 .fm-inspector-banner-slot {
   margin-bottom: var(--fm-space-2);
 }
+
+.fm-inspector-contexts { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+.fm-inspector-contexts__tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--fm-border-subtle); padding-inline: var(--fm-space-2); }
+.fm-inspector-contexts__tabs .fm-tabs-trigger { gap: var(--fm-space-2); min-height: 2.25rem; }
+.fm-inspector-contexts__content { min-height: 0; min-width: 0; height: 100%; overflow: hidden; }
+.fm-inspector-contexts__content[hidden] { display: none; }
+.fm-viewport-inspector-outlet { height: 100%; min-height: 0; overflow: hidden; }
+
+.fm-inspector-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; min-width: 0; }
+.fm-viewport-inspector-outlet__placeholder { margin: 0; padding: var(--fm-space-4); color: var(--fm-text-secondary); font-size: var(--fm-font-size-control); line-height: 1.5; }
+.fm-viewport-inspector-outlet:has(> [aria-label="3D View Settings"]) > .fm-viewport-inspector-outlet__placeholder { display: none; }

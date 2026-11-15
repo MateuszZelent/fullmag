@@ -13,6 +13,8 @@ import { antennaFieldDisplayLabel } from "@/kernel/visualization/antennaFieldInt
 import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
 import { returnToCurrentFieldView } from "@/kernel/visualization/savedFieldPresentation";
 import { updateVisibleColorScales, type Viewport3DVisibleColorScaleReport, type Viewport3DVisibleColorScales } from "./model/viewport3DVisibleColorScale";
+import { createPortal } from "react-dom";
+import { registerViewport3DProjectionOwner } from "./viewport3dCameraCommands";
 import { useThree } from "@react-three/fiber";
 import { useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
 import {
@@ -153,7 +155,9 @@ import {
   type RegionDiagnosticOverlayState,
 } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
-import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
+import { Viewport3DSettingsContent } from "./components/Viewport3DSettingsContent";
+import { Viewport3DToolbar } from "./components/Viewport3DToolbar";
+import { useViewport3DInspectorDestination, setViewport3DInspectorSection } from "./viewport3dInspectorState";
 import { Viewport3DAppearanceHud } from "./components/Viewport3DAppearanceHud";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
 import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
@@ -1464,7 +1468,7 @@ interface Viewport3DFrameProps
   > {
   artifactInspectionDefinitions: ReadonlyArray<{ id?: string; source_object_id?: string }>;
   artifactPresentationTarget: VisualizationTargetRef | null;
-  cameraDialogOpen: boolean;
+  cameraOwnerKey: string;
   cameraResource: VisualizationStateResource["camera"] | null;
   clientReady: boolean;
   colors: Viewport3DSceneProps["colors"] | null;
@@ -1916,7 +1920,7 @@ function LiveViewport3DModule({
       clientReady={clientReady}
       colors={colors}
       colorsUnavailable={colorsUnavailable}
-      cameraDialogOpen={commandState.widgets.cameraDialogOpen}
+      cameraOwnerKey={`${sessionIdentityKey ?? "no-session"}:${sceneModel.savedViewportActive ? sceneModel.savedFieldIdentity ?? "saved" : "live"}`}
       dimensionFrameAnnotation={commandState.widgets.dimensionFrameAnnotation}
       dimensionFrameDensity={commandState.widgets.dimensionFrameDensity}
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
@@ -2127,7 +2131,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   artifactPresentationTarget,
   captureRevision,
   canvasContextProfileId,
-  cameraDialogOpen,
+  cameraOwnerKey,
   cameraResource,
   clientReady,
   colors,
@@ -2170,6 +2174,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   visualizationDebugSource,
   ...sceneProps
 }: Viewport3DFrameProps) {
+  const inspectorDestination = useViewport3DInspectorDestination();
+  const onViewCommand = useCallback((id: string) => {
+    void kernel.commands.execute(id, { source: "inspector", layout: kernel.layout, selection: kernel.selection, cameraRegistry: kernel.cameraRegistry });
+  }, [kernel]);
+  useLayoutEffect(() => registerViewport3DProjectionOwner(sceneProps.cameraProjection, onCameraPatch), [cameraOwnerKey, onCameraPatch, sceneProps.cameraProjection]);
   const savedScopeKey = savedFieldIdentity ?? null;
   const [visibleSavedScales, setVisibleSavedScales] = useState<Viewport3DVisibleColorScales>(() => ({ scopeKey: savedScopeKey, passes: {} }));
   if (visibleSavedScales.scopeKey !== savedScopeKey) setVisibleSavedScales({ scopeKey: savedScopeKey, passes: {} });
@@ -2874,87 +2883,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-visual-profile-id={sceneProps.visualProfileId}
       data-antenna-field-quantity={antennaFieldOverlay?.intent.quantity}
       data-antenna-field-sample-count={antennaFieldOverlay?.count}
-      onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
+      onPointerDown={(event) => { if (event.currentTarget.contains(event.target as Node)) kernel.layout.setFocusedSlot(slotId); }}
     >
       <div className="fm-viewport-3d__hud" role="group" aria-label="3D view controls">
-        <Viewport3DAppearanceHud onOpenSettings={() => { void kernel.commands.execute("viewport-3d.open-settings", { source: "menu", layout: kernel.layout, selection: kernel.selection }); }} />
-        {preparedMagnetizationLabel ? (
-          <div className="fm-viewport-3d__issue-banner">
-            <span className="fm-viewport-3d__issue-banner-text" role="status">{preparedMagnetizationLabel}</span>
-            <Button size="sm" type="button" variant="secondary" onClick={() => observationSourceWorkspaceStore.clear()}>
-              Return to live
-            </Button>
-          </div>
-        ) : null}
-        {fieldDataIssue ? (
-          <div className="fm-viewport-3d__issue-banner" role="status">
-            <span
-              className="fm-viewport-3d__issue-banner-text"
-              title={`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
-            >
-              {`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
-            </span>
-            <Button onClick={() => setResourceIssueOpen(true)} size="sm" type="button" variant="secondary">
-              Details
-            </Button>
-            <Button onClick={fieldDataIssue.retry} size="sm" type="button" variant="secondary">
-              Retry
-            </Button>
-          </div>
-        ) : null}
-        {fieldPresentationFreshness && fieldPresentationFreshness !== "current" && !fieldDataIssue ? (
-          <span
-            className="fm-viewport-3d__freshness-badge"
-            data-freshness={fieldPresentationFreshness}
-            role="status"
-          >
-            {VIEWPORT_FIELD_FRESHNESS_LABEL[fieldPresentationFreshness]}
-          </span>
-        ) : null}
-        {savedViewportActive ? (
-          <fieldset
-            aria-label="Viewport source"
-            className="fm-viewport-3d__region-modes"
-          >
-            <Button
-              aria-label="Return to current view"
-              onClick={onReturnToCurrentView}
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              Current view
-            </Button>
-          </fieldset>
-        ) : null}
-        {/* Informational pills share one shrinkable lane so they truncate with
-            a tooltip instead of wrapping the HUD into extra rows. */}
-        <div className="fm-viewport-3d__hud-info">
-          <Viewport3DFieldLabel quantityId={artifactField.historical ? artifactField.model?.quantityId ?? "" : antennaFieldOverlay?.intent.quantity ?? quantityId} label={ownUniverseInspection ? "Accepted Universe inspection" : antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
-          <span title={antennaFieldSourceLabel ?? selectedLabel}>{antennaFieldSourceLabel ?? selectedLabel}</span>
-          {hysteresisReplayLabel ? <span title={hysteresisReplayLabel}>{hysteresisReplayLabel}</span> : null}
-          <span title={hudSampleSummary}>{hudSampleSummary}</span>
-          {artifactField.error ? <span role="status" title={artifactField.error}>{artifactField.error}</span> : null}
-          {antennaFieldOverlay?.intent.kind === "inspection" ? (
-            <span title={ANTENNA_INSPECTION_HUD_NOTE}>{ANTENNA_INSPECTION_HUD_NOTE}</span>
-          ) : null}
-          {meshQualityLegend ? <span title={meshQualityLegend}>{meshQualityLegend}</span> : null}
-          {meshSizeHighlightSummary ? (
-            <span title={meshSizeHighlightSummary}>{meshSizeHighlightSummary}</span>
-          ) : null}
-          <span title={status || undefined}>{status}</span>
-        </div>
-        {!antennaFieldOverlay && artifactField.candidates.length > 0 ? (
-          <Select value={artifactField.selectedStageId} onValueChange={artifactField.select}>
-            <SelectTrigger aria-label="Field inspection source and execution" className="fm-viewport-artifact-owner-select"><SelectValue placeholder="Select source and execution" /></SelectTrigger>
-            <SelectContent>{artifactField.candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.sourceObjectId} · {candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
-          </Select>
-        ) : null}
-        {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
-          <span key={issue.objectId} role="alert">
-            Geometry preview unavailable · {issue.objectId}: {issue.message}
-          </span>
-        ))}
+        <Viewport3DToolbar
+          onCommand={onViewCommand}
+          projection={sceneProps.cameraProjection}
+          qualityProfileId={sceneProps.visualProfileId}
+          settingsOpen={inspectorDestination.context === "view"}
+          inspectEnabled={sceneProps.inspectEnabled}
+          layersContent={<div className="fm-viewport-3d__layers">
         {sceneProps.regionOverlays.length > 0 ||
         sceneProps.meshRegionOverlays.length > 0 ? (
           <fieldset
@@ -3079,7 +3017,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </span>
           </fieldset>
         ) : null}
-        <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
         {!savedViewportActive ? (
           <Popover>
             <PopoverTrigger asChild>
@@ -3090,6 +3027,89 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </PopoverContent>
           </Popover>
         ) : null}
+          </div>}
+        />
+        <div className="fm-viewport-3d__status" aria-label="3D view status">
+        {preparedMagnetizationLabel ? (
+          <div className="fm-viewport-3d__issue-banner">
+            <span className="fm-viewport-3d__issue-banner-text" role="status">{preparedMagnetizationLabel}</span>
+            <Button size="sm" type="button" variant="secondary" onClick={() => observationSourceWorkspaceStore.clear()}>
+              Return to live
+            </Button>
+          </div>
+        ) : null}
+        {fieldDataIssue ? (
+          <div className="fm-viewport-3d__issue-banner" role="status">
+            <span
+              className="fm-viewport-3d__issue-banner-text"
+              title={`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
+            >
+              {`${fieldDataIssue.quantityId} cannot be rendered: ${fieldDataIssue.message}`}
+            </span>
+            <Button onClick={() => setResourceIssueOpen(true)} size="sm" type="button" variant="secondary">
+              Details
+            </Button>
+            <Button onClick={fieldDataIssue.retry} size="sm" type="button" variant="secondary">
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {fieldPresentationFreshness && fieldPresentationFreshness !== "current" && !fieldDataIssue ? (
+          <span
+            className="fm-viewport-3d__freshness-badge"
+            data-freshness={fieldPresentationFreshness}
+            role="status"
+          >
+            {VIEWPORT_FIELD_FRESHNESS_LABEL[fieldPresentationFreshness]}
+          </span>
+        ) : null}
+        {savedViewportActive ? (
+          <fieldset
+            aria-label="Viewport source"
+            className="fm-viewport-3d__region-modes"
+          >
+            <Button
+              aria-label="Return to current view"
+              onClick={onReturnToCurrentView}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              Current view
+            </Button>
+          </fieldset>
+        ) : null}
+        {/* Informational pills share one shrinkable lane so they truncate with
+            a tooltip instead of wrapping the HUD into extra rows. */}
+        <div className="fm-viewport-3d__hud-info">
+          <Viewport3DAppearanceHud />
+          <Viewport3DFieldLabel quantityId={artifactField.historical ? artifactField.model?.quantityId ?? "" : antennaFieldOverlay?.intent.quantity ?? quantityId} label={ownUniverseInspection ? "Accepted Universe inspection" : antennaFieldOverlay ? antennaFieldDisplayLabel(antennaFieldOverlay.intent) : quantityLabel} historical={!antennaFieldOverlay && artifactField.historical} model={artifactField.model} error={artifactField.error} liveDataAvailable={antennaFieldOverlay ? undefined : liveQuantityDataAvailable} />
+          <span title={antennaFieldSourceLabel ?? selectedLabel}>{antennaFieldSourceLabel ?? selectedLabel}</span>
+          {hysteresisReplayLabel ? <span title={hysteresisReplayLabel}>{hysteresisReplayLabel}</span> : null}
+          <span title={hudSampleSummary}>{hudSampleSummary}</span>
+          {artifactField.error ? <span role="status" title={artifactField.error}>{artifactField.error}</span> : null}
+          {antennaFieldOverlay?.intent.kind === "inspection" ? (
+            <span title={ANTENNA_INSPECTION_HUD_NOTE}>{ANTENNA_INSPECTION_HUD_NOTE}</span>
+          ) : null}
+          {meshQualityLegend ? <span title={meshQualityLegend}>{meshQualityLegend}</span> : null}
+          {meshSizeHighlightSummary ? (
+            <span title={meshSizeHighlightSummary}>{meshSizeHighlightSummary}</span>
+          ) : null}
+          <span title={status || undefined}>{status}</span>
+        </div>
+        {!antennaFieldOverlay && artifactField.candidates.length > 0 ? (
+          <Select value={artifactField.selectedStageId} onValueChange={artifactField.select}>
+            <SelectTrigger aria-label="Field inspection source and execution" className="fm-viewport-artifact-owner-select"><SelectValue placeholder="Select source and execution" /></SelectTrigger>
+            <SelectContent>{artifactField.candidates.map(candidate => <SelectItem key={candidate.runtimeStageId} value={candidate.runtimeStageId}>{candidate.sourceObjectId} · {candidate.authoredStageId} · {candidate.runtimeStageId} · {candidate.status}</SelectItem>)}</SelectContent>
+          </Select>
+        ) : null}
+        {sceneProps.primitiveModel?.diagnostics?.map((issue) => (
+          <span key={issue.objectId} role="alert">
+            Geometry preview unavailable · {issue.objectId}: {issue.message}
+          </span>
+        ))}
+        <Viewport3DFieldRefreshCountdown refresh={fieldRefresh} />
+        </div>
       </div>
       {clientReady && colors ? (
         <Viewport3DCanvas
@@ -3100,7 +3120,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target === event.currentTarget) {
               event.preventDefault();
-              viewport3dStore.setCameraDialogOpen(true);
+              onViewCommand("viewport-3d.open-camera-dialog");
             }
           }}
           role="region"
@@ -3200,16 +3220,25 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           onInteractionStart={sceneProps.onCameraInteractionStart}
         />
       ) : null}
-      <Viewport3DCameraDialog
-        cameraOrthographicScale={sceneProps.cameraOrthographicScale}
-        cameraProjection={sceneProps.cameraProjection}
-        cameraResource={cameraResource}
-        cameraState={sceneProps.cameraState}
-        onCameraPatch={onCameraPatch}
-        onOpenChange={(open) => viewport3dStore.setCameraDialogOpen(open)}
-        open={cameraDialogOpen}
-      />
-      <Viewport3DSettingsDialog onCommand={(id) => { void kernel.commands.execute(id, { source: "menu", layout: kernel.layout, selection: kernel.selection }); }} />
+      {inspectorDestination.host ? createPortal(
+        <Viewport3DSettingsContent
+          activeSection={inspectorDestination.section}
+          onSectionChange={setViewport3DInspectorSection}
+          onCommand={onViewCommand}
+          cameraContent={<Viewport3DCameraDialog
+            key={cameraOwnerKey}
+            cameraOrthographicScale={sceneProps.cameraOrthographicScale}
+            cameraProjection={sceneProps.cameraProjection}
+            cameraResource={cameraResource}
+            cameraState={sceneProps.cameraState}
+            onCameraPatch={onCameraPatch}
+            onOpenChange={() => undefined}
+            open
+            inline
+          />}
+        />,
+        inspectorDestination.host,
+      ) : null}
       <Viewport3DResourceIssueDialog
         issue={fieldDataIssue}
         open={Boolean(fieldDataIssue && resourceIssueOpen)}

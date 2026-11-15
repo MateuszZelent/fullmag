@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useLayoutEffect } from "react";
+import { PanelRightClose } from "lucide-react";
+import { Button } from "@/shared/ui/Button";
+import { PanelChrome, usePanelChromeControls } from "@/shared/ui/PanelFrame";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -13,6 +16,8 @@ import {
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
 
+import { Viewport3DInspectorOutlet, useViewport3DInspectorContext, useViewport3DInspectorVisited, setViewport3DInspectorContext } from "@/modules/viewport-3d/public";
+import { InspectorContexts } from "./InspectorContexts";
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
   InspectorEditSessionProvider,
@@ -52,10 +57,30 @@ function PendingFormBridge() {
 }
 
 export default function InspectorModule() {
+  const kernel = useKernel();
+  const context = useViewport3DInspectorContext();
+  const viewVisited = useViewport3DInspectorVisited();
   const savedPlayback = useSavedResultsPlaybackSelection();
-  return savedPlayback && !savedPlayback.studyResult
+  const selectionPanel = savedPlayback && !savedPlayback.studyResult
     ? <SavedResultsPlaybackInspector />
     : <LiveInspectorModule />;
+  if (!kernel.modules.get("viewport-3d")) return selectionPanel;
+  return <InspectorContexts context={context} onContextChange={setViewport3DInspectorContext} view={viewVisited ? <ViewInspectorPanel /> : null}>
+    {selectionPanel}
+  </InspectorContexts>;
+}
+
+function ViewInspectorPanel() {
+  const kernel = useKernel();
+  const chrome = usePanelChromeControls();
+  const hide = () => kernel.layout.setPanelVisible("right", false);
+  return <section className="fm-inspector-view" aria-label="3D View Inspector">
+    <PanelChrome>
+      <span className="fm-panel-chrome__title">3D View</span>
+      <Button aria-label="Hide Inspector" size="icon" variant="ghost" onClick={() => chrome ? chrome.hideWith(hide) : hide()}><PanelRightClose size={16} aria-hidden="true" /></Button>
+    </PanelChrome>
+    <Viewport3DInspectorOutlet />
+  </section>;
 }
 
 function LiveInspectorModule() {

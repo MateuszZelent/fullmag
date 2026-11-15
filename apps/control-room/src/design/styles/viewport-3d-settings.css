@@ -1,0 +1,215 @@
+.fm-viewport-3d-settings {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--fm-text-primary);
+}
+
+.fm-viewport-3d-settings__tabs {
+  display: grid;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fm-viewport-3d-settings__tab-list {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-viewport-3d-settings__tab {
+  min-width: 0;
+  min-height: 2rem;
+  padding-inline: 0.25rem;
+  overflow: hidden;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-viewport-3d-settings__tab:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--fm-accent);
+  outline-offset: 1px;
+}
+
+.fm-viewport-3d-settings__panels,
+.fm-viewport-3d-settings__panel,
+.fm-viewport-3d-settings__field-list {
+  display: grid;
+  min-width: 0;
+  gap: 0.65rem;
+}
+
+.fm-viewport-3d-settings__panels {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.75rem;
+  align-content: start;
+}
+
+.fm-viewport-3d-settings__camera-content {
+  min-width: 0;
+}
+
+.fm-viewport-3d-settings__group {
+  min-width: 0;
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+}
+
+.fm-viewport-3d-settings__legend {
+  max-width: 100%;
+  padding-inline: 0.25rem;
+  color: var(--fm-text-primary);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.fm-viewport-3d-settings__field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(7rem, 46%);
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.fm-viewport-3d-settings__label {
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.fm-viewport-3d-settings__select {
+  min-width: 0;
+  min-height: 2rem;
+  font-size: 0.74rem;
+}
+
+.fm-viewport-3d-settings__range-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+}
+
+.fm-viewport-3d-settings__range-heading {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(4rem, 5.5rem);
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fm-viewport-3d-settings__number {
+  min-width: 0;
+  min-height: 2rem;
+  padding: 0.25rem 0.4rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.fm-viewport-3d-settings__slider {
+  min-height: 2rem;
+  padding-inline: 0.35rem;
+}
+
+.fm-viewport-3d-settings__range-help,
+.fm-viewport-3d-settings__help {
+  color: var(--fm-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.fm-viewport-3d-settings__status {
+  margin: 0;
+  padding: 0.35rem 0.45rem;
+  border-inline-start: 2px solid var(--fm-accent);
+  background: color-mix(in srgb, var(--fm-accent) 6%, var(--fm-bg-panel));
+  color: var(--fm-text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.fm-viewport-3d-settings__error {
+  color: var(--fm-danger);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.fm-viewport-3d-settings__toggle {
+  display: flex;
+  min-width: 0;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fm-viewport-3d-settings__toggle-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.fm-viewport-3d-settings__toggle [role="switch"] {
+  flex: 0 0 auto;
+}
+
+.fm-viewport-3d-settings__actions {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+.fm-viewport-3d-settings__advanced {
+  min-width: 0;
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-viewport-3d-settings__advanced .fm-accordion-trigger {
+  min-height: 2.25rem;
+  color: var(--fm-text-secondary);
+  font-size: 0.72rem;
+}
+
+.fm-viewport-3d-settings__advanced .fm-accordion-content-inner {
+  display: grid;
+  gap: 0.65rem;
+  padding-block: 0.5rem;
+}
+
+@media (max-width: 22rem) {
+  .fm-viewport-3d-settings__tab {
+    font-size: 0.66rem;
+  }
+
+  .fm-viewport-3d-settings__group {
+    padding: 0.5rem;
+  }
+
+  .fm-viewport-3d-settings__field {
+    grid-template-columns: minmax(0, 1fr) minmax(6rem, 43%);
+    gap: 0.35rem;
+  }
+}
+
+.fm-viewport-3d-settings__panel[hidden] {
+  display: none;
+}

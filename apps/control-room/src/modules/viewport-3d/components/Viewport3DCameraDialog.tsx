@@ -37,7 +37,7 @@ import {
   isViewport3DCameraFovDegreesValid,
   resolveViewport3DCameraFovDegrees,
 } from "../viewport3dCameraFov";
-import { VIEWPORT_3D_WORLD_UP } from "../layers/CameraControls";
+import { VIEWPORT_3D_WORLD_UP } from "../viewport3dCameraModel";
 
 type CameraPatch = NonNullable<VisualizationStatePatch["camera"]>;
 type CameraResource = VisualizationStateResource["camera"];
@@ -78,6 +78,7 @@ export function Viewport3DCameraDialog({
   onCameraPatch,
   onOpenChange,
   open,
+  inline = false,
 }: {
   cameraResource: CameraResource | null;
   cameraOrthographicScale: number | null;
@@ -86,6 +87,7 @@ export function Viewport3DCameraDialog({
   onCameraPatch: (patch: CameraPatch) => void;
   onOpenChange: (open: boolean) => void;
   open: boolean;
+  inline?: boolean;
 }) {
   const [dialogPosition, setDialogPosition] = useState<CameraDialogPosition>(
     () => initialDialogPosition(),
@@ -206,42 +208,7 @@ export function Viewport3DCameraDialog({
     top: dialogPosition.y,
   } satisfies CSSProperties;
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        aria-describedby="fm-viewport-camera-dialog-description"
-        aria-label="3D camera parameters"
-        className="fm-viewport-camera-dialog"
-        style={dialogStyle}
-      >
-        <DialogHeader
-          className="fm-viewport-camera-dialog__header"
-          onPointerDown={beginDrag}
-          onPointerMove={moveDrag}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-        >
-          <DialogTitle>Camera Parameters</DialogTitle>
-          <DialogDescription
-            className="fm-visually-hidden"
-            id="fm-viewport-camera-dialog-description"
-          >
-            Inspect and edit the 3D viewport camera position, target, projection,
-            and orientation.
-          </DialogDescription>
-          <DialogClose asChild>
-            <Button
-              aria-label="Close camera parameters"
-              className="fm-viewport-camera-dialog__close"
-              onPointerDown={(event) => event.stopPropagation()}
-              size="icon"
-              variant="ghost"
-            >
-              <X aria-hidden="true" size={16} />
-            </Button>
-          </DialogClose>
-        </DialogHeader>
-
+  const content = <>
         <div className="fm-viewport-camera-dialog__body">
           <div className="fm-viewport-camera-dialog__live">
             <CameraLiveValue label="Projection" value={snapshot.projection} />
@@ -330,7 +297,7 @@ export function Viewport3DCameraDialog({
           </div>
 
           {error ? (
-            <div className="fm-viewport-camera-dialog__error">{error}</div>
+            <div role="alert" className="fm-viewport-camera-dialog__error">{error}</div>
           ) : null}
         </div>
 
@@ -342,6 +309,50 @@ export function Viewport3DCameraDialog({
             Apply
           </Button>
         </DialogFooter>
+  </>;
+  if (inline) return <section aria-label="3D camera parameters" className="fm-viewport-camera-editor">
+    <h3>Camera</h3>
+    <p>Edit the current view. Apply commits camera changes; Reset discards this draft.</p>
+    {content}
+  </section>;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        aria-describedby="fm-viewport-camera-dialog-description"
+        aria-label="3D camera parameters"
+        className="fm-viewport-camera-dialog"
+        style={dialogStyle}
+      >
+        <DialogHeader
+          className="fm-viewport-camera-dialog__header"
+          onPointerDown={beginDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <DialogTitle>Camera Parameters</DialogTitle>
+          <DialogDescription
+            className="fm-visually-hidden"
+            id="fm-viewport-camera-dialog-description"
+          >
+            Inspect and edit the 3D viewport camera position, target, projection,
+            and orientation.
+          </DialogDescription>
+          <DialogClose asChild>
+            <Button
+              aria-label="Close camera parameters"
+              className="fm-viewport-camera-dialog__close"
+              onPointerDown={(event) => event.stopPropagation()}
+              size="icon"
+              variant="ghost"
+            >
+              <X aria-hidden="true" size={16} />
+            </Button>
+          </DialogClose>
+        </DialogHeader>
+
+        {content}
       </DialogContent>
     </Dialog>
   );
