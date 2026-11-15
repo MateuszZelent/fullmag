@@ -215,6 +215,14 @@ export class TestElement extends TestNode {
 
   private optionSelected = false;
 
+  append(...nodes: (TestNode | string)[]): void {
+    for (const node of nodes) {
+      this.appendChild(
+        typeof node === "string" ? this.ownerDocument.createTextNode(node) : node,
+      );
+    }
+  }
+
   get className(): string {
     return this.getAttribute("class") ?? "";
   }

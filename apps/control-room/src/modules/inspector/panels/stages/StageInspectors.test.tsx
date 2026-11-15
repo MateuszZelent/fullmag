@@ -308,6 +308,36 @@ function renderMounted(
   }
 }
 
+function expectFieldUnitAssociation(
+  markup: string,
+  label: string,
+  unit: string,
+  disabled = false,
+): void {
+  const labelAttributes = [...markup.matchAll(/<label\b([^>]*)>([^<]*)<\/label>/g)]
+    .find((match) => match[2] === label)?.[1];
+  const fieldId = labelAttributes?.match(/\bfor="([^"]+)"/)?.[1];
+  expect(fieldId, label + " label targets its input").toBeDefined();
+
+  const inputAttributes = [...markup.matchAll(/<input\b([^>]*)>/g)]
+    .find((match) => match[1]?.match(/\bid="([^"]+)"/)?.[1] === fieldId)?.[1];
+  expect(inputAttributes, label + " input is rendered").toBeDefined();
+  if (disabled) expect(inputAttributes).toMatch(/\sdisabled=""/);
+
+  const describedBy =
+    inputAttributes?.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
+  const unitAttributes = [...markup.matchAll(/<span\b([^>]*)>([^<]*)<\/span>/g)]
+    .find(
+      (match) =>
+        match[1]?.includes("fm-inspector-form-field__unit") &&
+        match[2] === unit,
+    )?.[1];
+  const unitId = unitAttributes?.match(/\bid="([^"]+)"/)?.[1];
+
+  expect(unitId, label + " " + unit + " unit has an id").toBeDefined();
+  expect(describedBy, label + " input describes its unit").toContain(unitId);
+}
+
 function escapeMountedMarkup(markup: string): string {
   const escape = (value: string) =>
     value
@@ -539,7 +569,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFieldUnitAssociation(tableHtml, "t_sampling", "s", true);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -571,7 +601,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFieldUnitAssociation(autosaveHtml, "Every", "s", true);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -583,9 +613,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expectFieldUnitAssociation(antennaHtml, "Cutoff fc", "Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFieldUnitAssociation(antennaHtml, "Center t0", "s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 
