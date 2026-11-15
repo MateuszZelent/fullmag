@@ -1104,7 +1104,7 @@
     },
     ".github/antenna-retained-dtq/apply-task4-fixture-ci.py": {
       "bytes": 3567,
-      "sha256": "4978b17df04aa92fd4ef5b33e2f016e2ae1ac772691b0e14b678e1495b21c383"
+      "sha256": "1ce9c9111eeff6d619c17a11b444360c48bb15271a7a087f8788873ea8bbc6c7"
     },
     ".github/antenna-retained-dtq/apply-task4-source.py": {
       "bytes": 3167,
@@ -1151,12 +1151,12 @@
       "sha256": "421400c964478cb8763380f77dc3ea3b082d3ae8523f2e2c047c6299da3ca210"
     },
     ".github/antenna-retained-dtq/task-4-fixture/materialize-task4-fixture-ci.py": {
-      "bytes": 10315,
-      "sha256": "6d12e23efbd436d51110ff2d0aa5324bc455f43974f046977f1269cffe982ec3"
+      "bytes": 11484,
+      "sha256": "26a5edda2c1c7f6e0afe2eab59174feb4ce529a48184b9a1fd7fb12748747819"
     },
     ".github/antenna-retained-dtq/task-4-fixture/run_retained_dtq_authenticated_fixture_contract.sh": {
-      "bytes": 3201,
-      "sha256": "9c3b9e75b4942d696292845162cc40c193936e51bd2726e0ef4bb45bee609bf4"
+      "bytes": 3490,
+      "sha256": "2e19abec5b4cc19b75a9b06e12fbdc56a0cc5bea58bc4fb93db67951175081ab"
     },
     ".github/antenna-retained-dtq/task-4-fixture/task-4-authenticated-acceptance.rs": {
       "bytes": 19296,

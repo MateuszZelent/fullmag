@@ -117,6 +117,9 @@ def inventory(root):
     files = []
     for item in SOURCE_ITEMS:
         start = root / item
+        # Cargo permits a checkout with no project-local configuration directory.
+        if item == ".cargo" and not start.exists() and not start.is_symlink():
+            continue
         if not start.exists() or start.is_symlink():
             raise ValueError("Required source item unavailable: " + item)
         if start.is_file():
@@ -142,6 +145,11 @@ def inventory(root):
         raise ValueError("Source inventory exceeds file/total byte bound")
     return files
 
+def preflight(root, data):
+    inputs = load_inputs(data)
+    check_before(root, inputs, require_marker=False)
+    return inputs, inventory(root)
+
 def copy_source(root, destination, data):
     root = root.resolve(strict=True)
     destination = destination.absolute()
@@ -150,9 +158,7 @@ def copy_source(root, destination, data):
         raise ValueError("Disposable source destination must be new")
     if any(inside(parent, root / item) for item in SOURCE_ITEMS):
         raise ValueError("Disposable copy must be outside the bounded source inventory")
-    inputs = load_inputs(data)
-    check_before(root, inputs, require_marker=False)
-    files = inventory(root)
+    inputs, files = preflight(root, data)
     destination.mkdir()
     for path in files:
         target = destination / path.relative_to(root)
@@ -187,13 +193,25 @@ def run(root, temporary_root, data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "copy", "run"))
+    parser.add_argument("action", choices=("preflight", "prepare", "copy", "run"))
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--temporary-root", type=Path)
     args = parser.parse_args()
     data = Path(__file__).resolve().parent
-    if args.action == "prepare":
+    if args.action == "preflight":
+        if args.temporary_root is None:
+            parser.error("preflight requires --temporary-root")
+        root = args.source_root.resolve(strict=True)
+        temporary_root = args.temporary_root.resolve(strict=True)
+        if not temporary_root.is_dir() or any(inside(temporary_root, root / item) for item in SOURCE_ITEMS):
+            raise ValueError("Managed temporary root must be an existing directory outside source inventory")
+        inputs, files = preflight(root, data)
+        print(json.dumps({"source_preflight": True, "source_items": list(SOURCE_ITEMS),
+                          "source_files": len(files), "source_bytes": sum(path.stat().st_size for path in files),
+                          "production_23_before_pins_verified": True,
+                          "project_cargo_absent": not (root / ".cargo").exists()}, sort_keys=True))
+    elif args.action == "prepare":
         prepare(args.source_root, data)
     elif args.action == "copy":
         if args.destination is None:

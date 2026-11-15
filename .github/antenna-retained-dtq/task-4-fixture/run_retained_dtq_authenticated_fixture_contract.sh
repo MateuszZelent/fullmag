@@ -16,6 +16,10 @@ mkdir -p -- "$CARGO_TARGET_DIR" "$CARGO_HOME" || refuse 'cannot prepare canonica
 [[ -d "$CARGO_TARGET_DIR" ]] || refuse 'CARGO_TARGET_DIR is not an existing directory'
 [[ -d "$CARGO_HOME" ]] || refuse 'CARGO_HOME is not an existing directory'
 printf '%s\n' TASK4_AUTHENTICATED_CARGO_CACHE_READY
+"${FULLMAG_PYTHON:?missing managed Python}" -B \
+    .github/antenna-retained-dtq/task-4-fixture/materialize-task4-fixture-ci.py preflight \
+    --source-root "$repo_root" --temporary-root "${FULLMAG_BUILD_ROOT:?missing managed build root}" \
+    | tee "$report_dir/source-preflight.json"
 # Compile only the shared library with the existing managed CPU guards/flags.
 # The unchanged OE-F1 numerical tests are deliberately not executed here.
 python3 scripts/audit_fem_cpu_only_runtime.py \
