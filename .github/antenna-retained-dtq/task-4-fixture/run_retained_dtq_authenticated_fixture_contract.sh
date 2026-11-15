@@ -5,6 +5,17 @@ cd "$repo_root"
 build_dir="${FULLMAG_FEM_CPU_BUILD_ROOT:?missing managed FEM CPU build root}/oersted-oef1"
 report_dir="$repo_root/task4-authenticated-evidence"
 mkdir -p "$report_dir"
+refuse() {
+    printf 'TASK4_AUTHENTICATED_PREREQUISITE_REFUSED: %s\n' "$1" >&2
+    exit 1
+}
+[[ "${FULLMAG_MANAGED_FEM_DEVICE:-}" == cpu ]] || refuse 'FULLMAG_MANAGED_FEM_DEVICE must be cpu'
+: "${CARGO_TARGET_DIR:?TASK4_AUTHENTICATED_PREREQUISITE_REFUSED: missing CARGO_TARGET_DIR}"
+: "${CARGO_HOME:?TASK4_AUTHENTICATED_PREREQUISITE_REFUSED: missing CARGO_HOME}"
+mkdir -p -- "$CARGO_TARGET_DIR" "$CARGO_HOME" || refuse 'cannot prepare canonical Cargo directories'
+[[ -d "$CARGO_TARGET_DIR" ]] || refuse 'CARGO_TARGET_DIR is not an existing directory'
+[[ -d "$CARGO_HOME" ]] || refuse 'CARGO_HOME is not an existing directory'
+printf '%s\n' TASK4_AUTHENTICATED_CARGO_CACHE_READY
 # Compile only the shared library with the existing managed CPU guards/flags.
 # The unchanged OE-F1 numerical tests are deliberately not executed here.
 python3 scripts/audit_fem_cpu_only_runtime.py \
@@ -26,13 +37,11 @@ CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-1}" \
   cmake --build "$build_dir" --target fullmag_fem \
   2>&1 | tee "$report_dir/build.log"
 printf '%s\n' TASK4_AUTHENTICATED_CPU_LIBRARY_BUILD_PASS
-[[ -f "$build_dir/CMakeCache.txt" && -f "$build_dir/backends/fem/libfullmag_fem.so" ]]
-grep -Fxq 'FULLMAG_ENABLE_CUDA:BOOL=OFF' "$build_dir/CMakeCache.txt"
-grep -Fxq 'FULLMAG_ENABLE_FEM_GPU:BOOL=OFF' "$build_dir/CMakeCache.txt"
-grep -Fxq 'FULLMAG_USE_MFEM_STACK:BOOL=ON' "$build_dir/CMakeCache.txt"
-[[ "${FULLMAG_MANAGED_FEM_DEVICE:?missing managed FEM device}" == cpu ]]
-[[ -d "${CARGO_TARGET_DIR:?missing existing shared Cargo target}" ]]
-[[ -d "${CARGO_HOME:?missing existing shared Cargo cache}" ]]
+[[ -f "$build_dir/CMakeCache.txt" ]] || refuse 'missing OE-F1 CMakeCache.txt'
+[[ -f "$build_dir/backends/fem/libfullmag_fem.so" ]] || refuse 'missing OE-F1 libfullmag_fem.so'
+grep -Fxq 'FULLMAG_ENABLE_CUDA:BOOL=OFF' "$build_dir/CMakeCache.txt" || refuse 'OE-F1 CMakeCache.txt requires FULLMAG_ENABLE_CUDA:BOOL=OFF'
+grep -Fxq 'FULLMAG_ENABLE_FEM_GPU:BOOL=OFF' "$build_dir/CMakeCache.txt" || refuse 'OE-F1 CMakeCache.txt requires FULLMAG_ENABLE_FEM_GPU:BOOL=OFF'
+grep -Fxq 'FULLMAG_USE_MFEM_STACK:BOOL=ON' "$build_dir/CMakeCache.txt" || refuse 'OE-F1 CMakeCache.txt requires FULLMAG_USE_MFEM_STACK:BOOL=ON'
 export FULLMAG_FEM_LIB_DIR="$build_dir/backends/fem"
 export LD_LIBRARY_PATH="$FULLMAG_FEM_LIB_DIR:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
