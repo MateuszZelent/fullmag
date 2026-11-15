@@ -13,11 +13,13 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import stat
 import subprocess
 from uuid import UUID
 
 import linux_native_host as host
 from docker_dev_host import local_volume
+from fullmag_data_volume_guard import resolve_mount_uuid
 
 SCHEMA = 'fullmag.linux-native-data-migration-preparation.v1'
 _PIN_KEYS = {'state_root', 'mount_root', 'volume_id', 'filesystem_uuid', 'engine_id',
@@ -40,13 +42,38 @@ def _encoded(value):
 
 
 def filesystem_uuid(path):
-    observed = subprocess.check_output(
-        ['findmnt', '--noheadings', '--output', 'UUID', '--target', str(path)],
+    path = Path(path)
+    observation = json.loads(subprocess.check_output(
+        ['findmnt', '--json', '--target', str(path), '--output', 'TARGET,UUID,MAJ:MIN'],
         text=True, timeout=15,
-    ).strip().splitlines()
-    if len(observed) != 1:
+    ))
+    rows = observation.get('filesystems') if type(observation) is dict else None
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
         raise ValueError('Migration filesystem UUID is not one observation')
-    value = observed[0].strip()
+    row = rows[0]
+    if 'uuid' not in row or 'UUID' in row:
+        raise ValueError('Migration filesystem UUID field differs')
+    target = row.get('target')
+    major_minor = row.get('maj:min')
+    if (type(target) is not str or not target.startswith('/') or
+            type(major_minor) is not str or re.fullmatch(r'[0-9]+:[0-9]+', major_minor) is None):
+        raise ValueError('Migration filesystem mount identity differs')
+    reported = row['uuid']
+    if reported == '':
+        reported = None
+    elif reported is not None and type(reported) is not str:
+        raise ValueError('Migration filesystem UUID is not a string or null')
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise ValueError('Migration filesystem path is unavailable') from error
+    if stat.S_ISDIR(metadata.st_mode):
+        descriptor_path = path
+    elif stat.S_ISREG(metadata.st_mode):
+        descriptor_path = path.parent
+    else:
+        raise ValueError('Migration filesystem path is not a regular file or directory')
+    value = resolve_mount_uuid(descriptor_path, reported, major_minor=major_minor)
     if str(UUID(value)) != value or UUID(value).int == 0:
         raise ValueError('Migration filesystem UUID is not canonical')
     return value

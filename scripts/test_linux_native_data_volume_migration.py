@@ -3,8 +3,12 @@ import base64
 import copy
 import hashlib
 import json
+import os
+from contextlib import ExitStack
 from pathlib import Path
+import sys
 import unittest
+import uuid
 from unittest.mock import patch
 
 import linux_native_host as host
@@ -12,6 +16,7 @@ from scripts import test_linux_native_readmission as fixtures
 import linux_native_data_volume_migration as migration
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'Linux filesystem UUID ioctl')
 class DataVolumeStateMigrationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.LinuxNativeReadmissionTests(methodName='runTest')
@@ -42,9 +47,43 @@ class DataVolumeStateMigrationTests(unittest.TestCase):
                       for name in host.READMISSION_FILES},
         }
 
-    def patches(self):
-        return patch.multiple(migration, local_volume=lambda path: self.fixture.volume,
-                              filesystem_uuid=lambda path: self.fixture.filesystem_uuid)
+    def patches(self, *, reported_uuid=None, descriptor_uuid=None, ioctl_error=None,
+                major_minor=None, findmnt_rows=None):
+        metadata = self.state.stat()
+        if major_minor is None:
+            major_minor = f'{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}'
+
+        def findmnt(args, *, text=False, timeout=None):
+            if '--json' not in args:
+                # The old UUID-only query returned an empty line for a mount
+                # without a filesystem UUID. Keep that behavior in the mock so
+                # this fixture exercises the migration's real observation path.
+                return '\n' if text else b'\n'
+            target = args[args.index('--target') + 1]
+            rows = findmnt_rows
+            if rows is None:
+                rows = [{'target': target, 'uuid': reported_uuid, 'maj:min': major_minor}]
+            output = json.dumps({'filesystems': rows})
+            return output if text else output.encode()
+
+        def ioctl(descriptor, request, buffer, mutate=True):
+            if ioctl_error is not None:
+                raise ioctl_error
+            self.assertEqual(request, 0x80111500)
+            self.assertTrue(mutate)
+            buffer[0] = 16
+            buffer[1:17] = uuid.UUID(
+                descriptor_uuid or self.fixture.filesystem_uuid
+            ).bytes
+            return 0
+
+        stack = ExitStack()
+        stack.enter_context(patch.multiple(
+            migration, local_volume=lambda path: self.fixture.volume
+        ))
+        stack.enter_context(patch.object(migration.subprocess, 'check_output', side_effect=findmnt))
+        stack.enter_context(patch('fcntl.ioctl', side_effect=ioctl))
+        return stack
 
     def prepare(self, pins=None):
         with self.patches():
@@ -66,6 +105,31 @@ class DataVolumeStateMigrationTests(unittest.TestCase):
         self.assertFalse(prepared['namespace_admitted'])
         self.assertEqual({n: (self.state / n).read_bytes() for n in before}, before)
         json.dumps(prepared, allow_nan=False)
+
+    def test_filesystem_uuid_resolves_null_or_empty_findmnt_from_descriptor(self):
+        for reported_uuid in (None, ''):
+            with self.subTest(reported_uuid=reported_uuid), self.patches(reported_uuid=reported_uuid):
+                self.assertEqual(migration.filesystem_uuid(self.state), self.fixture.filesystem_uuid)
+
+    def test_filesystem_uuid_preserves_canonical_findmnt_uuid(self):
+        with self.patches(reported_uuid=self.fixture.filesystem_uuid, ioctl_error=OSError('unused')):
+            self.assertEqual(migration.filesystem_uuid(self.state), self.fixture.filesystem_uuid)
+
+    def test_migration_rejects_mismatched_or_unavailable_filesystem_uuid(self):
+        cases = (
+            {'findmnt_rows': []},
+            {'findmnt_rows': [{'target': '/', 'maj:min': '0:0'}]},
+            {'reported_uuid': '11234567-89ab-4def-8123-456789abcdef'},
+            {'reported_uuid': 'not-a-filesystem-uuid'},
+            {'reported_uuid': None, 'descriptor_uuid': '11234567-89ab-4def-8123-456789abcdef'},
+            {'reported_uuid': None, 'ioctl_error': OSError('unsupported filesystem UUID ioctl')},
+            {'reported_uuid': None, 'major_minor': '999:999'},
+        )
+        for options in cases:
+            before = self.fixture.certificate_path.read_bytes()
+            with self.subTest(options=options), self.patches(**options), self.assertRaises(ValueError):
+                migration.prepare_state_migration(self.state, self.pins)
+            self.assertEqual(self.fixture.certificate_path.read_bytes(), before)
 
     def test_copy_or_drain_identity_drift_rejected_without_writes(self):
         for key, value in [('copied_data_sha256', '4' * 64),
