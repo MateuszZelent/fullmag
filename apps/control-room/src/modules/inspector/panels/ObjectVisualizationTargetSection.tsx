@@ -593,7 +593,7 @@ export function ScalarColorbarControl({
           ))}
         </FormField>
       ) : null}
-      <div
+      <div role="img"
         className="fm-inspector-colorbar"
         aria-label={
           minLabel && maxLabel

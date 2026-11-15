@@ -330,7 +330,7 @@ export function ResultDatasetBrowser({
                   <span data-status={model.manifestStatus}>
                     {manifest.status.completeness}
                   </span>
-                  <div
+                  <div role="group"
                     aria-label="Result actions"
                     className="fm-results-dataset-browser__actions"
                   >
@@ -369,7 +369,7 @@ export function ResultDatasetBrowser({
                 </div>
               </header>
 
-              <div className="fm-results-dataset-browser__axes" aria-label="Dataset axes">
+              <div role="group" className="fm-results-dataset-browser__axes" aria-label="Dataset axes">
                 {model.axes.map((axis) => (
                   <ResultDatasetAxisControl
                     axis={axis}
@@ -400,7 +400,7 @@ export function ResultDatasetBrowser({
                 </p>
               ) : null}
 
-              <div className="fm-results-dataset-browser__filters" aria-label="Result filters">
+              <div role="group" className="fm-results-dataset-browser__filters" aria-label="Result filters">
                 {!serverFiltering || !serverSorting ? (
                   <p className="fm-results-dataset-browser__status" role="status">
                     {serverFiltering && !serverSorting
@@ -1171,7 +1171,7 @@ function ResultPageControls({
 }) {
   if (!page?.cursor && !page?.next_cursor) return null;
   return (
-    <div
+    <div role="group"
       aria-label={ariaLabel}
       className="fm-results-dataset-browser__page-controls"
     >

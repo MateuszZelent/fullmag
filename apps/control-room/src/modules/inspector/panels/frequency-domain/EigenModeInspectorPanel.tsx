@@ -311,7 +311,7 @@ function EigenMode3DActions({
   ];
 
   return (
-    <div
+    <div role="group"
       aria-label="Selected eigen mode 3D visualization controls"
       className="fm-frequency-domain-visualization-actions"
     >

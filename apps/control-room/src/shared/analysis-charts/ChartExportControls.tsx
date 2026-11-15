@@ -51,7 +51,7 @@ export function ChartExportControls({
   };
 
   return (
-    <div className="fm-analysis-chart-export" aria-label="Chart export">
+    <div role="group" className="fm-analysis-chart-export" aria-label="Chart export">
       {onOpenPointsTable ? (
         <Button size="sm" type="button" variant="secondary" onClick={onOpenPointsTable}>
           Data Table

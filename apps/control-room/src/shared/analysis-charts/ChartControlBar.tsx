@@ -124,7 +124,7 @@ export function ChartControlBar({
 
       {/* Point budget summary */}
       {visiblePoints != null ? (
-        <span
+        <span role="group"
           aria-label={`${visiblePoints} visible points${totalRows != null ? ` of ${totalRows} total` : ""}`}
           className="fm-chart-control-bar__points"
         >

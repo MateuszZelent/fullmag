@@ -252,7 +252,7 @@ function TopologicalChargeMethodSummary({
         </div>
         <span>{method.sampleQuality}</span>
       </div>
-      <div
+      <div role="group"
         className="fm-topological-charge-method__equations"
         aria-label="Topological charge equations"
       >

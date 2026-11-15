@@ -200,7 +200,7 @@ export function WorkspaceDockLayout() {
       </> : null}
     </ResizablePanelGroup>
     {!playbackOnly ? (
-      <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
+      <div role="group" className="fm-panel-restore-bar" aria-label="Restore hidden panels">
         {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
         {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
         {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}

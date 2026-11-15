@@ -851,7 +851,7 @@ function SolverTracePanel({ model }: { model: SolverTracePanelModel }) {
     );
 
   return (
-    <div
+    <div role="group"
       className="fm-footer-diagnostics__trace"
       data-completeness={model.completeness}
       aria-label="Solver to render trace"
