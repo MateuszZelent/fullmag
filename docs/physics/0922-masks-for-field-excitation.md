@@ -505,7 +505,9 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   $\mathbf m$ on FEM GPU; the two lanes agree to 1.4e-15. `H_drive` of a
   position-dependent mask equals {eq}`mask-fem-basis` at the node coordinates to
   4.6e-16 on both lanes, is zero outside the support, and every support node
-  lies inside the shape.
+  lies inside the shape. One script with a uniform mask, run on FEM CPU and on
+  FDM CPU (only the engine differs, no demagnetization), gives the same
+  trajectory to 9.5e-15 in $\mathbf m$.
 
 - Reference (item 4, inputs): the antenna of the mumax3 script `racetrack 3.6 GHz`
   written by hand (`~/git/simulations/fullmag/racetrack_3.6GHz.py`) plans on the
