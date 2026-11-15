@@ -105,7 +105,7 @@ def _measure_volumes(gmsh, volumes):
     return summary
 
 
-def build_hollow_mesh(source, destination, *, magnetic_size_m=8e-9):
+def build_hollow_mesh(source, destination, *, magnetic_size_m=32e-9):
     import gmsh
     import numpy as np
     source, destination = Path(source), Path(destination)

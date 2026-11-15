@@ -10,10 +10,11 @@ extent defines the outer size; STL coordinates have no intrinsic units.
 The initial state is saturated along +x, without a preparatory field stage.
 This finds a local energy minimum, not a guaranteed ground state. Repeat with
 other initial states and finer meshes before drawing physical conclusions.
-The nominal 8 nm magnetic sizing target is below the exchange length (~8.9 nm).
-Actual edge lengths and domain quality must be read from the mesh report; mesh
-and airbox convergence still require independent checks. This 5 um model can be
-expensive; increasing MAGNETIC_MESH_M makes a preview, not a qualified result.
+The user-selected coarse mesh has a nominal 32 nm magnetic sizing target and
+1,420,157 tetrahedra in total. This exceeds the exchange length (~8.9 nm), so
+the saved state is preliminary and requires mesh convergence before FMR claims.
+Actual edge lengths and domain quality must be read from the mesh report;
+airbox convergence also requires an independent check.
 
 Pattern: tests/standard_problems/mumag/sp4/fem/scenarios/
 relax_projected_gradient_bb.py. No eigenmode or subsequent field stage.
@@ -32,7 +33,7 @@ STL_MAX_EXTENT = 5.361742973327637
 STL_SCALE = OUTER_SIZE_M / STL_MAX_EXTENT
 MS_A_PER_M = 400e3
 AEX_J_PER_M = 8e-12
-MAGNETIC_MESH_M = 8e-9
+MAGNETIC_MESH_M = 32e-9
 AIR_MESH_M = 500e-9
 MAX_STEPS = 100_000
 TORQUE_TOL_T = 1e-6
@@ -52,8 +53,8 @@ study.wait_for_solve(False)
 # This path is the private user-data bind of this task's Compose group.
 RUN_DIR = Path("/user-data/buckyball-zero-field-20261115")
 study.storage(
-    output_dir=str(RUN_DIR / "relax.zarr"),
-    temp_dir=str(RUN_DIR / "scratch"),
+    output_dir=str(RUN_DIR / "relax_32nm.zarr"),
+    temp_dir=str(RUN_DIR / "scratch_32nm"),
     data_format="zarr",
     cleanup="never",
     existing_output="error",
@@ -93,7 +94,7 @@ study.fem_demag_solver(
 # creates walls plus both air domains, and prepare_mesh.py validates and writes
 # this SI MeshIR before API activation. Configuration capture stays declarative.
 study.domain_mesh(
-    RUN_DIR / "relax.mesh.json", region_markers={"buckyball": 1},
+    RUN_DIR / "geometry_check_32nm.mesh.json", region_markers={"buckyball": 1},
 )
 
 # %% Relax and retain energy/torque diagnostics plus the final magnetization
@@ -117,7 +118,7 @@ study.stages.add_relax(
     )
 )
 study.stages.add_save_state(
-    artifact_name="buckyball_final_candidate_m.zarr",
+    artifact_name="buckyball_32nm_final_candidate_m.zarr",
     format="zarr",
     dataset="m",
 )
