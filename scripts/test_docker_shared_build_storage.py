@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -54,6 +55,42 @@ class VolumeFixture:
 
 
 class SharedBuildStorageTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"),
+                         "the initializer wrapper regression requires POSIX bash")
+    def test_initializer_wrapper_passes_payload_as_quoted_python_c_argument_without_temp_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bin_directory = Path(temporary) / "bin"
+            bin_directory.mkdir()
+            fake_python = bin_directory / "python3"
+            fake_python.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "print(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            environment = {**os.environ, "PATH": str(bin_directory) + os.pathsep + os.environ.get("PATH", "")}
+
+            def prohibit_file_writes():
+                import resource
+                resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+
+            result = subprocess.run(
+                [shutil.which("bash"), "-euo", "pipefail", "-c", storage.INITIALIZER_SCRIPT],
+                capture_output=True,
+                check=False,
+                env=environment,
+                preexec_fn=prohibit_file_writes,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("<<", storage.INITIALIZER_SCRIPT)
+        arguments = json.loads(result.stdout)
+        self.assertEqual(arguments[:1], ["-c"], "the initializer must receive its program through python -c")
+        self.assertEqual(len(arguments), 2)
+        self.assertEqual(arguments[1], storage._INITIALIZER_PYTHON)
+
     def test_volume_names_and_labels_are_project_stable_and_task_independent(self):
         first = storage.shared_volume_names("fullmag")
         second = storage.shared_volume_names("fullmag")
