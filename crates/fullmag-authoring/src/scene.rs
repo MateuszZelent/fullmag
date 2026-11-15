@@ -1443,6 +1443,10 @@ fn default_mesh() -> ScriptBuilderMeshState {
         adaptive_max_passes: 5,
         adaptive_error_tolerance: String::new(),
         order: None,
+        domain_mesh_mode: None,
+        domain_mesh_source: None,
+        domain_region_markers: None,
+        domain_object_region_markers: None,
     }
 }
 

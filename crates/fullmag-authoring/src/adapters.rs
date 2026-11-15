@@ -2704,6 +2704,10 @@ mod tests {
                 adaptive_max_passes: 2,
                 adaptive_error_tolerance: "1e-3".to_string(),
                 order: None,
+                domain_mesh_mode: None,
+                domain_mesh_source: None,
+                domain_region_markers: None,
+                domain_object_region_markers: None,
             },
             universe: Some(ScriptBuilderUniverseState {
                 mode: "auto".to_string(),

@@ -1,14 +1,18 @@
 """Zero-field buckyball relaxation, FEM GPU, double precision.
 
-Open this script in Fullmag and press Compute. Material and size come from
+Prepare the hollow mesh with build_hollow_mesh.py and prepare_mesh.py in the
+selected managed backend, then activate this script in Fullmag; relaxation starts
+automatically and remains visible in the interactive workspace.
+Material and size come from
 params.txt: Ms=400 kA/m, A=8 pJ/m, outer size=5 um. The largest STL bounding-box
 extent defines the outer size; STL coordinates have no intrinsic units.
 
 The initial state is saturated along +x, without a preparatory field stage.
 This finds a local energy minimum, not a guaranteed ground state. Repeat with
 other initial states and finer meshes before drawing physical conclusions.
-The 8 nm magnetic mesh is below the exchange length (~8.9 nm), but mesh and
-airbox convergence still require independent checks. This 5 um model can be
+The nominal 8 nm magnetic sizing target is below the exchange length (~8.9 nm).
+Actual edge lengths and domain quality must be read from the mesh report; mesh
+and airbox convergence still require independent checks. This 5 um model can be
 expensive; increasing MAGNETIC_MESH_M makes a preview, not a qualified result.
 
 Pattern: tests/standard_problems/mumag/sp4/fem/scenarios/
@@ -17,7 +21,6 @@ relax_projected_gradient_bb.py. No eigenmode or subsequent field stage.
 
 # %% Parameters (SI)
 from pathlib import Path
-import sys
 
 import fullmag as fm
 
@@ -43,7 +46,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.mode("strict")
 study.interactive(True)
-study.wait_for_solve(True)
+study.wait_for_solve(False)
 
 # Explicit absolute storage keeps results and scratch on the admitted E: ext4 volume.
 # This path is the private user-data bind of this task's Compose group.
@@ -86,19 +89,12 @@ study.b_ext(0.0, 0.0, 0.0)
 study.fem_demag_solver(
     solver="CG", preconditioner="AMG", rtol=1e-10, max_iterations=1000,
 )
-# The supplied STL has nested exterior/cavity shells. Mesh the walls and both
-# air domains explicitly instead of treating each shell as a magnetic solid.
-sys.path.insert(0, str(SCRIPT_DIR))
-from build_hollow_mesh import build_hollow_mesh
-
-mesh_path = build_hollow_mesh(
-    STL_PATH, RUN_DIR / "relax.msh", magnetic_size_m=MAGNETIC_MESH_M,
+# The supplied STL has nested exterior/cavity shells. build_hollow_mesh.py
+# creates walls plus both air domains, and prepare_mesh.py validates and writes
+# this SI MeshIR before API activation. Configuration capture stays declarative.
+study.domain_mesh(
+    RUN_DIR / "relax.mesh.json", region_markers={"buckyball": 1},
 )
-study.mesh.import_(
-    mesh_path, region_map={"buckyball": 1},
-    boundary_map={"outer": 1, "magnetic_air": 2}, coordinate_unit="um",
-)
-study.mesh.save_or_load(RUN_DIR / "relax.fullmag-mesh")
 
 # %% Relax and retain energy/torque diagnostics plus the final magnetization
 # A saved candidate is an equilibrium only after the terminal stop reason and

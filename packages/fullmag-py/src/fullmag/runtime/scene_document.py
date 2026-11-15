@@ -2643,6 +2643,15 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    mesh_override = overrides["mesh"]
+    for key in (
+        "domain_mesh_mode",
+        "domain_mesh_source",
+        "domain_region_markers",
+        "domain_object_region_markers",
+    ):
+        if key in mesh and mesh[key] is not None:
+            mesh_override[key] = copy.deepcopy(mesh[key])
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")

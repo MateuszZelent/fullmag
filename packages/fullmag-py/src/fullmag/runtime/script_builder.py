@@ -10556,7 +10556,7 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
     if not use_declared_defaults and declared_order is None and isinstance(fem, FEM):
         declared_order = fem.order
 
-    return {
+    mesh_state = {
         "algorithm_2d": int(mesh_options.get("algorithm_2d", 6)),
         "algorithm_3d": int(mesh_options.get("algorithm_3d", 1)),
         "hmax": _text_mesh_size(declared_hmax),
@@ -10668,6 +10668,16 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(adaptive_mesh.get("error_tolerance"))
         ),
     }
+    for key in (
+        "domain_mesh_mode",
+        "domain_mesh_source",
+        "domain_region_markers",
+        "domain_object_region_markers",
+    ):
+        value = mesh_workflow.get(key)
+        if value is not None:
+            mesh_state[key] = value
+    return mesh_state
 
 
 def _is_pure_fdm_problem(problem: Problem) -> bool:
