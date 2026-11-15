@@ -1307,12 +1307,20 @@ async function installBrowserAuditInstrumentation(page) {
 }
 
 async function waitForViewportDiagnostics(page) {
-  const trigger = page.locator(".fm-viewport-3d").getByRole("button", { name: "Render details", exact: true });
-  if (await trigger.getAttribute("aria-expanded") !== "true") {
-    await trigger.click();
-  }
-  // Render diagnostics is portalled outside the viewport HUD.
+  const viewport = page.locator(".fm-viewport-3d");
+  // Render diagnostics is portalled from the View layers popover.
   const details = page.getByRole("dialog", { name: "Render diagnostics", exact: true });
+  if (!(await details.isVisible())) {
+    const layers = page.getByRole("dialog", { name: "View layers", exact: true });
+    if (!(await layers.isVisible())) {
+      await viewport.getByRole("button", { name: "Layers", exact: true }).click();
+      await layers.waitFor({ state: "visible", timeout: 20_000 });
+    }
+    const trigger = layers.getByRole("button", { name: "Render details", exact: true });
+    if (await trigger.getAttribute("aria-expanded") !== "true") {
+      await trigger.click();
+    }
+  }
   await details.waitFor({ state: "visible", timeout: 20_000 });
   await waitForCondition(
     async () => (await details.textContent())?.includes("geo:"),
