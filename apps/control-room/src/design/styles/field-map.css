@@ -876,8 +876,23 @@
 
 /* Layer legends overlay the bottom-left of the plot (plan §2.1 C) instead of
    taking a grid row from it; independent quantities keep distinct SI units. */
+.fm-field-map__composition-buffers {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.fm-field-map__composition-slot {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .fm-field-map__composition-legends {
   position: absolute;
+  pointer-events: none;
   left: calc(var(--fm-space-6) + 4.5rem + var(--fm-space-2));
   bottom: calc(var(--fm-space-4) + var(--fm-space-6) + 1.75rem + var(--fm-space-2));
   /* Bounded by the stage on both edges so a short stage scrolls the stack

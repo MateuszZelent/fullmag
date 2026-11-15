@@ -216,9 +216,9 @@ export function PlanarStatusBar({
       <output aria-label="Cursor position" className="fm-planar-statusbar__cursor">
         {cursor ? formatCursor(cursor) : "—"}
       </output>
-      <span aria-label="Zoom" className="fm-planar-statusbar__zoom">
+      <output aria-label="Zoom" className="fm-planar-statusbar__zoom">
         {`${Math.round(zoom * 100)}%`}
-      </span>
+      </output>
       {crop ? (
         <span className="fm-planar-statusbar__crop" data-planar-crop="">
           <Crop aria-hidden="true" size={12} />

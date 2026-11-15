@@ -306,11 +306,10 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             model.items.map((item) => {
               const diagnostics = diagnosticSummary(item);
               return (
+                <div key={item.regionId} className="fm-region-list__item" role="listitem">
                 <button
-                  key={item.regionId}
                   className="fm-region-card"
                   type="button"
-                  role="listitem"
                   onClick={() => selectRegion(item)}
                 >
                   <span
@@ -337,6 +336,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
                     ) : null}
                   </span>
                 </button>
+                </div>
               );
             })
           )}

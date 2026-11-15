@@ -194,3 +194,7 @@
   padding: var(--fm-space-1) var(--fm-space-3);
 }
 
+
+.fm-region-list__item {
+  display: contents;
+}

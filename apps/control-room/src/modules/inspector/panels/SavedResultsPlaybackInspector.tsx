@@ -206,7 +206,7 @@ export function SavedResultsPlaybackInspector() {
             <p className="fm-saved-results-playback-inspector__time" aria-live="polite">
               Time: {formatSavedPlaybackTimeNs(frameTime(manifest, stageId, frameIndex))}
             </p>
-            <div aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
+            <div role="group" aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
               <Button aria-label="First frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(0)} size="sm" type="button" variant="secondary">First</Button>
               <Button aria-label="Previous frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(frameIndex - 1)} size="sm" type="button" variant="secondary">Previous</Button>
               <Button aria-label="Next frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex >= lastFrame} onClick={() => selectFrame(frameIndex + 1)} size="sm" type="button" variant="secondary">Next</Button>

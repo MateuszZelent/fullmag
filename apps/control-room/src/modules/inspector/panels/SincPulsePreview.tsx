@@ -9,7 +9,7 @@ export function SincPulsePreview({
   solverDtS: number | null;
 }) {
   return (
-    <div className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
+    <div role="group" className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
       <PreviewPlot
         points={model.waveform.map((point) => [point.timeS, point.value])}
         marker={model.t0S}

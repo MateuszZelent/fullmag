@@ -165,14 +165,12 @@ function FemMeshReadinessGuideCardInner({
         </div>
         <button
           aria-expanded={expanded}
-          aria-label={
-            expanded ? "Collapse FEM Mesh Guide" : "Expand FEM Mesh Guide"
-          }
+          aria-label="FEM Mesh Guide"
           className="fm-mesh-guide__toggle"
           type="button"
           onClick={() => setExpanded((prev) => !prev)}
         >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {expanded ? <ChevronDown aria-hidden="true" size={14} /> : <ChevronRight aria-hidden="true" size={14} />}
         </button>
       </div>
 

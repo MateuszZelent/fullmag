@@ -1015,7 +1015,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
       <InspectorGroup title="Actions">
         {objectEditDraftDirty ? (
-          <div style={{ marginBottom: "0.5rem" }}>
+          <div className="fm-inspector-banner-slot">
             <FeedbackBanner
               kind="warning"
               message="Uncommitted object changes are pending. Use Apply or Revert to commit or discard them."
