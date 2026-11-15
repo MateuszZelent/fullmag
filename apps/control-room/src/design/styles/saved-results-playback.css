@@ -262,3 +262,40 @@
     flex-wrap: wrap;
   }
 }
+
+.fm-saved-playback-viewport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 320px;
+}
+
+.fm-saved-playback-caption {
+  padding: var(--fm-space-2) var(--fm-space-3);
+  background: var(--fm-bg-panel);
+  color: var(--fm-text-primary);
+}
+
+.fm-saved-playback-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2) var(--fm-space-3);
+  color: var(--fm-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-saved-playback-gradient {
+  display: inline-block;
+  inline-size: 180px;
+  block-size: 12px;
+  border-radius: var(--fm-radius-sm);
+}
+
+.fm-saved-playback-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 260px;
+}

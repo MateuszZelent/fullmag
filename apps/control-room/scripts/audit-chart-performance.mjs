@@ -943,7 +943,15 @@ async function pauseAnalysisUpdates(page) {
     exact: true,
     name: "Resume live chart updates",
   });
-  if ((await pauseButton.count()) > 0 || (await resumeButton.count()) > 0) {
+  const toggleButton = page.getByRole("button", {
+    exact: true,
+    name: "Pause live chart updates",
+  });
+  if (
+    (await pauseButton.count()) > 0 ||
+    (await resumeButton.count()) > 0 ||
+    (await toggleButton.count()) > 0
+  ) {
     throw new Error(
       "Analysis still exposes live pause/resume controls after dataset separation.",
     );

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { useHysteresisPointsResource } from "@/kernel/resources/studyRuntimeResources";
 import { hysteresisPointSelectionPayload } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { Button } from "@/shared/ui/Button";
+import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 
 import type { PlanarEvidenceStatus } from "../model/fieldMapEvidence";
 import { adjacentSnapshot, snapshotIndex, snapshotSequence } from "../model/planarSnapshotNavigation";
@@ -35,6 +36,10 @@ export function PlanarSnapshotNavigator({ status }: { status: PlanarEvidenceStat
   const index = snapshotIndex(sequence, selected.snapshotId);
   const current = index >= 0 ? sequence[index]! : null;
   const [playing, setPlaying] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, {
+    deps: [index, playing, sequence.length, selected.stageId],
+  });
 
   const show = (step: -1 | 1) => {
     const next = adjacentSnapshot(sequence, selected.snapshotId, step);
@@ -59,7 +64,9 @@ export function PlanarSnapshotNavigator({ status }: { status: PlanarEvidenceStat
   if (!selected.stageId || sequence.length === 0) return null;
   return (
     <div
+      ref={toolbarRef}
       aria-label="Snapshot navigator"
+      onKeyDown={toolbarKeyDown}
       className="fm-field-map__snapshot-nav"
       data-snapshot-count={sequence.length}
       data-snapshot-id={selected.snapshotId ?? ""}

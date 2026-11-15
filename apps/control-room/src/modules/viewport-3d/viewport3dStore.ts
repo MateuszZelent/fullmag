@@ -59,8 +59,15 @@ export interface Viewport3DCommandState {
   fitRevision: number;
   renderedScalarRanges: Viewport3DRenderedScalarRange[];
   resetCameraRevision: number;
+  /** Keyboard/command equivalent of a ViewCube face click; consumed by the orientation HUD. */
+  viewDirectionRequest: Viewport3DViewDirectionRequest | null;
   visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
+}
+
+export interface Viewport3DViewDirectionRequest {
+  direction: [number, number, number];
+  revision: number;
 }
 
 type Viewport3DListener = () => void;
@@ -191,6 +198,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   fitRevision: 0,
   renderedScalarRanges: [],
   resetCameraRevision: 0,
+  viewDirectionRequest: null,
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraDialogOpen: false,
@@ -233,6 +241,17 @@ class Viewport3DStore {
     this.snapshot = {
       ...this.snapshot,
       fitRevision: this.snapshot.fitRevision + 1,
+    };
+    this.notify();
+  }
+
+  requestViewDirection(direction: [number, number, number]): void {
+    this.snapshot = {
+      ...this.snapshot,
+      viewDirectionRequest: {
+        direction,
+        revision: (this.snapshot.viewDirectionRequest?.revision ?? 0) + 1,
+      },
     };
     this.notify();
   }
