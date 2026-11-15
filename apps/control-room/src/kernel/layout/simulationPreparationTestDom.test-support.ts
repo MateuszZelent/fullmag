@@ -321,6 +321,14 @@ export class TestElement extends TestNode {
     this.style = style;
   }
 
+  append(...nodes: (TestNode | string)[]): void {
+    for (const node of nodes) {
+      this.appendChild(
+        typeof node === "string" ? this.ownerDocument.createTextNode(node) : node,
+      );
+    }
+  }
+
   click(): void {
     const event = new TestEvent("click", { bubbles: true });
     this.dispatchEvent(event);

@@ -62,7 +62,10 @@ import {
 } from "@/kernel/resources/sessionResourceIdentity";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
-import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 import { stageResultInitialState } from "./StageInitialStateSelector";
@@ -280,6 +283,38 @@ function render(
       </Accordion>
     </KernelContext.Provider>,
   );
+}
+
+function renderedFieldState(
+  html: string,
+  labelText: string,
+): { disabled: boolean; unit: string | null } {
+  const dom = installSimulationPreparationTestDom();
+  try {
+    const root = dom.document.createElement("div");
+    root.innerHTML = html;
+    const label = findElement(
+      root,
+      (element) => element.tagName === "LABEL" && element.textContent.trim() === labelText,
+      `FormField label '${labelText}'`,
+    );
+    const controlId = label.getAttribute("for");
+    if (!controlId) throw new Error(`FormField '${labelText}' has no associated control.`);
+    const control = findElement(
+      root,
+      (element) => element.getAttribute("id") === controlId,
+      `FormField control for '${labelText}'`,
+    );
+    const field = control.closest(".fm-inspector-form-field");
+    if (!field) throw new Error(`FormField '${labelText}' has no field wrapper.`);
+    return {
+      disabled: control.disabled,
+      unit:
+        field.querySelector(".fm-inspector-form-field__unit")?.textContent.trim() ?? null,
+    };
+  } finally {
+    dom.restore();
+  }
 }
 
 function renderMounted(
@@ -539,7 +574,10 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expect(renderedFieldState(tableHtml, "t_sampling")).toEqual({
+      disabled: true,
+      unit: "s",
+    });
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -571,7 +609,10 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expect(renderedFieldState(autosaveHtml, "Every")).toEqual({
+      disabled: true,
+      unit: "s",
+    });
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -583,9 +624,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expect(renderedFieldState(antennaHtml, "Cutoff fc").unit).toBe("Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expect(renderedFieldState(antennaHtml, "Center t0").unit).toBe("s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 
