@@ -52,6 +52,7 @@ import {
   Waves,
   Zap,
 } from "lucide-react";
+import { VIEW_DIRECTION_COMMANDS } from "@/modules/viewport-3d/public";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
@@ -2178,6 +2179,17 @@ function buildViewCameraAction({
             value: "object",
           },
         ],
+      },
+      {
+        type: "submenu",
+        id: "camera:view-direction",
+        label: "View direction",
+        nodes: VIEW_DIRECTION_COMMANDS.map((command) => ({
+          type: "item" as const,
+          id: `camera:${command.id}`,
+          label: command.label,
+          commandId: command.id,
+        })),
       },
       { type: "separator", id: "camera:rotation-separator" },
       { type: "item", id: "camera:focus", label: "Focus selected", preview: true, disabled: true },

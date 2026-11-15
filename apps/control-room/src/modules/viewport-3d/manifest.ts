@@ -5,6 +5,7 @@ import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscreti
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
 
 import { viewport3dStore } from "./viewport3dStore";
+import { VIEW_DIRECTION_COMMANDS } from "./viewport3dViewDirections";
 import type {
   Viewport3DDimensionFrameAnnotation,
   Viewport3DDimensionFrameDensity,
@@ -305,6 +306,17 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      ...VIEW_DIRECTION_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        run: () => {
+          viewport3dStore.requestViewDirection(command.direction);
+          return { status: "completed" as const };
+        },
+      })),
       {
         id: "viewport-3d.toggle-viewcube",
         title: "Toggle ViewCube",
