@@ -499,6 +499,13 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   built-in regional drive active together, the saved `H_drive` equals the sum of
   the three terms to 1.3e-14 (relative) on FDM CPU and FDM CUDA at the time of
   each sample (`~/git/simulations/fullmag/field_masks/h_drive`).
+- FEM, 1091 nodes (760 magnetic), 0.3 ns through the managed API
+  (`~/git/simulations/fullmag/field_masks/fem`): a uniform mask term reproduces
+  the built-in regional drive bit for bit on FEM CPU and to 1.4e-17 in
+  $\mathbf m$ on FEM GPU; the two lanes agree to 1.4e-15. `H_drive` of a
+  position-dependent mask equals {eq}`mask-fem-basis` at the node coordinates to
+  4.6e-16 on both lanes, is zero outside the support, and every support node
+  lies inside the shape.
 
 - Reference (item 4, inputs): the antenna of the mumax3 script `racetrack 3.6 GHz`
   written by hand (`~/git/simulations/fullmag/racetrack_3.6GHz.py`) plans on the

@@ -416,6 +416,16 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 - [ ] **Step 4: Commit** `feat: split space-time field functions into mask terms`.
 - [ ] **Step 5: Finish** with `finishing-a-development-branch`, local steps only: clean worktree, head hash, commit list, evidence paths. Ask the user about the merge, the full 16.53 ns run and the FEM follow-up.
 
+### Task 13: FEM CPU and FEM GPU lanes — DONE 2026-11-15 (`c64adb258`, `7ed3ed58d`; open: the FEM/FDM one-script comparison)
+
+Added on the user's request of 2026-11-14 (finish the antennas completely, FEM included).
+
+- Planner: `FemPlanIR.mask_field_term_bases`; `resolve_fem_mask_field_terms` evaluates each mask at the nodes of the target's magnetic elements inside the shape (shared resolver with FDM in `crates/fullmag-plan/src/mask_field.rs`); `mask_not_periodic` on periodic node pairs.
+- Native FEM: regional-drive ABI v4, time kind `FULLMAG_FEM_TIME_HOST_EXPRESSION` with the time program; CPU evaluates it per drive materialization, GPU on the host with the factors passed to the kernel by value (at most 8); `fullmag_fem_time_expression_eval_v1` for the interpreter cross-check; a non-finite factor stops the step.
+- Runner: bases packed as pre-projected nodal drives; horizon check shared with FDM (`crates/fullmag-runner/src/mask_time.rs`); `H_drive`/`E_drive` gates; the certified-equilibrium handoff and the accepted-state materialization treat a stage with mask terms as driven; the Rust FEM reference path rejects masks.
+- Evidence (`~/git/simulations/fullmag/field_masks/fem`): a uniform mask equals the built-in regional drive bit for bit on FEM CPU and to 1.4e-17 on FEM GPU; `H_drive` of a position-dependent mask equals the function at the node coordinates to 4.6e-16 on both lanes, is zero outside the support, and the support nodes all lie inside the shape.
+- Not done: a plan-only probe for FEM (the mesh asset exists only on the managed route, so the FEM planner is checked through runs); the comparison of `parity_fem.py` with `parity_fdm.py` (blocked by finding 6 until the backend restarts).
+
 ---
 
 ## Findings outside the masks (2026-11-14, not fixed)
@@ -432,6 +442,15 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
    output time (11.27 fs late in the `H_drive` check; FDM CPU lands on the time). The
    `separate` Zarr field layout does not record the sample times, so the offset is
    invisible in a field store.
+5. FEM RK45 fails with `adaptive RK decision failed: invalid_timestep` when the stage
+   end is a whole number of `dt_max` steps after an output time (0.3 ns, `dt_max`
+   0.1 ps, output every 50 ps; also with the built-in regional drive).
+6. A scene that cannot be lowered blocks the workspace: a script with `study.cell(...)`
+   and `study.universe.mesh(maximum_element_size=...)` is rejected ("FEM mesh controls
+   cannot be combined with cell_size"), and every later script fails with
+   `live_retirement_capture_failed` until the backend restarts.
+7. FEM fields are stored as three blocks (all x, all y, all z) and FDM fields
+   interleaved; the field arrays carry neither the layout nor node coordinates.
 
 ## User decisions (2026-11-13)
 
@@ -442,4 +461,5 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 5. Thermal step left out on both sides; the quirks of the mumax3 script are reproduced as they are.
 6. Later plans: array masks from OVF files, more ready antennas (the user will send examples), FEM lanes.
 7. Design §11 points 1–5: assumed, to be confirmed with the co-author.
+9. 2026-11-14: finish the antennas completely, FEM CPU and GPU included (Task 13); leave the bugs found outside the masks as they are.
 8. 2026-11-14: keep our core (explicit terms, host scalar time, one Rust evaluator, text equations, cell-centre default, loop masks); adopt from Mateusz's V4: Update stage action with term names, scoped factories and region targets, `arbitrary_mask` naming, SSA reassignment, `H_drive` readback, the four-lane acceptance matrix as the target, and the UI design (`docs/superpowers/specs/2026-11-14-field-masks-comparison-with-v4.md`).
