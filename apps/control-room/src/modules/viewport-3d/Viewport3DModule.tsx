@@ -78,7 +78,6 @@ import {
 } from "@/kernel/selection/semanticRenderTargetCatalog";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useObjectEditSelector } from "@/kernel/authoring/object-edit/useObjectEditSelector";
-import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { ModuleProps } from "@/kernel/types";
 import {
   AIRBOX_VISUALIZATION_TARGET,
@@ -1560,14 +1559,8 @@ function LiveViewport3DModule({
   useViewport3DWorkerRuntime(reportWorkerRuntimeCounts);
   const resourceCounts = useViewport3DResourceCounts(tracker);
   useEffect(() => {
-    recordVisualizationDebugResourceCounts({
-      geometries: resourceCounts.geometries,
-      materials: resourceCounts.materials,
-      renderTargets: resourceCounts.renderTargets,
-      textures: resourceCounts.textures,
-      workers: resourceCounts.workers,
-    });
-  }, [resourceCounts]);
+    tracker.publishDebugResourceCounts();
+  }, [resourceCounts, tracker]);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
   const [regionDiagnosticOverlayState, setRegionDiagnosticOverlayState] =
