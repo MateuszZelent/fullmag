@@ -844,7 +844,13 @@ fn reject_missing_fdm_primary_inputs(plan: &fullmag_ir::FdmPlanIR, gpu: bool) ->
     if plan.frozen_spins.is_some() {
         return Err("accepted FDM materialization cannot reconstruct the original Frozen Spins activation reference".into());
     }
-    if gpu && !plan.field_drives.is_empty() {
+    if gpu
+        && (!plan.field_drives.is_empty()
+            || plan
+                .mask_field_term_bases
+                .iter()
+                .any(|basis| basis.time_dependent))
+    {
         return Err("accepted FDM GPU materialization cannot evaluate time-dependent field drives at the accepted clock".into());
     }
     Ok(())
@@ -852,6 +858,7 @@ fn reject_missing_fdm_primary_inputs(plan: &fullmag_ir::FdmPlanIR, gpu: bool) ->
 
 fn reject_missing_fem_primary_inputs(plan: &fullmag_ir::FemPlanIR) -> Result<(), String> {
     if !plan.field_drives.is_empty() || !plan.antenna_zeeman_masks.is_empty()
+        || !plan.mask_field_term_bases.is_empty()
         || !plan.solved_antenna_drive_bases.is_empty() || !plan.current_modules.is_empty()
         || !plan.spin_transport_plans.is_empty() || !plan.charge_transport_plans.is_empty()
     {
