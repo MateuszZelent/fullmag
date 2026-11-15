@@ -1,7 +1,6 @@
 import {
   useCallback,
   useLayoutEffect,
-  useRef,
   type DependencyList,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
@@ -23,11 +22,6 @@ export interface ToolbarRovingFocusOptions {
   deps?: DependencyList;
 }
 
-export interface ToolbarRovingFocus<T extends HTMLElement> {
-  ref: RefObject<T | null>;
-  onKeyDown: (event: ReactKeyboardEvent<T>) => void;
-}
-
 export function toolbarItems(toolbar: HTMLElement, itemSelector: string): HTMLElement[] {
   return Array.from(toolbar.querySelectorAll<HTMLElement>(itemSelector)).filter(
     // Items nested in a child toolbar belong to that toolbar's own tab stop.
@@ -40,13 +34,14 @@ export function toolbarItems(toolbar: HTMLElement, itemSelector: string): HTMLEl
  * keys move between items (wrapping), Home/End jump to the ends. Clicking an
  * item makes it the remembered tab stop.
  */
-export function useToolbarRovingFocus<T extends HTMLElement = HTMLDivElement>({
-  itemSelector = DEFAULT_TOOLBAR_ITEM_SELECTOR,
-  orientation = "horizontal",
-  deps = [],
-}: ToolbarRovingFocusOptions = {}): ToolbarRovingFocus<T> {
-  const ref = useRef<T>(null);
-
+export function useToolbarRovingFocus<T extends HTMLElement = HTMLDivElement>(
+  ref: RefObject<T | null>,
+  {
+    itemSelector = DEFAULT_TOOLBAR_ITEM_SELECTOR,
+    orientation = "horizontal",
+    deps = [],
+  }: ToolbarRovingFocusOptions = {},
+): (event: ReactKeyboardEvent<T>) => void {
   useLayoutEffect(() => {
     const toolbar = ref.current;
     if (!toolbar) return;
@@ -66,7 +61,7 @@ export function useToolbarRovingFocus<T extends HTMLElement = HTMLDivElement>({
     toolbar.addEventListener("focusin", rememberFocus);
     return () => toolbar.removeEventListener("focusin", rememberFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemSelector, ...deps]);
+  }, [ref, itemSelector, ...deps]);
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<T>) => {
@@ -94,5 +89,5 @@ export function useToolbarRovingFocus<T extends HTMLElement = HTMLDivElement>({
     [itemSelector, orientation],
   );
 
-  return { ref, onKeyDown };
+  return onKeyDown;
 }

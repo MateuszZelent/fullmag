@@ -1082,7 +1082,8 @@ function useHysteresisChartView({
   const [xAxisUnit, setXAxisUnit] = useState<XAxisUnit>("mT");
   const [viewMode, setViewMode] = useState<ViewMode>("full");
   const [isPlaying, setIsPlaying] = useState(false);
-  const playerToolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [isPlaying] });
+  const playerToolbarRef = useRef<HTMLDivElement>(null);
+  const playerToolbarKeyDown = useToolbarRovingFocus(playerToolbarRef, { deps: [isPlaying] });
 
   const elementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
@@ -1586,11 +1587,11 @@ function useHysteresisChartView({
         ) : null}
 
         <div
-          ref={playerToolbar.ref}
+          ref={playerToolbarRef}
           className="fm-hysteresis-player-controls"
           role="toolbar"
           aria-label="Hysteresis playback"
-          onKeyDown={playerToolbar.onKeyDown}
+          onKeyDown={playerToolbarKeyDown}
         >
           <Button
             size="sm"

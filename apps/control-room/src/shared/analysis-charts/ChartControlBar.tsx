@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { Button } from "@/shared/ui/Button";
 import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
 import {
@@ -86,15 +87,16 @@ export function ChartControlBar({
   timeRangeSupported = true,
 }: ChartControlBarProps) {
   const isPaused = liveMode === "paused";
-  const toolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [rangeMode, liveMode] });
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, { deps: [rangeMode, liveMode] });
 
   return (
     <div
-      ref={toolbar.ref}
+      ref={toolbarRef}
       className="fm-chart-control-bar"
       role="toolbar"
       aria-label="Chart controls"
-      onKeyDown={toolbar.onKeyDown}
+      onKeyDown={toolbarKeyDown}
     >
       {/* Live / Paused toggle */}
       <Button

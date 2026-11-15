@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useRef, useSyncExternalStore, type ReactNode } from "react";
 import {
   Camera,
   ChartSpline,
@@ -143,15 +143,16 @@ export function PlanarToolbar() {
   const multisliceEnabled = planar?.multislice?.enabled ?? false;
   const panelCount = String(planar?.multislice?.position_fractions.length ?? 3);
   const panelsEnabled = commands.isEnabled("field-map.multislice-panels", context);
-  const toolbar = useToolbarRovingFocus<HTMLDivElement>({ deps: [context] });
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, { deps: [context] });
 
   return (
     <TooltipProvider delayDuration={300}>
       <div
         aria-label="2D view tools"
         className="fm-planar-toolbar"
-        onKeyDown={toolbar.onKeyDown}
-        ref={toolbar.ref}
+        onKeyDown={toolbarKeyDown}
+        ref={toolbarRef}
         role="toolbar"
       >
         <div aria-label="Section plane" className="fm-planar-toolbar__group" role="radiogroup">

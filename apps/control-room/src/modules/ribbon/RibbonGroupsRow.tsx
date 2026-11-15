@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -277,14 +277,15 @@ function RibbonGroup({
   onAction?: (actionId: string, input?: unknown) => void;
   onCommandDetail?: (commandId: string) => void;
 }) {
-  const toolbar = useToolbarRovingFocus<HTMLDivElement>({
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, {
     itemSelector: RIBBON_TOOLBAR_ITEM_SELECTOR,
     deps: [density, group.actions],
   });
 
   return (
     <div
-      ref={toolbar.ref}
+      ref={toolbarRef}
       className="fm-ribbon-group"
       data-group-id={group.id}
       data-tone={group.tone ?? "neutral"}
@@ -292,7 +293,7 @@ function RibbonGroup({
       aria-label={group.subtitle ? `${group.title}: ${group.subtitle}` : group.title}
       aria-orientation="horizontal"
       role="toolbar"
-      onKeyDown={toolbar.onKeyDown}
+      onKeyDown={toolbarKeyDown}
     >
       {density === "collapsed" ? (
         <DropdownMenu>

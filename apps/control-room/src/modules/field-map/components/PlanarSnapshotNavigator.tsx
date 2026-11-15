@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { useHysteresisPointsResource } from "@/kernel/resources/studyRuntimeResources";
@@ -36,7 +36,8 @@ export function PlanarSnapshotNavigator({ status }: { status: PlanarEvidenceStat
   const index = snapshotIndex(sequence, selected.snapshotId);
   const current = index >= 0 ? sequence[index]! : null;
   const [playing, setPlaying] = useState(false);
-  const toolbar = useToolbarRovingFocus<HTMLDivElement>({
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarKeyDown = useToolbarRovingFocus(toolbarRef, {
     deps: [index, playing, sequence.length, selected.stageId],
   });
 
@@ -63,9 +64,9 @@ export function PlanarSnapshotNavigator({ status }: { status: PlanarEvidenceStat
   if (!selected.stageId || sequence.length === 0) return null;
   return (
     <div
-      ref={toolbar.ref}
+      ref={toolbarRef}
       aria-label="Snapshot navigator"
-      onKeyDown={toolbar.onKeyDown}
+      onKeyDown={toolbarKeyDown}
       className="fm-field-map__snapshot-nav"
       data-snapshot-count={sequence.length}
       data-snapshot-id={selected.snapshotId ?? ""}
