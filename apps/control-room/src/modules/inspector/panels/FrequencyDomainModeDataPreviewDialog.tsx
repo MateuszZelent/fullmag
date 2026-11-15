@@ -198,7 +198,7 @@ export function FrequencyDomainModeDataPreviewDialog({
             </pre>
           ) : null}
 
-          <div className="fm-mode-data-preview__table-wrap">
+          <div aria-label="Mode data preview values (scrollable)" className="fm-mode-data-preview__table-wrap" role="region" tabIndex={0}>
             <table className="fm-frequency-domain-table fm-mode-data-preview__table">
               <thead>
                 <tr>

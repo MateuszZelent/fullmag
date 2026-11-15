@@ -13,6 +13,7 @@ function PopoverContent({
   className,
   ref,
   align = "center",
+  collisionPadding = 8,
   sideOffset = 6,
   ...props
 }: ComponentPropsWithRef<typeof PopoverPrimitive.Content>) {
@@ -21,6 +22,7 @@ function PopoverContent({
       <PopoverPrimitive.Content
         ref={ref}
         align={align}
+        collisionPadding={collisionPadding}
         sideOffset={sideOffset}
         className={cn("fm-popover", className)}
         {...props}

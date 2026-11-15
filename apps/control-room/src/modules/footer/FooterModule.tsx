@@ -245,7 +245,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
 
   return (
     <>
-      <div className="fm-footer__filters shrink-0" aria-label="Log filters">
+      <div role="group" className="fm-footer__filters shrink-0" aria-label="Log filters">
         <FilterButton
           active={direction === "all"}
           onClick={() => setFooterDirectionFilter("all")}

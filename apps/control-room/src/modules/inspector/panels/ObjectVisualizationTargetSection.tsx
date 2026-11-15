@@ -593,7 +593,7 @@ export function ScalarColorbarControl({
           ))}
         </FormField>
       ) : null}
-      <div
+      <div role="img"
         className="fm-inspector-colorbar"
         aria-label={
           minLabel && maxLabel
@@ -1424,6 +1424,7 @@ export function NumberField({
         max={max}
         min={min}
         step={step}
+        valueText={(v) => `${formatNumericControlValue(v, step)}${unit ?? ""}`}
         value={[displayValue]}
         onValueChange={([nextValue]: number[]) => {
           if (nextValue !== undefined) setDraftOverride(nextValue);

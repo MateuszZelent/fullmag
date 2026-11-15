@@ -222,7 +222,7 @@ function RuntimeLaneSummary({ compute }: { readonly compute: ComputeProbeState }
               <span className="fm-start-env__lane-name">
                 {backend} · {device}
               </span>
-              <span
+              <span role="group"
                 aria-label={diagnostic?.reason ? `${label}: ${diagnostic.reason}` : undefined}
                 className="fm-start-env__lane-state"
                 title={diagnostic?.reason}

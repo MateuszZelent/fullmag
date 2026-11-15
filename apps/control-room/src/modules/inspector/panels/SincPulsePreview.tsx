@@ -9,7 +9,7 @@ export function SincPulsePreview({
   solverDtS: number | null;
 }) {
   return (
-    <div className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
+    <div role="group" className="fm-sinc-preview" aria-label="Sinc pulse and source FFT preview">
       <PreviewPlot
         points={model.waveform.map((point) => [point.timeS, point.value])}
         marker={model.t0S}
@@ -44,14 +44,12 @@ export function SincPulsePreview({
       </div>
       <p
         className={`fm-sinc-preview__message fm-sinc-preview__message--${model.isSymmetricWindow ? "ready" : "preview_only"}`}
-        role="status"
       >
         {model.symmetryMessage} Symmetry is assessed with τ = t - t0; the horizontal axis remains the authored time t and t0 is never recentered silently.
       </p>
       {model.message ? <p className={`fm-sinc-preview__message fm-sinc-preview__message--${model.status}`}>{model.message}</p> : null}
       <p
         className={`fm-sinc-preview__message fm-sinc-preview__message--${model.nyquistStatus === "pass" ? "ready" : model.nyquistStatus === "fail" ? "unavailable" : "preview_only"}`}
-        role="status"
       >
         {model.nyquistMessage}
       </p>

@@ -176,7 +176,7 @@ export function FrequencyDomainModeTable({
   }
 
   return (
-    <div className="fm-frequency-domain-table-wrap">
+    <div aria-label="Frequency-domain mode table (scrollable)" className="fm-frequency-domain-table-wrap" role="region" tabIndex={0}>
       <table
         aria-label="Frequency-domain mode table"
         className="fm-frequency-domain-table"
@@ -296,7 +296,7 @@ export function FrequencyDomainResponsePointTable({
   }
 
   return (
-    <div className="fm-frequency-domain-table-wrap">
+    <div aria-label="Frequency-domain response point table (scrollable)" className="fm-frequency-domain-table-wrap" role="region" tabIndex={0}>
       <table
         aria-label="Frequency-domain response point table"
         className="fm-frequency-domain-table"
@@ -392,7 +392,7 @@ export function FrequencyDomainBranchTable({
   }
 
   return (
-    <div className="fm-frequency-domain-table-wrap">
+    <div aria-label="Frequency-domain branch table (scrollable)" className="fm-frequency-domain-table-wrap" role="region" tabIndex={0}>
       <table
         aria-label="Frequency-domain branch table"
         className="fm-frequency-domain-table"
@@ -489,7 +489,7 @@ export function FrequencyDomainFmrPeakTable({
   }
 
   return (
-    <div className="fm-frequency-domain-table-wrap">
+    <div aria-label="Frequency-domain FMR peak table (scrollable)" className="fm-frequency-domain-table-wrap" role="region" tabIndex={0}>
       <table
         aria-label="Frequency-domain FMR peak table"
         className="fm-frequency-domain-table"

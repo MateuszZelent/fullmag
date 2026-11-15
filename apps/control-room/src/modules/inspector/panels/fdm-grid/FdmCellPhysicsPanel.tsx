@@ -315,7 +315,7 @@ function FieldSourceDetails({ rows }: { rows: readonly FdmCellQuantitySample[] }
   const sourcedRows = rows.filter((row) => row.status === "ready" && sourceText(row));
   if (!sourcedRows.length) return <FieldRow label="Field sources" value="No current sample provenance" />;
   return (
-    <div className="fm-fdm-cell-physics__sources" aria-label="Per-field source provenance">
+    <div role="group" className="fm-fdm-cell-physics__sources" aria-label="Per-field source provenance">
       {sourcedRows.map((row) => (
         <FieldRow key={row.id} label={`${row.group === "material" ? materialLabel(row) : row.group === "energy" ? energyLabel(row) : "m"} source`} value={sourceText(row)!} />
       ))}

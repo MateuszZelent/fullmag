@@ -1131,6 +1131,10 @@ function useHysteresisChartView({
   const liveYValue = activePoint ? getPointYValue(activePoint, yAxisKey) : getProgressYValue(progress, yAxisKey);
   const liveSettleLabel = progressSettleLabel(progress);
   const activePointSnapshotId = activePoint?.snapshot_id ?? null;
+  const scrubberTotal = progress?.total_points || points.length;
+  const scrubberValueText = activePoint
+    ? `Point ${resolvedActiveIndex + 1} of ${scrubberTotal}, H = ${activePoint.field_value_mT.toFixed(2)} mT`
+    : `Point ${resolvedActiveIndex >= 0 ? resolvedActiveIndex + 1 : 0} of ${scrubberTotal}`;
   const replayAction = hysteresisChartReplayActionPresentation(
     activePointSnapshotId,
     activePoint?.snapshot_storage_status ?? null,
@@ -1722,6 +1726,7 @@ function useHysteresisChartView({
                 if (nextIndex != null) selectPoint(nextIndex);
               }}
               aria-label="Hysteresis point scrubber"
+              aria-valuetext={scrubberValueText}
               className="fm-hysteresis-scrubber"
             />
           )}

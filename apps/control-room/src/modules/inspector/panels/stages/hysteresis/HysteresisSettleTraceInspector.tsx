@@ -60,7 +60,7 @@ function HysteresisSettleTraceRow({
   return (
     <div className="fm-hysteresis-inspector-step">
       <div className="fm-hysteresis-inspector-step__header">
-        <span className="fm-hysteresis-inspector-step__title">
+        <span className="fm-hysteresis-inspector-step__title" title={`${entry.step_index + 1}. ${entry.algorithm_id}`}>
           {entry.step_index + 1}. {entry.algorithm_id}
         </span>
         <span className="fm-hysteresis-inspector-step__method">{entry.method}</span>

@@ -368,9 +368,9 @@ function AirboxLaneAvailabilityPanel({
     [kernel],
   );
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <p>{heading}</p>
-      <p>{message}</p>
+      <p role="status">{message}</p>
       <div className="fm-inspector-toolbar">
         {showPolicyRoute ? (
           <Button size="sm" type="button" variant="primary" onClick={() => navigateToAirboxRoute(kernel.selection, "meshParameters")}>

@@ -88,7 +88,7 @@ export function PointsTableDialog({
           onClick={onClose}
           type="button"
         >
-          ✕
+          <span aria-hidden="true">✕</span>
         </button>
       </div>
 

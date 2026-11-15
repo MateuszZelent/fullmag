@@ -21,7 +21,7 @@ export function FieldMapAuxiliaryDiagnostics({
   if (diagnostics.length === 0) return null;
   return (
     <div className="fm-field-map__diagnostics" role="status" aria-label="Planar layer diagnostics">
-      {diagnostics.map((message) => <p key={message}>{message}</p>)}
+      {[...new Set(diagnostics)].map((message) => <p key={message}>{message}</p>)}
     </div>
   );
 }

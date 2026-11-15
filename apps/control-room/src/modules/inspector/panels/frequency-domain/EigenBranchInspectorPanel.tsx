@@ -367,7 +367,7 @@ function BranchContinuityCharts({ branch }: { branch: EigenBranch | null }) {
 
   return (
     <div className="fm-frequency-domain-branch-charts">
-      <div
+      <div role="group"
         aria-label="Frequency-domain branch frequency chart"
         className="fm-frequency-domain-chart"
         data-renderer="summary"
@@ -385,7 +385,7 @@ function BranchContinuityCharts({ branch }: { branch: EigenBranch | null }) {
           ))}
         </div>
       </div>
-      <div
+      <div role="group"
         aria-label="Frequency-domain branch overlap chart"
         className="fm-frequency-domain-chart"
         data-renderer="summary"

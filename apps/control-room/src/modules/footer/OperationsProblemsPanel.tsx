@@ -97,7 +97,7 @@ export function OperationsPanelView({
       </div>
       <ProjectionGaps gaps={model.gaps} />
       {model.rows.length > 0 ? (
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Operations" className="fm-footer-diagnostics__profile-table">
           <thead>
             <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
               <th scope="col">Source</th>
@@ -160,7 +160,7 @@ export function ProblemsPanelView({
       </div>
       <ProjectionGaps gaps={model.gaps} />
       {model.rows.length > 0 ? (
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Problems" className="fm-footer-diagnostics__profile-table">
           <thead>
             <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
               <th scope="col">Severity</th>

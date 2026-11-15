@@ -785,15 +785,40 @@ button:hover > .fm-inspector-group-icon-box {
   }
 }
 
-/* ── Reduced motion: disable all animations ── */
+/* ── Reduced motion: no lift/scale/nudge; colour transitions remain ── */
 @media (prefers-reduced-motion: reduce) {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
   .fm-inspector-metric-card,
   .fm-viz-color-swatch,
-  .fm-visualization-toggle {
-    transition: none !important;
+  .fm-visualization-toggle,
+  .fm-viz-layer-chip,
+  .fm-inspector-group-nav-trigger > svg:last-child,
+  .fm-inspector__action-btn {
     transform: none !important;
+  }
+
+  .fm-viz-render-mode-tile__icon,
+  .fm-inspector-group-nav-trigger:hover > svg:last-child,
+  .fm-inspector__action-btn:active:not(:disabled) {
+    transition: none !important;
+  }
+
+  .fm-viz-render-mode-tile,
+  .fm-viz-layer-chip {
+    transition-property: background, border-color, color, box-shadow !important;
+  }
+
+  .fm-viz-color-swatch,
+  .fm-inspector-metric-card {
+    transition-property: background, border-color, box-shadow !important;
+  }
+
+  .fm-inspector-group-nav-trigger {
+    transition-property: background !important;
+  }
+  .fm-inspector-range-slider::-webkit-slider-thumb {
+    transition: none;
   }
 }
 

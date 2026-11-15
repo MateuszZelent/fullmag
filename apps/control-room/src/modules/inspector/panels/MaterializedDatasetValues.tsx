@@ -48,12 +48,14 @@ function ValuesPage({ dataset, pageSize, total }: {
         {error && <p role="alert" className="m-0 text-fm-xs text-fm-danger">Could not verify saved field values: {error.message}</p>}
         {resource.status === "loading" && <p role="status" className="m-0 text-fm-xs text-fm-muted">Reading saved field values…</p>}
         {resource.data && !error && (
+          <div aria-label="Saved field values" className="max-w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-fm-accent" role="region" tabIndex={0}>
           <table aria-label="Saved field values" className="w-full text-fm-xs">
             <thead><tr><th scope="col" className="text-left">Element index</th><th scope="col" className="text-right">Component {component} [{dataset.field.descriptor.unit}]</th></tr></thead>
             <tbody>{Array.from({ length: Number(count) }, (_, index) => (
               <tr key={(offset + BigInt(index)).toString()}><th scope="row" className="text-left font-normal">{(offset + BigInt(index)).toString()}</th><td className="text-right font-mono">{resource.data!.values[index * components + component].toPrecision(8)}</td></tr>
             ))}</tbody>
           </table>
+          </div>
         )}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={offset === BigInt(0)} onClick={() => setOffset(offset > pageSize ? offset - pageSize : BigInt(0))}>Previous values</Button>
