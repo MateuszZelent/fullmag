@@ -92,7 +92,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                         changed["document"], changed["actual"], "frontend", {}
                     )
 
-    def test_native_contract_allowlist_keeps_one_contract_per_invocation(self):
+    def test_native_contract_allowlist_keeps_single_ids_and_one_closed_pair(self):
         self.assertEqual(
             docker_volume_dev._native_contracts(["fem-cuda-bb-exchange-mass"]),
             ("fem-cuda-bb-exchange-mass",),
@@ -113,10 +113,17 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                     docker_volume_dev._native_contracts([contract_id]),
                     (contract_id,),
                 )
+        self.assertEqual(
+            docker_volume_dev._native_contracts(["fem-rk-explicit", "fem-adaptive-dt"]),
+            ("fem-adaptive-dt", "fem-rk-explicit"),
+        )
         for values in (
             ["fem-arbitrary-target"],
             ["fem-cuda-activity-trace", "fem-demag-poisson"],
+            ["fem-adaptive-dt", "fem-cuda-activity-trace"],
+            ["fem-adaptive-dt", "fem-rk-explicit", "fem-cuda-activity-trace"],
             ["fem-cuda-activity-trace", "fem-cuda-activity-trace"],
+            ["fem-adaptive-dt", "fem-adaptive-dt"],
             "fem-cuda-activity-trace",
         ):
             with self.subTest(values=values), self.assertRaisesRegex(

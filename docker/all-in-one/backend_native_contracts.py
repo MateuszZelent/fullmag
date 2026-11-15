@@ -22,6 +22,9 @@ SCHEMA = "fullmag.backend-native-contracts.v1"
 CONTRACT_REVISION = 1
 FEM_DEMAG_POISSON = "fem-demag-poisson"
 FEM_CUDA_ACTIVITY_TRACE = "fem-cuda-activity-trace"
+FEM_ADAPTIVE_DT = "fem-adaptive-dt"
+FEM_RK_EXPLICIT = "fem-rk-explicit"
+_ADAPTIVE_RK_PAIR = frozenset((FEM_ADAPTIVE_DT, FEM_RK_EXPLICIT))
 CONTRACT_TARGETS = {
     "fem-cuda-snapshot": "fem_cuda_snapshot_contract",
     "fem-cuda-bb-exchange-mass": "fem_cuda_bb_exchange_mass_contract",
@@ -32,8 +35,8 @@ CONTRACT_TARGETS = {
     "fem-cpu-pgbb-reuse": "fem_pgbb_accepted_cache_contract",
     "fem-cuda-object-average": "fem_cuda_object_average_contract",
     "fem-cpu-threads": "fem_cpu_threads_contract",
-    "fem-adaptive-dt": "fem_adaptive_dt_contract",
-    "fem-rk-explicit": "fem_rk_explicit_contract",
+    FEM_ADAPTIVE_DT: "fem_adaptive_dt_contract",
+    FEM_RK_EXPLICIT: "fem_rk_explicit_contract",
 }
 ALLOWED_CONTRACTS = frozenset(CONTRACT_TARGETS)
 PACKAGE_LIBRARY_ARTIFACT_PATH = "lib/libfullmag_fem.so"
@@ -82,8 +85,8 @@ def normalize_contracts(requested: Sequence[str] | None) -> tuple[str, ...]:
             raise ValueError(f"duplicate native contract: {value}")
         seen.add(value)
         normalized.append(value)
-    if len(normalized) > 1:
-        raise ValueError("select at most one native contract per managed build")
+    if len(normalized) > 1 and frozenset(normalized) != _ADAPTIVE_RK_PAIR:
+        raise ValueError("only the adaptive-dt and rk-explicit native contract pair may be combined")
     return tuple(normalized)
 
 
@@ -503,9 +506,8 @@ def prepare_contracts(
 ) -> dict[str, Any]:
     """Compile before Make copies the FEM library; this is not a test pass."""
     contract_ids = normalize_contracts(requested)
-    if len(contract_ids) != 1:
+    if not contract_ids:
         raise NativeContractError("native preparation requires the allowlisted contract")
-    contract_id = contract_ids[0]
     attempt, attempt_id = _safe_evidence_attempt(evidence_root)
     report = _new_report(attempt_id=attempt_id, requested=list(contract_ids),
                          source_snapshot_sha256=source_snapshot_sha256)
@@ -519,20 +521,36 @@ def prepare_contracts(
         native_root = Path(native_build_root).absolute()
         _require_directory(native_root, "native build root")
         _require_cmake_snapshot(native_root, source_snapshot_sha256)
-        compile_argv = [environment.get("FULLMAG_CMAKE", "cmake"), "--build", str(native_root),
-                        "--target", CONTRACT_TARGETS[contract_id], "--parallel", str(jobs)]
-        if not _expected_compile_argv(compile_argv, contract_id):
-            raise NativeContractError("invalid native preparation CMake command")
-        contract: dict[str, Any] = {"state": "failed", "contract_revision": CONTRACT_REVISION}
-        report["contracts"][contract_id] = contract
-        contract["compile"] = _run_command(compile_argv, cwd=native_root,
-                                            environment=environment, log_file=log_file)
-        if not _command_succeeded(contract["compile"], kind="compile", contract_id=contract_id):
-            raise NativeContractError("native contract preparation compile failed")
+        for contract_id in contract_ids:
+            report["contracts"][contract_id] = {
+                "state": "failed", "contract_revision": CONTRACT_REVISION,
+            }
+        prepared_library_hash: str | None = None
+        for contract_id in contract_ids:
+            contract = report["contracts"][contract_id]
+            compile_argv = [environment.get("FULLMAG_CMAKE", "cmake"), "--build", str(native_root),
+                            "--target", CONTRACT_TARGETS[contract_id], "--parallel", str(jobs)]
+            if not _expected_compile_argv(compile_argv, contract_id):
+                raise NativeContractError("invalid native preparation CMake command")
+            contract["compile"] = _run_command(compile_argv, cwd=native_root,
+                                                environment=environment, log_file=log_file)
+            if not _command_succeeded(contract["compile"], kind="compile", contract_id=contract_id):
+                raise NativeContractError(f"native contract preparation compile failed: {contract_id}")
+            _require_cmake_snapshot(native_root, source_snapshot_sha256)
+            library_hash = _build_library_sha256(native_root)
+            if prepared_library_hash is not None and library_hash != prepared_library_hash:
+                raise NativeContractError("FEM library changed between paired native contract builds")
+            prepared_library_hash = library_hash
+            contract["library_sha256"] = library_hash
+            contract["test_binary_sha256"] = _hash_regular_file(native_root / _test_binary_path(contract_id))
+            contract["state"] = "compiled"
         _require_cmake_snapshot(native_root, source_snapshot_sha256)
-        contract["library_sha256"] = _build_library_sha256(native_root)
-        contract["test_binary_sha256"] = _hash_regular_file(native_root / _test_binary_path(contract_id))
-        contract["state"] = "compiled"
+        if _build_library_sha256(native_root) != prepared_library_hash:
+            raise NativeContractError("FEM library changed after native contract builds")
+        for contract_id in contract_ids:
+            contract = report["contracts"][contract_id]
+            if _hash_regular_file(native_root / _test_binary_path(contract_id)) != contract["test_binary_sha256"]:
+                raise NativeContractError("native contract binary changed after native contract builds")
         report["state"] = "compiled"
     except Exception as error:
         report["error"] = str(error)
@@ -557,7 +575,15 @@ def _valid_evidence(report: Mapping[str, Any]) -> bool:
     )
 
 
-def _preparation_matches(report: Any, snapshot: str, contract_id: str = FEM_DEMAG_POISSON) -> bool:
+def _preparation_matches(
+    report: Any,
+    snapshot: str,
+    requested: Sequence[str] | str = FEM_DEMAG_POISSON,
+) -> bool:
+    try:
+        contract_ids = normalize_contracts((requested,) if isinstance(requested, str) else requested)
+    except (TypeError, ValueError):
+        return False
     if not isinstance(report, Mapping) or (
         report.get("schema") != SCHEMA
         or type(report.get("contract_revision")) is not int
@@ -565,27 +591,33 @@ def _preparation_matches(report: Any, snapshot: str, contract_id: str = FEM_DEMA
         or report.get("state") != "compiled"
         or report.get("source_snapshot_sha256") != snapshot
         or not _valid_sha256(snapshot)
-        or report.get("requested") != [contract_id]
+        or report.get("requested") != list(contract_ids)
         or not _valid_evidence(report)
     ):
         return False
     contracts = report.get("contracts")
-    if not isinstance(contracts, Mapping) or set(contracts) != {contract_id}:
+    if not contract_ids or not isinstance(contracts, Mapping) or set(contracts) != set(contract_ids):
         return False
-    contract = contracts[contract_id]
-    return (
-        isinstance(contract, Mapping) and contract.get("state") == "compiled"
-        and type(contract.get("contract_revision")) is int
-        and contract.get("contract_revision") == CONTRACT_REVISION
-        and _command_succeeded(contract.get("compile"), kind="compile", contract_id=contract_id)
-        and _valid_sha256(contract.get("library_sha256"))
-        and _valid_sha256(contract.get("test_binary_sha256"))
-    )
+    library_hashes: set[str] = set()
+    for contract_id in contract_ids:
+        contract = contracts[contract_id]
+        if not (
+            isinstance(contract, Mapping) and contract.get("state") == "compiled"
+            and type(contract.get("contract_revision")) is int
+            and contract.get("contract_revision") == CONTRACT_REVISION
+            and _command_succeeded(contract.get("compile"), kind="compile", contract_id=contract_id)
+            and _valid_sha256(contract.get("library_sha256"))
+            and _valid_sha256(contract.get("test_binary_sha256"))
+        ):
+            return False
+        library_hashes.add(contract["library_sha256"])
+    return len(library_hashes) == 1
 
 
 def _read_preparation(root: Path, native_root: Path, snapshot: str, jobs: int,
-                      contract_id: str = FEM_DEMAG_POISSON) -> dict[str, Any]:
+                      requested: Sequence[str] | str = FEM_DEMAG_POISSON) -> dict[str, Any]:
     """Reject missing, ambiguous, stale or changed pre-copy compilation evidence."""
+    contract_ids = normalize_contracts((requested,) if isinstance(requested, str) else requested)
     root = root.absolute()
     for path in reversed((root, *root.parents)):
         _require_directory(path, "native preparation evidence directory")
@@ -601,20 +633,23 @@ def _read_preparation(root: Path, native_root: Path, snapshot: str, jobs: int,
     if len(payload) > 1024 * 1024 or hashlib.sha256(payload).hexdigest() != before or before != _hash_regular_file(receipt):
         raise NativeContractError("native preparation report changed or exceeds its size limit")
     report = json.loads(payload)
-    if not _preparation_matches(report, snapshot, contract_id) or attempt.name != "attempt-" + report["attempt_id"]:
+    if not _preparation_matches(report, snapshot, contract_ids) or attempt.name != "attempt-" + report["attempt_id"]:
         raise NativeContractError("native preparation does not match this contract and snapshot")
-    contract = report["contracts"][contract_id]
     _require_cmake_snapshot(native_root, snapshot)
-    argv = contract["compile"]["argv"]
     log_path = attempt / "native-contract.log"
-    if (
-        argv[2] != str(native_root) or argv[6] != str(jobs)
-        or _hash_regular_file(log_path) != report["evidence"]["log_sha256"]
-        or log_path.stat().st_size != report["evidence"]["log_size_bytes"]
-        or _build_library_sha256(native_root) != contract["library_sha256"]
-        or _hash_regular_file(native_root / _test_binary_path(contract_id)) != contract["test_binary_sha256"]
-    ):
+    if (_hash_regular_file(log_path) != report["evidence"]["log_sha256"]
+            or log_path.stat().st_size != report["evidence"]["log_size_bytes"]):
         raise NativeContractError("native preparation inputs, command or log changed")
+    library_hash = _build_library_sha256(native_root)
+    for contract_id in contract_ids:
+        contract = report["contracts"][contract_id]
+        argv = contract["compile"]["argv"]
+        if (
+            argv[2] != str(native_root) or argv[6] != str(jobs)
+            or library_hash != contract["library_sha256"]
+            or _hash_regular_file(native_root / _test_binary_path(contract_id)) != contract["test_binary_sha256"]
+        ):
+            raise NativeContractError("native preparation inputs or command changed")
     return report
 
 
@@ -707,76 +742,63 @@ def run_contracts(
         package_lib_dir = package / "lib"
         _require_directory(package_lib_dir, "native package library directory")
 
-        contract_id = contract_ids[0]
-        compile_argv = [
-            "cmake",
-            "--build",
-            str(native_root),
-            "--target",
-            CONTRACT_TARGETS[contract_id],
-            "--parallel",
-            str(jobs),
-        ]
-        test_binary = native_root / _test_binary_path(contract_id)
-        test_argv = [str(test_binary)]
         build_lib_dir = native_root / BUILD_LIBRARY_RELATIVE_PATH.parent
         command_environment = dict(environment)
         prior_library_path = command_environment.get("LD_LIBRARY_PATH", "")
         command_environment["LD_LIBRARY_PATH"] = (
             str(build_lib_dir) + (os.pathsep + prior_library_path if prior_library_path else "")
         )
-
-        contract: dict[str, Any] = {
-            "contract_revision": CONTRACT_REVISION,
-            "state": "failed",
-            "compile": {
-                "state": "not_run",
-                "exit_code": None,
-                "argv": compile_argv,
-                "duration_seconds": 0.0,
-            },
-            "test": {
-                "state": "not_run",
-                "exit_code": None,
-                "argv": test_argv,
-                "duration_seconds": 0.0,
-            },
-            "test_binary": {
-                "path": _test_binary_path(contract_id).as_posix(),
-                "sha256_before": None,
-                "sha256_after": None,
-            },
-            "libraries": {
-                "build": {
-                    "path": BUILD_LIBRARY_RELATIVE_PATH.as_posix(),
-                    "sha256": None,
+        for contract_id in contract_ids:
+            compile_argv = [
+                "cmake", "--build", str(native_root), "--target",
+                CONTRACT_TARGETS[contract_id], "--parallel", str(jobs),
+            ]
+            test_binary = native_root / _test_binary_path(contract_id)
+            report["contracts"][contract_id] = {
+                "contract_revision": CONTRACT_REVISION,
+                "state": "failed",
+                "compile": {
+                    "state": "not_run", "exit_code": None,
+                    "argv": compile_argv, "duration_seconds": 0.0,
                 },
-                "package": {
-                    "path": PACKAGE_LIBRARY_ARTIFACT_PATH,
-                    "sha256": None,
+                "test": {
+                    "state": "not_run", "exit_code": None,
+                    "argv": [str(test_binary)], "duration_seconds": 0.0,
                 },
-            },
-        }
-        report["contracts"][contract_id] = contract
+                "test_binary": {
+                    "path": _test_binary_path(contract_id).as_posix(),
+                    "sha256_before": None, "sha256_after": None,
+                },
+                "libraries": {
+                    "build": {"path": BUILD_LIBRARY_RELATIVE_PATH.as_posix(), "sha256": None},
+                    "package": {"path": PACKAGE_LIBRARY_ARTIFACT_PATH, "sha256": None},
+                },
+            }
 
         package_hash_before = _package_library_sha256(package)
-        if preparation_root is None:
-            contract["compile"] = _run_command(
-                compile_argv, cwd=native_root,
-                environment=command_environment, log_file=log_file,
-            )
-        else:
+        prepared: dict[str, Any] | None = None
+        if preparation_root is not None:
             try:
-                prepared = _read_preparation(Path(preparation_root), native_root, source_snapshot_sha256, jobs, contract_id)
+                prepared = _read_preparation(
+                    Path(preparation_root), native_root, source_snapshot_sha256, jobs, contract_ids
+                )
             except Exception as error:
                 raise NativeContractError(f"native contract preparation rejected: {error}") from error
             report["preparation"] = prepared
             report["preparation_root"] = str(Path(preparation_root).absolute())
-            contract["compile"] = prepared["contracts"][contract_id]["compile"]
             _append_diagnostic(log_file, f"compile evidence: {preparation_root}/{prepared['evidence']['report_path']}")
-        if contract["compile"]["state"] != "succeeded":
-            reason = contract["compile"].get("reason", "compile_failed")
-            raise NativeContractError(f"native contract compile failed: {reason}")
+        for contract_id in contract_ids:
+            contract = report["contracts"][contract_id]
+            if prepared is None:
+                contract["compile"] = _run_command(
+                    contract["compile"]["argv"], cwd=native_root,
+                    environment=command_environment, log_file=log_file,
+                )
+            else:
+                contract["compile"] = prepared["contracts"][contract_id]["compile"]
+            if not _command_succeeded(contract["compile"], kind="compile", contract_id=contract_id):
+                reason = contract["compile"].get("reason", "compile_failed")
+                raise NativeContractError(f"native contract compile failed for {contract_id}: {reason}")
 
         build_library_hash = _build_library_sha256(native_root)
         package_library_hash = _package_library_sha256(package)
@@ -784,46 +806,51 @@ def run_contracts(
             raise NativeContractError("packaged FEM library changed during native contract compilation")
         if build_library_hash != package_library_hash:
             raise NativeContractError("built FEM library does not match the installed package library")
-        contract["libraries"]["build"]["sha256"] = build_library_hash
-        contract["libraries"]["package"]["sha256"] = package_library_hash
-
-        contract["test_binary"]["sha256_before"] = _hash_regular_file(test_binary)
-        _require_soname_matches(package / PACKAGE_LIBRARY_ARTIFACT_PATH, package, package_library_hash)
-        if preparation_root is not None:
-            prepared_contract = report["preparation"]["contracts"][contract_id]
-            if (
-                contract["test_binary"]["sha256_before"] != prepared_contract["test_binary_sha256"]
-                or build_library_hash != prepared_contract["library_sha256"]
+        for contract_id in contract_ids:
+            contract = report["contracts"][contract_id]
+            contract["libraries"]["build"]["sha256"] = build_library_hash
+            contract["libraries"]["package"]["sha256"] = package_library_hash
+            if prepared is not None and (
+                build_library_hash != prepared["contracts"][contract_id]["library_sha256"]
             ):
-                raise NativeContractError("prepared binary or library changed before test execution")
-        contract["test"] = _run_command(
-            test_argv,
-            cwd=native_root,
-            environment=command_environment,
-            log_file=log_file,
-        )
-        contract["test_binary"]["sha256_after"] = _hash_regular_file(test_binary)
-        build_library_hash_after = _build_library_sha256(native_root)
-        package_library_hash_after = _package_library_sha256(package)
-        if contract["test_binary"]["sha256_before"] != contract["test_binary"]["sha256_after"]:
-            raise NativeContractError("native contract test binary changed while it was executing")
-        if build_library_hash_after != build_library_hash:
-            raise NativeContractError("built FEM library changed while the native contract was executing")
-        if package_library_hash_after != package_library_hash:
-            raise NativeContractError("packaged FEM library changed while the native contract was executing")
-        _require_soname_matches(package / PACKAGE_LIBRARY_ARTIFACT_PATH, package, package_library_hash_after)
-        if contract["test"]["state"] != "succeeded":
-            reason = contract["test"].get("reason", "test_failed")
-            raise NativeContractError(f"native contract test failed: {reason}")
-        contract["state"] = "passed"
+                raise NativeContractError("prepared FEM library changed before test execution")
+        _require_soname_matches(package / PACKAGE_LIBRARY_ARTIFACT_PATH, package, package_library_hash)
+
+        for contract_id in contract_ids:
+            contract = report["contracts"][contract_id]
+            test_binary = native_root / _test_binary_path(contract_id)
+            test_argv = contract["test"]["argv"]
+            contract["test_binary"]["sha256_before"] = _hash_regular_file(test_binary)
+            if prepared is not None and (
+                contract["test_binary"]["sha256_before"]
+                != prepared["contracts"][contract_id]["test_binary_sha256"]
+            ):
+                raise NativeContractError("prepared test binary changed before test execution")
+            contract["test"] = _run_command(
+                test_argv, cwd=native_root, environment=command_environment, log_file=log_file,
+            )
+            contract["test_binary"]["sha256_after"] = _hash_regular_file(test_binary)
+            build_library_hash_after = _build_library_sha256(native_root)
+            package_library_hash_after = _package_library_sha256(package)
+            if contract["test_binary"]["sha256_before"] != contract["test_binary"]["sha256_after"]:
+                raise NativeContractError("native contract test binary changed while it was executing")
+            if build_library_hash_after != build_library_hash:
+                raise NativeContractError("built FEM library changed while the native contract was executing")
+            if package_library_hash_after != package_library_hash:
+                raise NativeContractError("packaged FEM library changed while the native contract was executing")
+            _require_soname_matches(package / PACKAGE_LIBRARY_ARTIFACT_PATH, package, package_library_hash_after)
+            if contract["test"]["state"] != "succeeded":
+                reason = contract["test"].get("reason", "test_failed")
+                raise NativeContractError(f"native contract test failed for {contract_id}: {reason}")
+            contract["state"] = "passed"
+        for contract_id in contract_ids:
+            binary = report["contracts"][contract_id]["test_binary"]
+            if _hash_regular_file(native_root / _test_binary_path(contract_id)) != binary["sha256_after"]:
+                raise NativeContractError("native contract binary changed after contract execution")
         report["state"] = "succeeded"
     except Exception as error:
         error_message = str(error)
         report["state"] = "failed"
-        if contract_ids:
-            contract = report["contracts"].get(contract_ids[0])
-            if isinstance(contract, dict):
-                contract["state"] = "failed"
         _append_diagnostic(log_file, f"native contract gate failed: {error_message}")
 
     if error_message is not None:
@@ -932,7 +959,7 @@ def receipt_satisfies(
             prepared = report.get("preparation")
             preparation_root = report.get("preparation_root")
             if (
-                not _preparation_matches(prepared, source_snapshot_sha256, contract_id)
+                not _preparation_matches(prepared, source_snapshot_sha256, contract_ids)
                 or not isinstance(preparation_root, str) or not Path(preparation_root).is_absolute()
             ):
                 return False
@@ -998,7 +1025,7 @@ def _main(argv: Sequence[str]) -> int:
         if not native_root.is_absolute() or not evidence_root.is_absolute():
             raise NativeContractError("native preparation paths must be absolute")
         report = prepare_contracts(
-            requested=[os.environ["FULLMAG_INTERNAL_NATIVE_CONTRACTS"]],
+            requested=os.environ["FULLMAG_INTERNAL_NATIVE_CONTRACTS"].split(","),
             native_build_root=native_root, evidence_root=evidence_root,
             source_snapshot_sha256=os.environ["FULLMAG_SOURCE_SNAPSHOT_SHA256"],
             environment=os.environ.copy(), jobs=int(os.environ["CARGO_BUILD_JOBS"]),

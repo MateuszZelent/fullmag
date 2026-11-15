@@ -6102,7 +6102,7 @@ def _prepare_locked(
     )
     if required_contracts and cargo_profile != BACKEND_CARGO_PROFILE:
         _fail("native contract qualification requires the backend-dev profile")
-    # _requested_native_contracts already validates one allowlisted selector.
+    # _requested_native_contracts already validates the closed allowlisted set.
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
     # These selectors and paths are internal Make inputs. Never trust inherited
     # values from the host or Compose environment.
@@ -6110,7 +6110,7 @@ def _prepare_locked(
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", None)
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", None)
     if required_contracts:
-        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = required_contracts[0]
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = ",".join(required_contracts)
         environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"] = str(
             Path(__file__).resolve().with_name("backend_native_contracts.py")
         )

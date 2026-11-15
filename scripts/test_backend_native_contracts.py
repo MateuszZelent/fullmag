@@ -192,6 +192,116 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-rk-explicit", "fem_rk_explicit_contract")
 
+    def test_adaptive_dt_and_rk_explicit_share_one_build_and_receipt(self):
+        requested = ["fem-adaptive-dt", "fem-rk-explicit"]
+        targets = ["fem_adaptive_dt_contract", "fem_rk_explicit_contract"]
+        for target in targets:
+            (self.build_fem / target).write_bytes((target + " executable").encode())
+        runner, calls = self._runner(outcomes=[0, 0, 0, 0])
+        with runner:
+            prepared = self._prepare(requested)
+            report = self._run_prepared(requested)
+
+        self.assertEqual([call[0][4] for call in calls[:2]], targets)
+        self.assertEqual([call[0] for call in calls[2:]], [
+            [str(self.build_fem / target)] for target in targets
+        ])
+        self.assertEqual(prepared["requested"], requested)
+        self.assertEqual(report["requested"], requested)
+        self.assertEqual(set(report["contracts"]), set(requested))
+        for contract_id in requested:
+            with self.subTest(contract_id=contract_id):
+                prepared_contract = prepared["contracts"][contract_id]
+                contract = report["contracts"][contract_id]
+                self.assertEqual(contract["compile"], prepared_contract["compile"])
+                self.assertEqual(contract["test_binary"]["sha256_before"],
+                                 prepared_contract["test_binary_sha256"])
+                self.assertEqual(contract["libraries"]["build"]["sha256"],
+                                 contract["libraries"]["package"]["sha256"])
+                self.assertEqual(contract["state"], "passed")
+        self.assertEqual(
+            report["contracts"][requested[0]]["libraries"]["package"]["sha256"],
+            report["contracts"][requested[1]]["libraries"]["package"]["sha256"],
+        )
+        self.assertTrue(receipt_satisfies(
+            report, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+        missing_contract = json.loads(json.dumps(report))
+        missing_contract["contracts"].pop(requested[1])
+        self.assertFalse(receipt_satisfies(
+            missing_contract, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+        failed_contract = json.loads(json.dumps(report))
+        failed_contract["contracts"][requested[1]]["state"] = "failed"
+        self.assertFalse(receipt_satisfies(
+            failed_contract, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+        wrong_binary = json.loads(json.dumps(report))
+        wrong_binary["contracts"][requested[1]]["test_binary"]["sha256_after"] = "c" * 64
+        self.assertFalse(receipt_satisfies(
+            wrong_binary, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+        mismatched_library = json.loads(json.dumps(report))
+        mismatched_library["contracts"][requested[1]]["libraries"]["package"]["sha256"] = "b" * 64
+        self.assertFalse(receipt_satisfies(
+            mismatched_library, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+    def test_adaptive_dt_and_rk_explicit_partial_prepare_or_run_cannot_qualify(self):
+        requested = ["fem-adaptive-dt", "fem-rk-explicit"]
+        for target in ("fem_adaptive_dt_contract", "fem_rk_explicit_contract"):
+            (self.build_fem / target).write_bytes((target + " executable").encode())
+
+        prepare_runner, prepare_calls = self._runner(outcomes=[0, 7])
+        with prepare_runner, self.assertRaisesRegex(NativeContractError, "preparation compile failed") as caught:
+            self._prepare(requested)
+        self.assertEqual(len(prepare_calls), 2)
+        self.assertEqual(caught.exception.report["state"], "failed")
+        self.assertFalse(receipt_satisfies(
+            caught.exception.report, requested=requested,
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+
+        self.root = self.root / "run-failure"
+        runner, calls = self._runner(outcomes=[0, 0, 0, 9])
+        with runner:
+            self._prepare(requested)
+            with self.assertRaisesRegex(NativeContractError, "native contract test failed") as failed:
+                self._run_prepared(requested)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(failed.exception.report["state"], "failed")
+        self.assertEqual(failed.exception.report["contracts"][requested[0]]["state"], "passed")
+        self.assertEqual(failed.exception.report["contracts"][requested[1]]["test"]["exit_code"], 9)
+        self.assertFalse(receipt_satisfies(
+            failed.exception.report, requested=requested,
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+
+    def test_adaptive_dt_and_rk_explicit_recheck_both_test_binaries_after_execution(self):
+        requested = ["fem-adaptive-dt", "fem-rk-explicit"]
+        first_binary = self.build_fem / "fem_adaptive_dt_contract"
+        for target in (first_binary, self.build_fem / "fem_rk_explicit_contract"):
+            target.write_bytes((target.name + " executable").encode())
+
+        def mutate_first_binary():
+            first_binary.write_bytes(b"changed by the second native contract test")
+
+        runner, _calls = self._runner(
+            outcomes=[0, 0, 0, 0], callbacks=[None, None, None, mutate_first_binary],
+        )
+        with runner:
+            self._prepare(requested)
+            with self.assertRaisesRegex(
+                NativeContractError, "binary changed after contract execution"
+            ) as failed:
+                self._run_prepared(requested)
+        self.assertEqual(failed.exception.report["state"], "failed")
+        self.assertFalse(receipt_satisfies(
+            failed.exception.report, requested=requested,
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):
@@ -319,10 +429,24 @@ class BackendNativeContractsTests(unittest.TestCase):
         for contract_id in ("fem-adaptive-dt", "fem-rk-explicit"):
             with self.subTest(contract_id=contract_id):
                 self.assertEqual(normalize_contracts([contract_id]), (contract_id,))
+        self.assertEqual(
+            normalize_contracts(["fem-adaptive-dt", "fem-rk-explicit"]),
+            ("fem-adaptive-dt", "fem-rk-explicit"),
+        )
+        self.assertEqual(
+            normalize_contracts(["fem-rk-explicit", "fem-adaptive-dt"]),
+            ("fem-rk-explicit", "fem-adaptive-dt"),
+        )
         with self.assertRaisesRegex(ValueError, "unknown native contract"):
             normalize_contracts(["fem-arbitrary-target"])
         with self.assertRaisesRegex(ValueError, "duplicate native contract"):
             normalize_contracts([FEM_DEMAG_POISSON, FEM_DEMAG_POISSON])
+        with self.assertRaisesRegex(ValueError, "pair"):
+            normalize_contracts([FEM_DEMAG_POISSON, "fem-cuda-activity-trace"])
+        with self.assertRaisesRegex(ValueError, "pair"):
+            normalize_contracts([
+                "fem-adaptive-dt", "fem-rk-explicit", FEM_DEMAG_POISSON,
+            ])
         with self.assertRaisesRegex(ValueError, "sequence"):
             normalize_contracts(FEM_DEMAG_POISSON)
 
@@ -346,6 +470,25 @@ class BackendNativeContractsTests(unittest.TestCase):
             del os.environ["FULLMAG_DIRECT_COMPOSE"]
             self.assertEqual(native_contracts._main(["prepare"]), 1)
             self.assertEqual(prepare.call_count, 1)
+
+    def test_prepare_entrypoint_splits_the_closed_pair_selector(self) -> None:
+        environment = {
+            "FULLMAG_DIRECT_COMPOSE": "1",
+            "FULLMAG_INTERNAL_NATIVE_CONTRACTS": "fem-adaptive-dt,fem-rk-explicit",
+            "FULLMAG_FEM_NATIVE_BUILD_ROOT": str(self.native_root),
+            "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": str(self.root / "preparation"),
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": SNAPSHOT,
+            "CARGO_BUILD_JOBS": "3",
+        }
+        prepared = {"evidence": {"report_path": "attempt-fixture/report.json"}}
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            native_contracts, "prepare_contracts", return_value=prepared,
+        ) as prepare, patch("sys.stdout", new=io.StringIO()), patch("sys.stderr", new=io.StringIO()):
+            self.assertEqual(native_contracts._main(["prepare"]), 0)
+        self.assertEqual(
+            prepare.call_args.kwargs["requested"],
+            ["fem-adaptive-dt", "fem-rk-explicit"],
+        )
 
     def test_success_runs_fixed_compile_then_test_and_binds_installed_library(self) -> None:
         runner, calls = self._runner()

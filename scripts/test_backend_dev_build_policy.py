@@ -71,10 +71,50 @@ def test_direct_compose_keeps_native_fem_release_for_backend_dev():
 
 @pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
                     reason="The extracted Makefile recipe is a Linux-container regression")
+def test_adaptive_rk_pair_is_forwarded_and_is_the_only_multi_contract_selector(tmp_path):
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
+    recipe_end = makefile.index("\nshow-cli-path:", recipe_start)
+    recipe = makefile[recipe_start:recipe_end]
+    expansion = "$$"
+    guard_anchor = recipe.index("\tnative_contracts=")
+    guard_start = recipe.rfind("\t@set -e; \\", 0, guard_anchor)
+    guard_end = recipe.index("\n\t@set -e\n", guard_anchor)
+    guard = recipe[guard_start:guard_end].replace(expansion, "$").lstrip("\t@")
+    guard = guard.replace('"$@"', '"$MAKE_TARGET"')
+
+    def run_guard(selector):
+        environment = os.environ.copy()
+        environment.update({
+            "MAKE_TARGET": "install-cli-dev",
+            "FULLMAG_DIRECT_COMPOSE": "1",
+            "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
+            "FULLMAG_INTERNAL_NATIVE_CONTRACTS": selector,
+        })
+        return subprocess.run(
+            ["bash", "-c", guard], cwd=tmp_path, env=environment,
+            capture_output=True, text=True,
+        )
+
+    backend = (ROOT / "docker/all-in-one/backend_dev.py").read_text(encoding="utf-8")
+    assert 'environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = ",".join(required_contracts)' in backend
+    assert run_guard("fem-adaptive-dt,fem-rk-explicit").returncode == 0
+    assert run_guard("fem-rk-explicit,fem-adaptive-dt").returncode == 0
+    for selector in (
+        "fem-demag-poisson,fem-cuda-activity-trace",
+        "fem-adaptive-dt,fem-rk-explicit,fem-demag-poisson",
+        "fem-adaptive-dt,fem-adaptive-dt",
+    ):
+        assert run_guard(selector).returncode == 2, selector
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="The extracted Makefile recipe is a Linux-container regression")
 @pytest.mark.parametrize("contract_id", ["fem-demag-poisson", "fem-cuda-activity-trace",
                                         "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                         "fem-cpu-pgbb-reuse", "fem-cuda-bb-exchange-mass",
-                                        "fem-cuda-snapshot", "fem-adaptive-dt", "fem-rk-explicit"])
+                                        "fem-cuda-snapshot", "fem-adaptive-dt", "fem-rk-explicit",
+                                        "fem-adaptive-dt,fem-rk-explicit"])
 def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path, contract_id):
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
@@ -137,7 +177,7 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     fake_cmake.write_text(
         "#!/bin/sh\n"
         "printf '%s\\n' \"$*\" >> \"$FAKE_CMAKE_LOG\"\n"
-        "if [ \"$FAKE_CMAKE_FAIL\" = \"1\" ]; then exit 7; fi\n"
+        "if [ \"$FAKE_CMAKE_FAIL\" = \"1\" ] || [ \"$FAKE_CMAKE_FAIL_TARGET\" = \"$4\" ]; then exit 7; fi\n"
         "printf 'post-prebuild-library' > \"$FAKE_FEM_LIBRARY\"\n",
         encoding="utf-8",
     )
@@ -149,8 +189,13 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
         "#!/bin/sh\n"
         "if [ \"$1\" = \"$FAKE_HELPER\" ]; then\n"
         "  [ \"$2\" = \"prepare\" ] || exit 8\n"
-        "  \"$FULLMAG_CMAKE\" --build \"$FULLMAG_FEM_NATIVE_BUILD_ROOT\" "
-        "--target $FAKE_CONTRACT_TARGET --parallel \"$CARGO_BUILD_JOBS\"\n"
+        "  old_ifs=$IFS; IFS=,\n"
+        "  for contract_id in $FULLMAG_INTERNAL_NATIVE_CONTRACTS; do\n"
+        "    target=$(printf '%s' \"$contract_id\" | tr '-' '_')_contract\n"
+        "    \"$FULLMAG_CMAKE\" --build \"$FULLMAG_FEM_NATIVE_BUILD_ROOT\" "
+        "--target \"$target\" --parallel \"$CARGO_BUILD_JOBS\" || exit $?\n"
+        "  done\n"
+        "  IFS=$old_ifs\n"
         "elif [ \"$1\" = \"scripts/select_managed_fem_library.py\" ]; then\n"
         "  printf '%s\\n' \"$FAKE_FEM_SELECTION\"\n"
         "else\n"
@@ -162,7 +207,10 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     helper = tmp_path / "fake-native-contract-helper.py"
     helper.write_text("# fixture helper invoked by the Make recipe\n", encoding="utf-8")
 
-    def run_build(case_root, *, selector, fail=False):
+    contract_ids = contract_id.split(",")
+    targets = [value.replace("-", "_") + "_contract" for value in contract_ids]
+
+    def run_build(case_root, *, selector, fail=False, fail_target=""):
         native_root = case_root / "native-root"
         fem_build = native_root / "backends/fem"
         fem_build.mkdir(parents=True)
@@ -192,11 +240,11 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
             "FULLMAG_SOURCE_SNAPSHOT_SHA256": "a" * 64,
             "CARGO_BUILD_JOBS": "3",
             "FAKE_HELPER": str(helper),
-            "FAKE_CONTRACT_TARGET": contract_id.replace("-", "_") + "_contract",
             "FAKE_FEM_SELECTION": str(fem_build),
             "FAKE_FEM_LIBRARY": str(build_library),
             "FAKE_CMAKE_LOG": str(capture),
             "FAKE_CMAKE_FAIL": "1" if fail else "0",
+            "FAKE_CMAKE_FAIL_TARGET": fail_target,
         })
         return subprocess.run(
             ["bash", "-c", script],
@@ -213,9 +261,10 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert packaged_library.read_bytes() == b"post-prebuild-library"
-    assert cmake_log.read_text(encoding="utf-8").strip() == (
-        f"--build {changed_root / 'native-root'} --target {contract_id.replace('-', '_')}_contract --parallel 3"
-    )
+    assert cmake_log.read_text(encoding="utf-8").splitlines() == [
+        f"--build {changed_root / 'native-root'} --target {target} --parallel 3"
+        for target in targets
+    ]
 
     skipped_root = tmp_path / "skipped"
     skipped_root.mkdir()
@@ -231,6 +280,20 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     )
     assert result.returncode == 7
     assert not packaged_library.exists()
+
+    if contract_id == "fem-adaptive-dt,fem-rk-explicit":
+        second_target_failure_root = tmp_path / "second-target-failure"
+        second_target_failure_root.mkdir()
+        result, packaged_library, cmake_log = run_build(
+            second_target_failure_root, selector=contract_id,
+            fail_target="fem_rk_explicit_contract",
+        )
+        assert result.returncode == 7
+        assert cmake_log.read_text(encoding="utf-8").splitlines() == [
+            f"--build {second_target_failure_root / 'native-root'} --target {target} --parallel 3"
+            for target in targets
+        ]
+        assert not packaged_library.exists()
 
 
 @pytest.mark.skipif(

@@ -2171,19 +2171,25 @@ def _validate_cancellation_maintenance(value):
 
 
 def _native_contracts(values):
+    adaptive_rk_pair = {"fem-adaptive-dt", "fem-rk-explicit"}
+    allowlisted = {
+        "fem-demag-poisson", "fem-cuda-activity-trace",
+        "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+        "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+        "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot",
+        *adaptive_rk_pair,
+    }
     if values is None:
         return ()
     if (not isinstance(values, (list, tuple))
             or any(not isinstance(value, str)
-                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
-                                    "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
-                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                    "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot",
-                                    "fem-adaptive-dt", "fem-rk-explicit"}
+                   or value not in allowlisted
                    for value in values)
-            or len(values) > 1
-            or len(set(values)) != len(values)):
-        raise BuildControlError("Native contracts must contain at most one unique allowlisted identifier")
+            or len(set(values)) != len(values)
+            or (len(values) > 1 and set(values) != adaptive_rk_pair)):
+        raise BuildControlError(
+            "Native contracts must contain unique allowlisted identifiers or the adaptive-dt/rk-explicit pair"
+        )
     return tuple(sorted(values))
 
 
