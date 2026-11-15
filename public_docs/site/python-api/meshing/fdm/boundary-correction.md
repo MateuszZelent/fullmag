@@ -111,12 +111,7 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Study -> Discretization -> FDM`. The current global
-authoring route is partial. Apply the FDM policy only where the draft exposes
-the correction keys; mesh and dependent solver resources then become stale.
-`not implemented: frontend support` for a dedicated typed editor for
-`boundary_phi_floor` and `boundary_delta_min` when they are absent from the
-current draft. See [Control Room capability register](/frontend/capability-register).
+Control Room does not expose interactive authoring for `boundary_correction`, `boundary_phi_floor`, or `boundary_delta_min` (`not implemented`); realized structured-grid inspection uses the read-only FDM grid and region views described in {doc}`/frontend/meshing/fdm-grid-view`. See [Control Room capability register](/frontend/capability-register).
 
 ## 6. Backend and frontend support
 
@@ -125,7 +120,7 @@ current draft. See [Control Room capability register](/frontend/capability-regis
 | FDM CPU | planner-gated | Source policy exists; execution requires lane qualification. |
 | FDM GPU | planner-gated | Source presence is not CUDA qualification. |
 | FEM CPU/GPU | not applicable | This policy belongs to FDM discretization. |
-| Control Room | partial | Global FDM authoring exists; correction subfields may be not implemented. |
+| Control Room | not implemented | Boundary correction parameters remain Python-only. |
 
 (python-api-meshing-fdm-boundary-correction-validation)=
 <!-- (validation)= -->

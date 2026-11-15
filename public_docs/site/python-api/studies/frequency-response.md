@@ -208,10 +208,29 @@ FEM GPU supports the `gpu_operator_host_krylov` lane when device capability and 
 
 ### Control Room crosswalk
 
+Status: Frequency-response stage authoring, FMR susceptibility sweeps, peak extraction, and 3D driven response playback are `partial`; specialized `FrequencyResponseSolverPolicy` linear-system tuning fields without UI controls remain `not implemented` in the stage editor.
+
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
+| Driven frequency bounds, step schedule, & excitation binding | `Model Explorer -> Stages -> Add stage -> Frequency Response` (`FrequencyResponseStageInspector`, `StudyStageDraftEditor`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Swept FMR curve, resonance peaks, & complex susceptibility detail | `Analysis Plots` (`FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `FrequencyDomainResponseChart`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/frequency-response/*` and SolutionSet artifacts |
+| Driven spatial response field & harmonic phase playback in 3D | `3D Viewport` (`ModeVisualizationInspectorPanel`) | `inspection-only` | `analysis.frequency-response.plot-response-field-3d` and `analysis.frequency-domain.set-3d-phase` |
+| Solver policy parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> Frequency Response` | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Control Room FMR frequency-response curve, extracted peaks, and frequency-domain inspection view
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Study and Stage Inspectors displaying frequency-response stage sequencing and re-run controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register`, {doc}`/frontend/inspectors/analysis-and-frequency-domain`, and {doc}`/frontend/inspectors/studies-and-stages`.
+Frontend source owners: `FrequencyResponseStageInspector`, `FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `ModeVisualizationInspectorPanel`, and `StudyStageDraftEditor`.
 
 ### Source-map coverage
 

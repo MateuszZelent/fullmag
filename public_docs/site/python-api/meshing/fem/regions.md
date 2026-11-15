@@ -108,10 +108,22 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh`.
-Enable the regional override, set maximum/minimum size, transition distance,
-and order, then press **Apply**. **Build Shared-Domain Mesh** materializes the
-conforming result and refreshes region resources. See [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`ObjectRegionMeshPanel`).
+When the region is committed on a FEM study, enable the region mesh override, set maximum/minimum element size,
+transition distance, and finite-element order, then press **Apply**; **Apply & Build Shared-Domain Mesh** materializes
+the conforming domain mesh and refreshes membership and quality resources (under FDM, the same panel becomes a read-only
+structured-cell membership inspector). See {doc}`/frontend/meshing/region-mesh` and
+[Control Room capability register](/frontend/capability-register).
+
+```{image} /_static/images/ui/inspector-material-and-regions.png
+:alt: Semantic Inspector region panel showing object-owned region configuration and overrides
+:width: 92%
+```
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector FEM mesh and airbox policy controls paired with region sizing
+:width: 92%
+```
 
 ## 6. Backend and frontend support
 

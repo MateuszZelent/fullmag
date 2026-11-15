@@ -115,10 +115,17 @@ Model Explorer
         └── Mesh            → selection kind: object.mesh
 ```
 
-The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx`) groups all
-authoring levels: size presets, element size parameters, thin-film strategy,
-interface/edge refinement, backend parameters, advanced JSON, and the
-Quality/History tabs. Full description: {doc}`../../../../frontend/meshing/object-mesh`.
+The **Object Mesh Policy** inspector (`ObjectMeshPolicyPanel.tsx` / `ObjectMeshPolicyPanelModel.ts`) groups size presets, element size parameters, thin-film strategy (`swept_prism` layer counts from `mesh.exact_layer_count` with `swept_hex` disabled), interface/edge refinement, core relaxation, backend parameters, advanced JSON, and the Quality/History tabs (`MeshQualityStatisticsView`). Full description: {doc}`../../../../frontend/meshing/object-mesh`.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector Object Mesh Policy and Airbox Mesh controls for magnetic bodies
+:width: 92%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM tetrahedral body mesh inside exterior airbox
+:width: 92%
+```
 
 ## 6. Backend support
 

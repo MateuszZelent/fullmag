@@ -116,7 +116,22 @@ Focused repository tests covering this contract include: test_global_uniform_sin
 (python-api-current-and-excitations-regional-field-drive-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Localized or masked regional field drives are authored in Control Room through `RegionalFieldDrivePanel` (`field-drive` selection route), which supports `sinc`, `sinusoidal`, and `piecewise_linear` waveforms with SI unit conversion (`ps`/`ns`, `GHz`/`Hz`, `m`/`nm`, `rad`, `mT`/`T`) and live `SincPulsePreview` inspection. Custom callable expressions or arbitrary coordinate closures remain Python-only (`not implemented` in the form editor).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Regional target bounds, drive amplitude, direction, & analytical/piecewise waveforms | `Model Explorer -> Physics / Drives -> <field_drive>` (`RegionalFieldDrivePanel`, `SincPulsePreview`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| Python callable waveforms or unsupported spatial closures | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-antenna-rf-and-waveforms.png
+:alt: Control Room Field Drive and Antenna RF waveform inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-regional-field-drive-scientific-bibliography)=
 ## Scientific bibliography

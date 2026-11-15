@@ -143,16 +143,30 @@ Mode and spectrum definitions belong to {doc}`../../numerical-methods/eigensolve
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
+Status: Mode-field and spectrum inspection are `partial`; 3D modal overlays and planar monitor frequency projections are `implemented` (`inspection-only`), while stage output toggles not rendered in the inspector remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Outputs` | `partial` | Submit stage draft; output resources are revised after execution |
+| `SaveMode`, `SaveSpectrum`, & `SaveEigenDiagnostics` selections | `Model Explorer -> Stages -> <stage> -> Outputs` (`EigenmodesOutputsStageInspectorPanel`) | `partial` | Submit stage draft; output resources are revised after execution |
+| Planar monitor definitions & frequency-domain spatial cuts | `Model Explorer -> Planar Monitors` (`PlanarMonitorInspectorPanel`, `PlanarMonitorDraftInspectorPanel`) | `partial` | Commit monitor geometry to `MODEL_PLANAR_MONITORS_PATH`; slice overlays query planar endpoints |
+| 3D eigenmode / driven response phasor & spatial profile | `3D Viewport` (`ModeVisualizationInspectorPanel`) | `inspection-only` | `real`, `imag`, `magnitude`, `phase_rotated_real` and $0\text{–}2\pi$ phase slider (`analysis.eigen.set-mode-3d-phase`) |
 | Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `not implemented` | Python-only until implemented |
 
+```{image} /_static/images/ui/inspector-planar-monitor-and-frequency.png
+:alt: Control Room Planar Monitor Inspector showing View 3D/2D switcher, Monitor ID planar_mon_core, Name Mid-Plane RF Monitor, Length unit nm, and Domain target
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/viewport-3d-eigenmode-spatial-profile.png
+:alt: 3D spatial eigenmode profile rendered in Control Room Viewport with phase projection controls
+:align: center
+:width: 100%
+```
+
 not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: [`apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx#L247) (`EigenmodesOutputsStageInspectorPanel`).
+See [Control Room capability register](/frontend/capability-register) and [Planar Monitors & Frequency-Domain Inspectors](/frontend/inspectors/analysis-and-frequency-domain).
+Frontend source owners: [`apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx#L247) (`EigenmodesOutputsStageInspectorPanel`), `PlanarMonitorInspectorPanel`, and `ModeVisualizationInspectorPanel`.
 
 ## 13. Source-code index
 

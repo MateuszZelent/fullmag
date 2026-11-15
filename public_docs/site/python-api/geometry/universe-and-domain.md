@@ -114,7 +114,22 @@ Focused repository tests covering this contract include: test_study_pbc_serializ
 (python-api-geometry-universe-and-domain-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Exterior domain / Airbox geometry bounds, padding, and FEM airbox mesh sizing are configured in Control Room via the Universe / **Airbox Mesh Parameters** inspector (`Model Explorer -> Universe / Airbox`), with geometry-only inspection on FDM sessions and full exterior mesh sizing controls on FEM sessions (see {doc}`/frontend/meshing/airbox-mesh`). Advanced multi-box or custom airbox grading strategies without matching inspector fields remain Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Domain bounds, padding mode, & airbox mesh sizing | `Model Explorer -> Universe / Airbox` (**Airbox Mesh Parameters**) | `partial` (FEM editable; FDM geometry subset) | Scene / domain mesh invalidation on commit |
+| Unsupported custom exterior rules | Python DSL | `not implemented` | Author in Python |
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Control Room FEM Mesh and Airbox Parameters inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/meshing/airbox-mesh`.
 
 (python-api-geometry-universe-and-domain-scientific-bibliography)=
 ## Scientific bibliography

@@ -110,7 +110,22 @@ Focused repository tests covering this contract include: test_rf_drive_serialize
 (python-api-current-and-excitations-rf-drive-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Harmonic and sinc RF waveform definitions are editable in Control Room inside `AntennaObjectPanel` (for antenna-attached excitations) and `RegionalFieldDrivePanel` (for regional field drives), supporting amplitude (`mT`/`T`), `frequency`, `cutoff`, `t0`, `phase`, and `offset` with optimistic `scene_revision` checks. Multi-tone expressions or custom Python callables remain Python-only (`not implemented` in the UI).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `sinc` / `sinusoidal` / `piecewise_linear` waveform parameters | `AntennaObjectPanel` or `RegionalFieldDrivePanel` | `partial` | `runAuthoringMutationWithHistory` with `scene_revision` check |
+| Custom Python waveform expressions | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-antenna-rf-and-waveforms.png
+:alt: Control Room RF waveform parameters and antenna excitation panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-rf-drive-scientific-bibliography)=
 ## Scientific bibliography

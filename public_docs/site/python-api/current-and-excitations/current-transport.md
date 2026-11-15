@@ -113,7 +113,22 @@ Focused repository tests covering this contract include: test_ohmic_poisson_seri
 (python-api-current-and-excitations-current-transport-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Steady and time-modulated electrical current transport records (`current_transport`) are edited in Control Room through `TransportAuthoringInspector` (`current-transport` selection route), which supports closure selection, structured current-source cuts, active-lane capability gating, and readiness validation via `transport-authoring-validation.v1`. Spatial conductivity profiles or closures without exposed UI widgets remain Python-only (`not implemented` in the inspector).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Current transport parameters, contacts, & validation checks | `Model Explorer -> Current Transport -> <transport>` (`TransportAuthoringInspector`) | `partial` | `runAuthoringMutationWithHistory` and `transport-authoring-validation.v1` request |
+| Parameters without a named UI field | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room TransportAuthoringInspector and SpinAuthoringInspector showing current transport, spin transport, and torque bindings
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-current-transport-scientific-bibliography)=
 ## Scientific bibliography

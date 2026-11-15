@@ -104,16 +104,21 @@ No independent interaction is introduced.
 
 ## Control Room crosswalk
 
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: Uniform initial magnetization (`uniform`) is editable in `ObjectMagneticTexturePanel` (`partial` relative to the full transform/version surface); unlisted preset arguments remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft via `commitMagneticTextureApply`; authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
+Frontend support is not implemented for texture transform arguments not exposed by `ObjectMagneticTexturePanel`.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring uniform magnetization vector
+:width: 92%
+```
 
 ## Source-code index
 

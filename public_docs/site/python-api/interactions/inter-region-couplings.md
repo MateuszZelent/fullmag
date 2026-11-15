@@ -113,7 +113,23 @@ Focused repository tests covering this contract include: test_class_api_exchange
 (python-api-interactions-inter-region-couplings-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Inter-object and inter-region couplings (`CouplingRegistry`) are inspected and toggled (`toggle-enabled`, `delete`) in Control Room via `CouplingInspectorPanel` (`coupling` selection route, backed by `MODEL_COUPLINGS_RESOURCE_KEY` and undo/redo history). Creating new custom coupling formulas or asymmetric tensor couplings without inspector fields remains Python-only (`not implemented` in the form editor). Explicit spin-mixing interfaces additionally surface `SpinInterfaceInspectorPanel` and FEM `tet4` facet orientation verification.
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Enabled state & inspection of explicit object/region couplings | `Model Explorer -> Physics / Couplings -> <coupling>` (`CouplingInspectorPanel`) | `partial` | `runAuthoringMutationWithHistory` via `MODEL_COUPLINGS_RESOURCE_KEY` |
+| Spin interface parameters & `tet4` facet orientation check | `Model Explorer -> Physics / Spin Interfaces` (`SpinInterfaceInspectorPanel`) | `partial` | `verifySpinInterfaceMeshOrientation` & scene transaction |
+| Custom tensor coupling laws without UI widgets | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-physics-couplings-frozen-spins.png
+:alt: Control Room Frozen Spins constraint inspector showing region-scoped pinning selection (frz_edge_pin on reg_pinning_ring) inside the Physics constraints view
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-interactions-inter-region-couplings-scientific-bibliography)=
 ## Scientific bibliography

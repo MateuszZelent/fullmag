@@ -112,11 +112,17 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Study -> Discretization -> FEM defaults`. Set global
-order and maximum element size, press **Apply**, then **Build Shared-Domain
-Mesh**. Object and airbox overrides are edited in their own Mesh panels.
-`not implemented: frontend support` for low-level `FEM(mesh=...)` or solver-policy fields
-not rendered by the study editor. See [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Universe / Airbox -> Mesh` (`AirboxMeshParametersPanel`) and
+`Model Explorer -> Objects -> <object> -> Mesh` (`ObjectMeshPolicyPanel`) author exterior air sizing and per-object
+FEM sizing/order before executing **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`). See
+{doc}`/frontend/meshing/index`, {doc}`/frontend/meshing/object-mesh`, and {doc}`/frontend/meshing/airbox-mesh` for
+supported UI fields; low-level `FEM(mesh=...)` or solver-policy fields not rendered in Control Room remain Python-only
+(`not implemented`). See [Control Room capability register](/frontend/capability-register).
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel showing FEM object mesh and airbox parameters in Control Room
+:width: 92%
+```
 
 ## 6. Backend and frontend support
 

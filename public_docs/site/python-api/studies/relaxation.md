@@ -227,6 +227,25 @@ assert ir["study"]["stages"][0]["algorithm"] == "projected_gradient_bb"
 1. J. Barzilai and J. M. Borwein, *Two-point step size gradient methods*, IMA J. Numer. Anal. **8**, 141–148 (1988).
 2. S. Bartels and A. Prohl, *Convergence of an implicit finite element method for the Landau–Lifshitz–Gilbert equation*, SIAM J. Numer. Anal. **44**, 1405–1419 (2006).
 
+## Control Room crosswalk
+
+Status: Stage authoring, initial-state handoff, and convergence inspection are `partial`; specialized Python constraint closures and custom stop-policy extensions without dedicated UI controls remain not implemented in the stage editor.
+
+| Python/API surface | Control Room path | Status | Transaction |
+| --- | --- | --- | --- |
+| Core relaxation parameters (`algorithm`, tolerances, max steps/time, `stage_initial_state`) | `Model Explorer -> Stages -> Add stage -> Relax` (`RelaxStageInspector`, `StudyStageDraftEditor`) | `partial` | Apply stage draft and run `executeStageAfterApply` (pinned to `scene_revision`, `solver_profile`, `domain`) |
+| Live convergence trace & scalar readback | `Live Charts` (`LiveChartControls` -> `Convergence` preset) | `inspection-only` | FMTB table stream over `/v2/sessions/current/data/*` |
+| Python-authored `FrozenSpins` closures or unsupported extensions | `Model Explorer -> Stages -> <stage>` | `not implemented` | Edited in Python or authored in `FrozenSpinsInspectorPanel` where supported |
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Study and Relax Stage Inspectors showing solver execution profile, stage pipeline cards, initial-state handoff, and re-run controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/studies-and-stages`.
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx`, `apps/control-room/src/modules/inspector/panels/stages/RelaxStageInspector.tsx`, and `apps/control-room/src/modules/inspector/panels/studyStageApplyAndRun.ts`.
+
 (python-api-studies-relaxation-source-code-index)=
 <!-- (source-code-index)= -->
 ## 13. Source-code index
