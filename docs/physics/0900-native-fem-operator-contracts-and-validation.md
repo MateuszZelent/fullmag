@@ -536,7 +536,7 @@ default, jednostkę, domenę walidacji, znaczenie, wsparcie lane i cel obniżeni
 | Authoring | Kanoniczny cel |
 |---|---|
 | `study.engine("fem")` | `backend_policy.requested_backend = "fem"` |
-| `study.device("gpu", precision="double")` | znormalizowane requested device jest authoring metadata w `problem_meta.runtime_metadata.runtime_selection.device = "cuda"`; precyzja trafia do `backend_policy.execution_precision = "double"` |
+| `study.device("gpu", precision="double")` | requested device jest authoring metadata w `problem_meta.runtime_metadata.runtime_selection.device = "gpu"`; precyzja trafia do `backend_policy.execution_precision = "double"` |
 | `study.mode("strict")` | `validation_profile.execution_mode = "strict"` |
 | `study.universe(...)` i `study.universe.mesh(...)` | authoring metadata w `problem_meta.runtime_metadata.study_universe`; `airbox_hmax` nie jest polem FEM solver hint |
 | `film.mesh(..., order=1)` | authored per-object recipe w `problem_meta.runtime_metadata.mesh_workflow.per_geometry[0]`; znormalizowany wspólny hint tego przykładu jest osobno w `backend_policy.discretization_hints.fem` |
