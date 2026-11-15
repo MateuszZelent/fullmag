@@ -4000,6 +4000,30 @@ FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
 FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_bb_preconditioner(
     fullmag_fem_backend *handle, uint32_t policy);
 
+/* Last physically completed BB preconditioner solve, independent of Poisson
+ * and accepted-state certification. available=0 means no completed readback.
+ * Cooperative support is observed during workspace creation, never inferred
+ * from the requested device. Status 1 means certified; 2..5 are GPU failures.
+ * Initialize abi_version=1 and struct_size=88. This host-cache-only getter
+ * performs no CUDA query, transfer, allocation or synchronization. */
+typedef struct fullmag_fem_gpu_bb_pcg_certificate_v1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t available;
+    uint32_t cooperative_launch_supported;
+    uint32_t status;
+    uint32_t iterations;
+    uint32_t nonzero_rhs_mask;
+    uint32_t reserved;
+    double rhs_norm_squared[3];
+    double residual_norm_squared[3];
+    double certificate_relative_tolerance;
+} fullmag_fem_gpu_bb_pcg_certificate_v1;
+
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_bb_pcg_certificate_v1 *out_certificate);
+
 FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
     int enabled

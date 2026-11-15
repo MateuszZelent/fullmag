@@ -689,7 +689,7 @@ pub use types::{
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
     FdmGpuOperatorResidency, FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt,
     FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
-    FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuMinimizerExecutionReceipt,
+    FemGpuBbPcgCertificateProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuMinimizerExecutionReceipt,
     FemMeshPartPayload, FemMeshPayload,
     InitialObservationPolicy, InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,

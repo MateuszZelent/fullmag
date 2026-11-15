@@ -56,6 +56,10 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string gpu_rk_stats =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats.cu");
+    const std::string snapshot =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
+    const std::string transaction =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_step_transaction.cpp");
     const std::string gpu_runtime =
         read_text_file(root / "gpu" / "cuda" / "runtime" / "gpu_state_runtime.hpp");
     const std::string gpu_rk_demag_energy =
@@ -170,11 +174,62 @@ int main()
         gpu_rk_stats.find("step_hypre_timed_solve_count = 0") != std::string::npos &&
             gpu_rk_stats.find("context_hypre_apply_timed_solve_count(ctx)") != std::string::npos,
         "profile-off reset and profile-on timed solve count must both be explicit");
+    for (const char *field : {
+             "last_solver_apply_device_wall_time_ns",
+             "step_solver_apply_device_wall_time_ns",
+             "step_hypre_wait_in_enqueue_wall_time_ns",
+             "step_hypre_host_api_wall_time_ns",
+             "step_hypre_wait_out_enqueue_wall_time_ns",
+             "step_hypre_event_wait_count",
+             "step_hypre_timed_solve_count",
+         }) {
+        check(
+            snapshot.find(std::string("ctx.poisson_demag.") + field + " = 0") !=
+                std::string::npos,
+            "snapshot must clear every C1 host counter before observing the step");
+    }
+    check(
+        snapshot.find("reset_context_hypre_apply_device_timing(ctx)") !=
+            std::string::npos,
+        "snapshot must start a fresh HYPRE event-pool scope before its solve");
+    check(
+        transaction.find("capture_context_hypre_apply_timing_scope(ctx)") !=
+                std::string::npos &&
+            transaction.find("restore_context_hypre_apply_timing_scope(ctx,") !=
+                std::string::npos,
+        "RK rollback must capture and restore C1 host and event-pool timing scope state");
+    for (const char *field : {
+             "last_solver_apply_device_wall_time_ns",
+             "step_solver_apply_device_wall_time_ns",
+             "step_hypre_wait_in_enqueue_wall_time_ns",
+             "step_hypre_host_api_wall_time_ns",
+             "step_hypre_wait_out_enqueue_wall_time_ns",
+             "step_hypre_event_wait_count",
+             "step_hypre_timed_solve_count",
+         }) {
+        check(
+            transaction.find(field) != std::string::npos,
+            "RK rollback must capture every C1 host timing field");
+    }
     check(
         gpu_runtime.find("demag_assemble_events") != std::string::npos &&
             gpu_runtime.find("demag_recover_events") != std::string::npos &&
             gpu_runtime.find("demag_energy_events") != std::string::npos,
         "GPU RK timing runtime must own prepared demag timing event pools");
+    const auto scope_snapshot_begin = hypre_stream_interop_header.find(
+        "struct HypreApplyTimingScopeSnapshot {");
+    const auto scope_snapshot_end = hypre_stream_interop_header.find(
+        "};", scope_snapshot_begin);
+    check(
+        scope_snapshot_begin != std::string::npos &&
+            scope_snapshot_end != std::string::npos &&
+            hypre_stream_interop_header.substr(
+                scope_snapshot_begin, scope_snapshot_end - scope_snapshot_begin)
+                    .find("cudaEvent_t") == std::string::npos &&
+            hypre_stream_interop_header.substr(
+                scope_snapshot_begin, scope_snapshot_end - scope_snapshot_begin)
+                    .find("std::vector") == std::string::npos,
+        "timing rollback snapshots must contain scalar scope values, never CUDA handles or pool storage");
     check(
         gpu_rk_stats.find("GPU RK demag assemble phase timing pool") != std::string::npos &&
             gpu_rk_stats.find("GPU RK demag recover phase timing pool") != std::string::npos &&

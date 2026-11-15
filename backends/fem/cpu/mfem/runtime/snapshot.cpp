@@ -17,6 +17,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -142,8 +143,18 @@ bool context_snapshot_stats_mfem(
     ctx.poisson_demag.global_sync_count_current_step = 0;
     ctx.poisson_demag.step_assemble_wall_time_ns = 0;
     ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_apply_device_wall_time_ns = 0;
+    ctx.poisson_demag.step_solver_apply_device_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_host_api_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns = 0;
+    ctx.poisson_demag.step_hypre_event_wait_count = 0;
+    ctx.poisson_demag.step_hypre_timed_solve_count = 0;
     ctx.poisson_demag.step_recover_wall_time_ns = 0;
     ctx.poisson_demag.step_energy_wall_time_ns = 0;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    reset_context_hypre_apply_device_timing(ctx);
+#endif
 
     if (!ctx.mfem_context.ready) {
         error = "MFEM snapshot requested before MFEM context initialization";

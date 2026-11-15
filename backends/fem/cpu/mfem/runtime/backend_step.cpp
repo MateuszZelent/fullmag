@@ -503,6 +503,7 @@ int run_backend_relaxation_step(
                 0.0);
             return FULLMAG_FEM_ERR_INTERNAL;
         }
+        gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);
         // Prepare immutable MFEM CSR and Krylov storage outside the hot-loop
         // audit scope. Subsequent BB steps only reuse this prepared state.
         if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB &&
@@ -513,7 +514,6 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_UNAVAILABLE;
         }
         gpu_rk_reset_phase_timing_events(ctx);
-        gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);
         ctx.poisson_demag.solves_current_step = 0;
         ctx.poisson_demag.linear_iterations_current_step = 0;
         ctx.poisson_demag.setup_count_current_step = 0;
@@ -674,7 +674,7 @@ int run_backend_relaxation_step(
                 TransferAuditScopeKind::HotLoop);
             if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB) {
                 gpu_status =
-                    gpu_relax_projected_gradient_bb_step(ctx, out_stats, error);
+                    gpu_relax_projected_gradient_bb_step(ctx, out_stats, error, true);
             } else {
                 gpu_status =
                     gpu_relax_nonlinear_cg_step(ctx, out_stats, error);

@@ -17,6 +17,7 @@
 #include "mandatory_control_counter_fixture.hpp"
 #include "poisson_device_pcg_counter_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/dmi_workspace.hpp"
 #include "cpu/mfem/runtime/element_parallel_policy.hpp"
@@ -29,11 +30,13 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/pcg_device_scalar_kernels.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -3027,6 +3030,58 @@ void device_scalar_pcg_terminal_state_contract() {
 }
 #endif
 
+void hypre_apply_timing_scope_helpers_round_trip_contract()
+{
+    fullmag::fem::Context cpu_context{};
+    const auto empty =
+        fullmag::fem::capture_context_hypre_apply_timing_scope(cpu_context);
+    check(empty.used == 0u && empty.active_index == 0u &&
+              empty.overflow_count == 0u && empty.completed_count == 0u &&
+              empty.elapsed_time_ns == 0u &&
+              empty.last_wait_in_enqueue_wall_time_ns == 0u &&
+              empty.last_wait_out_enqueue_wall_time_ns == 0u && !empty.active,
+          "CPU/stub Context without a GPU workspace has an empty HYPRE timing observation");
+
+    fullmag::fem::HypreStreamInterop interop{};
+    interop.apply_timing_events.resize(2u);
+    const auto *const event_pool_storage = interop.apply_timing_events.data();
+    interop.apply_timing_enabled = true;
+    interop.apply_timing_used = 2u;
+    interop.active_apply_timing_index = 1u;
+    interop.apply_timing_overflow_count = 3u;
+    interop.apply_timing_completed_count = 1u;
+    interop.apply_device_elapsed_time_ns = 1234u;
+    interop.last_wait_in_enqueue_wall_time_ns = 5u;
+    interop.last_wait_out_enqueue_wall_time_ns = 6u;
+    interop.apply_timing_active = true;
+
+    const auto before =
+        fullmag::fem::capture_hypre_apply_timing_scope(interop);
+    interop.apply_timing_used = 0u;
+    interop.active_apply_timing_index = 0u;
+    interop.apply_timing_overflow_count = 0u;
+    interop.apply_timing_completed_count = 0u;
+    interop.apply_device_elapsed_time_ns = 0u;
+    interop.last_wait_in_enqueue_wall_time_ns = 0u;
+    interop.last_wait_out_enqueue_wall_time_ns = 0u;
+    interop.apply_timing_active = false;
+    fullmag::fem::restore_hypre_apply_timing_scope(interop, before);
+
+    check(interop.apply_timing_used == 2u &&
+              interop.active_apply_timing_index == 1u &&
+              interop.apply_timing_overflow_count == 3u &&
+              interop.apply_timing_completed_count == 1u &&
+              interop.apply_device_elapsed_time_ns == 1234u &&
+              interop.last_wait_in_enqueue_wall_time_ns == 5u &&
+              interop.last_wait_out_enqueue_wall_time_ns == 6u &&
+              interop.apply_timing_active && interop.apply_timing_enabled &&
+              interop.apply_timing_events.size() == 2u &&
+              interop.apply_timing_events.data() == event_pool_storage &&
+              interop.apply_timing_events[0].start_event == nullptr &&
+              interop.apply_timing_events[0].stop_event == nullptr,
+          "HYPRE timing-scope helpers restore cursor, accumulator, overflow, and active pair without copying event handles");
+}
+
 void direct_pgbb_performance_lifecycle_contract(bool exercise_c2 = false)
 {
     const char *saved_env = std::getenv("FULLMAG_FEM_STEP_PROFILE");
@@ -3142,8 +3197,26 @@ void direct_pgbb_performance_lifecycle_contract(bool exercise_c2 = false)
               "direct PGBB telemetry explicitly exercises exchange-mass certificates");
         auto &ctx = handle->context;
         auto &state = ctx.gpu_state.performance_counters;
+        fullmag_fem_gpu_bb_pcg_certificate_v1 bb_certificate{};
+        bb_certificate.abi_version = 1u;
+        bb_certificate.struct_size = sizeof(bb_certificate);
+        check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(nullptr, &bb_certificate) ==
+                  FULLMAG_FEM_ERR_INVALID &&
+              fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(handle, nullptr) ==
+                  FULLMAG_FEM_ERR_INVALID,
+              "BB certificate getter rejects null inputs");
+        bb_certificate.struct_size -= 1u;
+        check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(handle, &bb_certificate) ==
+                  FULLMAG_FEM_ERR_INVALID,
+              "BB certificate getter rejects an invalid ABI size");
+        bb_certificate.struct_size = sizeof(bb_certificate);
+        check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(handle, &bb_certificate) ==
+                  FULLMAG_FEM_OK && bb_certificate.available == 0u &&
+                  bb_certificate.status == 0u,
+              "an unexecuted BB solve has no fabricated residual certificate");
         fullmag_fem_step_stats stats{};
         const auto warm_before_cold = fullmag::fem::workspace_ptr(ctx)->warm_start_count;
+        const auto device_bytes_before_cold = ctx.gpu_state.device.lifecycle.device_bytes;
         if (exercise_c2) {
             check(ctx.mfem_device.gpu_device_index == -1 &&
                 ctx.mfem_context.selected_device_index >= 0,
@@ -3156,6 +3229,36 @@ void direct_pgbb_performance_lifecycle_contract(bool exercise_c2 = false)
         const auto first = fullmag::fem::gpu_performance_snapshot(state);
         const auto pcg = fullmag::fem::gpu_performance_device_pcg_snapshot(state,104);
         const auto mandatory = fullmag::fem::gpu_performance_mandatory_controls_snapshot(state);
+        const auto audit_before_certificate =
+            fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+        check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(handle, &bb_certificate) ==
+                  FULLMAG_FEM_OK && bb_certificate.available == 1u &&
+                  bb_certificate.cooperative_launch_supported == 1u &&
+                  bb_certificate.status == 1u && bb_certificate.iterations <= 512u &&
+                  bb_certificate.nonzero_rhs_mask <= 7u &&
+                  bb_certificate.certificate_relative_tolerance == 1e-8,
+              "public BB getter exposes the actual cooperative solve certificate");
+        for (int component = 0; component < 3; ++component) {
+            const double rhs = bb_certificate.rhs_norm_squared[component];
+            const double residual = bb_certificate.residual_norm_squared[component];
+            const bool nonzero = (bb_certificate.nonzero_rhs_mask & (1u << component)) != 0u;
+            check(std::isfinite(rhs) && std::isfinite(residual) && rhs >= 0.0 &&
+                      residual >= 0.0 && (nonzero ? rhs > 0.0 : rhs == 0.0) &&
+                      residual <= 1e-8 * 1e-8 * rhs,
+                  "each exported BB component satisfies the unchanged true-residual limit");
+        }
+        const auto audit_after_certificate =
+            fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+        const auto mandatory_after_certificate =
+            fullmag::fem::gpu_performance_mandatory_controls_snapshot(state);
+        check(audit_before_certificate.hot_loop_d2h_bytes ==
+                  audit_after_certificate.hot_loop_d2h_bytes &&
+              audit_before_certificate.hot_loop_host_sync_count ==
+                  audit_after_certificate.hot_loop_host_sync_count &&
+              mandatory.bb_certificate_readbacks ==
+                  mandatory_after_certificate.bb_certificate_readbacks &&
+              mandatory.bb_certificate_bytes == mandatory_after_certificate.bb_certificate_bytes,
+              "reading cached BB provenance adds no transfer or certificate synchronization");
         check(!state.attempt_active && first.completed_attempt_count == 1 &&
                   first.completed_step == ctx.state.step_count && first.physical_control_fences > 0 &&
                   pcg.solves > 0 && pcg.status_readbacks > 0 &&
@@ -3164,8 +3267,143 @@ void direct_pgbb_performance_lifecycle_contract(bool exercise_c2 = false)
         if (exercise_c2) {
             check(fullmag::fem::workspace_ptr(ctx)->warm_start_count == warm_before_cold,
                 "first PGBB step has no accepted-potential warm start");
+            auto &relaxation = ctx.gpu_state.device.relaxation;
+            auto *const cold_bb_workspace = relaxation.bb_exchange_mass.get();
+            const auto cold_device_bytes = ctx.gpu_state.device.lifecycle.device_bytes;
+            check(relaxation.bb_preconditioner_cache_misses == 1u &&
+                      relaxation.bb_preconditioner_cache_hits == 1u,
+                  "cold public PGBB step reports operator construction and its in-step reuse");
+            check(cold_bb_workspace != nullptr &&
+                      cold_device_bytes > device_bytes_before_cold,
+                  "cold public PGBB step retains its uploaded exchange-mass workspace");
+
+            const auto warm_transfer_before =
+                fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+            const int warm_accepted = fullmag_fem_backend_relax_step(handle,
+                FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB,&stats);
+            check_result(warm_accepted == FULLMAG_FEM_OK,
+                fullmag_fem_backend_last_error(handle),
+                "direct PGBB warm step without manual performance begin");
+            const auto warm_transfer_after =
+                fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+            check(relaxation.bb_preconditioner_cache_misses == 0u &&
+                      relaxation.bb_preconditioner_cache_hits == 2u,
+                  "warm public PGBB step reports both prepared-operator cache hits");
+            check(relaxation.bb_exchange_mass.get() == cold_bb_workspace &&
+                      ctx.gpu_state.device.lifecycle.device_bytes == cold_device_bytes,
+                  "warm public PGBB step reuses the same workspace without device allocation");
+            check(warm_transfer_after.hot_loop_h2d_bytes ==
+                      warm_transfer_before.hot_loop_h2d_bytes,
+                  "warm public PGBB step adds no hot-loop H2D bytes");
             fullmag::fem::test::gpu_pgbb_accepted_potential_contract(
                 handle, stats.total_energy_joules, check);
+            fullmag::fem::set_gpu_step_profile(ctx, profile[0] == '1');
+            std::string snapshot_timing_error;
+            check(fullmag::fem::gpu_rk_prepare_phase_timing_event_count(
+                      ctx, 1u, snapshot_timing_error),
+                  snapshot_timing_error.c_str());
+            fullmag_fem_step_stats snapshot_stats{};
+            const int snapshot_status =
+                fullmag_fem_backend_snapshot_stats(handle, &snapshot_stats);
+            check_result(snapshot_status == FULLMAG_FEM_OK,
+                fullmag_fem_backend_last_error(handle),
+                "snapshot after a profiled PGBB step");
+            const uint64_t expected_timed_solves = profile[0] == '1' ? 1u : 0u;
+            check(ctx.poisson_demag.solves_current_step == 1u &&
+                      ctx.poisson_demag.step_hypre_timed_solve_count == expected_timed_solves &&
+                      snapshot_stats.demag_hypre_timed_solve_count == expected_timed_solves,
+                  "snapshot reports only its own Poisson solve and timing event after resetting the prior step scope");
+            if (profile[0] == '0') {
+                hypre_apply_timing_scope_helpers_round_trip_contract();
+            }
+            if (profile[0] == '1') {
+                auto &phase_timings = ctx.gpu_state.rk_phase_timings;
+                const bool saved_override_configured = phase_timings.override_configured;
+                const bool saved_override_enabled = phase_timings.override_enabled;
+                phase_timings.override_configured = true;
+                phase_timings.override_enabled = false;
+
+                auto *const timing_workspace = fullmag::fem::workspace_ptr(ctx);
+                check(timing_workspace != nullptr,
+                      "timing rollback fixture retains its HYPRE event-pool owner");
+                auto &interop = timing_workspace->stream_interop;
+                const auto scope_before =
+                    fullmag::fem::capture_context_hypre_apply_timing_scope(ctx);
+                const auto last_device_time_before =
+                    ctx.poisson_demag.last_solver_apply_device_wall_time_ns;
+                const auto step_device_time_before =
+                    ctx.poisson_demag.step_solver_apply_device_wall_time_ns;
+                const auto wait_in_before =
+                    ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns;
+                const auto host_api_before =
+                    ctx.poisson_demag.step_hypre_host_api_wall_time_ns;
+                const auto wait_out_before =
+                    ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns;
+                const auto event_waits_before =
+                    ctx.poisson_demag.step_hypre_event_wait_count;
+                const auto timed_solves_before =
+                    ctx.poisson_demag.step_hypre_timed_solve_count;
+                const auto lifetime_waits_before = ctx.poisson_demag.event_wait_count;
+                const auto lifetime_syncs_before = ctx.poisson_demag.global_sync_count;
+                const auto interop_waits_before = interop.event_wait_count;
+                const auto interop_syncs_before = interop.global_sync_count;
+
+                fullmag::fem::RkStepTransaction transaction(ctx);
+                std::string transaction_error;
+                check(transaction.begin(transaction_error), transaction_error.c_str());
+                ctx.poisson_demag.last_solver_apply_device_wall_time_ns += 11u;
+                ctx.poisson_demag.step_solver_apply_device_wall_time_ns += 12u;
+                ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns += 13u;
+                ctx.poisson_demag.step_hypre_host_api_wall_time_ns += 14u;
+                ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns += 15u;
+                ctx.poisson_demag.step_hypre_event_wait_count += 16u;
+                ctx.poisson_demag.step_hypre_timed_solve_count += 17u;
+                interop.apply_timing_used += 1u;
+                interop.active_apply_timing_index += 1u;
+                interop.apply_timing_overflow_count += 1u;
+                interop.apply_timing_completed_count += 1u;
+                interop.apply_device_elapsed_time_ns += 18u;
+                interop.last_wait_in_enqueue_wall_time_ns += 19u;
+                interop.last_wait_out_enqueue_wall_time_ns += 20u;
+                interop.apply_timing_active = !interop.apply_timing_active;
+                ctx.poisson_demag.event_wait_count += 1u;
+                ctx.poisson_demag.global_sync_count += 1u;
+                interop.event_wait_count += 1u;
+                interop.global_sync_count += 1u;
+                check(transaction.rollback(transaction_error), transaction_error.c_str());
+
+                const auto scope_after =
+                    fullmag::fem::capture_context_hypre_apply_timing_scope(ctx);
+                check(ctx.poisson_demag.last_solver_apply_device_wall_time_ns ==
+                              last_device_time_before &&
+                          ctx.poisson_demag.step_solver_apply_device_wall_time_ns ==
+                              step_device_time_before &&
+                          ctx.poisson_demag.step_hypre_wait_in_enqueue_wall_time_ns ==
+                              wait_in_before &&
+                          ctx.poisson_demag.step_hypre_host_api_wall_time_ns == host_api_before &&
+                          ctx.poisson_demag.step_hypre_wait_out_enqueue_wall_time_ns ==
+                              wait_out_before &&
+                          ctx.poisson_demag.step_hypre_event_wait_count == event_waits_before &&
+                          ctx.poisson_demag.step_hypre_timed_solve_count == timed_solves_before &&
+                          scope_after.used == scope_before.used &&
+                          scope_after.active_index == scope_before.active_index &&
+                          scope_after.overflow_count == scope_before.overflow_count &&
+                          scope_after.completed_count == scope_before.completed_count &&
+                          scope_after.elapsed_time_ns == scope_before.elapsed_time_ns &&
+                          scope_after.last_wait_in_enqueue_wall_time_ns ==
+                              scope_before.last_wait_in_enqueue_wall_time_ns &&
+                          scope_after.last_wait_out_enqueue_wall_time_ns ==
+                              scope_before.last_wait_out_enqueue_wall_time_ns &&
+                          scope_after.active == scope_before.active,
+                      "RK rollback restores captured C1 host fields and HYPRE timing scope");
+                check(ctx.poisson_demag.event_wait_count == lifetime_waits_before + 1u &&
+                          ctx.poisson_demag.global_sync_count == lifetime_syncs_before + 1u &&
+                          interop.event_wait_count == interop_waits_before + 1u &&
+                          interop.global_sync_count == interop_syncs_before + 1u,
+                      "RK C1 timing restore leaves lifetime Poisson synchronization counters cumulative");
+                phase_timings.override_configured = saved_override_configured;
+                phase_timings.override_enabled = saved_override_enabled;
+            }
             fullmag_fem_backend_destroy(handle);
             continue;
         }
@@ -5591,6 +5829,20 @@ int regional_contract_process(const char *program, const char *mode) {
 #endif
 }
 
+void gpu_bb_certificate_absent_without_workspace() {
+    // This ABI contract also runs in CPU-only builds, without querying CUDA
+    // or fabricating a successful zero-RHS preconditioner certificate.
+    fullmag_fem_backend handle{};
+    fullmag_fem_gpu_bb_pcg_certificate_v1 certificate{};
+    certificate.abi_version = 1u;
+    certificate.struct_size = sizeof(certificate);
+    check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(&handle, &certificate) ==
+              FULLMAG_FEM_OK && certificate.available == 0u &&
+              certificate.cooperative_launch_supported == 0u && certificate.status == 0u &&
+              certificate.iterations == 0u && certificate.nonzero_rhs_mask == 0u,
+          "CPU-only or unprepared Context has no BB certificate");
+}
+
 int main(int argc, char **argv) {
     int regional_transport_failures = 0;
     if (argc == 2 && std::string(argv[1]) == "--regional-cpu") {
@@ -5609,6 +5861,7 @@ int main(int argc, char **argv) {
     if (argc != 1) return 1;
     regional_transport_failures += regional_contract_process(argv[0], "--regional-cpu");
     run_contract_case("check_result_accepts_nullable_c_api_errors", check_result_accepts_nullable_c_api_errors);
+    run_contract_case("gpu_bb_certificate_absent_without_workspace", gpu_bb_certificate_absent_without_workspace);
     run_contract_case("gpu_pcg_control_abi_validation_contract", gpu_pcg_control_abi_validation_contract);
     run_contract_case("gpu_pcg_control_runtime_state_contract", gpu_pcg_control_runtime_state_contract);
     run_contract_case("demag_amg_policy_resolves_defaults_overrides_and_invalid_values", demag_amg_policy_resolves_defaults_overrides_and_invalid_values);

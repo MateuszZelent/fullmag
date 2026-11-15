@@ -58,9 +58,100 @@
     },
     {
       "id": "terminal",
-      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "path": "crates/fullmag-runner/src/fem/gpu_terminal_provenance.rs",
       "symbol": "gpu_pcg_control_experiment_from_ffi",
       "responsibility": "Validate actual native identity and terminal raw counters.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-snapshot-reset",
+      "path": "backends/fem/cpu/mfem/runtime/snapshot.cpp",
+      "symbol": "context_snapshot_stats_mfem",
+      "responsibility": "Reset host timing fields and begin a fresh HYPRE apply timing scope for snapshot statistics.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-step-capture",
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp",
+      "symbol": "capture_poisson_step_state",
+      "responsibility": "Capture host C1 StepStats and legacy timing fields at the outer public-step transaction boundary.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-transaction-rollback",
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp",
+      "symbol": "RkStepTransaction::rollback",
+      "responsibility": "Restore audit and timing state on outer public-step rollback; raw lifetime control counters remain outside the transaction.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-internal-retry-scope",
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp",
+      "symbol": "RkAttemptCacheSnapshot::restore_preserving_attempt_counters",
+      "responsibility": "Invalidate the internal RK attempt cache while retaining timing and counters for adaptive retries inside a successful public step.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-event-scope-capture",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp",
+      "symbol": "capture_hypre_apply_timing_scope",
+      "responsibility": "Declare the helper that captures scalar HYPRE event-pool timing scope without copying CUDA handles or storage.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-event-scope-restore",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp",
+      "symbol": "restore_hypre_apply_timing_scope",
+      "responsibility": "Declare the helper that restores event-pool cursor, counters, accumulator, enqueue timings, and active pair.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-event-bracket",
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "symbol": "compute_device_demag_for_device_stage_impl",
+      "responsibility": "Bracket the HYPRE apply device-stream interval with CUDA events.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "pcg-control-counters",
+      "path": "backends/fem/gpu/cuda/demag_poisson/control_state.hpp",
+      "symbol": "record_solve_attempt",
+      "responsibility": "Accumulate raw PCG solve counters, including the hot-loop subaccount, outside RK transaction rollback.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "physical-lifetime-counters",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "gpu_performance_reject_attempt",
+      "responsibility": "Retain rejected-attempt physical work in lifetime counters because executed device work cannot be undone.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "transfer-audit-hot-loop",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.hpp",
+      "symbol": "record_device_pcg_solve_started",
+      "responsibility": "Declare the PCG hot-loop audit subaccount that shares owner, copy, reset, and rollback semantics with the other transfer-audit counters.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-public-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "fullmag_fem_backend_snapshot_stats",
+      "responsibility": "Exercise the public PGBB path with profiling on and off, including fresh snapshot timing and rollback restoration; native run pending.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-scope-helper-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "restore_hypre_apply_timing_scope",
+      "responsibility": "Check the empty CPU/stub observation and scalar timing-scope round-trip without replacing the event pool; native run pending.",
+      "evidence_status": "source_only_runtime_unvalidated"
+    },
+    {
+      "id": "c1-source-regression",
+      "path": "backends/fem/tests/cuda_demag_timing_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Check the source wiring for timing brackets, fresh snapshot reset, and rollback; native run pending.",
       "evidence_status": "source_only_runtime_unvalidated"
     }
   ],

@@ -4652,6 +4652,21 @@ impl NativeFemBackend {
         runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
     }
 
+    pub(crate) fn gpu_bb_preconditioner_certificate(
+        &self,
+    ) -> Result<Option<crate::types::FemGpuBbPcgCertificateProvenance>, RunError> {
+        let mut info = ffi::fullmag_fem_gpu_bb_pcg_certificate_v1 {
+            abi_version: 1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_bb_pcg_certificate_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(self.handle, &mut info) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU BB cached certificate read failed"));
+        }
+        crate::fem::gpu_terminal_provenance::gpu_bb_certificate_from_ffi(info)
+    }
+
     pub(crate) fn gpu_pcg_control_experiment(
         &self,
         requested_stride: u32,
@@ -4665,7 +4680,7 @@ impl NativeFemBackend {
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU PCG control experiment read failed"));
         }
-        runtime_info::gpu_pcg_control_experiment_from_ffi(info, requested_stride)
+        crate::fem::gpu_terminal_provenance::gpu_pcg_control_experiment_from_ffi(info, requested_stride)
     }
 
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {

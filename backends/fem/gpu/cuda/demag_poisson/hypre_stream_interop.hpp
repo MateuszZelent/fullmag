@@ -46,6 +46,26 @@ struct HypreStreamInterop {
     bool ready = false;
 };
 
+/* Scalar timing-scope state only. Event handles, stream ownership, and pool
+ * storage stay in HypreStreamInterop and are never copied into a rollback. */
+struct HypreApplyTimingScopeSnapshot {
+    size_t used = 0;
+    size_t active_index = 0;
+    uint64_t overflow_count = 0;
+    uint64_t completed_count = 0;
+    uint64_t elapsed_time_ns = 0;
+    uint64_t last_wait_in_enqueue_wall_time_ns = 0;
+    uint64_t last_wait_out_enqueue_wall_time_ns = 0;
+    bool active = false;
+};
+
+HypreApplyTimingScopeSnapshot capture_hypre_apply_timing_scope(
+    const HypreStreamInterop &interop) noexcept;
+
+void restore_hypre_apply_timing_scope(
+    HypreStreamInterop &interop,
+    const HypreApplyTimingScopeSnapshot &snapshot) noexcept;
+
 bool initialize_hypre_stream_interop(
     HypreStreamInterop &interop,
     std::string &error);
@@ -95,6 +115,13 @@ bool prepare_context_hypre_apply_device_timing(
     std::string &error);
 
 void reset_context_hypre_apply_device_timing(Context &ctx) noexcept;
+
+HypreApplyTimingScopeSnapshot capture_context_hypre_apply_timing_scope(
+    const Context &ctx) noexcept;
+
+void restore_context_hypre_apply_timing_scope(
+    Context &ctx,
+    const HypreApplyTimingScopeSnapshot &snapshot) noexcept;
 
 bool collect_context_hypre_apply_device_timing(
     Context &ctx,

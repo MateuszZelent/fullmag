@@ -22,6 +22,7 @@ bool gpu_relax_pgbb_field_reuse_key(
 int gpu_relax_projected_gradient_bb_step(
     Context &ctx,
     fullmag_fem_step_stats &out_stats,
-    std::string &error);
+    std::string &error,
+    bool diagnostics_already_reset = false);
 
 } // namespace fullmag::fem

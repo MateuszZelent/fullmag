@@ -4179,6 +4179,27 @@ pub struct FemGpuPerformanceSnapshotProvenance {
     pub accepted_demag_recover_elapsed_ns: u64,
     pub accepted_demag_energy_elapsed_ns: u64,
     pub accepted_rhs_elapsed_ns: u64,
+    /// Cached true residual of the last completed BB inner solve. This is
+    /// independent of Poisson and does not certify an accepted endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bb_preconditioner_certificate: Option<FemGpuBbPcgCertificateProvenance>,
+}
+
+/// Host-cached result of the cooperative GPU BB preconditioner certificate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuBbPcgCertificateProvenance {
+    pub schema_version: String,
+    pub scope: String,
+    pub solver: String,
+    pub cooperative_launch_supported: bool,
+    pub status: u32,
+    pub iterations: u32,
+    pub nonzero_rhs_mask: u32,
+    pub rhs_norm_squared: [f64; 3],
+    pub residual_norm_squared: [f64; 3],
+    pub relative_residual: [f64; 3],
+    pub certificate_relative_tolerance: f64,
 }
 
 /// Native FEM GPU execution evidence captured after execution.

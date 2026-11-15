@@ -3566,6 +3566,10 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         policy: u32,
     ) -> i32;
+    pub fn fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(
+        handle: *mut fullmag_fem_backend,
+        certificate: *mut fullmag_fem_gpu_bb_pcg_certificate_v1,
+    ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_pcg_control_v1(
         handle: *mut fullmag_fem_backend,
         config: *const fullmag_fem_gpu_pcg_control_config_v1,
@@ -7398,6 +7402,40 @@ pub struct fullmag_fem_poisson_device_pcg_counters_v1 {
     pub control_d2h_bytes: u64,
     pub solves: u64,
     pub active_iterations: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_bb_pcg_certificate_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub available: u32,
+    pub cooperative_launch_supported: u32,
+    pub status: u32,
+    pub iterations: u32,
+    pub nonzero_rhs_mask: u32,
+    pub reserved: u32,
+    pub rhs_norm_squared: [f64; 3],
+    pub residual_norm_squared: [f64; 3],
+    pub certificate_relative_tolerance: f64,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<fullmag_fem_gpu_bb_pcg_certificate_v1>() == 88);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, rhs_norm_squared) == 32);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, residual_norm_squared) == 56);
+    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, certificate_relative_tolerance) == 80);
+};
+
+#[cfg(all(test, feature = "build-native"))]
+#[test]
+fn gpu_bb_pcg_certificate_v1_has_additive_layout_and_getter() {
+    assert_eq!(std::mem::align_of::<fullmag_fem_gpu_bb_pcg_certificate_v1>(), 8);
+    let _getter: unsafe extern "C" fn(
+        *mut fullmag_fem_backend,
+        *mut fullmag_fem_gpu_bb_pcg_certificate_v1,
+    ) -> i32 = fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1;
+    assert_eq!(unsafe { _getter(std::ptr::null_mut(), std::ptr::null_mut()) }, FULLMAG_FEM_ERR_INVALID);
 }
 
 #[repr(C)]

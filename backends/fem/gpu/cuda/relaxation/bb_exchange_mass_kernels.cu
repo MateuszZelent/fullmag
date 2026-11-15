@@ -1,4 +1,5 @@
 #include "gpu/cuda/relaxation/bb_exchange_mass_kernels.hpp"
+#include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cooperative_groups.h>
 #include <cmath>
@@ -12,7 +13,6 @@ constexpr int kThreads = 256;
 // A limit hit is an explicit failure, never acceptance or a CPU fallback.
 constexpr int kMaximumIterations = 512;
 constexpr double kInternalRelativeTolerance = 1e-10;
-constexpr double kCertificateRelativeTolerance = 1e-8;
 
 __device__ double *component(FemGpuComponentField f, int c)
 { return c == 0 ? f.x : (c == 1 ? f.y : f.z); }
@@ -200,7 +200,7 @@ __global__ void exchange_mass_pcg(
     if (rank == 0) {
         for (int c = 0; c < 3; ++c) {
             s.residual_norm_squared[c] = reduced[c];
-            const double limit = kCertificateRelativeTolerance * kCertificateRelativeTolerance * s.rhs_norm_squared[c];
+            const double limit = kGpuBbCertificateRelativeTolerance * kGpuBbCertificateRelativeTolerance * s.rhs_norm_squared[c];
             if (s.status == 1 && (!isfinite(reduced[c]) || reduced[c] > limit)) {
                 s.status = 5;
             }

@@ -43,6 +43,7 @@ struct GpuBbExchangeMassWorkspace {
     uint64_t device_bytes = 0;
     int blocks = 0;
     GpuBbPcgResult last{};
+    bool last_available = false;
 
     GpuBbExchangeMassWorkspace(const mfem::SparseMatrix &m, const mfem::SparseMatrix &k)
         : mass(m), stiffness(k), regularized_mass(m.Height())
@@ -138,6 +139,8 @@ bool gpu_bb_exchange_mass_solve(
     const FemGpuComponentField &direction, double step_m_per_a,
     void *compute_stream, TransferAudit &audit, std::string &error, GpuPerformanceCounterState *performance)
 {
+    // A failed new attempt must not expose an older successful certificate.
+    w.last_available = false;
     if (!std::isfinite(step_m_per_a) || step_m_per_a <= 0.0 ||
         gradient.x == nullptr || gradient.y == nullptr || gradient.z == nullptr ||
         direction.x == nullptr || direction.y == nullptr || direction.z == nullptr) {
@@ -166,6 +169,7 @@ bool gpu_bb_exchange_mass_solve(
     counter.mandatory_controls.bb_certificate_bytes=sizeof(w.last);
     note_hot_loop_mandatory_controls(audit,counter.mandatory_controls);
     if (performance) gpu_performance_note(*performance,counter);
+    w.last_available = true;
     if (w.last.status != 1) {
         error = "cooperative FEM GPU BB PCG failed: status=" + std::to_string(w.last.status) +
             " iterations=" + std::to_string(w.last.iterations);
@@ -187,6 +191,26 @@ double gpu_bb_exchange_mass_last_relative_residual(const GpuBbExchangeMassWorksp
 uint64_t gpu_bb_exchange_mass_last_iterations(const GpuBbExchangeMassWorkspace &w)
 { return static_cast<uint64_t>(std::max(0, w.last.iterations)); }
 #endif
+
+void gpu_bb_exchange_mass_certificate(
+    const Context &ctx, fullmag_fem_gpu_bb_pcg_certificate_v1 &certificate)
+{
+    certificate.certificate_relative_tolerance = kGpuBbCertificateRelativeTolerance;
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME
+    const auto &workspace = ctx.gpu_state.device.relaxation.bb_exchange_mass;
+    if (workspace == nullptr) { return; }
+    certificate.cooperative_launch_supported = workspace->blocks > 0 ? 1u : 0u;
+    if (!workspace->last_available) { return; }
+    certificate.available = 1u;
+    certificate.status = static_cast<uint32_t>(workspace->last.status);
+    certificate.iterations = static_cast<uint32_t>(std::max(0, workspace->last.iterations));
+    certificate.nonzero_rhs_mask = workspace->last.nonzero_rhs_mask;
+    std::copy_n(workspace->last.rhs_norm_squared, 3, certificate.rhs_norm_squared);
+    std::copy_n(workspace->last.residual_norm_squared, 3, certificate.residual_norm_squared);
+#else
+    (void)ctx;
+#endif
+}
 
 bool gpu_bb_exchange_mass_prepare(Context &ctx, std::string &error)
 {

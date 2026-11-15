@@ -117,6 +117,36 @@ liczbę prób solve, zleconych iteracji i wywołań AMG w całym Context oraz
 osobno dla `hot_loop_depth>0`. Liczniki obejmują także próby odrzucone i błędne;
 nie zastępują istniejących liczników wykonanej aktywnej rekurencji.
 
+### Zakres telemetryki C1, snapshot i rollback
+
+Pola C1 w StepStats oraz legacy liczniki host/device opisują zakres publicznego
+kroku integratora. `RkStepTransaction` zapisuje ich stan na granicy tego kroku
+i odtwarza go przy zewnętrznym rollbacku całego kroku. Wewnętrzne ponowienia
+adaptacyjnego RK w obrębie udanego publicznego kroku zachowują czas i liczniki
+faktycznie wykonanej pracy: `RkAttemptCacheSnapshot::restore_preserving_attempt_counters`
+unieważnia cache bez odtwarzania tych liczników. Przy rollbacku zewnętrznym
+odtwarzany jest również skalarny zakres pomiaru
+zdarzeń HYPRE: kursor puli, indeks aktywnej pary, liczniki ukończeń i przepełnień,
+akumulator czasu, czasy enqueue oraz flaga aktywności. Uchwyty CUDA i pamięć puli
+pozostają własnością workspace i nie są kopiowane.
+
+Przygotowanie statystyk snapshotu rozpoczyna świeży zakres: zeruje liczniki
+czasów host/device tego zakresu i kursor oraz akumulatory puli pomiarowej HYPRE,
+zachowując już przygotowane zdarzenia. Surowe liczniki `GpuPcgControlRuntimeState`
+pozostają kumulatywne przez życie Context; obejmuje to osobne liczniki wywołań
+zarejestrowanych przy `hot_loop_depth>0`. Tak samo poza rollbackiem transakcji
+pozostają fizyczne liczniki wydajności GPU. Osobną domeną jest
+`TransferAudit.device_pcg_hot_loop`, który celowo współdzieli własność,
+kopiowanie, reset i rollback pozostałych liczników hot-loop audytu. Jego wartości
+opisują zakres audytu, a nie surową liczbę wywołań API PCG.
+
+Zdarzenia CUDA mierzą przedział na strumieniu HYPRE ograniczony wokół wywołania
+solver/apply HYPRE; nie izolują czasu poszczególnych kerneli. Hostowy
+`step_solver_apply_wall_time_ns` obejmuje szerszą orkiestrację hosta i oczekiwania,
+a `step_hypre_host_api_wall_time_ns` mierzy wywołanie API na hoście. Są to
+nakładające się obserwacje różnych zakresów; czasu zdarzeń CUDA nie należy dodawać
+do hostowego wall time.
+
 (implementation-mapping)=
 ## Mapa implementacji
 
@@ -137,6 +167,14 @@ Następnie porównanie tego samego SP4 RK45 w kolejności przeplatanej 8/4,
 z tą samą siatką, m0, gamma, tolerancjami i harmonogramem zapisu. Zachować
 każdy `.py`, pełny Zarr, wszystkie energie, pola, torque i certyfikat.
 Przyspieszenie wymaga zmierzonego czasu; liczba wywołań nie jest jego dowodem.
+Kontrakt C1 jest pokryty regresjami w istniejącym `fem_demag_poisson_contract`:
+`direct_pgbb_performance_lifecycle_contract` przebiega z profilingiem wyłączonym
+i włączonym, sprawdza świeży zakres snapshotu oraz przywrócenie zakresu po
+rollbacku, a `hypre_apply_timing_scope_helpers_round_trip_contract` sprawdza pustą
+obserwację CPU/stub i odtworzenie skalarnego stanu bez zmiany tożsamości puli.
+`cuda_demag_timing_contract` sprawdza źródłowe podpięcie resetu, pomiaru i
+rollbacku. Te regresje wymagają jeszcze uruchomienia w zarządzanym środowisku
+native FEM; test GPU/runtime pozostaje **PENDING / NOT VERIFIED**.
 
 (limitations)=
 ## Ograniczenia
@@ -165,4 +203,17 @@ runtime pozostaje NOT VERIFIED do uzyskania nowych receiptów i wyników.
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `apply_demag_poisson_device_pcg` | Apply retained AMG and count raw submissions at their call sites. Source only; runtime NOT VERIFIED. |
 | `crates/fullmag-ir/src/plan.rs` | `FemGpuPcgControlExperimentIR` | Typed closed diagnostic request and schema/domain validation. Source only; runtime NOT VERIFIED. |
 | `crates/fullmag-plan/src/pcg_control_experiment.rs` | `request` | Reject unsupported lanes before planning. Source only; runtime NOT VERIFIED. |
-| `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `gpu_pcg_control_experiment_from_ffi` | Validate actual native identity and terminal raw counters. Source only; runtime NOT VERIFIED. |
+| `crates/fullmag-runner/src/fem/gpu_terminal_provenance.rs` | `gpu_pcg_control_experiment_from_ffi` | Validate actual native identity and terminal raw counters. Dedicated default-feature test selection added; CI and runtime verification pending. |
+| `backends/fem/cpu/mfem/runtime/snapshot.cpp` | `context_snapshot_stats_mfem` | Rozpoczyna świeży zakres liczników C1 i pomiaru HYPRE dla snapshotu. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp` | `capture_poisson_step_state` | Zapisuje hostowe pola C1 na granicy zewnętrznego publicznego kroku; integracja rollbacku jest w `RkStepTransaction::rollback`. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp` | `RkStepTransaction::rollback` | Przywraca zakres całego publicznego kroku oraz audyt hot-loop; surowe liczniki sterowania pozostają poza transakcją. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp` | `RkAttemptCacheSnapshot::restore_preserving_attempt_counters` | Unieważnia cache wewnętrznej próby RK, zachowując koszt jej wykonania w publicznym kroku. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp` | `capture_hypre_apply_timing_scope` | Deklaruje zapis skalarnych danych puli HYPRE bez kopiowania uchwytów CUDA. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp` | `restore_hypre_apply_timing_scope` | Deklaruje odtworzenie kursora, akumulatorów i aktywnej pary pomiaru HYPRE. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_device_stage_impl` | Ogranicza zdarzeniowy pomiar urządzenia do zakresu HYPRE apply na strumieniu HYPRE. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/demag_poisson/control_state.hpp` | `record_solve_attempt` | Utrzymuje kumulatywne liczniki wywołań PCG, także dla zakresu hot-loop. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `gpu_performance_reject_attempt` | Zachowuje fizyczną pracę odrzuconej próby w liczniku lifetime. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/gpu/cuda/transfer/transfer_audit.hpp` | `record_device_pcg_solve_started` | Deklaruje licznik audytu PCG hot-loop, który współdzieli rollback z pozostałym audytem. Źródło; runtime NOT VERIFIED. |
+| `backends/fem/tests/demag_poisson_contract.cpp` | `fullmag_fem_backend_snapshot_stats` | Unikalny punkt wywołania publicznego API w regresji PGBB, świeżego zakresu snapshotu i rollbacku z profilingiem on/off; native PENDING. |
+| `backends/fem/tests/demag_poisson_contract.cpp` | `restore_hypre_apply_timing_scope` | Unikalny punkt wywołania helpera w regresji round-trip zakresu HYPRE i pustej obserwacji CPU/stub; native PENDING. |
+| `backends/fem/tests/cuda_demag_timing_contract.cpp` | `main` | Źródłowa kontrola granic pomiaru, resetu snapshotu i rollbacku; native PENDING. |

@@ -3,6 +3,7 @@
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "backend_handle.hpp"
 #include <mfem.hpp>
 #include <cuda_runtime.h>
 #include <array>
@@ -46,6 +47,17 @@ void check_tridiagonal_oracle(int n, bool air_row)
     std::shared_ptr<GpuBbExchangeMassWorkspace> workspace;
     std::string error;
     check(gpu_bb_exchange_mass_create(mass, stiffness, workspace, audit, error), error.c_str());
+    fullmag_fem_backend certificate_handle{};
+    certificate_handle.context.gpu_state.device.relaxation.bb_exchange_mass = workspace;
+    auto read_certificate = [&]() {
+        fullmag_fem_gpu_bb_pcg_certificate_v1 certificate{};
+        certificate.abi_version = 1u;
+        certificate.struct_size = sizeof(certificate);
+        check(fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(&certificate_handle, &certificate) ==
+                  FULLMAG_FEM_OK, "read cached certificate through public C ABI");
+        return certificate;
+    };
+    check(read_certificate().available == 0u, "allocated workspace alone is not a certificate");
     FemGpuComponentField input{}, output{};
     uint64_t bytes = 0;
     check(gpu_device_allocate_component(input, n, bytes, error), error.c_str());
@@ -109,8 +121,15 @@ void check_tridiagonal_oracle(int n, bool air_row)
             if (air_row) { check(actual.back() == 0.0, "air-only row has zero RHS/direction"); }
         }
     }
+    const auto last_success = read_certificate();
+    check(last_success.available == 1u && last_success.status == 1u,
+          "a completed GPU solve exposes its actual certificate");
     check(!gpu_bb_exchange_mass_solve(*workspace, input, output,
         std::numeric_limits<double>::quiet_NaN(), nullptr, audit, error), "invalid step rejected");
+    const auto failed_attempt = read_certificate();
+    check(failed_attempt.available == 0u && failed_attempt.status == 0u &&
+              failed_attempt.iterations == 0u && failed_attempt.nonzero_rhs_mask == 0u,
+          "a failed new solve cannot reuse the previous successful certificate");
     // A zero field must converge without division by zero, with a true zero certificate.
     cuda_check(cudaMemset(input.x, 0, n * sizeof(double)));
     cuda_check(cudaMemset(input.y, 0, n * sizeof(double)));
@@ -118,6 +137,10 @@ void check_tridiagonal_oracle(int n, bool air_row)
     check(gpu_bb_exchange_mass_solve(*workspace, input, output, 1e-6, nullptr, audit, error), error.c_str());
     check(gpu_bb_exchange_mass_last_iterations(*workspace) == 0, "zero RHS needs no Krylov steps");
     check(gpu_bb_exchange_mass_last_relative_residual(*workspace) == 0.0, "zero true residual");
+    const auto zero = read_certificate();
+    check(zero.available == 1u && zero.status == 1u && zero.iterations == 0u &&
+              zero.nonzero_rhs_mask == 0u,
+          "a truly executed zero-RHS solve is distinguished from unavailable evidence");
     gpu_device_free_component(input); gpu_device_free_component(output);
 }
 

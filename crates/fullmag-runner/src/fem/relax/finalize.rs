@@ -950,8 +950,15 @@ pub(crate) fn finalize_native_fem_relaxation(
     );
     if capture_performance_snapshot {
         let snapshot = backend.gpu_performance_snapshot()?;
-        final_provenance.fem_gpu_performance_snapshot =
-            Some(snapshot.to_provenance(final_stats.step)?);
+        let mut provenance = snapshot.to_provenance(final_stats.step)?;
+        if plan.relaxation.as_ref().is_some_and(|control| {
+            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+        }) {
+            // Existing host cache only: no per-step readback or new GPU fence.
+            provenance.bb_preconditioner_certificate =
+                backend.gpu_bb_preconditioner_certificate()?;
+        }
+        final_provenance.fem_gpu_performance_snapshot = Some(provenance);
     }
     let capture_pcg_control_experiment = plan.gpu_pcg_control_experiment.is_some();
     if let Some(request) = &plan.gpu_pcg_control_experiment {

@@ -376,6 +376,30 @@
       "path": "backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp",
       "symbol": "gpu_pgbb_final_energy_overlay_contract",
       "responsibility": "Checks all nine published energies and their total, fresh torque/moment retention, Robin exclusion, and finite-failure atomicity."
+    },
+    {
+      "id": "bb-certificate-cabi",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1",
+      "responsibility": "Exports the existing host-cached result without a new device readback or synchronization. Managed native validation pending."
+    },
+    {
+      "id": "bb-certificate-cache",
+      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp",
+      "symbol": "gpu_bb_exchange_mass_certificate",
+      "responsibility": "Distinguishes an absent result from the last completed cooperative BB solve, independently of accepted-state rollback."
+    },
+    {
+      "id": "bb-certificate-typed-validation",
+      "path": "crates/fullmag-runner/src/fem/gpu_terminal_provenance.rs",
+      "symbol": "gpu_bb_certificate_from_ffi",
+      "responsibility": "Validates ABI, actual cooperative support and each component true residual, including exact zero and tiny nonzero RHS."
+    },
+    {
+      "id": "bb-certificate-terminal-attachment",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Attaches the cached certificate once to terminal performance provenance; no per-step device work."
     }
   ],
   "public_api": {

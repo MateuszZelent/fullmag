@@ -48,6 +48,7 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
+#include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
@@ -5339,6 +5340,33 @@ int fullmag_fem_backend_set_gpu_bb_preconditioner(
     auto &state = handle->context.gpu_state.device.relaxation;
     state.bb_preconditioner_policy = policy;
     fullmag::fem::gpu_relax_invalidate_accepted_evaluation(state);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_bb_pcg_certificate_v1 *out_certificate)
+{
+    static_assert(sizeof(fullmag_fem_gpu_bb_pcg_certificate_v1) == 88);
+    static_assert(offsetof(fullmag_fem_gpu_bb_pcg_certificate_v1, rhs_norm_squared) == 32);
+    static_assert(offsetof(fullmag_fem_gpu_bb_pcg_certificate_v1, residual_norm_squared) == 56);
+    static_assert(offsetof(fullmag_fem_gpu_bb_pcg_certificate_v1, certificate_relative_tolerance) == 80);
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("GPU BB certificate getter received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_certificate == nullptr || out_certificate->abi_version != 1u ||
+        out_certificate->struct_size != sizeof(fullmag_fem_gpu_bb_pcg_certificate_v1)) {
+        fullmag_fem_set_handle_error(handle, "GPU BB certificate getter received invalid ABI header");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    fullmag_fem_gpu_bb_pcg_certificate_v1 certificate{};
+    certificate.abi_version = 1u;
+    certificate.struct_size = sizeof(certificate);
+    fullmag::fem::gpu_bb_exchange_mass_certificate(handle->context, certificate);
+    *out_certificate = certificate;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
 

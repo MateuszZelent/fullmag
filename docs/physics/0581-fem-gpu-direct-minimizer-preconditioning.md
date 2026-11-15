@@ -533,6 +533,19 @@ BB/Armijo scalar controller and HYPRE Poisson host control remain host-
 controlled; the existing Poisson `rtol` and iteration limit are unchanged.
 This does not claim the whole relaxation step is fully GPU controlled.
 
+The terminal `fem_gpu_performance_snapshot.bb_preconditioner_certificate`
+record exports the already-read cooperative PCG result through the additive
+host-only `fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1` getter. It retains
+the actual iteration count, the three RHS and true-residual norm squares,
+the nonzero-RHS mask, and the unchanged certificate limit `1e-8`. This is the
+last physically completed preconditioner solve, not a certificate of the
+accepted magnetization or the Poisson equation. An unexecuted solve is absent;
+it must never appear as a successful zero-residual solve. A failed new readback
+invalidates the older cached certificate. Publishing this terminal record adds
+no CUDA work or transfer to the step. The getter, typed export, and new cache
+counter regression are source changes awaiting a fresh managed native gate;
+earlier SP4 runs do not contain this new record and do not qualify it.
+
 Keep the original physical gradient for torque, stopping, and BB curvature.
 If the proposed GPU direction fails the existing physical energy-weighted
 `g·z > 0` descent check, restart from the raw GPU gradient, as on CPU. Preserve
@@ -779,6 +792,10 @@ against MuMax3. See the
 | Cooperative device PCG recurrence and convergence | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu` | `gpu_bb_pcg_launch` | FEM GPU | Implemented source; runtime unqualified |
 | StudyBuilder policy entry point | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | FEM GPU request | Implemented source; runtime unqualified |
 | Native context policy setter | `backends/fem/src/api.cpp` | `fullmag_fem_backend_set_gpu_bb_preconditioner` | FEM GPU runtime | Implemented source; runtime unqualified |
+| Host-only terminal BB certificate export | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1` | FEM GPU observation | Source change; fresh managed native gate pending |
+| Existing readback cache, with explicit availability | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp` | `gpu_bb_exchange_mass_certificate` | FEM GPU observation | Source change; no added CUDA API or transfer |
+| Typed component residual validation | `crates/fullmag-runner/src/fem/gpu_terminal_provenance.rs` | `gpu_bb_certificate_from_ffi` | FEM GPU terminal provenance | Regression source; managed Rust gate pending |
+| One terminal attachment to existing performance provenance | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | FEM GPU terminal provenance | Source change; managed validation pending |
 | Nonexecuted BB-only pipeline carrier | `crates/fullmag-ir/src/bb_pipeline.rs` | `is_gpu_bb_pipeline_carrier` | FEM GPU authoring | Source contract; managed bridge validation required |
 | Matching Python pipeline structural validation | `packages/fullmag-py/src/fullmag/model/bb_pipeline.py` | `is_gpu_bb_only_pipeline` | FEM GPU authoring | Interpreted regression tests |
 | BB preparation without stage physical mutations | `crates/fullmag-api/src/script.rs` | `gpu_bb_preparation_study` | FEM GPU preparation | Source regression; managed compile required |

@@ -6373,7 +6373,21 @@ mod tests {
         let autosave_root = root.join("autosave");
         let (problem, plan, summary, mut executed, output) =
             stage_completion_fixture(&root, &autosave_root, "relax", "gpu", None);
-        let snapshot = performance_snapshot_provenance_fixture();
+        let mut snapshot = performance_snapshot_provenance_fixture();
+        let bb_certificate = crate::types::FemGpuBbPcgCertificateProvenance {
+            schema_version: "fullmag.fem.gpu.bb-pcg-certificate.v1".into(),
+            scope: "last_completed_bb_preconditioner_solve".into(),
+            solver: "cooperative_device_pcg".into(),
+            cooperative_launch_supported: true,
+            status: 1,
+            iterations: 17,
+            nonzero_rhs_mask: 1,
+            rhs_norm_squared: [1e-240, 0.0, 0.0],
+            residual_norm_squared: [1e-260, 0.0, 0.0],
+            relative_residual: [1e-10, 0.0, 0.0],
+            certificate_relative_tolerance: 1e-8,
+        };
+        snapshot.bb_preconditioner_certificate = Some(bb_certificate.clone());
         executed.provenance.fem_gpu_performance_snapshot = Some(snapshot.clone());
         let hypre = crate::types::HypreRelax7AsyncCopyTelemetry {
             count: 9_007_199_254_740_993,
@@ -6407,6 +6421,16 @@ mod tests {
         );
         assert_eq!(stage["provenance"]["hypre_relax7_async_copy"], expected_hypre);
         assert_eq!(attrs["provenance"]["hypre_relax7_async_copy"], expected_hypre);
+        let expected_bb_certificate = serde_json::to_value(bb_certificate).unwrap();
+        for provenance in [
+            &metadata["execution_provenance"], &stage["provenance"], &attrs["provenance"],
+        ] {
+            assert_eq!(
+                provenance["fem_gpu_performance_snapshot"]["bb_preconditioner_certificate"],
+                expected_bb_certificate,
+                "terminal metadata, stage and Zarr retain all nested BB certificate fields",
+            );
+        }
         let expected = serde_json::to_value(snapshot).unwrap();
         assert_eq!(
             stage["provenance"]["fem_gpu_performance_snapshot"],

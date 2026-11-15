@@ -41,3 +41,4 @@ libc = "0.2"
 
 [dev-dependencies]
 fullmag-fdm-sys = { path = "../fullmag-fdm-sys" }
+fullmag-fem-sys = { path = "../fullmag-fem-sys" }

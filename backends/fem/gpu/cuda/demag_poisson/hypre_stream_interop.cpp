@@ -148,6 +148,37 @@ void reset_hypre_apply_device_timing(HypreStreamInterop &interop) noexcept
     interop.last_wait_out_enqueue_wall_time_ns = 0;
 }
 
+HypreApplyTimingScopeSnapshot capture_hypre_apply_timing_scope(
+    const HypreStreamInterop &interop) noexcept
+{
+    return {
+        interop.apply_timing_used,
+        interop.active_apply_timing_index,
+        interop.apply_timing_overflow_count,
+        interop.apply_timing_completed_count,
+        interop.apply_device_elapsed_time_ns,
+        interop.last_wait_in_enqueue_wall_time_ns,
+        interop.last_wait_out_enqueue_wall_time_ns,
+        interop.apply_timing_active,
+    };
+}
+
+void restore_hypre_apply_timing_scope(
+    HypreStreamInterop &interop,
+    const HypreApplyTimingScopeSnapshot &snapshot) noexcept
+{
+    interop.apply_timing_used = snapshot.used;
+    interop.active_apply_timing_index = snapshot.active_index;
+    interop.apply_timing_overflow_count = snapshot.overflow_count;
+    interop.apply_timing_completed_count = snapshot.completed_count;
+    interop.apply_device_elapsed_time_ns = snapshot.elapsed_time_ns;
+    interop.last_wait_in_enqueue_wall_time_ns =
+        snapshot.last_wait_in_enqueue_wall_time_ns;
+    interop.last_wait_out_enqueue_wall_time_ns =
+        snapshot.last_wait_out_enqueue_wall_time_ns;
+    interop.apply_timing_active = snapshot.active;
+}
+
 bool begin_hypre_apply_device_timing(
     HypreStreamInterop &interop,
     std::string &error)
@@ -245,6 +276,24 @@ void reset_context_hypre_apply_device_timing(Context &ctx) noexcept
 {
     if (auto *workspace = workspace_ptr(ctx); workspace != nullptr) {
         reset_hypre_apply_device_timing(workspace->stream_interop);
+    }
+}
+
+HypreApplyTimingScopeSnapshot capture_context_hypre_apply_timing_scope(
+    const Context &ctx) noexcept
+{
+    const auto *workspace = workspace_ptr(ctx);
+    return workspace == nullptr
+        ? HypreApplyTimingScopeSnapshot{}
+        : capture_hypre_apply_timing_scope(workspace->stream_interop);
+}
+
+void restore_context_hypre_apply_timing_scope(
+    Context &ctx,
+    const HypreApplyTimingScopeSnapshot &snapshot) noexcept
+{
+    if (auto *workspace = workspace_ptr(ctx); workspace != nullptr) {
+        restore_hypre_apply_timing_scope(workspace->stream_interop, snapshot);
     }
 }
 

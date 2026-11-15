@@ -637,7 +637,8 @@ bool gpu_relax_compute_accepted_bb_curvature(
 int gpu_relax_projected_gradient_bb_step(
     Context &ctx,
     fullmag_fem_step_stats &out_stats,
-    std::string &error)
+    std::string &error,
+    bool diagnostics_already_reset)
 {
     out_stats = {};
     struct PotentialExitGuard {
@@ -653,7 +654,9 @@ int gpu_relax_projected_gradient_bb_step(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    gpu_relax_reset_step_diagnostics(gpu.relaxation);
+    if (!diagnostics_already_reset) {
+        gpu_relax_reset_step_diagnostics(gpu.relaxation);
+    }
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
@@ -1243,6 +1246,7 @@ int gpu_relax_projected_gradient_bb_step(
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;
+    (void)diagnostics_already_reset;
     error = "GPU projected-gradient BB relaxation requires FULLMAG_HAS_CUDA_RUNTIME=1";
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
