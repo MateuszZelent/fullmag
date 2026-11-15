@@ -504,7 +504,7 @@ function FrequencyDomainEChartsFrame({
 }) {
   const exportRef = useRef<ChartRendererOwner | null>(null);
   return (
-    <div aria-label={title} className="fm-frequency-domain-chart" data-renderer="echarts">
+    <div role="group" aria-label={title} className="fm-frequency-domain-chart" data-renderer="echarts">
       <div className="fm-frequency-domain-chart__header">
         <span>{title}</span>
         <small>

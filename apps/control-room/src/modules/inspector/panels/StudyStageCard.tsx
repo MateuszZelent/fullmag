@@ -20,7 +20,7 @@ export function StageCard({
   const content = (
     <>
       <div className="fm-study-stage-card__header">
-        <span>{stage.label}</span>
+        <span title={stage.label}>{stage.label}</span>
         <small>{stage.status}</small>
       </div>
       <StudyProgressBar

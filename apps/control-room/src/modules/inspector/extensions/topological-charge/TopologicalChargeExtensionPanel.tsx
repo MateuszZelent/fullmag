@@ -130,9 +130,9 @@ function TopologicalChargeProfileTable({
   if (!profile || profile.length === 0) return null;
 
   return (
-    <div className="fm-topological-charge-profile" aria-label="Topological charge profile">
+    <div role="group" className="fm-topological-charge-profile" aria-label="Topological charge profile">
       <h4>Support profile</h4>
-      <table>
+      <table aria-label="Support profile">
         <thead>
           <tr>
             <th scope="col">i</th>

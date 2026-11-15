@@ -19,7 +19,7 @@ export function AntennaTerminalSourceDetails({ model, current, onGeometry, onPor
     <InspectorGroup title="Circuit source and port observations" badge="source definition"
       description="Explicit source data from the scene. Execution and computed fields have separate validation gates.">
       {!current ? <FeedbackBanner kind="warning" message="Waiting for the current session-scoped scene; navigation is unavailable." /> : null}
-      {model.messages.map(message => <FeedbackBanner key={message} kind="error" message={message} />)}
+      {[...new Set(model.messages)].map(message => <FeedbackBanner key={message} kind="error" message={message} />)}
       <p className="fm-inspector-hint">Source voltage drives the circuit. Port inlet/outlet references observe current; signed branch weights do not impose electrode currents.</p>
       <Button type="button" disabled={!current} onClick={onGeometry}>Open Geometry</Button>
     </InspectorGroup>
@@ -28,7 +28,7 @@ export function AntennaTerminalSourceDetails({ model, current, onGeometry, onPor
       badge={source.kind === "authored" ? "authored" : source.kind === "prepared" ? "prepared descriptor" : "review required"}>
       <FieldRow label="Current transport" value={value(source.transport.name)} mono />
       <FieldRow label="Source schema" value={value(source.definition?.schema_version)} mono />
-      {source.messages.map(message => <FeedbackBanner key={message} kind="error" message={message} />)}
+      {[...new Set(source.messages)].map(message => <FeedbackBanner key={message} kind="error" message={message} />)}
       {source.kind === "authored" ? <>
         <FieldRow label="Closure ID" value={value(source.definition?.closure_id)} mono />
         {source.cuts.map((cut, index) => {

@@ -1659,3 +1659,7 @@
   color: var(--fm-text-disabled);
   cursor: not-allowed;
 }
+
+.fm-inspector-banner-slot {
+  margin-bottom: var(--fm-space-2);
+}

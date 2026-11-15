@@ -271,7 +271,6 @@
 
 .fm-viewport-3d__refresh-countdown[data-refresh-state="updated"]
   .fm-viewport-3d__refresh-countdown-ring {
-  animation: fm-viewport-refresh-flash 650ms ease-out both;
   background: conic-gradient(var(--fm-success) 360deg, transparent 0);
 }
 
@@ -327,18 +326,30 @@
   gap: var(--fm-space-3);
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
-  animation: fm-viewport-pulse 2s ease-in-out infinite;
+  opacity: 0.6;
+}
+
+/* Persistent placeholder pulse and one-shot scale flash: opt-in only. */
+@media (prefers-reduced-motion: no-preference) {
+  .fm-viewport-3d__placeholder {
+    animation: fm-viewport-pulse 2s ease-in-out infinite;
+  }
+
+  .fm-viewport-3d__refresh-countdown[data-refresh-state="updated"]
+    .fm-viewport-3d__refresh-countdown-ring {
+    animation: fm-viewport-refresh-flash 650ms ease-out both;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-viewport-3d__placeholder {
-    animation: none;
-    opacity: 0.6;
+  /* Syncing stays visible as an opacity pulse instead of a spin. */
+  .fm-viewport-3d__refresh-countdown[data-refresh-state="syncing"]
+    .fm-viewport-3d__refresh-countdown-ring {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
   }
 
-  .fm-viewport-3d__refresh-countdown-ring {
-    animation: none !important;
-    transform: none !important;
+  .fm-viewport-3d__settings-switch-track::after {
+    transition: none;
   }
 }
 
@@ -666,6 +677,7 @@
   font-size: var(--fm-font-size-xs);
   font-weight: 600;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-viewport-camera-dialog__form {

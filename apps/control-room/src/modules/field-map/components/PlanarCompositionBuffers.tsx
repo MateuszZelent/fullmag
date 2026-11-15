@@ -65,20 +65,19 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
   }, [visibleFrame]);
   return <><div className="fm-field-map__composition-buffers"
     data-planar-composition-state={pending ? "pending" : visible?.frame.coherence ?? "unavailable"}
-    data-planar-composition-visible-slot={visibleId ?? "none"}
-    style={{ position: "relative", width: "100%", height: "100%", minHeight: 0 }}>
+    data-planar-composition-visible-slot={visibleId ?? "none"}>
     {(["A", "B"] as const).map((id) => {
       const slot = inScope ? snapshot.slots[id] : null;
-      return <div key={id} data-planar-composition-slot={id}
+      return <div key={id} className="fm-field-map__composition-slot" data-planar-composition-slot={id}
         aria-hidden={visibleId !== id} inert={visibleId !== id ? true : undefined}
-        style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr)", position: "absolute", inset: 0, visibility: visibleId === id ? "visible" : "hidden", pointerEvents: visibleId === id ? undefined : "none" }}>
+        style={{ visibility: visibleId === id ? "visible" : "hidden", pointerEvents: visibleId === id ? undefined : "none" }}>
         {slot ? <BufferedSlot id={id} slot={slot} store={store} surfaceProps={surfaceProps}
           interactive={visibleId === id} payloadPending={pending} /> : null}
       </div>;
     })}
     {!visible ? <div role="status" className="fm-field-map__diagnostic">{statusReason ?? "Loading the requested field layers."}</div> : null}
   </div>
-    {visible ? <div className="fm-field-map__composition-legends" style={{ pointerEvents: "none" }}>
+    {visible ? <div className="fm-field-map__composition-legends">
       {renderBaseLegend?.(visible.frame.base.model, visible.frame.base.meta)}
       <PlanarLayerLegendList
         layers={legendEntries}

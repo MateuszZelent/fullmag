@@ -50,6 +50,7 @@ import {
   primitiveMonoColorForRole,
 } from "@/kernel/visualization/primitiveSurfaceColor";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -1015,7 +1016,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
       <InspectorGroup title="Actions">
         {objectEditDraftDirty ? (
-          <div style={{ marginBottom: "0.5rem" }}>
+          <div className="fm-inspector-banner-slot">
             <FeedbackBanner
               kind="warning"
               message="Uncommitted object changes are pending. Use Apply or Revert to commit or discard them."
@@ -1051,16 +1052,24 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
                 Edit Geometry
               </Button>
               <span className="fm-inspector-toolbar__spacer" />
-              <Button
-                disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
-                size="sm"
-                type="button"
-                variant="danger"
-                title={sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined)}
-                onClick={() => void deleteObject()}
-              >
-                Delete
-              </Button>
+              {(() => {
+                const deleteDisabledReason =
+                  sceneMutationLockReason ?? (inspectorDirty ? "Apply or revert changes before deleting this object." : undefined);
+                const deleteButton = (
+                  <Button
+                    disabled={pending || inspectorDirty || Boolean(sceneMutationLockReason)}
+                    size="sm"
+                    type="button"
+                    variant="danger"
+                    onClick={() => void deleteObject()}
+                  >
+                    Delete
+                  </Button>
+                );
+                return deleteDisabledReason ? (
+                  <DisabledReason reason={deleteDisabledReason}>{deleteButton}</DisabledReason>
+                ) : deleteButton;
+              })()}
             </>
           )}
         </div>
@@ -1078,7 +1087,7 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Fetch state" value={validation.status} />
         {validationMessages.length > 0 ? (
           <ul className="fm-inspector-validation-list">
-            {validationMessages.map((message) => (
+            {[...new Set(validationMessages)].map((message) => (
               <li key={message}>{message}</li>
             ))}
           </ul>

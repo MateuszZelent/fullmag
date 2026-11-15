@@ -3033,7 +3033,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             </Button>
             {sceneProps.airboxSettings.visible ? (
               <span
-                aria-label={`${sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport} · ${sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}`}
                 className="fm-viewport-3d__airbox-legend"
                 title={`${sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport} · ${sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}`}
               >
@@ -3170,6 +3169,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       {discretizationKind && (
         <div
           aria-label={`Discretization method: ${discretizationKind}`}
+          role="note"
           className="fm-viewport-3d__method-badge"
         >
           {discretizationKind}
@@ -3676,6 +3676,7 @@ const Viewport3DFieldRefreshCountdown = memo(
     return (
       <span
         aria-label={`${display.ariaLabel} for ${refresh.quantityId}`}
+        role="group"
         className="fm-viewport-3d__refresh-countdown"
         data-pulse-id={countdown.sample.pulseId}
         data-refresh-state={display.state}
@@ -3866,6 +3867,7 @@ function Viewport3DOrbitDebugSlider({
       <output>{value.toFixed(3)}</output>
       <input
         aria-label={label}
+        aria-valuetext={value.toFixed(3)}
         max={max}
         min={min}
         step="0.001"

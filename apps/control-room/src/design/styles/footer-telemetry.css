@@ -132,6 +132,15 @@
   100% { transform: translateX(240%); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-footer-telemetry__freq-strip-track--indeterminate
+    .fm-footer-telemetry__freq-strip-bar {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(70%);
+  }
+}
+
 /* ── Metrics container ──
    Flexbox with wrap: each row sizes independently.
    Cards in a sparse last row expand to fill the available width
@@ -158,7 +167,7 @@
   overflow-x: hidden;
   padding: var(--fm-space-2) var(--fm-space-3);
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
 /* ── Metric card ──
@@ -229,6 +238,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-footer-telemetry__metric-label svg {
@@ -410,8 +420,17 @@
 
 @media (prefers-reduced-motion: reduce) {
   .fm-footer-telemetry__antenna-progress .fm-progress__indicator {
-    animation: none !important;
     transition: none;
+  }
+
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-footer-telemetry__antenna-progress[data-active="true"] .fm-progress[data-state="indeterminate"] .fm-progress__indicator {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(140%);
+  }
+
+  .fm-footer-telemetry__metric {
+    transition-property: border-color, background, box-shadow;
   }
 }
 

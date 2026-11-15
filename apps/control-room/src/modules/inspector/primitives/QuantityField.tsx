@@ -19,6 +19,7 @@ import {
   type QuantityFieldDraftStore,
   type QuantityFieldDraftSummary,
 } from "./quantityFieldDraftStore";
+import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export type QuantityFieldParseResult<T> =
   | { ok: true; value: T }
@@ -190,10 +191,8 @@ export function QuantityField<T>({
     if (!equals(parsed.value, value)) onCommit(parsed.value);
   };
 
-  const showDraftError =
-    entry !== undefined &&
-    entry.status !== "valid" &&
-    (!focused || entry.status === "invalid");
+  // Draft errors appear after the user leaves the field, never per keystroke.
+  const showDraftError = entry !== undefined && entry.status !== "valid" && !focused;
   const draftError = showDraftError ? (entry.message ?? invalidMessage) : undefined;
   const visibleError = draftError ?? error;
 
@@ -220,7 +219,7 @@ export function QuantityField<T>({
       onChange={(event) => report(event.target.value)}
       onFocus={() => setFocused(true)}
       onKeyDown={(event) => {
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && !isImeComposing(event)) {
           commit();
         } else if (event.key === "Escape" && entry) {
           event.preventDefault();

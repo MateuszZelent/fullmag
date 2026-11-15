@@ -213,3 +213,10 @@ details[open] > .fm-registry-tree__summary .fm-registry-tree__compact {
   color: var(--fm-text-muted);
   font-style: italic;
 }
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-registry-tree__summary::before {
+    transition: none;
+  }
+}

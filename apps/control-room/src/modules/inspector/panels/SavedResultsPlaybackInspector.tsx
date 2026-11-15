@@ -10,6 +10,7 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
+import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export function clampPlaybackFrameIndex(frameIndex: number, frameCount: number): number {
   const lastFrame = Math.max(0, Math.floor(frameCount) - 1);
@@ -71,7 +72,7 @@ function ColorLimitControl({
         onBlur={commit}
         onChange={(event) => setDraft({ baseValue: value, text: event.currentTarget.value })}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !isImeComposing(event)) {
             event.preventDefault();
             event.currentTarget.blur();
           }
@@ -201,12 +202,13 @@ export function SavedResultsPlaybackInspector() {
                 if (next !== undefined) selectFrame(next);
               }}
               step={1}
+              valueText={(v) => `Frame ${v + 1} of ${frameCount}`}
               value={[frameIndex]}
             />
-            <p className="fm-saved-results-playback-inspector__time" aria-live="polite">
+            <p className="fm-saved-results-playback-inspector__time">
               Time: {formatSavedPlaybackTimeNs(frameTime(manifest, stageId, frameIndex))}
             </p>
-            <div aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
+            <div role="group" aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">
               <Button aria-label="First frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(0)} size="sm" type="button" variant="secondary">First</Button>
               <Button aria-label="Previous frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex === 0} onClick={() => selectFrame(frameIndex - 1)} size="sm" type="button" variant="secondary">Previous</Button>
               <Button aria-label="Next frame" className="fm-saved-results-playback-inspector__nav-button" disabled={!hasFrames || frameIndex >= lastFrame} onClick={() => selectFrame(frameIndex + 1)} size="sm" type="button" variant="secondary">Next</Button>

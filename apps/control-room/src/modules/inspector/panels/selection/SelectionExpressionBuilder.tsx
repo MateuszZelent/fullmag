@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type {
   FrozenSpinsSelectionExpression,
@@ -254,18 +254,21 @@ function TextField({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const errorId = useId();
   return (
     <div className="fm-inspector-field-wrapper">
       <label className="fm-inspector-field">
         <span>{label}</span>
         <input
+          aria-describedby={error ? errorId : undefined}
+          aria-invalid={error ? true : undefined}
           className={`fm-inspector-input ${error ? "fm-inspector-input--invalid" : ""}`}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
       {error ? (
-        <p className="fm-inspector-feedback" data-kind="error">
+        <p className="fm-inspector-feedback" data-kind="error" id={errorId}>
           {error}
         </p>
       ) : null}
@@ -337,12 +340,15 @@ function NumberField({
   }
 
   const effectiveError = externalError ?? draft.internalError;
+  const errorId = useId();
 
   return (
     <div className="fm-inspector-field-wrapper">
       <label className="fm-inspector-field">
         <span>{label}</span>
         <input
+          aria-describedby={effectiveError ? errorId : undefined}
+          aria-invalid={effectiveError ? true : undefined}
           className={`fm-inspector-input ${effectiveError ? "fm-inspector-input--invalid" : ""}`}
           type="number"
           value={draft.text}
@@ -350,7 +356,7 @@ function NumberField({
         />
       </label>
       {effectiveError ? (
-        <p className="fm-inspector-feedback" data-kind="error">
+        <p className="fm-inspector-feedback" data-kind="error" id={errorId}>
           {effectiveError}
         </p>
       ) : null}

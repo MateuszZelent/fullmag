@@ -529,7 +529,7 @@ function AvailabilityReasons<K extends string>({ entries, kinds }: {
     return state?.available === false ? [`${label(kind)}: ${state.reason}`] : [];
   });
   if (unavailable.length === 0) return null;
-  return <div className="fm-help-text">{unavailable.map((reason) => <p key={reason}>{reason}</p>)}</div>;
+  return <div className="fm-help-text">{[...new Set(unavailable)].map((reason) => <p key={reason}>{reason}</p>)}</div>;
 }
 
 function targetForKind(kind: TargetKind): PlanarMonitorTarget {

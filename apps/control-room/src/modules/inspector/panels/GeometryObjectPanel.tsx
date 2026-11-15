@@ -30,6 +30,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -1089,25 +1090,31 @@ function ActionsSection({
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
-        {draft.mode === "draft-new" ? (
-          <Button
-            disabled={
-              pending ||
-              !valid ||
-              Boolean(sceneMutationLockReason) ||
-              typeof draft.baseRevision !== "number" ||
-              !Number.isFinite(draft.baseRevision) ||
-              revisionConflictPhase !== null
-            }
-            size="sm"
-            type="button"
-            variant="primary"
-            title={sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined)}
-            onClick={() => void onApplyCreateDraft()}
-          >
-            Apply Draft
-          </Button>
-        ) : null}
+        {draft.mode === "draft-new" ? (() => {
+          const applyDisabledReason =
+            sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined);
+          const applyButton = (
+            <Button
+              disabled={
+                pending ||
+                !valid ||
+                Boolean(sceneMutationLockReason) ||
+                typeof draft.baseRevision !== "number" ||
+                !Number.isFinite(draft.baseRevision) ||
+                revisionConflictPhase !== null
+              }
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void onApplyCreateDraft()}
+            >
+              Apply Draft
+            </Button>
+          );
+          return applyDisabledReason ? (
+            <DisabledReason reason={applyDisabledReason}>{applyButton}</DisabledReason>
+          ) : applyButton;
+        })() : null}
       </div>
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
@@ -1164,7 +1171,7 @@ function ValidationSection({
       <FieldRow label="Fetch state" value={status} />
       {messages.length > 0 ? (
         <ul className="fm-inspector-validation-list">
-          {messages.map((message) => (
+          {[...new Set(messages)].map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>

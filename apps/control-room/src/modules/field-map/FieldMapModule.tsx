@@ -1203,7 +1203,7 @@ export default function FieldMapModule() {
           meta; its presentation diagnostics describe nothing that is drawn. */}
       {!metaOnlyBase && renderModel.diagnostics.length ? (
         <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">
-          {renderModel.diagnostics.map((message) => <p key={message}>{message}</p>)}
+          {[...new Set(renderModel.diagnostics)].map((message) => <p key={message}>{message}</p>)}
         </div>
       ) : null}
       <FieldMapAuxiliaryDiagnostics

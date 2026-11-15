@@ -243,7 +243,7 @@ export function PlanarMonitorDraftInspectorPanel() {
       </div>
       {validationErrors.length > 0 ? (
         <div className="fm-help-text" role="alert">
-          {validationErrors.map((error) => <p key={error}>{error}</p>)}
+          {[...new Set(validationErrors)].map((error) => <p key={error}>{error}</p>)}
         </div>
       ) : null}
       {feedback ? <p role="alert">{feedback}</p> : null}

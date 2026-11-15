@@ -31,7 +31,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-bg-chrome);
   padding-inline: var(--fm-space-3);
 }
 
@@ -102,7 +102,7 @@
   overflow-y: hidden;
   padding-inline: var(--fm-space-2);
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) var(--fm-bg-chrome);
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-bg-chrome);
 }
 
 .fm-ribbon__groups::-webkit-scrollbar {
@@ -193,6 +193,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-ribbon-group__label small {
@@ -204,6 +205,7 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   text-overflow: ellipsis;
+  white-space: nowrap;
   text-transform: none;
 }
 
@@ -567,4 +569,23 @@
   background: var(--fm-border-subtle);
   flex-shrink: 0;
   align-self: center;
+}
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-ribbon-action {
+    transition-property: background-color, box-shadow, color;
+  }
+
+  .fm-ribbon-action:hover .fm-ribbon-action__icon {
+    transform: none;
+  }
+
+  .fm-ribbon-action__icon {
+    transition-property: color;
+  }
+
+  .fm-ribbon-action__icon::before {
+    transition-property: opacity;
+  }
 }

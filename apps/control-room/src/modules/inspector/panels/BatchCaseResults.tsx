@@ -212,7 +212,10 @@ export function BatchCaseResults({
       className="grid min-w-0 gap-2 border-t border-fm-subtle pt-2"
     >
       <header className="flex min-w-0 items-center gap-2">
-        <h4 className="m-0 min-w-0 flex-1 truncate text-fm-xs font-semibold text-fm-primary">
+        <h4
+          className="m-0 min-w-0 flex-1 truncate text-fm-xs font-semibold text-fm-primary"
+          title={`${solution.solution_set_id} · revision ${solution.revision}`}
+        >
           {solution.solution_set_id} · revision {solution.revision}
         </h4>
         {onClose ? (
@@ -270,7 +273,10 @@ export function BatchCaseResults({
                     setSelectedArtifactId(null);
                   }}
                 >
-                  <span className="min-w-0 truncate">
+                  <span
+                    className="min-w-0 truncate"
+                    title={`${member.member_id} · ${member.task_id} · ${member.stage_id}`}
+                  >
                     {member.member_id} · {member.task_id} · {member.stage_id}
                   </span>
                   <span className="ml-auto shrink-0 text-fm-xs opacity-80">
@@ -328,7 +334,7 @@ export function BatchCaseResults({
                     variant={selectedArtifactId === artifact.artifact_id ? "primary" : "ghost"}
                     onClick={() => setSelectedArtifactId(artifact.artifact_id)}
                   >
-                    <span className="min-w-0 truncate">{artifact.artifact_id}</span>
+                    <span className="min-w-0 truncate" title={artifact.artifact_id}>{artifact.artifact_id}</span>
                     <span className="ml-auto shrink-0 text-fm-xs opacity-80">
                       {artifact.kind} · {artifact.integrity}
                     </span>

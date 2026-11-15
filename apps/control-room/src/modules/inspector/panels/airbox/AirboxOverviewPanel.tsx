@@ -134,7 +134,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
                 : "hidden"
           }
         />
-        <div className="fm-inspector-toolbar" aria-label="Airbox navigation">
+        <div role="group" className="fm-inspector-toolbar" aria-label="Airbox navigation">
           <Button size="sm" type="button" variant="secondary" onClick={() => navigateToAirboxRoute(kernel.selection, "meshParameters")}>
             Mesh Parameters
           </Button>
