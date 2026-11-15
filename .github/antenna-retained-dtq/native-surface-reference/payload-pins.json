@@ -1,0 +1,26 @@
+{
+  "inputs.json": {
+    "bytes": 10219,
+    "sha256": "ece0416744904b4de36c4085b638933c57cbaa048dc266cfaf61c6e9acf629db"
+  },
+  "source-pins.json": {
+    "bytes": 7875,
+    "sha256": "df6d730084d4b48298aa4eb237aab66ac091f6dfd38c1710373d434cb9f38382"
+  },
+  "native_surface_inputs.hpp": {
+    "bytes": 2650,
+    "sha256": "2de6dbd1f86bdebbcb0f045f4e3c95e78892b75231cf4171c481be5f506e90ed"
+  },
+  "native_surface_reference.cpp": {
+    "bytes": 7083,
+    "sha256": "e1aad7610c2666cb7c36e7f51443bcd0a5e2ed87f3894e3c290bf7d4c5270879"
+  },
+  "materialize_ci.py": {
+    "bytes": 6742,
+    "sha256": "19ea5c12085eab6e22d3f46e61208623387d182ebfb71df189c0e1c227a30f07"
+  },
+  "assess_ci.py": {
+    "bytes": 7251,
+    "sha256": "63326b255bee92405b6824eeffcabc88cd923e402e8d18fd6191a287178cba0d"
+  }
+}

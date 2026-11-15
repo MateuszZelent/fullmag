@@ -1,5 +1,5 @@
 {
-  "name": "PR425 surface reference only; production DTQ gate FAIL",
+  "name": "PR425 existing native surface reference; production DTQ remains FAIL",
   "on": {
     "pull_request": {}
   },
@@ -7,84 +7,100 @@
     "contents": "read"
   },
   "concurrency": {
-    "group": "pr425-surface-reference-${{ github.event.pull_request.number }}",
+    "group": "pr425-native-surface-${{ github.event.pull_request.number }}",
     "cancel-in-progress": false
   },
   "jobs": {
-    "surface-reference-only": {
-      "name": "Four mathematical controls; production DTQ remains FAIL",
+    "native-surface-reference-only": {
+      "name": "Four native toy-Tet controls; production DTQ FAIL",
       "if": "${{ github.event.pull_request.number == 425 }}",
       "runs-on": "ubuntu-latest",
-      "container": "python:3.11-slim",
-      "timeout-minutes": 10,
+      "timeout-minutes": 90,
       "env": {
         "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "NATIVE_SURFACE_EXPECTED_HEAD": "${{ github.event.pull_request.head.sha }}"
       },
       "steps": [
         {
-          "name": "Read PR425 source without credentials or overlays",
+          "name": "Checkout exact PR425 event head; no credentials",
           "id": "checkout",
           "uses": "actions/checkout@v4",
           "with": {
+            "ref": "${{ github.event.pull_request.head.sha }}",
             "fetch-depth": 1,
             "persist-credentials": false
           }
         },
         {
-          "name": "Record Python/platform and enforce three source byte pins",
+          "name": "Enforce reviewed private payload byte pins",
           "id": "pins",
-          "shell": "sh",
-          "run": "python -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json,os,platform,sys\nroot=Path('.'); output=root/'surface-reference-evidence'; output.mkdir(exist_ok=True)\nbase=root/'.github/antenna-retained-dtq/surface-reference'\nexpected={'reference.py': '68a705c2749cf1c150f156d2a8f20ea683009ad1fbe9591e64d5a2ec2f1d1c66', 'verify_inputs.py': '276e34b5eb563f1d5a5f82db17e1a5d69c85142996b715256f8f3bd75e977bd5', 'fixture.json': '1e1d38a360a47f69bd1fdee804231f93f851b69101c15a74f6bd246806c4d891'}\nreport={'python':sys.version,'platform':platform.platform(),'github_sha':os.environ.get('GITHUB_SHA'),'workflow_ref':os.environ.get('GITHUB_WORKFLOW_REF'),'expected_sha256':expected,'actual':{}}\nok=True\nfor name,digest in expected.items():\n    p=base/name\n    actual=hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None\n    report['actual'][name]=actual\n    ok=ok and actual==digest\nreport['status']='PASS' if ok else 'REFUSED'\n(output/'source-pins.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nraise SystemExit(0 if ok else 2)\nPY\n"
+          "shell": "bash",
+          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json\nbase=Path('.github/antenna-retained-dtq/native-surface-reference')\nraw=(base/'payload-pins.json').read_bytes()\nassert hashlib.sha256(raw).hexdigest() == 'cc437a28e3d6102641f37f55ddd42ccd5aedda33c2c637ec8e89a04ae8a034a9'\nfor name,pin in json.loads(raw).items():\n    data=(base/name).read_bytes()\n    assert len(data)==pin['bytes'] and hashlib.sha256(data).hexdigest()==pin['sha256'],name\nprint('NATIVE_SURFACE_PAYLOAD_PINS_PASS')\nPY\n"
         },
         {
-          "name": "Check exact fixture reconstruction and refusal self-checks (stdlib only)",
-          "id": "inputs",
-          "shell": "sh",
-          "run": "python -B .github/antenna-retained-dtq/surface-reference/verify_inputs.py > surface-reference-evidence/input-readback.log 2>&1\n"
+          "name": "Apply only pinned base delta, native GREEN and private test harness",
+          "id": "materialize",
+          "shell": "bash",
+          "run": "mkdir -p native-surface-reference-evidence\npython3 -B .github/antenna-retained-dtq/native-surface-reference/materialize_ci.py > native-surface-reference-evidence/materialization.log 2>&1\n"
         },
         {
-          "name": "Download exactly one original mpmath wheel; no install or retry",
-          "id": "wheel",
-          "shell": "sh",
-          "run": "set -eu\nmkdir surface-reference-evidence/dependency\npython -m pip download --disable-pip-version-check --no-cache-dir --no-deps --only-binary=:all: --retries 0 --timeout 45 --dest surface-reference-evidence/dependency mpmath==1.3.0 > surface-reference-evidence/dependency-download.log 2>&1\npython -B - <<'PY'\nfrom pathlib import Path\nimport hashlib,json\nout=Path('surface-reference-evidence'); files=list((out/'dependency').iterdir())\nreport={'status':'REFUSED','expected_filename':'mpmath-1.3.0-py3-none-any.whl','expected_sha256':'a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c','files':[p.name for p in files]}\nok=len(files)==1 and files[0].is_file() and files[0].name==report['expected_filename']\nif ok:\n    report['actual_sha256']=hashlib.sha256(files[0].read_bytes()).hexdigest()\n    ok=report['actual_sha256']==report['expected_sha256']\nreport['status']='PASS' if ok else 'REFUSED'\n(out/'dependency-pin.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nraise SystemExit(0 if ok else 2)\nPY\n"
+          "name": "Resolve existing CI storage profile",
+          "id": "storage",
+          "shell": "bash",
+          "run": "python3 -B - <<'PY'\nimport json,os,subprocess,sys\nresult=subprocess.run([sys.executable,'-B','scripts/fullmag_storage.py','resolve','--profile','ci-rust-contracts','--create'],check=True,capture_output=True,text=True)\nlayout=json.loads(result.stdout)\nwith open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as out:\n    out.write('FULLMAG_PROJECT_STORAGE_ROOT='+layout['storage_root']+'\\n')\nPY\n"
         },
         {
-          "name": "Four existing-oracle calls; reference-only PASS permitted",
-          "id": "reference",
-          "if": "${{ always() && steps.checkout.outcome == 'success' && steps.pins.outcome == 'success' && steps.inputs.outcome == 'success' && steps.wheel.outcome == 'success' }}",
-          "shell": "sh",
-          "run": "python -B .github/antenna-retained-dtq/surface-reference/reference.py > surface-reference-evidence/reference.log 2>&1\n"
+          "name": "Install existing pinned just version",
+          "id": "just",
+          "uses": "extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3",
+          "with": {
+            "just-version": "1.51.0"
+          }
         },
         {
-          "name": "Always record missing/refused reference status and production limitation",
+          "name": "Existing OE-F1 container recipe; four surface calls plus unchanged OE-T0",
+          "id": "native",
+          "shell": "bash",
+          "run": "set -o pipefail\njust verify-fem-oersted-oef1-cpu-contract 2>&1 | tee native-surface-reference-evidence/native.log\n"
+        },
+        {
+          "name": "Read exact native outputs and preregistered reference/bounds",
+          "id": "readback",
+          "if": "${{ always() && steps.checkout.outcome == 'success' && steps.pins.outcome == 'success' }}",
+          "shell": "bash",
+          "run": "mkdir -p native-surface-reference-evidence\npython3 -B .github/antenna-retained-dtq/native-surface-reference/assess_ci.py > native-surface-reference-evidence/readback.log 2>&1\n"
+        },
+        {
+          "name": "Always retain native status separately from production DTQ refusal",
           "if": "${{ always() }}",
-          "shell": "sh",
+          "shell": "bash",
           "env": {
             "CHECKOUT": "${{ steps.checkout.outcome }}",
             "PINS": "${{ steps.pins.outcome }}",
-            "INPUTS": "${{ steps.inputs.outcome }}",
-            "WHEEL": "${{ steps.wheel.outcome }}",
-            "REFERENCE": "${{ steps.reference.outcome }}"
+            "MATERIALIZE": "${{ steps.materialize.outcome }}",
+            "JUST": "${{ steps.just.outcome }}",
+            "NATIVE": "${{ steps.native.outcome }}",
+            "READBACK": "${{ steps.readback.outcome }}"
           },
-          "run": "python -B - <<'PY'\nfrom pathlib import Path\nimport json,os\nout=Path('surface-reference-evidence'); out.mkdir(exist_ok=True)\nreference=out/'reference.json'\nreport={'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','qualification':'NOT VERIFIED','steps':{key:os.environ[key] for key in ('CHECKOUT','PINS','INPUTS','WHEEL','REFERENCE')},'reference_json_exists':reference.is_file(),'reference_status':json.loads(reference.read_text())['status'] if reference.is_file() else 'NOT RUN: prerequisite or process failure; no field result','prior_production_commit':'099621f654299c7d20911be85e57c4782de967dd','prior_production_run':43647488516}\n(out/'terminal-state.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nPY\n"
+          "run": "python3 -B - <<'PY'\nfrom pathlib import Path\nimport json,os\nout=Path('native-surface-reference-evidence');out.mkdir(exist_ok=True)\np=out/'native-result.json'\nresult=json.loads(p.read_text()) if p.exists() else {'status':'NOT RUN: prerequisite or process failure'}\nreport={'production_gate':'PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516','prior_production_run':43647488516,'qualification':'NOT VERIFIED','steps':{k:os.environ.get(k) for k in ('CHECKOUT','PINS','MATERIALIZE','JUST','NATIVE','READBACK')},'native_status':result['status'],'github_sha':os.environ.get('GITHUB_SHA'),'event_head':os.environ.get('NATIVE_SURFACE_EXPECTED_HEAD')}\n(out/'terminal-state.json').write_text(json.dumps(report,indent=2)+'\\n')\nprint(json.dumps(report))\nPY\n"
         },
         {
-          "name": "Always upload reference logs, JSON and source/dependency pins",
+          "name": "Always upload raw precision/work/phase/RSS and source pins",
           "if": "${{ always() }}",
           "uses": "actions/upload-artifact@v4",
           "with": {
-            "name": "pr425-surface-reference-${{ github.run_id }}-${{ github.run_attempt }}",
-            "path": "surface-reference-evidence/*.log\nsurface-reference-evidence/*.json",
+            "name": "pr425-native-surface-reference-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "native-surface-reference-evidence/*.json\nnative-surface-reference-evidence/*.log",
             "if-no-files-found": "error",
             "retention-days": 14
           }
         },
         {
-          "name": "PRODUCTION DTQ GATE REMAINS FAIL (independent of reference status)",
+          "name": "PRODUCTION DTQ GATE REMAINS FAIL; native marker never promotes the full gate",
           "if": "${{ always() }}",
-          "shell": "sh",
-          "run": "python -B - <<'PY'\nprint('PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516', flush=True)\nraise SystemExit(1)\nPY\n"
+          "shell": "bash",
+          "run": "printf '%s\\n' PRODUCTION_DTQ_GATE_REMAINS_FAIL_FROM_RUN_43647488516\nexit 1\n"
         }
       ]
     }
