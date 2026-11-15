@@ -22,7 +22,17 @@ Displayed evidence includes:
 - grid fingerprint.
 
 FEM policy writes and FEM mesh-build commands are withheld in the FDM lane. To change resolution,
-edit the canonical Python/ProblemIR cell-size policy and re-plan or rerun the study.
+edit the canonical Python/ProblemIR cell-size policy and re-plan or rerun the study. In the
+unified 3D canvas, `FdmCuboidLayer` renders active structured cells and region masks (`FMRM` /
+`FMBM`) cleanly without generating tetrahedral overlays.
+
+```{image} /_static/images/ui/viewport-3d-interactive.png
+:alt: 3D Viewport rendering FDM structured grid cells, vector glyphs, and coordinate frame
+:align: center
+:width: 100%
+```
+
+Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
 ## Control Room crosswalk
 
 This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.

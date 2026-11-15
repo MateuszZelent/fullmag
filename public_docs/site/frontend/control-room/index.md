@@ -9,24 +9,64 @@ owner: fullmag-public-docs
 (public-docs-frontend-control-room-root)=
 # Control Room
 
-The Control Room is the interactive authoring and inspection client. Its core rule is that every
-write is explicit: form edits create a draft, **Apply** commits canonical authored policy, and a
-separate build or run command materializes backend resources.
+The Control Room (`apps/control-room`) is the active unified browser workspace for FullMag. It keeps
+one semantic workspace model, one viewport layout model, and one typed client architecture across
+FDM and FEM problems. Its core authoring invariant is explicit transactions: form edits create an
+isolated draft, **Apply** commits canonical authored policy with `scene_revision` checks, and a
+separate build or study command materializes backend resources.
 
-## Workspace ownership
+```{image} /_static/images/ui/control-room-workspace-overview.png
+:alt: FullMag Control Room v2 dark Catppuccin Mocha workspace layout
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/control-room-light-latte-overview.png
+:alt: FullMag Control Room v2 light Catppuccin Latte workspace layout
+:align: center
+:width: 100%
+```
+
+## Shell Routing, Theming, and Multi-Instance Tabs
+
+- **Routes (`tabRoutes.ts`)**: `/home` overlays the non-blocking Start Screen hub while preserving any open session; `/session/<slug>` opens the workspace for the local backend instance; `/session/<slug>?port=<port>` and `/instance/<port>` attach sibling Control Room tabs on the same host (for parallel runs or separate Docker Compose development groups) without interrupting local sessions.
+- **Mocha & Latte Themes (`theme.css`, `ThemeSwitcher`)**: Central `--fm-*` design tokens drive both Catppuccin **Mocha** (`data-theme="dark"`) and Catppuccin **Latte** (`data-theme="light"`) palettes, switchable directly from the `AppMenuBar`.
+
+```{image} /_static/images/ui/multi-instance-session-tabs.png
+:alt: Multi-instance session tab strip showing Home, local session, and host port tabs
+:align: center
+:width: 100%
+```
+
+## Workspace Ownership
 
 | Area | Responsibility |
 |---|---|
-| Explorer | selects study, universe, object, region, interaction, stage, mesh, or artifact |
-| Inspector | edits the selected canonical resource and exposes validation feedback |
-| Viewport | renders geometry, mesh, and field resources; it is not the source of numerical truth |
-| Mesh Build monitor | tracks requested, running, failed, and latest-successful mesh builds |
-| Status/footer | shows session, backend, device, precision, and stage state |
-| Script export | serializes canonical authored intent to the stage-first Python DSL |
+| `StartScreen` (`/home`) | Launch tiles (FDM/FEM/Template/Import/Script), checkpoint resume, active sessions, sibling instances |
+| `AppMenuBar` & `CommandPaletteModule` | File/Edit/View/Simulation/Tools/Help menus, quick Save/Apply/Undo/Redo, transport controls, `Ctrl+Shift+P` command search |
+| `RibbonModule` | Discretization- and lane-aware tabs (`Workspace`, `View`, `Geometry`, `Materials`, `Physics`, `Mesh`, `Study`, `Results`, contextual `analysis-context`) |
+| `ExplorerModule` | Five semantic dock tabs: `Model`, `Resources`, `Results`, `Jobs`, `Diagnostics` |
+| `InspectorRegistry` | Context-routed semantic property panels with draft isolation and validation |
+| `Viewport3DModule`, `FieldMapModule`, Charts | Unified 3D WebGL scene, 2D planar probe map, live ECharts traces, dispersion/FMR plots, and saved playback |
+| `FooterModule` & `StatusBarModule` | `Logs`, `Telemetry`, `Diagnostics`, `Engine`, `Operations` (including Mesh Jobs), `Problems`, `Quick Chart`, plus live status strip |
+| Script export | `File -> Save canonical copy as…` exports editable stage-first Python DSL scripts |
 
-The implementation is centered in `apps/control-room/src/modules`, with API/resource ownership in
-`apps/control-room/src/kernel`. The older `apps/legacy_web` implementation is not the canonical UI
-contract unless a page says otherwise.
+```{image} /_static/images/ui/status-bar-footer.png
+:alt: Control Room Status Bar and Footer Dock with Telemetry, Operations/Mesh Jobs, Problems, and Logs
+:align: center
+:width: 100%
+```
+
+The implementation lives in `apps/control-room/src/modules`, with API, resource, selection, and
+layout controllers in `apps/control-room/src/kernel`. Screenshots illustrate the interface; they are
+not runtime or physics qualification evidence.
+
+```{toctree}
+:maxdepth: 1
+
+start-screen
+ribbon-and-explorer
+```
 ## Control Room crosswalk
 
 This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.
