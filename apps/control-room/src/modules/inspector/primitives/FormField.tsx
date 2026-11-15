@@ -190,6 +190,8 @@ export function FormField(props: FormFieldProps) {
   const feedbackId = hintText
     ? `${fieldId}-${error ? "error" : "hint"}`
     : undefined;
+  const unitId = unit && !unitControl ? `${fieldId}-unit` : undefined;
+  const describedBy = [unitId, feedbackId].filter(Boolean).join(" ") || undefined;
   const invalidValue = invalid || Boolean(error);
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
@@ -352,7 +354,7 @@ export function FormField(props: FormFieldProps) {
       layout={layout}
       unit={
         unitControl ?? (unit ? (
-          <span className="fm-inspector-form-field__unit">{unit}</span>
+          <span className="fm-inspector-form-field__unit" id={unitId}>{unit}</span>
         ) : undefined)
       }
     >
@@ -361,7 +363,7 @@ export function FormField(props: FormFieldProps) {
           {...(rest as object)}
           id={fieldId}
           aria-label={label}
-          aria-describedby={feedbackId}
+          aria-describedby={describedBy}
           aria-errormessage={error ? feedbackId : undefined}
           aria-invalid={invalidValue || undefined}
           className={inputClass}

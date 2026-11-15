@@ -157,7 +157,7 @@ function FemMeshReadinessGuideCardInner({
             className="fm-mesh-guide__icon"
             size={15}
           />
-          <span className="fm-mesh-guide__title">FEM Mesh Readiness Guide</span>
+          <h3 className="fm-mesh-guide__title m-0">FEM Mesh Readiness Guide</h3>
           <Badge variant={overallBadgeVariant(guide.overallStatus)}>
             {guide.overallStatusLabel} ({guide.completedRequiredSteps}/
             {guide.totalRequiredSteps})

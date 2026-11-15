@@ -1,26 +1,40 @@
 /* ── Global Scrollbar Styles ── */
-::-webkit-scrollbar {
-  width: var(--fm-space-1);
-  height: var(--fm-space-1);
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--fm-border-default);
-  border-radius: var(--fm-radius-pill);
-  transition: background var(--fm-transition-fast);
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--fm-border-strong);
-}
-
+/* Resolved per element so nested [data-theme] subtrees get their own palette. */
 * {
+  --fm-scrollbar-thumb: var(--fm-border-default);
+  --fm-scrollbar-thumb-hover: var(--fm-border-strong);
+  --fm-scrollbar-track: transparent;
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
+}
+
+/* Stronger thumb for users who ask for more contrast. */
+@media (prefers-contrast: more) {
+  * {
+    --fm-scrollbar-thumb: var(--fm-text-secondary);
+    --fm-scrollbar-thumb-hover: var(--fm-text-primary);
+  }
+}
+
+/* Legacy fallback only where the standard properties are unsupported. */
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: var(--fm-space-1);
+    height: var(--fm-space-1);
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--fm-scrollbar-track);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--fm-scrollbar-thumb);
+    border-radius: var(--fm-radius-pill);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--fm-scrollbar-thumb-hover);
+  }
 }
 
 /* ── Disabled reason (focusable wrapper around a disabled control) ── */
@@ -184,6 +198,18 @@
   .fm-button:active:not(:disabled):not([aria-disabled="true"]):not([data-disabled="true"]) {
     transform: none;
   }
+
+  .fm-switch__thumb {
+    transition-property: background-color;
+  }
+
+  .fm-metric-card {
+    transition-property: border-color, background-color, box-shadow;
+  }
+
+  .fm-metric-card:hover {
+    transform: none;
+  }
 }
 
 @keyframes fm-tooltip-in {
@@ -199,7 +225,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .fm-tooltip {
-    animation: none;
+    animation-name: fm-reduced-fade-in;
   }
 }
 
@@ -572,7 +598,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .fm-popover {
-    animation: none;
+    animation-name: fm-reduced-fade-in;
   }
 }
 
@@ -766,12 +792,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-sheet__overlay,
+  /* Overlay is already opacity-only; panels crossfade instead of sliding. */
   .fm-sheet__content--right,
   .fm-sheet__content--left,
   .fm-sheet__content--top,
   .fm-sheet__content--bottom {
-    animation: none;
+    animation-name: fm-reduced-fade-in;
   }
 }
 
@@ -925,9 +951,13 @@
 .fm-toast[data-variant="error"] .fm-toast__title { color: var(--fm-danger); }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-toast,
+  /* Crossfade instead of sliding; keeps animationend for close handling. */
+  .fm-toast {
+    animation-name: fm-reduced-fade-in;
+  }
+
   .fm-toast[data-state="closed"] {
-    animation: none;
+    animation-name: fm-reduced-fade-out;
   }
 }
 
@@ -1082,6 +1112,12 @@
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-select-content {
+    animation-name: fm-reduced-fade-in;
   }
 }
 

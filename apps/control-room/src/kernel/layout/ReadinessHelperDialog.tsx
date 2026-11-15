@@ -85,7 +85,6 @@ export function ReadinessHelperHeaderControl({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           aria-describedby="fm-readiness-helper-dialog-description"
-          aria-label="Simulation and FEM Mesh Readiness Helper"
           className="fm-helper-modal"
         >
           <DialogHeader>

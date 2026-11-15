@@ -121,8 +121,8 @@ function GeometryBoundsDiagnosticNotice({
   );
   if (error || status === "error") {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>Backend geometry diagnostics could not be loaded.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">Backend geometry diagnostics could not be loaded.</p>
         <p>{boundedDisplayText(error instanceof Error ? error.message : String(error ?? "No error details published."))}</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
@@ -130,30 +130,30 @@ function GeometryBoundsDiagnosticNotice({
   }
   if (!diagnostics) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>{status === "loading" ? "Checking backend geometry diagnostics for manual bounds." : "Geometry diagnostics are not available for this session."}</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">{status === "loading" ? "Checking backend geometry diagnostics for manual bounds." : "Geometry diagnostics are not available for this session."}</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
     );
   }
   if (stale) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>Backend geometry diagnostics are for scene revision {diagnostics.scene_revision}; current scene revision is {sceneRevision}.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">Backend geometry diagnostics are for scene revision {diagnostics.scene_revision}; current scene revision is {sceneRevision}.</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open current diagnostics</Button>
       </div>
     );
   }
   if (outside.length === 0) {
     return (
-      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
-        <p>The backend has not published GEOMETRY_OBJECT_OUTSIDE_UNIVERSE for scene revision {diagnostics.scene_revision}.</p>
+      <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+        <p role="status">The backend has not published GEOMETRY_OBJECT_OUTSIDE_UNIVERSE for scene revision {diagnostics.scene_revision}.</p>
         <Button size="sm" type="button" variant="secondary" onClick={onOpenDiagnostics}>Open diagnostics</Button>
       </div>
     );
   }
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" role="status">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       {outside.map((diagnostic) => (
         <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" key={diagnostic.id}>
           <p>{diagnostic.message}</p>

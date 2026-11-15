@@ -269,6 +269,7 @@
   overflow: hidden;
   color: var(--fm-text-muted);
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-status-bar__button {

@@ -10,6 +10,7 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
+import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export function clampPlaybackFrameIndex(frameIndex: number, frameCount: number): number {
   const lastFrame = Math.max(0, Math.floor(frameCount) - 1);
@@ -71,7 +72,7 @@ function ColorLimitControl({
         onBlur={commit}
         onChange={(event) => setDraft({ baseValue: value, text: event.currentTarget.value })}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !isImeComposing(event)) {
             event.preventDefault();
             event.currentTarget.blur();
           }
@@ -203,7 +204,7 @@ export function SavedResultsPlaybackInspector() {
               step={1}
               value={[frameIndex]}
             />
-            <p className="fm-saved-results-playback-inspector__time" aria-live="polite">
+            <p className="fm-saved-results-playback-inspector__time">
               Time: {formatSavedPlaybackTimeNs(frameTime(manifest, stageId, frameIndex))}
             </p>
             <div role="group" aria-label="Frame navigation" className="fm-saved-results-playback-inspector__navigation">

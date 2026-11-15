@@ -299,11 +299,13 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             Add Region
           </Button>
         </div>
-        <div className="fm-region-list" role="list">
-          {model.items.length === 0 ? (
+        {model.items.length === 0 ? (
+          <div className="fm-region-list">
             <div className="fm-region-list__empty">No authored regions.</div>
-          ) : (
-            model.items.map((item) => {
+          </div>
+        ) : (
+          <div className="fm-region-list" role="list">
+            {model.items.map((item) => {
               const diagnostics = diagnosticSummary(item);
               return (
                 <div key={item.regionId} className="fm-region-list__item" role="listitem">
@@ -318,7 +320,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
                   />
                   <span className="fm-region-card__body">
                     <span className="fm-region-card__title-row">
-                      <span className="fm-region-card__title">{item.name}</span>
+                      <span className="fm-region-card__title" title={item.name}>{item.name}</span>
                       <span className="fm-region-card__status">
                         {item.enabled ? "enabled" : "disabled"}
                       </span>
@@ -338,9 +340,9 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
                 </button>
                 </div>
               );
-            })
-          )}
-        </div>
+            })}
+          </div>
+        )}
       </InspectorGroup>
 
       {adding ? (

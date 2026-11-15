@@ -53,8 +53,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Busy indicator without rotation. */
   .fm-field-map__spinner {
-    animation: none;
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
   }
 }
 
@@ -187,6 +188,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-planar-statusbar__separator {

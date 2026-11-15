@@ -179,6 +179,11 @@ export function PlanarStatusBar({
             min={0}
             step={1}
             value={[step]}
+            valueText={(value) => {
+              const at = geometry ? resolvedSectionCoordinate(geometry, stepFraction(value)) : null;
+              const where = `${axis} = ${formatSectionLength(at ?? Number.NaN)}`;
+              return layerCount !== null ? `${layerNoun} ${value} of ${layerCount - 1}, ${where}` : where;
+            }}
             onValueChange={(values) => {
               const value = values[0];
               if (value !== undefined) setDraft({ key: draftKey, value });
