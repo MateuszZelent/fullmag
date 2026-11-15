@@ -1,4 +1,13 @@
-import { runViewportExportBrowserQa } from "./viewport-export-browser-qa.mjs";
+import { createHash } from "node:crypto";
+import {
+  ensureViewportSettingsSection,
+  getViewportSettingsRegion,
+  getViewportCameraRegion,
+  readViewportInspectorState,
+  restoreViewportInspectorState,
+  runViewportExportBrowserQa,
+  selectViewportInspectorContext,
+} from "./viewport-export-browser-qa.mjs";
 
 const APPEARANCE_STORAGE_KEY =
   "fullmag.control-room.viewport-3d.appearance-preferences";
@@ -16,6 +25,20 @@ const FRAME_OPTIONS = {
   cage: "Floor and vertical planes",
   off: "Off",
 };
+const SETTING_SECTIONS_BY_LABEL = Object.freeze({
+  "Background": "Appearance",
+  "Geometry appearance": "Appearance",
+  "Visualization mode": "Appearance",
+  "Grid and axes": "View",
+  "Scale coordinates": "View",
+  "Requested quality": "Quality",
+});
+const RANGE_SECTIONS_BY_ID = Object.freeze({
+  "fm-view-background-strength": "Appearance",
+  "fm-view-light-strength": "Appearance",
+  "fm-view-metalness": "Appearance",
+  "fm-view-roughness": "Appearance",
+});
 
 export async function runViewportAppearanceBrowserQa(page, {
   assertCanvas,
@@ -31,11 +54,12 @@ export async function runViewportAppearanceBrowserQa(page, {
   if (!originalViewport) throw new Error("Appearance QA requires a fixed browser viewport");
 
   const viewport = page.locator(".fm-viewport-3d");
-  const dialog = page.getByRole("dialog", { name: "3D View Settings", exact: true });
-  const originalDialogOpen = await dialog.isVisible().catch(() => false);
+  const settings = getViewportSettingsRegion(page);
+  let originalInspectorState = null;
   const storageBefore = await readAppearanceStorage(page);
   let originalControls = null;
   let presentationRendering = null;
+  let inspectorInteraction = null;
   let result = null;
   let operationError = null;
   let restorationError = null;
@@ -44,15 +68,13 @@ export async function runViewportAppearanceBrowserQa(page, {
 
   try {
     await viewport.waitFor({ state: "visible", timeout });
-    if (originalDialogOpen) {
-      await dialog.getByRole("button", { name: "Close", exact: true }).click({ timeout });
-      await dialog.waitFor({ state: "hidden", timeout });
-    }
-    await ensureSettingsOpen(page, dialog, false, timeout);
-    originalControls = await readControls(page, dialog);
+    originalInspectorState = await readViewportInspectorState(page);
+    await ensureSettingsOpen(page, "Appearance", timeout, { forceCommand: true });
+    originalControls = await readControls(page, settings, timeout);
+    inspectorInteraction = await checkInspectorInteraction(page, { assertCanvas, timeout });
 
     try {
-      presentationRendering = await checkPresentationRendering(page, dialog, {
+      presentationRendering = await checkPresentationRendering(page, settings, {
         assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit: await page.evaluate(() => window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__?.()),
       });
     } catch (error) {
@@ -64,11 +86,11 @@ export async function runViewportAppearanceBrowserQa(page, {
     await choose(page, "Background", BACKGROUND_OPTIONS.gradient, "fm-view-background", timeout);
     await setRangeValue(page, "#fm-view-background-strength", 1);
     await waitForRenderedFrame(page);
-    const gradient = await readCanvasPixels(page, dialog, "gradient", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    const gradient = await readCanvasPixels(page, settings, "gradient", pixelSnapshots, pngDecoder, assertCanvas, timeout);
 
     await choose(page, "Background", BACKGROUND_OPTIONS.solid, "fm-view-background", timeout);
     await waitForRenderedFrame(page);
-    const solid = await readCanvasPixels(page, dialog, "solid", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    const solid = await readCanvasPixels(page, settings, "solid", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     const backgroundDifference = comparePixelSnapshots(pixelSnapshots, "gradient", "solid");
     const upperDifference = colorDistance(gradient.upper_mean, solid.upper_mean);
     const lowerDifference = colorDistance(gradient.lower_mean, solid.lower_mean);
@@ -78,7 +100,7 @@ export async function runViewportAppearanceBrowserQa(page, {
 
     await choose(page, "Background", BACKGROUND_OPTIONS.gradient, "fm-view-background", timeout);
     await waitForRenderedFrame(page);
-    const gradientRestored = await readCanvasPixels(page, dialog, "gradient-restored", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    const gradientRestored = await readCanvasPixels(page, settings, "gradient-restored", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     const restoredUpperDifference = colorDistance(gradient.upper_mean, gradientRestored.upper_mean);
     const restoredLowerDifference = colorDistance(gradient.lower_mean, gradientRestored.lower_mean);
     if (restoredUpperDifference > 3 || restoredLowerDifference > 3) {
@@ -87,7 +109,7 @@ export async function runViewportAppearanceBrowserQa(page, {
     clearPixelSnapshots(pixelSnapshots, ["gradient", "solid", "gradient-restored"]);
 
     if (originalControls.frameMode === "off") {
-      await choose(page, "Reference frame", FRAME_OPTIONS.floor, "fm-view-frame", timeout);
+      await choose(page, "Grid and axes", FRAME_OPTIONS.floor, "fm-view-frame", timeout);
     }
     await choose(page, "Scale coordinates", ORIGIN_OPTIONS["frame-center"], "fm-view-origin", timeout);
     const frameCenterOriginText = await readChoice(page, "Scale coordinates");
@@ -95,10 +117,10 @@ export async function runViewportAppearanceBrowserQa(page, {
       throw new Error("Frame-center coordinate mode did not publish its selected HUD setting text");
     }
     await waitForRenderedFrame(page);
-    const frameCenterPixels = await readCanvasPixels(page, dialog, "frame-center", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    const frameCenterPixels = await readCanvasPixels(page, settings, "frame-center", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     await choose(page, "Scale coordinates", ORIGIN_OPTIONS.world, "fm-view-origin", timeout);
     await waitForRenderedFrame(page);
-    const worldPixels = await readCanvasPixels(page, dialog, "world", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    const worldPixels = await readCanvasPixels(page, settings, "world", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     const originRenderDifference = comparePixelSnapshots(pixelSnapshots, "frame-center", "world");
     const worldOriginText = await readChoice(page, "Scale coordinates");
     if (worldOriginText !== ORIGIN_OPTIONS.world) {
@@ -117,17 +139,17 @@ export async function runViewportAppearanceBrowserQa(page, {
       await setSwitch(page, "Bloom (Glow)", false, timeout);
       await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
       await setRangeValue(page, "#fm-view-light-strength", 0);
-      await readCanvasPixels(page, dialog, "studio-zero", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      await readCanvasPixels(page, settings, "studio-zero", pixelSnapshots, pngDecoder, assertCanvas, timeout);
       await choose(page, "Geometry appearance", "Flat", "fm-view-lighting", timeout);
-      if (!await page.locator("#fm-view-light-strength").isDisabled()) {
+      if (!await settings.locator("#fm-view-light-strength-number").isDisabled()) {
         throw new Error("Flat geometry must explain its inactive studio light controls");
       }
-      await readCanvasPixels(page, dialog, "flat-zero", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      await readCanvasPixels(page, settings, "flat-zero", pixelSnapshots, pngDecoder, assertCanvas, timeout);
       await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
       await setRangeValue(page, "#fm-view-light-strength", 2);
-      await readCanvasPixels(page, dialog, "studio-two", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      await readCanvasPixels(page, settings, "studio-two", pixelSnapshots, pngDecoder, assertCanvas, timeout);
       await choose(page, "Geometry appearance", "Flat", "fm-view-lighting", timeout);
-      await readCanvasPixels(page, dialog, "flat-two", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      await readCanvasPixels(page, settings, "flat-two", pixelSnapshots, pngDecoder, assertCanvas, timeout);
       studioDifference = comparePixelSnapshots(pixelSnapshots, "studio-zero", "studio-two");
       flatDifference = comparePixelSnapshots(pixelSnapshots, "flat-zero", "flat-two");
       if (studioDifference.changed_pixels < 8) {
@@ -145,13 +167,9 @@ export async function runViewportAppearanceBrowserQa(page, {
     await setSwitch(page, "Ambient occlusion", true, timeout);
     await setSwitch(page, "Bloom (Glow)", true, timeout);
     await page.waitForTimeout(100);
-    const effectReasons = await dialog.getByRole("status").allInnerTexts();
-    const diagnostics = Object.fromEntries(effectReasons.map((text) => {
-      const separator = text.indexOf(":");
-      return separator < 0
-        ? [text, text]
-        : [text.slice(0, separator).trim(), text.slice(separator + 1).trim()];
-    }));
+    await ensureSettingsOpen(page, "Quality", timeout);
+    const effectReasons = await settings.getByRole("status").allInnerTexts();
+    const diagnostics = parseViewportEffectStatuses(effectReasons);
     const protectedReason = "Quantitative field colors are protected";
     const protectedEffects = ["ambientOcclusion", "bloom"]
       .filter((effect) => diagnostics[effect] === protectedReason);
@@ -163,32 +181,24 @@ export async function runViewportAppearanceBrowserQa(page, {
     }
 
 
-    const narrowLayout = await checkNarrowViewport(page, dialog, timeout);
+    const narrowLayout = await checkNarrowViewport(page, settings, timeout);
     await page.setViewportSize(originalViewport);
     await page.waitForTimeout(100);
 
     const sessionBeforeReload = await getSessionIdentity();
     assertSameSession(expectedSession, sessionBeforeReload, "before appearance preference reload");
-    const persistence = storageBefore.available && new URL(page.url()).pathname.startsWith("/workspace")
+    const persistence = storageBefore.available
       ? await verifyPreferenceReload(page, {
-          assertCanvas,
-          dialog,
-          expectedSession,
-          getSessionIdentity,
-          timeout,
+          assertCanvas, settings, expectedSession, getSessionIdentity, timeout,
         })
-      : {
-          state: "skipped",
-          reason: storageBefore.available
-            ? "The active page is not the current workspace route."
-            : "Browser local storage is unavailable.",
-        };
+      : { state: "skipped", reason: "Browser local storage is unavailable." };
 
     result = {
+      inspector_interaction: inspectorInteraction,
       presentation_rendering: presentationRendering,
-      settings_dialog: {
-        opened_from_view_settings: true,
-        title: "3D View Settings",
+      settings_panel: {
+        opened_from_command_palette: true,
+        region: "3D View Settings",
       },
       pixel_capture: {
         method: "Playwright canvas screenshot decoded by pinned utilsBundle PNG.sync.read",
@@ -249,6 +259,7 @@ export async function runViewportAppearanceBrowserQa(page, {
     };
   } catch (error) {
     if (presentationRendering) error.partialProof = { ...error.partialProof, presentation_rendering: presentationRendering };
+    if (inspectorInteraction) error.partialProof = { ...error.partialProof, inspector_interaction: inspectorInteraction };
     operationError = error;
   } finally {
     pixelSnapshots.clear();
@@ -263,30 +274,25 @@ export async function runViewportAppearanceBrowserQa(page, {
     await cleanup(() => page.setViewportSize(originalViewport));
     if (originalControls) {
       await cleanup(() => viewport.waitFor({ state: "visible", timeout }));
-      await cleanup(() => ensureSettingsOpen(page, dialog, true, timeout));
-      await cleanup(() => restoreControls(page, dialog, originalControls, timeout));
+      await cleanup(() => ensureSettingsOpen(page, "Appearance", timeout));
+      await cleanup(() => restoreControls(page, settings, originalControls, timeout));
     }
     await cleanup(async () => {
       preferenceStorageRestored = await restoreAppearanceStorage(page, storageBefore);
     });
-    if (originalDialogOpen) {
-      await cleanup(() => ensureSettingsOpen(page, dialog, true, timeout));
-    } else {
-      await cleanup(async () => {
-        if (await dialog.isVisible().catch(() => false)) {
-          await dialog.getByRole("button", { name: "Close", exact: true }).click({ timeout });
-          await dialog.waitFor({ state: "hidden", timeout });
-        }
-      });
+    if (originalInspectorState) {
+      await cleanup(() => restoreViewportInspectorState(page, originalInspectorState, timeout));
     }
     if (cleanupErrors.length) restorationError = new Error(cleanupErrors.join("; "));
   }
 
   if (operationError && restorationError) {
-    throw new Error(
-      `Appearance QA failed: ${operationError?.message ?? operationError}; ` +
+    const failure = new Error(
+      `Appearance QA failed: ${operationError?.stack ?? operationError}; ` +
       `preference restoration failed: ${restorationError?.message ?? restorationError}`,
     );
+    failure.partialProof = operationError.partialProof;
+    throw failure;
   }
   if (operationError) throw operationError;
   if (restorationError) throw restorationError;
@@ -295,23 +301,35 @@ export async function runViewportAppearanceBrowserQa(page, {
   return result;
 }
 
-async function ensureSettingsOpen(page, dialog, allowAlreadyOpen, timeout) {
-  if (allowAlreadyOpen && await dialog.isVisible().catch(() => false)) return;
-  const button = page.getByRole("button", { name: /view settings/i });
-  await button.waitFor({ state: "visible", timeout });
-  await button.click({ timeout });
-  await dialog.waitFor({ state: "visible", timeout });
+export function parseViewportEffectStatuses(texts) {
+  const keys = { "Ambient occlusion": "ambientOcclusion", Bloom: "bloom", "Anti-Aliasing": "antialias", "Soft shadows": "shadows" };
+  const diagnostics = {};
+  for (const text of texts) {
+    const match = text.match(/^([^:]+): (requested|not requested), (effective|inactive)(?: — (.*))?\.$/);
+    if (match && keys[match[1]]) diagnostics[keys[match[1]]] = match[4] ?? match[3];
+  }
+  if (!("ambientOcclusion" in diagnostics) || !("bloom" in diagnostics)) {
+    throw new Error("Quality settings omitted Ambient occlusion or Bloom effect status");
+  }
+  return diagnostics;
 }
 
-async function readControls(page, dialog) {
-  const background = await readChoice(page, "Background");
-  const origin = await readChoice(page, "Scale coordinates");
-  const frame = await readChoice(page, "Reference frame");
-  const strength = Number(await page.locator("#fm-view-background-strength").inputValue());
-  const ambientOcclusion = await dialog.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
-  const bloom = await dialog.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
-  const lightingMode = await readChoice(page, "Geometry appearance");
-  const lightingIntensity = Number(await page.locator("#fm-view-light-strength").inputValue());
+async function ensureSettingsOpen(page, section, timeout, options) {
+  return ensureViewportSettingsSection(page, section, timeout, options);
+}
+
+async function readControls(page, settings, timeout) {
+  await ensureSettingsOpen(page, "Appearance", timeout);
+  const background = await readChoice(page, "Background", timeout);
+  const strength = await readRangeValue(settings, "fm-view-background-strength");
+  const lightingMode = await readChoice(page, "Geometry appearance", timeout);
+  const lightingIntensity = await readRangeValue(settings, "fm-view-light-strength");
+  await ensureSettingsOpen(page, "View", timeout);
+  const origin = await readChoice(page, "Scale coordinates", timeout);
+  const frame = await readChoice(page, "Grid and axes", timeout);
+  await ensureSettingsOpen(page, "Quality", timeout);
+  const ambientOcclusion = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
+  const bloom = await settings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
   const backgroundMode = background === BACKGROUND_OPTIONS.gradient
     ? "gradient"
     : background === BACKGROUND_OPTIONS.solid
@@ -331,23 +349,44 @@ async function readControls(page, dialog) {
     lightingMode, lightingIntensity };
 }
 
-async function readChoice(page, label) {
-  return normalizeText(await page.getByRole("combobox", { name: label, exact: true }).innerText());
+async function readChoice(page, label, timeout = 15_000) {
+  const section = SETTING_SECTIONS_BY_LABEL[label];
+  if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
+  const settings = await ensureSettingsOpen(page, section, timeout);
+  return normalizeText(await settings.getByRole("combobox", { name: label, exact: true }).innerText({ timeout }));
 }
 
 async function choose(page, label, option, id, timeout) {
-  const trigger = page.getByRole("combobox", { name: label, exact: true });
+  const section = SETTING_SECTIONS_BY_LABEL[label];
+  if (!section) throw new Error(`No 3D View Settings section is registered for ${label}`);
+  const settings = await ensureSettingsOpen(page, section, timeout);
+  const trigger = settings.getByRole("combobox", { name: label, exact: true });
   await trigger.scrollIntoViewIfNeeded();
   await trigger.click({ timeout });
   await page.getByRole("option", { name: option, exact: true }).click({ timeout });
+  await page.getByRole("listbox").waitFor({ state: "hidden", timeout });
   await page.waitForFunction(({ controlId, expected }) => {
     const control = document.getElementById(controlId);
     return (control?.textContent ?? "").replace(/\s+/g, " ").trim().includes(expected);
   }, { controlId: id, expected: option }, { timeout });
 }
 
-async function setRangeValue(page, selector, target) {
-  const input = page.locator(selector);
+async function setRangeValue(page, selector, target, timeout = 15_000) {
+  const id = selector.replace(/^#/, "");
+  const section = RANGE_SECTIONS_BY_ID[id];
+  if (!section) throw new Error(`No 3D View Settings section is registered for ${selector}`);
+  const settings = await ensureSettingsOpen(page, section, timeout);
+  const input = settings.locator(`#${id}-number`);
+  const advanced = {
+    "fm-view-light-azimuth": "Advanced light direction",
+    "fm-view-light-elevation": "Advanced light direction",
+    "fm-view-ao-intensity": "Advanced ambient occlusion",
+    "fm-view-ao-radius": "Advanced ambient occlusion",
+  }[id];
+  if (advanced && await input.count() === 0) {
+    const trigger = settings.getByRole("button", { name: advanced, exact: true });
+    if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click({ timeout });
+  }
   const range = await input.evaluate((element) => ({
     max: Number(element.max),
     min: Number(element.min),
@@ -356,33 +395,39 @@ async function setRangeValue(page, selector, target) {
   if (!Number.isFinite(range.step) || range.step <= 0 || target < range.min || target > range.max) {
     throw new Error(`Range target ${target} is outside ${selector}`);
   }
-  const targetSteps = Math.round((target - range.min) / range.step);
-  if (Math.abs(range.min + targetSteps * range.step - target) > range.step * 0.01) {
+  if (Math.abs((target - range.min) / range.step - Math.round((target - range.min) / range.step)) > 0.01) {
     throw new Error(`Range target ${target} does not align with ${selector} steps`);
   }
-  await input.focus();
-  await input.press("Home");
-  for (let step = 0; step < targetSteps; step += 1) {
-    await input.press("ArrowRight");
-  }
-  const actual = Number(await input.inputValue());
-  if (Math.abs(actual - target) > range.step * 0.01) {
-    throw new Error(`Range ${selector} resolved to ${actual}, expected ${target}`);
-  }
+  await input.fill(String(target));
+  await input.press("Enter");
+  await page.waitForFunction(({ controlId, expected, tolerance }) => {
+    const number = Number(document.getElementById(`${controlId}-number`)?.value);
+    const slider = document.getElementById(controlId)?.querySelector('[role="slider"]');
+    const sliderValue = Number(slider?.getAttribute("aria-valuenow"));
+    return Number.isFinite(number) && Number.isFinite(sliderValue) &&
+      Math.abs(number - expected) <= tolerance && Math.abs(sliderValue - expected) <= tolerance;
+  }, { controlId: id, expected: target, tolerance: range.step * 0.01 }, { timeout });
+}
+
+async function readRangeValue(settings, id) {
+  const value = Number(await settings.locator(`#${id}-number`).inputValue());
+  if (!Number.isFinite(value)) throw new Error(`Numeric control ${id}-number did not expose a finite value`);
+  return value;
 }
 
 async function setSwitch(page, label, checked, timeout) {
-  const inputId = {
-    "Ambient occlusion": "fm-viewport-3d-effect-ambient-occlusion",
-    "Bloom (Glow)": "fm-viewport-3d-effect-bloom",
-    "Soft shadows": "fm-view-shadows",
+  const controlInfo = {
+    "Ambient occlusion": { id: "fm-viewport-3d-effect-ambient-occlusion", section: "Quality" },
+    "Bloom (Glow)": { id: "fm-viewport-3d-effect-bloom", section: "Quality" },
+    "Soft shadows": { id: "fm-view-shadows", section: "Quality" },
   }[label];
-  if (!inputId) throw new Error(`Unknown appearance switch ${label}`);
-  const control = page.getByRole("switch", { name: label, exact: true });
+  if (!controlInfo) throw new Error(`Unknown appearance switch ${label}`);
+  const settings = await ensureSettingsOpen(page, controlInfo.section, timeout);
+  const control = settings.getByRole("switch", { name: label, exact: true });
   if (await control.isChecked() !== checked) await control.click();
   await page.waitForFunction(({ id, expected }) =>
-    document.getElementById(id)?.checked === expected,
-  { id: inputId, expected: checked }, { timeout });
+    document.getElementById(id)?.getAttribute("aria-checked") === String(expected),
+  { id: controlInfo.id, expected: checked }, { timeout });
 }
 
 async function waitForRenderedFrame(page) {
@@ -392,17 +437,17 @@ async function waitForRenderedFrame(page) {
   await page.waitForTimeout(40);
 }
 
-async function readCanvasPixels(page, dialog, name, snapshots, pngDecoder, assertCanvas, timeout) {
-  if (!await dialog.isVisible().catch(() => false)) {
-    throw new Error("Appearance pixel capture expects the settings dialog to be open");
+async function readCanvasPixels(page, settings, name, snapshots, pngDecoder, assertCanvas, timeout) {
+  const inspectorState = await readViewportInspectorState(page);
+  if (inspectorState.context !== "view") {
+    throw new Error("Appearance pixel capture expects the 3D View Inspector context to be open");
   }
 
   let capture = null;
   let captureError = null;
   let reopenError = null;
   try {
-    await dialog.getByRole("button", { name: "Close", exact: true }).click({ timeout });
-    await dialog.waitFor({ state: "hidden", timeout });
+    await selectViewportInspectorContext(page, "selection", timeout);
     await waitForRenderedFrame(page);
 
     const canvasState = await assertCanvas(`appearance screenshot ${name}`);
@@ -447,7 +492,7 @@ async function readCanvasPixels(page, dialog, name, snapshots, pngDecoder, asser
     captureError = error;
   } finally {
     try {
-      await ensureSettingsOpen(page, dialog, true, timeout);
+      await ensureSettingsOpen(page, inspectorState.section, timeout);
     } catch (error) {
       reopenError = error;
     }
@@ -455,7 +500,7 @@ async function readCanvasPixels(page, dialog, name, snapshots, pngDecoder, asser
   if (captureError && reopenError) {
     throw new Error(
       `Canvas screenshot failed: ${captureError?.message ?? captureError}; ` +
-      `settings dialog restoration failed: ${reopenError?.message ?? reopenError}`,
+      `settings panel restoration failed: ${reopenError?.message ?? reopenError}`,
     );
   }
   if (captureError) throw captureError;
@@ -491,59 +536,100 @@ function clearPixelSnapshots(snapshots, names) {
   for (const name of names) snapshots.delete(name);
 }
 
-async function checkNarrowViewport(page, dialog, timeout) {
+async function checkNarrowViewport(page, settings, timeout) {
   await page.setViewportSize({ width: 480, height: 320 });
   await page.waitForTimeout(100);
+  await ensureSettingsOpen(page, "Appearance", timeout);
   const targets = [
-    page.getByRole("combobox", { name: "Background", exact: true }),
-    page.locator("#fm-view-background-strength"),
-    page.getByRole("combobox", { name: "Scale coordinates", exact: true }),
-    dialog.getByRole("button", { name: "Close", exact: true }),
+    settings.getByRole("combobox", { name: "Background", exact: true }),
+    settings.locator("#fm-view-background-strength-number"),
+    settings.getByRole("slider", { name: "Gradient strength", exact: true }),
   ];
   const visibleCounts = [];
   for (const target of targets) {
     await target.scrollIntoViewIfNeeded();
     await target.waitFor({ state: "visible", timeout });
     const box = await target.boundingBox();
-    const dialogBox = await dialog.boundingBox();
-    if (!box || !dialogBox || box.x < 0 || box.y < 0 || box.x + box.width > 480 || box.y + box.height > 320 ||
-        box.x < dialogBox.x - 1 || box.y < dialogBox.y - 1 ||
-        box.x + box.width > dialogBox.x + dialogBox.width + 1 ||
-        box.y + box.height > dialogBox.y + dialogBox.height + 1) {
-      throw new Error("A required viewport setting is clipped at 480x320");
+    const settingsBox = await settings.boundingBox();
+    if (!box || !settingsBox || box.x < 0 || box.y < 0 || box.x + box.width > 480 || box.y + box.height > 320 ||
+        box.x < settingsBox.x - 1 || box.y < settingsBox.y - 1 ||
+        box.x + box.width > settingsBox.x + settingsBox.width + 1 ||
+        box.y + box.height > settingsBox.y + settingsBox.height + 1) {
+      throw new Error(`A required viewport setting is clipped at 480x320: ${JSON.stringify({ control: box, settings: settingsBox })}`);
     }
-    const layout = await readVisibleControlLayout(dialog);
+    const reachable = await target.evaluate(control => {
+      const rect = control.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return hit === control || control.contains(hit);
+    });
+    if (!reachable) throw new Error("A required viewport setting is obscured at 480x320");
+    const layout = await readVisibleControlLayout(settings);
+    if (layout.visibleControls === 0) throw new Error("Visible settings controls were omitted by the collision probe");
     if (layout.collisions.length) {
       throw new Error(`Viewport settings controls overlap at 480x320: ${layout.collisions.join(", ")}`);
     }
     visibleCounts.push(layout.visibleControls);
   }
+  await ensureSettingsOpen(page, "View", timeout);
+  const coordinateControl = settings.getByRole("combobox", { name: "Scale coordinates", exact: true });
+  await coordinateControl.scrollIntoViewIfNeeded();
+  await coordinateControl.waitFor({ state: "visible", timeout });
+  const coordinateBox = await coordinateControl.boundingBox();
+  const settingsBox = await settings.boundingBox();
+  if (!coordinateBox || !settingsBox || coordinateBox.x < 0 || coordinateBox.y < 0 ||
+      coordinateBox.x + coordinateBox.width > 480 || coordinateBox.y + coordinateBox.height > 320 ||
+      coordinateBox.x < settingsBox.x - 1 || coordinateBox.y < settingsBox.y - 1 ||
+      coordinateBox.x + coordinateBox.width > settingsBox.x + settingsBox.width + 1 ||
+      coordinateBox.y + coordinateBox.height > settingsBox.y + settingsBox.height + 1) {
+    throw new Error("A required viewport setting is clipped at 480x320");
+  }
+  const viewLayout = await readVisibleControlLayout(settings);
+  if (viewLayout.visibleControls === 0) throw new Error("Visible View controls were omitted by the collision probe");
+  if (viewLayout.collisions.length) {
+    throw new Error(`Viewport settings controls overlap at 480x320: ${viewLayout.collisions.join(", ")}`);
+  }
+  visibleCounts.push(viewLayout.visibleControls);
   return {
     width: 480,
     height: 320,
-    visible_controls_checked: targets.length,
+    visible_controls_checked: targets.length + 1,
     visible_control_counts: visibleCounts,
     collisions: 0,
     device_pixel_ratio_changed: false,
   };
 }
 
-async function readVisibleControlLayout(dialog) {
-  return dialog.evaluate((element) => {
+async function readVisibleControlLayout(settings) {
+  return settings.evaluate((element) => {
     const container = element.getBoundingClientRect();
-    const controls = [...element.querySelectorAll('button, [role="combobox"], input[type="range"], input[type="checkbox"]')]
-      .filter((control) => {
+    const controls = [...element.querySelectorAll('button, [role="combobox"], [role="slider"], input[type="number"], input[type="checkbox"]')]
+      .flatMap((control) => {
         const style = getComputedStyle(control);
-        const rect = control.getBoundingClientRect();
-        return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0 &&
-          rect.width > 0 && rect.height > 0 && rect.left < container.right && rect.right > container.left &&
-          rect.top < container.bottom && rect.bottom > container.top && rect.left < innerWidth && rect.right > 0 &&
-          rect.top < innerHeight && rect.bottom > 0;
-      })
-      .map((control) => ({
-        name: control.getAttribute("aria-label") || control.textContent?.trim() || control.id || control.tagName,
-        rect: control.getBoundingClientRect().toJSON(),
-      }));
+        const box = control.getBoundingClientRect();
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0 || box.width <= 0 || box.height <= 0) return [];
+        const rect = {
+          left: Math.max(0, container.left, box.left), right: Math.min(innerWidth, container.right, box.right),
+          top: Math.max(0, container.top, box.top), bottom: Math.min(innerHeight, container.bottom, box.bottom),
+        };
+        // Rectangles of scrolled-out controls extend under the fixed tab bar.
+        // Intersect every overflow clip before checking visible collisions.
+        for (let parent = control.parentElement; parent; parent = parent.parentElement) {
+          const parentStyle = getComputedStyle(parent);
+          const bounds = parent.getBoundingClientRect();
+          if (/auto|scroll|hidden|clip/.test(parentStyle.overflowX)) {
+            rect.left = Math.max(rect.left, bounds.left + parent.clientLeft);
+            rect.right = Math.min(rect.right, bounds.left + parent.clientLeft + parent.clientWidth);
+          }
+          if (/auto|scroll|hidden|clip/.test(parentStyle.overflowY)) {
+            rect.top = Math.max(rect.top, bounds.top + parent.clientTop);
+            rect.bottom = Math.min(rect.bottom, bounds.top + parent.clientTop + parent.clientHeight);
+          }
+          // Dock drawers are fixed above their collapsed, zero-size dock column.
+          if (parentStyle.position === "fixed") break;
+        }
+        if (rect.right <= rect.left || rect.bottom <= rect.top) return [];
+        return [{ name: control.getAttribute("aria-label") || control.textContent?.trim() || control.id || control.tagName, rect }];
+      });
     const collisions = [];
     for (let leftIndex = 0; leftIndex < controls.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < controls.length; rightIndex += 1) {
@@ -560,13 +646,14 @@ async function readVisibleControlLayout(dialog) {
 
 async function verifyPreferenceReload(page, {
   assertCanvas,
-  dialog,
+  settings,
   expectedSession,
   getSessionIdentity,
   timeout,
 }) {
+  const routeBefore = page.url();
   await page.reload({ waitUntil: "domcontentloaded", timeout });
-  if (!new URL(page.url()).pathname.startsWith("/workspace")) {
+  if (page.url() !== routeBefore) {
     throw new Error("Preference reload did not stay on the current workspace route");
   }
   await page.locator("#fm-main-content.fm-workspace-body").waitFor({ state: "visible", timeout });
@@ -574,14 +661,15 @@ async function verifyPreferenceReload(page, {
   await assertCanvas("after appearance preference reload");
   const session = await getSessionIdentity();
   assertSameSession(expectedSession, session, "after appearance preference reload");
-  await ensureSettingsOpen(page, dialog, false, timeout);
-
-  const background = await readChoice(page, "Background");
-  const strength = Number(await page.locator("#fm-view-background-strength").inputValue());
-  const frame = await readChoice(page, "Reference frame");
-  const origin = await readChoice(page, "Scale coordinates");
-  const ambientOcclusion = await dialog.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
-  const bloom = await dialog.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
+  await ensureSettingsOpen(page, "Appearance", timeout);
+  const background = await readChoice(page, "Background", timeout);
+  const strength = await readRangeValue(settings, "fm-view-background-strength");
+  await ensureSettingsOpen(page, "View", timeout);
+  const frame = await readChoice(page, "Grid and axes", timeout);
+  const origin = await readChoice(page, "Scale coordinates", timeout);
+  await ensureSettingsOpen(page, "Quality", timeout);
+  const ambientOcclusion = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
+  const bloom = await settings.getByRole("switch", { name: "Bloom (Glow)", exact: true }).isChecked();
   if (background !== BACKGROUND_OPTIONS.gradient || Math.abs(strength - 1) > 0.001 ||
       frame !== FRAME_OPTIONS.floor || origin !== ORIGIN_OPTIONS.world || !ambientOcclusion || !bloom) {
     throw new Error("The selected appearance preferences did not survive a workspace reload");
@@ -600,18 +688,18 @@ async function verifyPreferenceReload(page, {
   };
 }
 
-async function restoreControls(page, dialog, original, timeout) {
+async function restoreControls(page, settings, original, timeout) {
   await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
   await setRangeValue(page, "#fm-view-light-strength", original.lightingIntensity);
   await choose(page, "Geometry appearance", original.lightingMode, "fm-view-lighting", timeout);
   await choose(page, "Background", BACKGROUND_OPTIONS.gradient, "fm-view-background", timeout);
   await setRangeValue(page, "#fm-view-background-strength", original.strength);
   await choose(page, "Scale coordinates", ORIGIN_OPTIONS[original.originMode], "fm-view-origin", timeout);
-  await choose(page, "Reference frame", FRAME_OPTIONS[original.frameMode], "fm-view-frame", timeout);
+  await choose(page, "Grid and axes", FRAME_OPTIONS[original.frameMode], "fm-view-frame", timeout);
   await setSwitch(page, "Ambient occlusion", original.ambientOcclusion, timeout);
   await setSwitch(page, "Bloom (Glow)", original.bloom, timeout);
   await choose(page, "Background", BACKGROUND_OPTIONS[original.backgroundMode], "fm-view-background", timeout);
-  const restored = await readControls(page, dialog);
+  const restored = await readControls(page, settings, timeout);
   if (JSON.stringify(restored) !== JSON.stringify(original)) {
     throw new Error("Viewport appearance controls did not return to their original values");
   }
@@ -651,13 +739,13 @@ function normalizeText(value) {
 }
 
 
-async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit }) {
-  const [originalMode, originalQuality, originalLighting, originalAo] = await Promise.all([
-    readChoice(page, "Visualization mode"),
-    readChoice(page, "Render quality"),
-    readChoice(page, "Geometry appearance"),
-    dialog.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked(),
-  ]);
+async function checkPresentationRendering(page, settings, { assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit }) {
+  await ensureSettingsOpen(page, "Appearance", timeout);
+  const originalMode = await readChoice(page, "Visualization mode", timeout);
+  const originalLighting = await readChoice(page, "Geometry appearance", timeout);
+  await ensureSettingsOpen(page, "Quality", timeout);
+  const originalQuality = await readChoice(page, "Requested quality", timeout);
+  const originalAo = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
   let originalRoughness;
   let originalMetalness;
   let originalShadows;
@@ -665,20 +753,21 @@ async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecod
   let presentationPng = null;
   const profiles = ["Interactive Lite", "Interactive", "Balanced", "Figure"];
   const isolatedQaBox = new Set(lightingAudit?.litPrimitiveObjectIds ?? []).has("qa-studio-box");
+  let renderingError = null;
   try {
-    await choose(page, "Visualization mode", "Presentation — PBR and studio HDRI", "fm-view-render-mode", timeout);
+    await choose(page, "Visualization mode", "Presentation", "fm-view-render-mode", timeout);
     await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
+    originalRoughness = await readRangeValue(settings, "fm-view-roughness");
+    originalMetalness = await readRangeValue(settings, "fm-view-metalness");
     await setSwitch(page, "Ambient occlusion", false, timeout);
-    originalShadows = await dialog.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
+    originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
     await setSwitch(page, "Soft shadows", false, timeout);
-    originalRoughness = Number(await page.locator("#fm-view-roughness").inputValue());
-    originalMetalness = Number(await page.locator("#fm-view-metalness").inputValue());
     await setRangeValue(page, "#fm-view-metalness", 1);
     await setRangeValue(page, "#fm-view-roughness", 0.1);
     const polishedAudit = await page.evaluate(() => window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__?.());
-    await readCanvasPixels(page, dialog, "presentation-polished", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    await readCanvasPixels(page, settings, "presentation-polished", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     await setRangeValue(page, "#fm-view-roughness", 0.9);
-    await readCanvasPixels(page, dialog, "presentation-rough", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    await readCanvasPixels(page, settings, "presentation-rough", pixelSnapshots, pngDecoder, assertCanvas, timeout);
     difference = comparePixelSnapshots(pixelSnapshots, "presentation-polished", "presentation-rough");
     const polishedPixels = pixelSnapshots.get("presentation-polished");
     if (polishedPixels) {
@@ -694,11 +783,11 @@ async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecod
     await setSwitch(page, "Soft shadows", true, timeout);
     const qualityPixels = [];
     for (const [index, profile] of profiles.entries()) {
-      await choose(page, "Render quality", profile, "fm-view-quality", timeout);
+      await choose(page, "Requested quality", profile, "fm-view-quality", timeout);
       await waitForRenderedFrame(page);
       await assertCanvas("presentation quality " + profile);
       const snapshotName = `presentation-quality-${index}`;
-      await readCanvasPixels(page, dialog, snapshotName, pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      await readCanvasPixels(page, settings, snapshotName, pixelSnapshots, pngDecoder, assertCanvas, timeout);
       const reference = pixelSnapshots.get("presentation-rough");
       const current = pixelSnapshots.get(snapshotName);
       let blackenedPixels = 0;
@@ -716,7 +805,7 @@ async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecod
       }
       qualityPixels.push({ profile, blackened_pixels: blackenedPixels });
     }
-    await choose(page, "Render quality", "Interactive", "fm-view-quality", timeout);
+    await choose(page, "Requested quality", "Interactive", "fm-view-quality", timeout);
     const exportProof = await runViewportExportBrowserQa(page, {
       assertCanvas, pngDecoder, timeout, expectedCaptureDpr: 1,
     });
@@ -730,14 +819,119 @@ async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecod
       presentation_png_export: exportProof,
       quantitative_data_protection: "Reported separately when quantitative data are visible",
     };
+  } catch (error) {
+    renderingError = error;
+    throw error;
   } finally {
-    if (originalShadows !== undefined) await setSwitch(page, "Soft shadows", originalShadows, timeout);
-    if (originalRoughness !== undefined) await setRangeValue(page, "#fm-view-roughness", originalRoughness);
-    if (originalMetalness !== undefined) await setRangeValue(page, "#fm-view-metalness", originalMetalness);
-    await choose(page, "Render quality", originalQuality, "fm-view-quality", timeout);
-    await choose(page, "Geometry appearance", originalLighting, "fm-view-lighting", timeout);
-    await choose(page, "Visualization mode", originalMode, "fm-view-render-mode", timeout);
-    await setSwitch(page, "Ambient occlusion", originalAo, timeout);
-    clearPixelSnapshots(pixelSnapshots, ["presentation-polished", "presentation-rough", ...profiles.map((_, index) => `presentation-quality-${index}`)]);
+    try {
+      if (originalRoughness !== undefined || originalMetalness !== undefined || originalShadows !== undefined) {
+        await choose(page, "Visualization mode", "Presentation", "fm-view-render-mode", timeout);
+      }
+      if (originalShadows !== undefined) await setSwitch(page, "Soft shadows", originalShadows, timeout);
+      if (originalRoughness !== undefined) await setRangeValue(page, "#fm-view-roughness", originalRoughness);
+      if (originalMetalness !== undefined) await setRangeValue(page, "#fm-view-metalness", originalMetalness);
+      await choose(page, "Requested quality", originalQuality, "fm-view-quality", timeout);
+      await choose(page, "Geometry appearance", originalLighting, "fm-view-lighting", timeout);
+      await choose(page, "Visualization mode", originalMode, "fm-view-render-mode", timeout);
+      await setSwitch(page, "Ambient occlusion", originalAo, timeout);
+      clearPixelSnapshots(pixelSnapshots, ["presentation-polished", "presentation-rough", ...profiles.map((_, index) => `presentation-quality-${index}`)]);
+    } catch (restoreError) {
+      if (renderingError) renderingError.message += `; presentation restoration failed: ${restoreError.message}`;
+      else throw restoreError;
+    }
+  }
+}
+
+
+async function checkInspectorInteraction(page, { assertCanvas, timeout }) {
+  const object = page.locator('[data-node-id="model:object:qa-offset-film-mvgw65uf"]');
+  if (await object.count() !== 1) return { state: "not-run", reason: "The owned QA object is absent." };
+  await selectViewportInspectorContext(page, "selection", timeout);
+  const inspector = page.locator(".fm-inspector");
+  if (!await inspector.locator(".fm-inspector__empty").isVisible().catch(() => false)) {
+    await ensureViewportSettingsSection(page, "Appearance", timeout);
+    return { state: "not-run", reason: "Preserving a pre-existing Inspector selection." };
+  }
+  const canvas = page.locator(".fm-viewport-3d canvas");
+  const canvasNode = await canvas.elementHandle();
+  const toolbar = page.getByRole("toolbar", { name: "3D view tools", exact: true });
+  // The owned offset fixture must be in frame before PNG pixel assertions.
+  await toolbar.getByRole("button", { name: "Fit view", exact: true }).click({ timeout });
+  await waitForRenderedFrame(page);
+  const buttons = toolbar.getByRole("button");
+  const tabStops = await buttons.evaluateAll(nodes => nodes.filter(node => node.tabIndex === 0).length);
+  if (tabStops !== 1) throw new Error(`3D toolbar exposes ${tabStops} tab stops instead of one`);
+  await buttons.first().focus();
+  await buttons.first().press("End");
+  if (!await buttons.last().evaluate(node => node === document.activeElement)) throw new Error("Toolbar End did not focus the last control");
+  await buttons.last().press("Home");
+  if (!await buttons.first().evaluate(node => node === document.activeElement)) throw new Error("Toolbar Home did not focus the first control");
+
+  const sceneUrl = new URL("/v2/sessions/current/model/scene", page.url()).toString();
+  const before = await (await page.request.get(sceneUrl, { timeout })).json();
+  await object.click({ timeout });
+  const name = inspector.getByRole("textbox", { name: "Name", exact: true });
+  await name.waitFor({ state: "visible", timeout });
+  const originalName = await name.inputValue();
+  const nameNode = await name.elementHandle();
+  const inspectorNode = await inspector.elementHandle();
+  const scroller = inspector.locator("[data-radix-scroll-area-viewport]").first();
+  let cameraOriginal = null;
+  let cameraField = null;
+  let completed = false;
+  let interactionProof = null;
+  try {
+    await name.fill(`${originalName} draft`, { timeout });
+    const scrollBefore = await scroller.evaluate(node => { node.scrollTop = Math.min(64, node.scrollHeight - node.clientHeight); return node.scrollTop; });
+    await toolbar.getByRole("button", { name: /settings/i }).click({ timeout });
+    await ensureViewportSettingsSection(page, "View", timeout);
+    const camera = getViewportCameraRegion(page);
+    cameraField = camera.getByRole("spinbutton", { name: /FOV/i });
+    cameraOriginal = await cameraField.inputValue();
+    const cameraNode = await cameraField.elementHandle();
+    const cameraDraft = String(Math.min(179, Number(cameraOriginal) + 1));
+    await cameraField.fill(cameraDraft, { timeout });
+    await selectViewportInspectorContext(page, "selection", timeout);
+    if (await name.inputValue() !== `${originalName} draft`) throw new Error("Switching Inspector context lost the object draft");
+    if (!await name.evaluate((node, original) => node === original, nameNode)) throw new Error("Switching Inspector context replaced the object input");
+    if (!await inspector.evaluate((node, original) => node === original, inspectorNode)) throw new Error("Switching Inspector context replaced the selection panel");
+    const scrollAfter = await scroller.evaluate(node => node.scrollTop);
+    if (Math.abs(scrollAfter - scrollBefore) > 1) throw new Error(`Inspector scroll changed: ${scrollBefore} -> ${scrollAfter}`);
+    await name.fill(originalName, { timeout });
+    await selectViewportInspectorContext(page, "view", timeout);
+    if (await cameraField.inputValue() !== cameraDraft || !await cameraField.evaluate((node, original) => node === original, cameraNode)) throw new Error("Switching Inspector context lost the camera draft");
+    await camera.getByRole("button", { name: "Reset", exact: true }).click({ timeout });
+    const projection = toolbar.getByRole("button", { name: "Projection", exact: true });
+    const originalProjection = await projection.getAttribute("aria-pressed");
+    await projection.click({ timeout });
+    await page.waitForFunction(previous => document.querySelector('.fm-viewport-3d-toolbar button[aria-label="Projection"]')?.getAttribute("aria-pressed") !== previous, originalProjection, { timeout });
+    await projection.click({ timeout });
+    await page.waitForFunction(previous => document.querySelector('.fm-viewport-3d-toolbar button[aria-label="Projection"]')?.getAttribute("aria-pressed") === previous, originalProjection, { timeout });
+    if (!await canvas.evaluate((node, original) => node === original, canvasNode)) throw new Error("Inspector interaction replaced the canvas");
+    await assertCanvas("after Inspector context and toolbar projection checks");
+    const after = await (await page.request.get(sceneUrl, { timeout })).json();
+    if (after.revision !== before.revision) throw new Error("Draft-only Inspector checks changed authored data");
+    completed = true;
+    interactionProof = { state: "passed", toolbar_tab_stops: tabStops, toolbar_home_end: true, object_draft_preserved: true, selection_dom_preserved: true, scroll_before: scrollBefore, scroll_after: scrollAfter, camera_draft_preserved: true, projection_roundtrip: true, canvas_preserved: true, authored_revision_unchanged: true };
+    return interactionProof;
+  } finally {
+    await selectViewportInspectorContext(page, "selection", timeout);
+    if (await name.isVisible().catch(() => false)) await name.fill(originalName, { timeout });
+    if (cameraField && cameraOriginal !== null) {
+      await ensureViewportSettingsSection(page, "View", timeout);
+      await getViewportCameraRegion(page).getByRole("button", { name: "Reset", exact: true }).click({ timeout });
+      await selectViewportInspectorContext(page, "selection", timeout);
+    }
+    await canvas.click({ position: { x: 8, y: 8 }, timeout });
+    await ensureViewportSettingsSection(page, "Appearance", timeout);
+    if (completed) {
+      await waitForRenderedFrame(page);
+      const png = await page.screenshot({ type: "png", animations: "disabled", timeout });
+      if (png.byteLength <= 512 * 1024) {
+        // Bounded screenshot retained with the browser proof, not in source/build storage on the host.
+        const preview = { mime_type: "image/png", byte_length: png.byteLength, sha256: createHash("sha256").update(png).digest("hex"), base64: png.toString("base64") };
+        interactionProof.preview = preview;
+      }
+    }
   }
 }

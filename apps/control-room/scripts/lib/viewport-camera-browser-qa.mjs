@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
+import {
+  ensureViewportSettingsSection,
+  getViewportCameraRegion,
+  readViewportInspectorState,
+  restoreViewportInspectorState,
+  selectViewportInspectorContext,
+} from "./viewport-export-browser-qa.mjs";
 
 const VIEWPORT_SELECTOR = ".fm-viewport-3d";
 const CANVAS_SELECTOR = `${VIEWPORT_SELECTOR} canvas`;
-const CAMERA_DIALOG_NAME = "Camera Parameters";
 const COMMAND_PALETTE_NAME = "Command palette";
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_RESTORE_TIMEOUT_MS = 4_000;
@@ -28,7 +34,7 @@ const CAMERA_POSES = Object.freeze([
 ]);
 
 /**
- * Exercises the visible 3D camera dialog and command palette, then restores
+ * Exercises the 3D camera Inspector region and command palette, then restores
  * the original camera through the same user-facing controls. PNGs are decoded
  * in Node from Playwright canvas screenshots; nothing is written to disk.
  */
@@ -45,16 +51,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
 
   const viewport = page.locator(VIEWPORT_SELECTOR);
   const canvas = page.locator(CANVAS_SELECTOR);
-  const cameraDialog = page.getByRole("dialog", {
-    exact: true,
-    name: CAMERA_DIALOG_NAME,
-  });
+  const cameraRegion = getViewportCameraRegion(page);
+  const cameraDialog = cameraRegion;
   const commandPalette = page.getByRole("dialog", {
     exact: true,
     name: COMMAND_PALETTE_NAME,
   });
 
-  let originalCameraDialogOpen = null;
+  let originalInspectorState = null;
+  let originalCameraControlsOpen = null;
   let originalCommandPaletteOpen = null;
   let originalCamera = null;
   let originalDialogValues = null;
@@ -81,7 +86,9 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     if (!originalCanvasHandle) {
       throw new Error("Viewport camera QA could not retain the original canvas element");
     }
-    originalCameraDialogOpen = await cameraDialog.isVisible().catch(() => false);
+    originalInspectorState = await readViewportInspectorState(page);
+    originalCameraControlsOpen = originalInspectorState.context === "view" &&
+      originalInspectorState.section === "View";
     originalCommandPaletteOpen = await commandPalette.isVisible().catch(() => false);
     if (originalCommandPaletteOpen) {
       throw new Error("Close the command palette before starting viewport camera QA");
@@ -91,9 +98,9 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     validateCameraPrecondition(originalCamera);
     await assertCanvas("before viewport camera QA");
 
-    await setCameraDialogOpen(page, cameraDialog, true, timeout);
-    originalDialogValues = await readDialogValues(cameraDialog);
-    validateDialogValues(originalCamera, originalDialogValues);
+    await setCameraDialogOpen(page, cameraDialog, true, timeout, { forceCommand: true });
+    originalDialogValues = await readCameraFormValues(cameraRegion);
+    validateCameraFormValues(originalCamera, originalDialogValues);
 
     captures.push(await captureCanvas(page, {
       assertCanvas,
@@ -285,7 +292,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       captures.push(capture);
       poses.push({
         name: pose.name,
-        source: "visible-camera-dialog",
+        source: "visible-camera-controls",
         requested_direction: direction,
         requested_position: position,
         target,
@@ -350,7 +357,7 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     });
 
     if (mutationStarted && originalCamera && originalDialogValues) {
-      await restore("restore original camera through visible dialog", async () => {
+      await restore("restore original camera through visible Inspector controls", async () => {
         await setCameraDialogOpen(page, cameraDialog, true, restoreTimeout);
         await restoreCamera(page, cameraDialog, originalCamera, originalDialogValues, restoreTimeout);
       });
@@ -379,12 +386,12 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
       });
     }
 
-    if (originalCameraDialogOpen !== null) {
-      await restore("restore original camera dialog visibility", async () => {
-        await setCameraDialogOpen(page, cameraDialog, originalCameraDialogOpen, restoreTimeout);
-        const actual = await cameraDialog.isVisible().catch(() => false);
-        if (actual !== originalCameraDialogOpen) {
-          throw new Error(`expected camera dialog open=${originalCameraDialogOpen}, got ${actual}`);
+    if (originalInspectorState !== null && originalCommandPaletteOpen !== true) {
+      await restore("restore original Inspector context and section", async () => {
+        await restoreViewportInspectorState(page, originalInspectorState, restoreTimeout);
+        const actual = await readViewportInspectorState(page);
+        if (JSON.stringify(actual) !== JSON.stringify(originalInspectorState)) {
+          throw new Error(`expected Inspector state ${JSON.stringify(originalInspectorState)}, got ${JSON.stringify(actual)}`);
         }
       });
     }
@@ -392,14 +399,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
 
   const restorationVerified = restorationErrors.length === 0 && originalCamera !== null;
   const proof = {
-    schema: "fullmag.viewport-camera-browser-qa.v1",
+    schema: "fullmag.viewport-camera-browser-qa.v2",
     state: operationError || restorationErrors.length ? "failed" : "passed",
     precondition: {
       view_source: originalCamera?.viewSource ?? null,
       required_view_source: "current",
       initial_camera: originalCamera,
-      initial_camera_dialog_open: originalCameraDialogOpen,
-      initial_dialog_values: originalDialogValues,
+      inspector_state: originalInspectorState,
+      initial_camera_controls_open: originalCameraControlsOpen,
+      initial_camera_form_values: originalDialogValues,
     },
     projection_transitions: commands.filter(({ title }) => title === "Toggle projection"),
     commands,
@@ -411,14 +419,15 @@ export async function runViewportCameraBrowserQa(page, options = {}) {
     restoration: {
       state: restorationVerified ? "verified" : "failed-or-not-attempted",
       camera_attributes: !originalCamera ? "not-available" : mutationStarted
-        ? "restored-through-visible-dialog-and-verified" : "unchanged-no-camera-mutation",
+        ? "restored-through-visible-camera-controls-and-verified" : "unchanged-no-camera-mutation",
       same_canvas_element_and_context: originalCanvasHandle ? "asserted" : "not-available",
-      camera_dialog_open: originalCameraDialogOpen,
+      inspector_context_and_section: originalInspectorState,
+      camera_controls_open: originalCameraControlsOpen,
       errors: restorationErrors,
     },
     errors: operationError ? [operationError?.message ?? String(operationError)] : [],
     limitations: [
-      "The pointer check covers one ViewCube face and one continuous orbit drag; the remaining axial poses use the visible camera dialog.",
+      "The pointer check covers one ViewCube face and one continuous orbit drag; the remaining axial poses use the visible camera Inspector controls.",
       "Fit is considered observed only when the public camera attributes change after the visible command; no change is reported without being treated as a camera movement.",
       "PNG captures are Playwright screenshots of the canvas element, decoded in memory; no image files are written.",
     ],
@@ -576,7 +585,7 @@ async function captureCanvas(page, {
     } catch (error) {
       if (!captureError) captureError = error;
       else captureError = new Error(
-        `${captureError?.message ?? String(captureError)}; camera dialog restore failed: ${error?.message ?? String(error)}`,
+        `${captureError?.message ?? String(captureError)}; camera Inspector controls restore failed: ${error?.message ?? String(error)}`,
         { cause: captureError },
       );
     }
@@ -586,23 +595,22 @@ async function captureCanvas(page, {
   return result;
 }
 
-async function setCameraDialogOpen(page, dialog, shouldOpen, timeout) {
-  const isOpen = await dialog.isVisible().catch(() => false);
-  if (isOpen === shouldOpen) return;
+async function setCameraControlsOpen(page, cameraRegion, shouldOpen, timeout, options = {}) {
   if (shouldOpen) {
-    await executeVisibleCommand(page, page.getByRole("dialog", {
-      exact: true,
-      name: COMMAND_PALETTE_NAME,
-    }), "Open 3D Camera Controls", timeout);
-    await dialog.waitFor({ state: "visible", timeout });
+    await ensureViewportSettingsSection(page, "View", timeout, {
+      commandTitle: "Open 3D Camera Controls",
+      ...options,
+    });
+    await cameraRegion.waitFor({ state: "visible", timeout });
     return;
   }
-  await dialog.getByRole("button", {
-    exact: true,
-    name: "Close camera parameters",
-  }).click({ timeout });
-  await dialog.waitFor({ state: "hidden", timeout });
+  const inspectorState = await readViewportInspectorState(page);
+  if (inspectorState.context === "view") {
+    await selectViewportInspectorContext(page, "selection", timeout);
+  }
 }
+
+const setCameraDialogOpen = setCameraControlsOpen;
 
 async function executeVisibleCommand(page, palette, title, timeout) {
   if (!await palette.isVisible().catch(() => false)) {
@@ -756,13 +764,13 @@ async function waitForCommittedGesture(page, viewport, before, timeout, changed,
   throw new Error(`${label} did not produce a stable changed camera pose`);
 }
 
-async function readDialogValues(dialog) {
+async function readCameraFormValues(cameraRegion) {
   const [position, target, fov, orthoScale, projection] = await Promise.all([
-    readVector(dialog, "Position (m)"),
-    readVector(dialog, "Target (m)"),
-    getScalarInput(dialog, "FOV").inputValue(),
-    getScalarInput(dialog, "Ortho scale").inputValue(),
-    getProjectionInput(dialog).inputValue(),
+    readVector(cameraRegion, "Position (m)"),
+    readVector(cameraRegion, "Target (m)"),
+    getScalarInput(cameraRegion, "FOV").inputValue(),
+    getScalarInput(cameraRegion, "Ortho scale").inputValue(),
+    getProjectionInput(cameraRegion).inputValue(),
   ]);
   return {
     position,
@@ -773,62 +781,62 @@ async function readDialogValues(dialog) {
   };
 }
 
-async function readVector(dialog, legend) {
-  const fieldset = dialog.locator("fieldset").filter({ hasText: legend });
+async function readVector(cameraRegion, legend) {
+  const fieldset = cameraRegion.locator("fieldset").filter({ hasText: legend });
   const inputs = fieldset.locator('input[type="number"]');
   const [fieldsetCount, inputCount] = await Promise.all([fieldset.count(), inputs.count()]);
   if (fieldsetCount !== 1 || inputCount !== 3) {
-    throw new Error(`Camera dialog does not expose exactly three ${legend} inputs`);
+    throw new Error(`Camera controls do not expose exactly three ${legend} inputs`);
   }
   const values = await Promise.all([0, 1, 2].map((index) => inputs.nth(index).inputValue()));
   const parsed = values.map(Number);
   if (parsed.some((value) => !Number.isFinite(value))) {
-    throw new Error(`Camera dialog ${legend} inputs are not finite numbers`);
+    throw new Error(`Camera ${legend} inputs are not finite numbers`);
   }
   return { text: values, values: parsed };
 }
 
-async function fillVector(dialog, legend, values) {
-  const fieldset = dialog.locator("fieldset").filter({ hasText: legend });
+async function fillVector(cameraRegion, legend, values) {
+  const fieldset = cameraRegion.locator("fieldset").filter({ hasText: legend });
   const inputs = fieldset.locator('input[type="number"]');
   if (await fieldset.count() !== 1 || await inputs.count() !== 3) {
-    throw new Error(`Camera dialog does not expose exactly three ${legend} inputs`);
+    throw new Error(`Camera controls do not expose exactly three ${legend} inputs`);
   }
   for (let index = 0; index < 3; index += 1) {
     await inputs.nth(index).fill(formatInputNumber(values[index]));
   }
 }
 
-function getScalarInput(dialog, label) {
-  return dialog
+function getScalarInput(cameraRegion, label) {
+  return cameraRegion
     .locator(".fm-viewport-camera-dialog__form label")
     .filter({ hasText: new RegExp(`^${escapeRegExp(label)}`) })
     .locator('input[type="number"]');
 }
 
-function getProjectionInput(dialog) {
-  return dialog
+function getProjectionInput(cameraRegion) {
+  return cameraRegion
     .locator(".fm-viewport-camera-dialog__form label")
     .filter({ hasText: /^Projection/ })
     .locator("select");
 }
 
-async function restoreCamera(page, dialog, initialCamera, initialDialogValues, timeout) {
-  await fillVector(dialog, "Position (m)", initialCamera.position);
-  await fillVector(dialog, "Target (m)", initialCamera.target);
-  await getScalarInput(dialog, "FOV").fill(initialDialogValues.fov);
-  await getScalarInput(dialog, "Ortho scale").fill(initialDialogValues.orthoScale);
-  await getProjectionInput(dialog).selectOption(initialCamera.projection);
-  await dialog.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
+async function restoreCamera(page, cameraRegion, initialCamera, initialDialogValues, timeout) {
+  await fillVector(cameraRegion, "Position (m)", initialCamera.position);
+  await fillVector(cameraRegion, "Target (m)", initialCamera.target);
+  await getScalarInput(cameraRegion, "FOV").fill(initialDialogValues.fov);
+  await getScalarInput(cameraRegion, "Ortho scale").fill(initialDialogValues.orthoScale);
+  await getProjectionInput(cameraRegion).selectOption(initialCamera.projection);
+  await cameraRegion.getByRole("button", { exact: true, name: "Apply" }).click({ timeout });
 
-  const viewport = dialog.page().locator(VIEWPORT_SELECTOR);
+  const viewport = cameraRegion.page().locator(VIEWPORT_SELECTOR);
   await waitForCamera(page, viewport, initialCamera, timeout);
-  const restoredValues = await readDialogValues(dialog);
+  const restoredValues = await readCameraFormValues(cameraRegion);
   if (!sameNumericText(restoredValues.fov, initialDialogValues.fov)) {
-    throw new Error(`FOV did not restore to its initial dialog value (${initialDialogValues.fov})`);
+    throw new Error(`FOV did not restore to its initial camera form value (${initialDialogValues.fov})`);
   }
   if (!sameNumericText(restoredValues.orthoScale, initialDialogValues.orthoScale)) {
-    throw new Error(`Ortho scale did not restore to its initial dialog value (${initialDialogValues.orthoScale})`);
+    throw new Error(`Ortho scale did not restore to its initial camera form value (${initialDialogValues.orthoScale})`);
   }
 }
 
@@ -866,22 +874,22 @@ function validateCameraPrecondition(camera) {
   }
 }
 
-function validateDialogValues(camera, values) {
+function validateCameraFormValues(camera, values) {
   if (values.projection !== camera.projection) {
-    throw new Error(`Camera dialog projection ${values.projection} does not match viewport ${camera.projection}`);
+    throw new Error(`Camera controls projection ${values.projection} does not match viewport ${camera.projection}`);
   }
   const coordinateEpsilon = sceneCoordinateEpsilon(distance(camera.position, camera.target));
   if (!sameVector(values.position.values, camera.position, coordinateEpsilon)) {
-    throw new Error("Camera dialog position does not match the public viewport camera attributes");
+    throw new Error("Camera controls position does not match the public viewport camera attributes");
   }
   if (!sameVector(values.target.values, camera.target, coordinateEpsilon)) {
-    throw new Error("Camera dialog target does not match the public viewport camera attributes");
+    throw new Error("Camera controls target does not match the public viewport camera attributes");
   }
   if (!Number.isFinite(Number(values.fov))) {
-    throw new Error("Camera dialog FOV is not finite");
+    throw new Error("Camera controls FOV is not finite");
   }
   if (values.orthoScale.trim() !== "" && !Number.isFinite(Number(values.orthoScale))) {
-    throw new Error("Camera dialog orthographic scale is not finite");
+    throw new Error("Camera controls orthographic scale is not finite");
   }
 }
 

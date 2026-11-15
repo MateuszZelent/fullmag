@@ -1,7 +1,7 @@
+import { ensureViewportSettingsSection, getViewportSettingsRegion, readViewportInspectorState, restoreViewportInspectorState, selectViewportInspectorContext } from "./viewport-export-browser-qa.mjs";
 const VIEWPORT_SELECTOR = ".fm-viewport-3d";
 const CANVAS_SELECTOR = `${VIEWPORT_SELECTOR} canvas`;
 const MAIN_SLOT_SELECTOR = '[data-slot-id="viewport-main"]';
-const SETTINGS_DIALOG_NAME = "3D View Settings";
 const APPEARANCE_STORAGE_KEY =
   "fullmag.control-room.viewport-3d.appearance-preferences";
 const RESOURCE_COUNT_KEYS = Object.freeze([
@@ -42,10 +42,7 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
   const assertCanvas = options.assertCanvas;
 
   const mainSlot = page.locator(MAIN_SLOT_SELECTOR);
-  const settingsDialog = page.getByRole("dialog", {
-    exact: true,
-    name: SETTINGS_DIALOG_NAME,
-  });
+  const settingsDialog = getViewportSettingsRegion(page);
   const originalViewport = page.viewportSize();
   if (!originalViewport) {
     throw new Error("Viewport lifecycle QA requires a fixed browser viewport");
@@ -57,6 +54,7 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
     throw new Error("Viewport-main did not expose its active module id");
   }
 
+  const originalInspectorState = await readViewportInspectorState(page);
   const [originalDialogOpen, originalStorage, sessionBefore] = await Promise.all([
     settingsDialog.isVisible().catch(() => false), readAppearanceStorage(page),
     typeof getSessionIdentity === "function" ? getSessionIdentity() : null,
@@ -121,9 +119,12 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
 
     await closeSettingsIfOpen(page, settingsDialog, timeout);
     const baselineCanvas = await checkCanvas(page, "initial active 3D viewport", assertCanvas, timeout);
+    // Match the post-return settle used for every cycle before sampling the baseline.
+    await assertCanvasStableWithinMount(page, timeout, settleMs);
     const baselineSignals = await readPublicSignals(page);
     const inactiveSamples = [];
     const returnCanvasProofs = [];
+    const activeSamples = [];
 
     for (let cycle = 1; cycle <= cycles; cycle += 1) {
       requestPhase = `cycle-${cycle}:to-2d`;
@@ -144,6 +145,7 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
       );
       await assertCanvasStableWithinMount(page, timeout, settleMs);
       returnCanvasProofs.push(canvasProof);
+      activeSamples.push(await readPublicSignals(page));
     }
     requestPhase = null;
 
@@ -154,10 +156,9 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
       inactiveSamples,
     );
     if (resourceAssessment.state === "growth-observed") {
-      throw new Error(
-        `Viewport resource counts grew after ${cycles} 3D/2D cycles: ` +
-          JSON.stringify(resourceAssessment.growth),
-      );
+      const error = new Error(`Viewport resource counts grew after ${cycles} 3D/2D cycles: ${JSON.stringify(resourceAssessment.growth)}`);
+      error.partialProof = { resource_assessment: resourceAssessment, active_samples: activeSamples.map(summarizeSignals), inactive_samples: inactiveSamples.map(summarizeSignals) };
+      throw error;
     }
 
     const idle = await sampleIdleFrames(page, idleSampleCount, idleSampleMs);
@@ -250,11 +251,7 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
       }
     });
 
-    if (originalDialogOpen) {
-      await cleanup(() => openSettings(page, settingsDialog, cleanupTimeout));
-    } else {
-      await cleanup(() => closeSettingsIfOpen(page, settingsDialog, cleanupTimeout));
-    }
+    await cleanup(() => restoreViewportInspectorState(page, originalInspectorState, cleanupTimeout));
 
     await cleanup(async () => {
       const restoredStorage = await readAppearanceStorage(page);
@@ -287,7 +284,7 @@ export async function runViewportLifecycleBrowserQa(page, options = {}) {
       }
       const dialogOpen = await settingsDialog.isVisible().catch(() => false);
       if (dialogOpen !== originalDialogOpen) {
-        throw new Error("The 3D View Settings dialog did not return to its original open state");
+        throw new Error("The 3D View Settings inspector did not return to its original open state");
       }
     });
 
@@ -347,7 +344,7 @@ async function inspectAppearanceRequests(page, {
     await closeSettingsIfOpen(page, settingsDialog, timeout);
     return {
       state: "not-verified",
-      reason: "The 3D settings dialog did not expose a Background control.",
+      reason: "The 3D settings inspector did not expose a Background control.",
       matching_requests: [],
     };
   }
@@ -406,16 +403,13 @@ async function readBackgroundChoice(page) {
 }
 
 async function openSettings(page, dialog, timeout) {
-  if (await dialog.isVisible().catch(() => false)) return;
-  const button = page.getByRole("button", { name: /view settings/i }).first();
-  await button.waitFor({ state: "visible", timeout });
-  await button.click({ timeout });
+  await ensureViewportSettingsSection(page, "Appearance", timeout);
   await dialog.waitFor({ state: "visible", timeout });
 }
 
 async function closeSettingsIfOpen(page, dialog, timeout) {
   if (!await dialog.isVisible().catch(() => false)) return;
-  await dialog.getByRole("button", { exact: true, name: "Close" }).click({ timeout });
+  await selectViewportInspectorContext(page, "selection", timeout);
   await dialog.waitFor({ state: "hidden", timeout });
 }
 
