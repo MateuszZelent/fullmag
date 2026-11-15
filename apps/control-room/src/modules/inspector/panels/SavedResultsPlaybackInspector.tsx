@@ -10,7 +10,6 @@ import { Button } from "@/shared/ui/Button";
 import { Input } from "@/shared/ui/Input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Slider } from "@/shared/ui/Slider";
-import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export function clampPlaybackFrameIndex(frameIndex: number, frameCount: number): number {
   const lastFrame = Math.max(0, Math.floor(frameCount) - 1);
@@ -72,7 +71,7 @@ function ColorLimitControl({
         onBlur={commit}
         onChange={(event) => setDraft({ baseValue: value, text: event.currentTarget.value })}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !isImeComposing(event)) {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             event.currentTarget.blur();
           }

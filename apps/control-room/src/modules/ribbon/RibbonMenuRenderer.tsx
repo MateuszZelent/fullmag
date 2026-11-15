@@ -23,7 +23,6 @@ import {
 } from "@/shared/ui/DropdownMenu";
 
 import type { RibbonMenuNode } from "./ribbonTypes";
-import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export function RibbonMenuRenderer({
   nodes,
@@ -448,7 +447,7 @@ function TextMenuItem({
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === "Enter" && !isImeComposing(event)) {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             commit();
           }

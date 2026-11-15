@@ -236,7 +236,7 @@ export function FooterTelemetry({
         ) : null}
       </div>
 
-      <div className="fm-footer-telemetry__metrics"><div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
+      <div className="fm-footer-telemetry__metrics"><div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
         {telemetry.metrics.map((metric) => (
           <TelemetryMetric key={metric.id} group={metricGroup(metric.id)} {...metric} />
         ))}

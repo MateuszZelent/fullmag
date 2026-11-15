@@ -19,7 +19,6 @@ import {
   type QuantityFieldDraftStore,
   type QuantityFieldDraftSummary,
 } from "./quantityFieldDraftStore";
-import { isImeComposing } from "@/shared/ui/imeComposition";
 
 export type QuantityFieldParseResult<T> =
   | { ok: true; value: T }
@@ -219,7 +218,7 @@ export function QuantityField<T>({
       onChange={(event) => report(event.target.value)}
       onFocus={() => setFocused(true)}
       onKeyDown={(event) => {
-        if (event.key === "Enter" && !isImeComposing(event)) {
+        if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
           commit();
         } else if (event.key === "Escape" && entry) {
           event.preventDefault();

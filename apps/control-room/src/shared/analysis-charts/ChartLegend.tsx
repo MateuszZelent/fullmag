@@ -157,7 +157,7 @@ export function ChartLegend({
                 </span>
               ) : null}
             </span>
-            <span
+            <span role="group"
               aria-label={`latest value: ${item.latestValue}`}
               className="fm-chart-legend__latest"
               data-slot="chart-legend-reading"

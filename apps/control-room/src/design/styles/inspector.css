@@ -230,9 +230,9 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 18%, transparent);
 }
 
-.fm-inspector-input[aria-invalid="true"],
-.fm-inspector-select[aria-invalid="true"],
-.fm-inspector-textarea[aria-invalid="true"] {
+/* Invalid only after interaction: :user-invalid (native constraints) and the
+   FormField-synced aria-invalid. :is() keeps the rule if :user-invalid is unknown. */
+:is(.fm-inspector-input, .fm-inspector-select, .fm-inspector-textarea):is(:user-invalid, [aria-invalid="true"]) {
   border-color: var(--fm-danger);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-danger) 18%, transparent);
 }
@@ -1385,18 +1385,14 @@
 }
 
 .fm-inspector .fm-inspector-input--invalid,
-.fm-inspector .fm-inspector-input[aria-invalid="true"],
-.fm-inspector .fm-inspector-select[aria-invalid="true"],
-.fm-inspector .fm-inspector-textarea[aria-invalid="true"],
+.fm-inspector :is(.fm-inspector-input, .fm-inspector-select, .fm-inspector-textarea):is(:user-invalid, [aria-invalid="true"]),
 .fm-inspector .fm-select-trigger[aria-invalid="true"] {
   border-color: var(--fm-danger);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-danger) 18%, transparent);
 }
 
 .fm-inspector .fm-inspector-input--invalid:focus-visible,
-.fm-inspector .fm-inspector-input[aria-invalid="true"]:focus-visible,
-.fm-inspector .fm-inspector-select[aria-invalid="true"]:focus-visible,
-.fm-inspector .fm-inspector-textarea[aria-invalid="true"]:focus-visible,
+.fm-inspector :is(.fm-inspector-input, .fm-inspector-select, .fm-inspector-textarea):is(:user-invalid, [aria-invalid="true"]):focus-visible,
 .fm-inspector .fm-select-trigger[aria-invalid="true"]:focus-visible {
   border-color: var(--fm-danger);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-danger) 22%, transparent);

@@ -124,8 +124,22 @@
 }
 
 .fm-topological-charge-profile {
-  overflow-x: auto;
+  min-inline-size: 0;
   padding: var(--fm-space-2);
+}
+
+.fm-topological-charge-profile__scroll {
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+
+.fm-topological-charge-profile__scroll:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
+}
+
+.fm-topological-charge-profile tbody th {
+  font-weight: inherit;
 }
 
 .fm-topological-charge-profile h4 {

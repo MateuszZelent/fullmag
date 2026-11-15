@@ -9,7 +9,6 @@ import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { isImeComposing } from "@/shared/ui/imeComposition";
 
 type CropField = keyof PlanarCropState;
 type FullBounds = readonly [number, number, number, number];
@@ -110,7 +109,7 @@ export function PlanarCropViewSection({
               setDrafts((current) => ({ ...current, [field]: value }));
             }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !isImeComposing(event)) {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                 event.preventDefault();
                 commit(field, event.currentTarget.value);
               } else if (event.key === "Escape") {

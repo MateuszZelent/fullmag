@@ -1835,6 +1835,7 @@
 
 .fm-start-locations li {
   display: flex;
+  min-inline-size: 0;
   justify-content: space-between;
   gap: var(--fm-space-3);
 }

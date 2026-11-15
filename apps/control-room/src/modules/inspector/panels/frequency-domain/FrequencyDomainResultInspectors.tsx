@@ -2588,7 +2588,7 @@ function FrequencyResponsePoint3DActions({
   ];
 
   return (
-    <div
+    <div role="group"
       aria-label="Response point 3D visualization controls"
       className="fm-frequency-domain-visualization-actions"
     >

@@ -384,7 +384,7 @@ function HeaderRunControls({
   onCommand,
 }: Pick<HeaderNavigationProps, "commandDisabledReason" | "isCommandDisabled" | "onCommand">) {
   return (
-    <div className="fm-header__run-controls" aria-label="Runtime controls">
+    <div role="group" className="fm-header__run-controls" aria-label="Runtime controls">
       {RUN_CONTROLS.map((action) => (
         <Button
           key={action.id}
@@ -908,7 +908,7 @@ function SessionAppMenuBar() {
             : sessionDisplay.indicatorLabel
         }
       >
-        <span
+        <span role="img"
           className="fm-header__session-dot"
           data-status={sessionDisplay.indicatorStatus}
           aria-label={sessionDisplay.indicatorLabel}
