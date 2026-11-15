@@ -24,7 +24,6 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { isImeComposing } from "@/shared/ui/imeComposition";
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type DefaultSlice = PlanarState["default_slice"];
@@ -211,7 +210,7 @@ export function PlanarSectionPlaneSection({
               onBlur={(event) => { if (draft !== null) commitPosition(event.currentTarget.value); }}
               onChange={(event) => setDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !isImeComposing(event)) {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                   event.preventDefault();
                   commitPosition(event.currentTarget.value);
                 } else if (event.key === "Escape") {

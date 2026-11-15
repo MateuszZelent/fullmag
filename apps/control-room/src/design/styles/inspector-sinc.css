@@ -187,6 +187,7 @@
 
 .fm-sampling-plan__group {
   display: grid;
+  min-inline-size: 0;
   gap: var(--fm-space-2);
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Play, Save } from "lucide-react";
+import { AlertCircle, Play, Save } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Button } from "@/shared/ui/Button";
@@ -8,6 +8,7 @@ import type { SceneResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
+import { focusFirstInvalid } from "../../primitives/fieldErrorAnnouncer";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
@@ -225,6 +226,16 @@ export function StageInspectorFrame({
             <Save size={13} aria-hidden="true" />
             {authoringBusy ? "Saving" : "Save stage"}
           </Button>
+          {hasDraftErrors && draft && !authoringBusy ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={(event) => focusFirstInvalid(event.currentTarget.closest(".fm-inspector"))}
+            >
+              <AlertCircle size={13} aria-hidden="true" /> Show first error
+            </Button>
+          ) : null}
         </div>
       </InspectorGroup>
 

@@ -3098,7 +3098,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           aria-label={`3D viewport: ${selectedLabel}. ${domainSummary}. Press Enter for camera controls.`}
           aria-roledescription="3D viewport"
           onKeyDown={(event) => {
-            if (event.key === "Enter" && event.target === event.currentTarget) {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target === event.currentTarget) {
               event.preventDefault();
               viewport3dStore.setCameraDialogOpen(true);
             }
