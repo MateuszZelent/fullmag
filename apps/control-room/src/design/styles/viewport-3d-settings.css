@@ -53,6 +53,12 @@
 
 .fm-viewport-3d-settings__panels {
   min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.fm-viewport-3d-settings__panel {
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0.75rem;

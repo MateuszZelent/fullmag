@@ -65,22 +65,22 @@ export default function InspectorModule() {
     ? <SavedResultsPlaybackInspector />
     : <LiveInspectorModule />;
   if (!kernel.modules.get("viewport-3d")) return selectionPanel;
-  return <InspectorContexts context={context} onContextChange={setViewport3DInspectorContext} view={viewVisited ? <ViewInspectorPanel /> : null}>
+  return <InspectorContexts context={context} onContextChange={setViewport3DInspectorContext} view={viewVisited ? <ViewInspectorPanel /> : null} viewActions={<ViewInspectorActions />}>
     {selectionPanel}
   </InspectorContexts>;
 }
 
 function ViewInspectorPanel() {
+  return <section className="fm-inspector-view" aria-label="3D View Inspector"><Viewport3DInspectorOutlet /></section>;
+}
+
+function ViewInspectorActions() {
   const kernel = useKernel();
   const chrome = usePanelChromeControls();
   const hide = () => kernel.layout.setPanelVisible("right", false);
-  return <section className="fm-inspector-view" aria-label="3D View Inspector">
-    <PanelChrome>
-      <span className="fm-panel-chrome__title">3D View</span>
-      <Button aria-label="Hide Inspector" size="icon" variant="ghost" onClick={() => chrome ? chrome.hideWith(hide) : hide()}><PanelRightClose size={16} aria-hidden="true" /></Button>
-    </PanelChrome>
-    <Viewport3DInspectorOutlet />
-  </section>;
+  return <PanelChrome className="fm-inspector-contexts__actions">
+    <Button aria-label="Hide Inspector" size="icon" variant="ghost" onClick={() => chrome ? chrome.hideWith(hide) : hide()}><PanelRightClose size={16} aria-hidden="true" /></Button>
+  </PanelChrome>;
 }
 
 function LiveInspectorModule() {
