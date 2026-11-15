@@ -300,8 +300,8 @@ ResolvedMaskFieldTermBasisIR {
 | `H_drive` readback | FDM CPU and CUDA publish `H_drive` including mask terms (today `H_ext` does not contain drives on CUDA). |
 | FDM CUDA | waveform kind `FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5`: before each field build the host evaluates each term's time program (one number per term) and passes the values to the kernels by value (at most 8); the kernel does `h += multiplier[i] · basis[i][cell]`. No equation per cell, no upload per step. Built-in waveform kinds untouched. Capability bit. |
 | FDM CPU | `DriveTimeFunction::Expression(program)` with the Rust interpreter. |
-| Multilayer FDM, FEM | planning fails with `mask_field_drive_unsupported_lane:<lane>`. |
-| FEM (later) | planner evaluates the mask function, or interpolates the array mask, at magnetic P1 nodes in the support → existing `PREPROJECTED_NODAL` basis; FEM time descriptor gets the same host-multiplier kind and header. No change to the crate, the IR, Python or the UI. |
+| Multilayer FDM, Rust FEM reference reduction | fail with `mask_field_drive_unsupported_lane:<lane>`. |
+| FEM CPU and GPU | `FemPlanIR.mask_field_term_bases`: the planner evaluates the mask function, or takes the array mask's lattice cell, at the nodes of the target's magnetic elements inside the shape → existing `PREPROJECTED_NODAL` basis; time kind `FULLMAG_FEM_TIME_HOST_EXPRESSION = 5` (regional-drive ABI v4) with the same bytecode header: CPU evaluates per drive materialization, GPU on the host with the factors passed to the kernel by value (at most 8). A mask on a periodic mesh must agree on periodic node pairs (`mask_not_periodic`). No change to the crate, Python or the UI. |
 
 Known cost outside this plan: any time-dependent drive (built-in or mask) makes
 FDM CUDA use the host-driven step loop instead of the captured adaptive graph;

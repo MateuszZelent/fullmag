@@ -223,20 +223,20 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `study.add_simpleantenna.arbitrary_mask(target, …)`, `magnet.add_simpleantenna.arbitrary_mask(…)`, `region.add_simpleantenna.arbitrary_mask(…)` | magnet, region of a magnet, or `"global"` | required (bound by a scoped factory) | $1$ | an existing magnet or region; `target=` on a scoped factory raises `scoped_target_override_not_allowed` | cells the drive may act on | FDM CPU/GPU; FEM rejected | `mask_field_drives[].target` (`global`, `object`, `region`) |
-| `…mask.shape` | `fm.Box`, `fm.Cylinder`, sphere | required | $\mathrm{m}$ | positive sizes | support shape $G$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].shape` |
-| `…mask.position` | 3 floats | `(0, 0, 0)` | $\mathrm{m}$ | finite | $\mathbf r_0$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].position_m` |
-| `…mask.frame` | `"local"`, `"world"` | `"local"` | $1$ | one of the two | frame of $\mathbf r_0$ and of mask coordinates, {eq}`mask-local-frame` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].frame` |
-| `…mask.time_origin` | `"stage_local"`, `"absolute"` | `"stage_local"` | $1$ | one of the two | clock of {eq}`mask-clock` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].time_origin` |
+| `study.add_simpleantenna.arbitrary_mask(target, …)`, `magnet.add_simpleantenna.arbitrary_mask(…)`, `region.add_simpleantenna.arbitrary_mask(…)` | magnet, region of a magnet, or `"global"` | required (bound by a scoped factory) | $1$ | an existing magnet or region; `target=` on a scoped factory raises `scoped_target_override_not_allowed` | cells (FDM) or nodes (FEM) the drive may act on | FDM and FEM, CPU/GPU | `mask_field_drives[].target` (`global`, `object`, `region`) |
+| `…mask.shape` | `fm.Box`, `fm.Cylinder`, sphere | required | $\mathrm{m}$ | positive sizes | support shape $G$ | FDM and FEM, CPU/GPU | `mask_field_drives[].shape` |
+| `…mask.position` | 3 floats | `(0, 0, 0)` | $\mathrm{m}$ | finite | $\mathbf r_0$ | FDM and FEM, CPU/GPU | `mask_field_drives[].position_m` |
+| `…mask.frame` | `"local"`, `"world"` | `"local"` | $1$ | one of the two | frame of $\mathbf r_0$ and of mask coordinates, {eq}`mask-local-frame` | FDM and FEM, CPU/GPU | `mask_field_drives[].frame` |
+| `…mask.time_origin` | `"stage_local"`, `"absolute"` | `"stage_local"` | $1$ | one of the two | clock of {eq}`mask-clock` | FDM and FEM, CPU/GPU | `mask_field_drives[].time_origin` |
 | `…mask.name`, `…mask.id` | `str` | derived | $1$ | non-empty, unique id | display name, stable id | all | `mask_field_drives[].name`, `.id` |
-| `antenna.add(mask, time, name=None)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None`; `str` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected; names unique within the antenna | one term of {eq}`mask-field` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].terms[]` (`name`) |
-| `fm.mask(function, **values)` | restricted function + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1`; every parameter needs a value | function mask $\boldsymbol\beta_i$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: function`) |
-| `fm.time(function, **values)` | restricted function + numbers | required | $1$ | rules of `mask-function-v1` | time function $f_i$ | FDM CPU/GPU; FEM rejected | `terms[].time` |
-| `study.new_vector_mask(size, cell, origin)` | 3 ints, 3 floats, 3 floats | the FDM grid of the study | $\mathrm{m}$ | positive size and cell; a lattice is required when the study has no FDM cell | array mask $\mathbf A_{ijk}$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: sampled`) |
-| `VectorMask.set_vector(i, j, k, value)` | ints, 3 floats | — | $\mathrm{T}$ | indices in range, finite values | one lattice value | FDM CPU/GPU; FEM rejected | array file |
-| `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive from this pipeline point on | FDM CPU/GPU; FEM rejected | stage action `add_mask_field_drive` |
-| `study.field_drives.add(antenna)` | `MaskAntenna` | — | $1$ | unique id | adds the drive for the whole study | FDM CPU/GPU; FEM rejected | `mask_field_drives[]` |
-| `study.stages.update_field_drive(antenna, mask_parameters, time_parameters, term, stage_id)` | `MaskAntenna` or id; `{name: float}`; term name or index | generated id | units of the parameters | the id is active; known names; finite values; `term` required for several terms (`mask_update_invalid`) | replaces parameter values of the active instance from this point on; the antenna's definition is unchanged | FDM CPU/GPU; FEM rejected | stage action `update_mask_field_drive` |
+| `antenna.add(mask, time, name=None)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None`; `str` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected; names unique within the antenna | one term of {eq}`mask-field` | FDM and FEM, CPU/GPU | `mask_field_drives[].terms[]` (`name`) |
+| `fm.mask(function, **values)` | restricted function + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1`; every parameter needs a value | function mask $\boldsymbol\beta_i$ | FDM and FEM, CPU/GPU | `terms[].mask` (`kind: function`) |
+| `fm.time(function, **values)` | restricted function + numbers | required | $1$ | rules of `mask-function-v1` | time function $f_i$ | FDM and FEM, CPU/GPU | `terms[].time` |
+| `study.new_vector_mask(size, cell, origin)` | 3 ints, 3 floats, 3 floats | the FDM grid of the study | $\mathrm{m}$ | positive size and cell; a lattice is required when the study has no FDM cell | array mask $\mathbf A_{ijk}$ | FDM and FEM, CPU/GPU | `terms[].mask` (`kind: sampled`) |
+| `VectorMask.set_vector(i, j, k, value)` | ints, 3 floats | — | $\mathrm{T}$ | indices in range, finite values | one lattice value | FDM and FEM, CPU/GPU | array file |
+| `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive from this pipeline point on | FDM and FEM, CPU/GPU | stage action `add_mask_field_drive` |
+| `study.field_drives.add(antenna)` | `MaskAntenna` | — | $1$ | unique id | adds the drive for the whole study | FDM and FEM, CPU/GPU | `mask_field_drives[]` |
+| `study.stages.update_field_drive(antenna, mask_parameters, time_parameters, term, stage_id)` | `MaskAntenna` or id; `{name: float}`; term name or index | generated id | units of the parameters | the id is active; known names; finite values; `term` required for several terms (`mask_update_invalid`) | replaces parameter values of the active instance from this point on; the antenna's definition is unchanged | FDM and FEM, CPU/GPU | stage action `update_mask_field_drive` |
 | `study.stages.remove_field_drive(id, stage_id)` | `str`, `str` | generated id | $1$ | the id is active | removes the drive from this point on | all lanes | stage action `remove_field_drive` |
 
 (problem-ir)=
@@ -384,10 +384,54 @@ not a readback of the device buffers.
 
 ### 8.3 FEM CPU and FEM GPU
 
-Not realized. Planning fails with `mask_field_drive_unsupported_lane:fem`. The
-intended realization evaluates {eq}`mask-fdm-basis` at magnetic P1 nodes of the
-support and feeds the existing pre-projected nodal basis of the regional drive;
-the time evaluation is the same as on FDM.
+On the FEM lanes the drive acts on the nodes of the P1 mesh. A node $n$ with
+position $\mathbf r_n$ belongs to the support when it is a node of a magnetic
+element of the target and $\mathbf r_n\in G$. The elements of a global target
+are all magnetic elements; of an object target, the magnetic elements of that
+object; of a region target, the elements of the region's mesh part. The stored
+basis is the nodal interpolant of the mask,
+
+```{math}
+:label: mask-fem-basis
+\mathbf h_i^h(\mathbf r)=\sum_{n\in\Omega_S}
+\frac{\mathbf B_i(\mathbf r_n)}{\mu_0}\,\varphi_n(\mathbf r),
+```
+
+with the P1 shape functions $\varphi_n$. It equals the mask at the support
+nodes and falls linearly to zero across the one layer of elements around the
+support, so the edge of the support is resolved to one element. Nodes on the
+interface between the target and its neighbours belong to the support. An array
+mask gives each node the value of the lattice cell that contains it
+({eq}`mask-fdm-array` with $\mathbf r_n$); nodes on the outer faces of the
+lattice count as inside.
+
+The solver adds $\sum_i f_i(\tau)\,\mathbf h_{i,n}$ to the nodal effective field
+at every field evaluation, as in {eq}`mask-fdm-update`. Both lanes evaluate
+$f_i$ on the host with the interpreter of the time bytecode, once per field
+evaluation: FEM CPU inside the drive materialization, FEM GPU before the drive
+kernel, which receives the numbers by value (waveform kind `HOST_EXPRESSION`,
+regional-drive ABI v4; at most 8 mask terms per stage on the GPU lane). The
+basis is the existing pre-projected nodal basis of the regional drive, in double
+precision on both lanes. The energy is the regional-drive energy with the
+lumped nodal weights $w_n$,
+
+```{math}
+:label: mask-fem-energy
+E_{\mathrm{drive}}=-\mu_0\sum_n w_n\,M_{s,n}\,\mathbf m_n\cdot
+\sum_{i=1}^{N}f_i(\tau)\,\mathbf h_{i,n},
+```
+
+or its consistent-mass form when $M_s$ is stored per element. `H_drive` is the
+nodal field of the solver. Before stepping the runner checks every time program
+at 4097 uniform times of the stage, and compares the library's interpreter with
+the Rust interpreter on every program (4 ulp); a non-finite factor during the
+run stops the step with `mask_expression_non_finite`.
+
+On a periodic mesh the two nodes of a periodic pair are one degree of freedom,
+so a mask must have equal values on them; otherwise planning fails with
+`mask_not_periodic`. A statically periodic plan that runs on the Rust reference
+reduction instead of the native solver rejects mask drives
+(`mask_field_drive_unsupported_lane:fem_reference`).
 
 ### 8.4 Lane matrix
 
@@ -395,8 +439,8 @@ the time evaluation is the same as on FDM.
 |---|---|---|---|
 | FDM | CPU | realized (function and array masks) | single grid, one magnet |
 | FDM | GPU | realized (function and array masks) | single grid; at most 8 mask terms per stage |
-| FEM | CPU | unsupported | explicit rejection; path described in 8.3 |
-| FEM | GPU | unsupported | explicit rejection; path described in 8.3 |
+| FEM | CPU | realized (function and array masks) | P1 nodal interpolant; not on the Rust reference reduction of statically periodic plans |
+| FEM | GPU | realized (function and array masks) | P1 nodal interpolant; at most 8 mask terms per stage |
 
 Multilayer FDM (more than one magnet) rejects mask field drives, as it rejects
 every regional drive.
@@ -410,11 +454,12 @@ every regional drive.
 | antennas, targets, terms, Update | `packages/fullmag-py/src/fullmag/model/mask_field_drive.py`, `packages/fullmag-py/src/fullmag/world.py` |
 | equation language and bytecode | `crates/fullmag-expr` |
 | IR types, validation, Update | `crates/fullmag-ir/src/mask_field_drive.rs` |
-| {eq}`mask-support`, {eq}`mask-fdm-basis` | `crates/fullmag-plan/src/mask_field.rs` |
+| {eq}`mask-support`, {eq}`mask-fdm-basis`, {eq}`mask-fem-basis` | `crates/fullmag-plan/src/mask_field.rs` |
 | {eq}`mask-fdm-update` on CUDA | `backends/fdm/gpu/cuda/interactions/regional_field_drive.cuh`, `backends/fdm/gpu/cuda/runtime/context.cu`, `native/include/fullmag_time_expression.h`, `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` |
 | {eq}`mask-fdm-update` on CPU | `crates/fullmag-engine/src/fdm/shared/terms.rs`, `crates/fullmag-runner/src/fdm/cpu/reference.rs` |
 | {eq}`mask-fdm-energy` | CUDA: `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs`; CPU: `crates/fullmag-runner/src/fdm/cpu/reference.rs` |
-| time programs on the stage horizon | `crates/fullmag-runner/src/fdm/mask_time.rs` |
+| FEM update and {eq}`mask-fem-energy` | `backends/fem/cpu/mfem/interactions/zeeman_time_dependence.cpp`, `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp`, `backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu`, `native/include/fullmag_fem.h`, `crates/fullmag-runner/src/native_fem.rs` |
+| time programs on the stage horizon | `crates/fullmag-runner/src/mask_time.rs` |
 | stage actions Add, Update, Remove | `crates/fullmag-application/src/script_stage_materialization.rs` |
 | scene and script round trip | `crates/fullmag-authoring/src/{scene.rs,builder.rs,adapters.rs,validation.rs}`, `packages/fullmag-py/src/fullmag/runtime/{script_builder.py,scene_document.py}` |
 
@@ -472,7 +517,8 @@ Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
 (limitations)=
 ## 11. Limitations and deferred work
 
-- FEM lanes and multilayer FDM.
+- Multilayer FDM; the Rust FEM reference reduction of statically periodic plans.
+- FEM elements of order above 1 (the basis is the P1 nodal interpolant).
 - Rotation of the local frame; shapes other than box, cylinder and sphere.
 - Step functions and conditional expressions in functions.
 - Array masks loaded from OVF files; trilinear resampling.

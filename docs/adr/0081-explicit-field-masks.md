@@ -50,11 +50,13 @@ other regions.
    a function mask once per cell (cell centre) or copies/resamples an array mask.
    The time function is compiled to bytecode; the host evaluates one number per
    term per field build. No equation is evaluated per cell during a run.
-7. **Lanes.** FDM CPU and FDM CUDA realize mask field drives first. FEM CPU/GPU
-   and multilayer FDM refuse them with `mask_field_drive_unsupported_lane`. FEM
-   will evaluate the same masks at magnetic nodes and feed its existing
-   pre-projected nodal basis; the IR, the crate, the Python API and the UI do not
-   change for that.
+7. **Lanes.** FDM CPU and FDM CUDA realize mask field drives on the single
+   grid. FEM CPU and FEM GPU evaluate the same masks at the nodes of the
+   target's magnetic elements and feed the existing pre-projected nodal basis
+   (regional-drive ABI v4, waveform kind `HOST_EXPRESSION`); the IR, the crate,
+   the Python API and the UI are the same for all four. Multilayer FDM and the
+   Rust FEM reference reduction refuse them with
+   `mask_field_drive_unsupported_lane`.
 8. **Stages and clock.** An antenna is authored by creation and enters the
    physics at a pipeline point with `study.stages.add_field_drive(antenna, …)`
    (stage action `add_mask_field_drive`, beside the existing `add_field_drive`) or
