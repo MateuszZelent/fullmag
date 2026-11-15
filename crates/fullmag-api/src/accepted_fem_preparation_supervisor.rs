@@ -25,6 +25,9 @@ use owned_worker_process::OwnedWorkerProcess;
 
 const STORE_WRITER_RETRY_LIMIT: Duration = Duration::from_secs(5);
 const STORE_WRITER_RETRY_DELAY: Duration = Duration::from_millis(10);
+const PREPARATION_HEARTBEAT_BUSY_LIMIT: Duration = Duration::from_secs(30);
+const PREPARATION_HEARTBEAT_RETRY_MIN: Duration = Duration::from_millis(50);
+const PREPARATION_HEARTBEAT_RETRY_MAX: Duration = Duration::from_millis(250);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PROCESS_DIAGNOSTIC_TAIL_LIMIT: usize = 64 * 1024;
 const PREPARER_SUMMARY_LINE_LIMIT: usize = 16 * 1024;
@@ -839,13 +842,22 @@ fn renew_preparation_lease(
     store: &SessionStore,
     active_lease: &mut FmsPreparationResourceLease,
 ) -> Result<()> {
+    renew_preparation_lease_with(active_lease, |renewed| {
+        store.heartbeat_preparation_resource_lease(renewed)
+    })
+}
+
+fn renew_preparation_lease_with(
+    active_lease: &mut FmsPreparationResourceLease,
+    heartbeat: impl FnOnce(&FmsPreparationResourceLease) -> Result<()>,
+) -> Result<()> {
     let mut renewed = active_lease.clone();
     renewed.heartbeat_sequence = renewed
         .heartbeat_sequence
         .checked_add(1)
         .context("preparation lease heartbeat sequence exhausted")?;
     renewed.heartbeat_at = chrono::Utc::now();
-    retry_store_writer_busy(|| store.heartbeat_preparation_resource_lease(&renewed))?;
+    heartbeat(&renewed)?;
     *active_lease = renewed;
     Ok(())
 }
@@ -1072,6 +1084,218 @@ mod pre_spawn_store_writer_retry_tests {
     }
 }
 
+#[cfg(test)]
+mod preparation_heartbeat_retry_tests {
+    use super::{
+        is_typed_store_writer_busy, preparation_observation_decision,
+        renew_preparation_lease_with, PreparationHeartbeatRetry,
+        preparation_heartbeat_retry_delay, PreparationObservationDecision,
+        PREPARATION_HEARTBEAT_BUSY_LIMIT, PREPARATION_HEARTBEAT_RETRY_MAX,
+        PREPARATION_HEARTBEAT_RETRY_MIN,
+    };
+    use anyhow::Error;
+    use chrono::Utc;
+    use fullmag_session::{
+        FmsPreparationResourceLease, FmsResourceBudget, FmsResourceLeaseState,
+        FMS_PREPARATION_RESOURCE_LEASE_SCHEMA,
+    };
+    use std::time::{Duration, Instant};
+
+    fn lease() -> FmsPreparationResourceLease {
+        let now = Utc::now();
+        FmsPreparationResourceLease {
+            schema_version: FMS_PREPARATION_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "preparation-heartbeat-test".into(),
+            budget: FmsResourceBudget {
+                cpu_millis: 1,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            },
+            run_id: "run-heartbeat-test".into(),
+            task_id: "task-heartbeat-test".into(),
+            preparation_attempt_id: "attempt-heartbeat-test".into(),
+            lease_token: "lease-heartbeat-test".into(),
+            state: FmsResourceLeaseState::Active,
+            acquired_at: now,
+            heartbeat_at: now,
+            heartbeat_sequence: 11,
+            released_at: None,
+            host_launch_binding: None,
+        }
+    }
+
+    #[test]
+    fn typed_writer_busy_can_last_beyond_five_seconds_then_success_resets_retry_state() {
+        let started = Instant::now();
+        let mut retry = PreparationHeartbeatRetry::default();
+        let interval = Duration::from_secs(6);
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                started + interval,
+                started,
+                Duration::from_secs(60),
+                started,
+                interval,
+                &retry,
+            ),
+            PreparationObservationDecision::HeartbeatDue
+        );
+
+        let first_busy = started + interval;
+        retry.record_writer_busy(first_busy, Duration::from_millis(100));
+        assert_eq!(retry.writer_busy_since, Some(first_busy));
+        assert_eq!(retry.attempts, 1);
+
+        let recovered_at = first_busy + Duration::from_secs(6);
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                recovered_at,
+                started,
+                Duration::from_secs(60),
+                started,
+                interval,
+                &retry,
+            ),
+            PreparationObservationDecision::HeartbeatDue
+        );
+        assert_eq!(retry.writer_busy_since, Some(first_busy));
+
+        retry.record_success();
+        assert_eq!(retry.writer_busy_since, None);
+        assert_eq!(retry.retry_at, None);
+        assert_eq!(retry.attempts, 0);
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                recovered_at + interval - Duration::from_millis(1),
+                started,
+                Duration::from_secs(60),
+                recovered_at,
+                interval,
+                &retry,
+            ),
+            PreparationObservationDecision::Wait
+        );
+    }
+
+    #[test]
+    fn child_exit_and_process_timeout_take_priority_while_writer_is_busy() {
+        let started = Instant::now();
+        let mut retry = PreparationHeartbeatRetry::default();
+        retry.record_writer_busy(started, Duration::from_millis(100));
+
+        assert_eq!(
+            preparation_observation_decision(
+                true,
+                started + Duration::from_secs(1),
+                started,
+                Duration::from_secs(2),
+                started,
+                Duration::from_millis(10),
+                &retry,
+            ),
+            PreparationObservationDecision::ChildExited
+        );
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                started + Duration::from_secs(2),
+                started,
+                Duration::from_secs(2),
+                started,
+                Duration::from_millis(10),
+                &retry,
+            ),
+            PreparationObservationDecision::ProcessTimedOut
+        );
+    }
+
+    #[test]
+    fn only_wrapped_typed_writer_busy_is_tolerated() {
+        let wrapped = Error::new(fullmag_session::StoreWriterBusy).context("heartbeat write");
+        let textual = anyhow::anyhow!("session store writer is busy");
+        let permanent = Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(is_typed_store_writer_busy(&wrapped));
+        assert!(!is_typed_store_writer_busy(&textual));
+        assert!(!is_typed_store_writer_busy(&permanent));
+
+        let started = Instant::now();
+        let mut retry = PreparationHeartbeatRetry::default();
+        retry.record_writer_busy(started, Duration::from_millis(75));
+        // A subsequent permanent failure is not reclassified as contention and
+        // the observer's non-busy branch remains immediately fatal.
+        assert!(!is_typed_store_writer_busy(&permanent));
+        assert_eq!(retry.attempts, 1);
+    }
+
+    #[test]
+    fn writer_busy_tolerance_expires_after_thirty_seconds() {
+        let started = Instant::now();
+        let mut retry = PreparationHeartbeatRetry::default();
+        retry.record_writer_busy(started, Duration::from_millis(100));
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                started + PREPARATION_HEARTBEAT_BUSY_LIMIT - Duration::from_millis(1),
+                started,
+                Duration::from_secs(60),
+                started,
+                Duration::from_millis(10),
+                &retry,
+            ),
+            PreparationObservationDecision::HeartbeatDue
+        );
+        assert_eq!(
+            preparation_observation_decision(
+                false,
+                started + PREPARATION_HEARTBEAT_BUSY_LIMIT,
+                started,
+                Duration::from_secs(60),
+                started,
+                Duration::from_millis(10),
+                &retry,
+            ),
+            PreparationObservationDecision::WriterBusyExpired
+        );
+    }
+
+    #[test]
+    fn heartbeat_retry_delay_uses_bounded_backoff_with_jitter() {
+        for attempts in 0..16 {
+            let delay = preparation_heartbeat_retry_delay(attempts);
+            assert!(delay >= PREPARATION_HEARTBEAT_RETRY_MIN);
+            assert!(delay <= PREPARATION_HEARTBEAT_RETRY_MAX);
+        }
+    }
+
+    #[test]
+    fn failed_heartbeat_does_not_advance_sequence_but_success_does() {
+        let mut active = lease();
+        let mut attempts = 0;
+        let error = renew_preparation_lease_with(&mut active, |candidate| {
+            attempts += 1;
+            assert_eq!(candidate.heartbeat_sequence, 12);
+            Err(Error::new(fullmag_session::StoreWriterBusy))
+        })
+        .unwrap_err();
+        assert!(is_typed_store_writer_busy(&error));
+        assert_eq!(attempts, 1, "one observer renewal makes one store attempt");
+        assert_eq!(active.heartbeat_sequence, 11);
+
+        renew_preparation_lease_with(&mut active, |candidate| {
+            attempts += 1;
+            assert_eq!(candidate.heartbeat_sequence, 12);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(active.heartbeat_sequence, 12);
+    }
+}
+
 fn validate_preparer_executable(executable: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(executable)
         .with_context(|| format!("inspect FEM preparer executable `{}`", executable.display()))?;
@@ -1136,10 +1360,21 @@ where
     };
     let started = Instant::now();
     let mut last_heartbeat = Instant::now();
+    let mut heartbeat_retry = PreparationHeartbeatRetry::default();
     loop {
-        if let Some(status) = child.try_wait().context("observe FEM preparer exit")? {
+        let status = child.try_wait().context("observe FEM preparer exit")?;
+        let decision = preparation_observation_decision(
+            status.is_some(),
+            Instant::now(),
+            started,
+            timeout,
+            last_heartbeat,
+            heartbeat_interval,
+            &heartbeat_retry,
+        );
+        if decision == PreparationObservationDecision::ChildExited {
             return collect_child_output(
-                status,
+                status.context("child-exit decision has no observed exit status")?,
                 false,
                 process_id,
                 process_start_token,
@@ -1148,7 +1383,7 @@ where
                 stderr_reader,
             );
         }
-        if started.elapsed() >= timeout {
+        if decision == PreparationObservationDecision::ProcessTimedOut {
             if let Err(error) = child.kill() {
                 if let Some(status) = child
                     .try_wait()
@@ -1179,27 +1414,228 @@ where
                 stderr_reader,
             );
         }
-        if last_heartbeat.elapsed() >= heartbeat_interval {
+        if decision == PreparationObservationDecision::WriterBusyExpired {
+            let reason = format!(
+                "renew preparation lease heartbeat: store writer remained busy for at least {} seconds",
+                PREPARATION_HEARTBEAT_BUSY_LIMIT.as_secs()
+            );
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .context("reap FEM preparer after heartbeat writer-busy tolerance expired")?;
+            return collect_child_output(
+                status,
+                false,
+                process_id,
+                process_start_token,
+                Some(reason),
+                stdout_reader,
+                stderr_reader,
+            );
+        }
+        if decision == PreparationObservationDecision::HeartbeatDue {
             if let Err(error) = heartbeat() {
-                let reason = format!("renew preparation lease heartbeat: {error:#}");
-                let _ = child.kill();
-                let status = child
-                    .wait()
-                    .context("reap FEM preparer after heartbeat failure")?;
-                return collect_child_output(
-                    status,
-                    false,
-                    process_id,
-                    process_start_token,
-                    Some(reason),
-                    stdout_reader,
-                    stderr_reader,
-                );
+                if is_typed_store_writer_busy(&error) {
+                    let busy_at = Instant::now();
+                    let delay = preparation_heartbeat_retry_delay(heartbeat_retry.attempts);
+                    heartbeat_retry.record_writer_busy(busy_at, delay);
+                } else {
+                    let reason = format!("renew preparation lease heartbeat: {error:#}");
+                    let _ = child.kill();
+                    let status = child
+                        .wait()
+                        .context("reap FEM preparer after heartbeat failure")?;
+                    return collect_child_output(
+                        status,
+                        false,
+                        process_id,
+                        process_start_token,
+                        Some(reason),
+                        stdout_reader,
+                        stderr_reader,
+                    );
+                }
+            } else {
+                last_heartbeat = Instant::now();
+                heartbeat_retry.record_success();
             }
-            last_heartbeat = Instant::now();
         }
         std::thread::sleep(CHILD_POLL_INTERVAL);
     }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod observe_child_integration_tests {
+    use super::{observe_child, OwnedWorkerProcess};
+    use std::collections::BTreeSet;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    fn spawn_program(program: &str, args: &[&str]) -> OwnedWorkerProcess {
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        OwnedWorkerProcess::spawn(&mut command, &BTreeSet::new(), None, None).unwrap()
+    }
+
+    #[test]
+    fn typed_busy_does_not_prevent_fast_child_exit_from_being_observed_and_reaped() {
+        let child = spawn_program("sleep", &["0.5"]);
+        let expected_pid = child.id();
+        let started = Instant::now();
+        let mut heartbeat_attempts = 0;
+        let observed = observe_child(
+            child,
+            Duration::from_secs(3),
+            Duration::from_millis(1),
+            &mut || {
+                heartbeat_attempts += 1;
+                Err(anyhow::Error::new(fullmag_session::StoreWriterBusy))
+            },
+        )
+        .unwrap();
+
+        assert!(heartbeat_attempts > 0);
+        assert_eq!(observed.process_id, expected_pid);
+        assert!(observed.status.success());
+        assert!(!observed.timed_out);
+        assert!(observed.failure_reason.is_none());
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn process_timeout_kills_and_reaps_child_while_typed_busy_retries_are_pending() {
+        let child = spawn_program("sleep", &["10"]);
+        let expected_pid = child.id();
+        let started = Instant::now();
+        let mut heartbeat_attempts = 0;
+        let observed = observe_child(
+            child,
+            Duration::from_millis(200),
+            Duration::from_millis(1),
+            &mut || {
+                heartbeat_attempts += 1;
+                Err(anyhow::Error::new(fullmag_session::StoreWriterBusy))
+            },
+        )
+        .unwrap();
+
+        assert!(heartbeat_attempts > 0);
+        assert_eq!(observed.process_id, expected_pid);
+        assert!(observed.timed_out);
+        assert!(!observed.status.success());
+        assert!(observed.failure_reason.is_none());
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn textual_writer_busy_still_fails_and_kills_child_immediately() {
+        let child = spawn_program("sleep", &["10"]);
+        let expected_pid = child.id();
+        let started = Instant::now();
+        let mut heartbeat_attempts = 0;
+        let observed = observe_child(
+            child,
+            Duration::from_secs(3),
+            Duration::from_millis(1),
+            &mut || {
+                heartbeat_attempts += 1;
+                Err(anyhow::anyhow!("session store writer is busy"))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(heartbeat_attempts, 1);
+        assert_eq!(observed.process_id, expected_pid);
+        assert!(!observed.timed_out);
+        assert!(!observed.status.success());
+        assert!(observed
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("session store writer is busy")));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreparationObservationDecision {
+    ChildExited,
+    ProcessTimedOut,
+    WriterBusyExpired,
+    HeartbeatDue,
+    Wait,
+}
+
+#[derive(Debug, Default)]
+struct PreparationHeartbeatRetry {
+    writer_busy_since: Option<Instant>,
+    retry_at: Option<Instant>,
+    attempts: u32,
+}
+
+impl PreparationHeartbeatRetry {
+    fn record_writer_busy(&mut self, now: Instant, retry_delay: Duration) {
+        self.writer_busy_since.get_or_insert(now);
+        self.attempts = self.attempts.saturating_add(1);
+        self.retry_at = Some(now + retry_delay);
+    }
+
+    fn record_success(&mut self) {
+        *self = Self::default();
+    }
+
+    fn expired(&self, now: Instant) -> bool {
+        self.writer_busy_since.is_some_and(|started| {
+            now.saturating_duration_since(started) >= PREPARATION_HEARTBEAT_BUSY_LIMIT
+        })
+    }
+
+    fn heartbeat_due(&self, now: Instant, last_success: Instant, interval: Duration) -> bool {
+        self.retry_at.map_or_else(
+            || now.saturating_duration_since(last_success) >= interval,
+            |retry_at| now >= retry_at,
+        )
+    }
+}
+
+fn preparation_observation_decision(
+    child_exited: bool,
+    now: Instant,
+    started: Instant,
+    timeout: Duration,
+    last_heartbeat: Instant,
+    heartbeat_interval: Duration,
+    retry: &PreparationHeartbeatRetry,
+) -> PreparationObservationDecision {
+    if child_exited {
+        PreparationObservationDecision::ChildExited
+    } else if now.saturating_duration_since(started) >= timeout {
+        PreparationObservationDecision::ProcessTimedOut
+    } else if retry.expired(now) {
+        PreparationObservationDecision::WriterBusyExpired
+    } else if retry.heartbeat_due(now, last_heartbeat, heartbeat_interval) {
+        PreparationObservationDecision::HeartbeatDue
+    } else {
+        PreparationObservationDecision::Wait
+    }
+}
+
+fn preparation_heartbeat_retry_delay(attempts: u32) -> Duration {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let ramp = attempts.min(4) as u64 * 25;
+    let lower_ms = PREPARATION_HEARTBEAT_RETRY_MIN.as_millis() as u64 + ramp;
+    let upper_ms = (lower_ms + 100).min(PREPARATION_HEARTBEAT_RETRY_MAX.as_millis() as u64);
+    let mut hasher = DefaultHasher::new();
+    std::process::id().hash(&mut hasher);
+    std::thread::current().id().hash(&mut hasher);
+    attempts.hash(&mut hasher);
+    let jitter_window_ms = upper_ms.saturating_sub(lower_ms) + 1;
+    Duration::from_millis(lower_ms + hasher.finish() % jitter_window_ms)
 }
 
 fn spawn_output_reader<R>(mut stream: R) -> JoinHandle<std::io::Result<Vec<u8>>>
@@ -1529,10 +1965,14 @@ fn retry_store_writer_busy<T>(mut operation: impl FnMut() -> Result<T>) -> Resul
 }
 
 fn is_store_writer_busy(error: &anyhow::Error) -> bool {
+    is_typed_store_writer_busy(error)
+        || format!("{error:#}").contains("session store writer is busy")
+}
+
+fn is_typed_store_writer_busy(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
-        || format!("{error:#}").contains("session store writer is busy")
 }
 
 #[cfg(target_os = "linux")]
