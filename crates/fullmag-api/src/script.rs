@@ -681,6 +681,79 @@ fn render_scene_document_via_python_helper_with_policy(
     })
 }
 
+/// The ready antennas of `fullmag.antennas` (function, summary, arguments),
+/// read from the Python registry.
+pub(crate) fn ready_antennas_via_python_helper(repo_root: &Path) -> Result<Value, ApiError> {
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "ready-antennas".to_string(),
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna registry helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    serde_json::from_slice::<Value>(&output.stdout).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to deserialize the ready-antenna registry: {error}"
+        ))
+    })
+}
+
+/// The mask terms of one ready-antenna call (`fullmag.antennas.rebuild`): the
+/// function is called again in Python with the given arguments. A rejected
+/// call (unknown antenna or argument, bad value) is a 400.
+pub(crate) fn rebuild_ready_antenna_terms_via_python_helper(
+    repo_root: &Path,
+    function: &str,
+    arguments: &std::collections::BTreeMap<String, f64>,
+) -> Result<Vec<fullmag_ir::MaskTermIR>, ApiError> {
+    let arguments_json = serde_json::to_string(arguments).map_err(|error| {
+        ApiError::bad_request(format!("invalid ready-antenna arguments: {error}"))
+    })?;
+    let helper_args = vec![
+        "-m".to_string(),
+        "fullmag.runtime.helper".to_string(),
+        "rebuild-ready-antenna".to_string(),
+        "--function".to_string(),
+        function.to_string(),
+        "--arguments-json".to_string(),
+        arguments_json,
+    ];
+    let output = run_python_helper(repo_root, &helper_args)?;
+    if output.status.code() == Some(3) {
+        let message = serde_json::from_slice::<Value>(&output.stdout)
+            .ok()
+            .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| "the ready antenna rejected the call".to_string());
+        return Err(ApiError::bad_request(format!(
+            "ready_antenna_rejected: {message}"
+        )));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::internal(format!(
+            "python ready-antenna helper failed: {}",
+            stderr.trim()
+        )));
+    }
+    #[derive(serde::Deserialize)]
+    struct Terms {
+        terms: Vec<fullmag_ir::MaskTermIR>,
+    }
+    serde_json::from_slice::<Terms>(&output.stdout)
+        .map(|value| value.terms)
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "failed to deserialize the ready-antenna terms: {error}"
+            ))
+        })
+}
+
 pub(crate) fn load_scene_document_state(
     repo_root: &Path,
     _workspace_root: &Path,

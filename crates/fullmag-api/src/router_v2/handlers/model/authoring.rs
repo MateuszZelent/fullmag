@@ -17,6 +17,9 @@ use crate::schemas::authoring::{
     CurrentTransportListResource, CurrentTransportMutationRequest, FieldDriveCreateRequest,
     FieldDriveDeleteRequest, FieldDriveListResource, FieldDriveReplaceRequest,
     GeometryRealizationRequest, MagnetizationAssetPatchRequest, MagnetizationAssetResource,
+    MaskFieldDriveCreateRequest, MaskFieldDriveListResource, MaskFieldDriveReplaceRequest,
+    MaskFieldDriveResource, MaskTermResource, ReadyAntennaListResource, ReadyAntennaTermsRequest,
+    ReadyAntennaTermsResource,
     MaterialParameterFieldListResource, MaterialParameterFieldResource, MaterialPatchRequest,
     MagnetizationApplyRequest, MagnetizationApplyScope, MagnetizationApplyTarget,
     MaterialPropertiesResource, MaterialReferenceResource, MaterialResource, NullableF64PatchValue,
@@ -1784,6 +1787,186 @@ pub async fn delete_authoring_field_drive(
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
             .await?;
     authoring_transaction_response("delete_field_drive", committed)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/mask-field-drives",
+    responses(
+        (status = 200, description = "Hand-written mask antennas", body = MaskFieldDriveListResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_mask_field_drives(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MaskFieldDriveListResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    let drives = scene
+        .field_drives
+        .mask_drives
+        .into_iter()
+        .map(MaskFieldDriveResource::from_ir)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ApiError::internal(format!("failed to serialize mask antenna: {error}")))?;
+    Ok(Json(MaskFieldDriveListResource {
+        scene_revision: scene.revision,
+        drives,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/mask-field-drives",
+    request_body = MaskFieldDriveCreateRequest,
+    responses(
+        (status = 200, description = "Created a mask antenna", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid mask antenna"),
+        (status = 409, description = "Revision conflict or duplicate field drive"),
+    ),
+    tag = "model"
+)]
+pub async fn create_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MaskFieldDriveCreateRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_create_mask_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        mask_field_drive_from_resource(req.drive)?,
+    )?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("create_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable mask antenna id")),
+    request_body = MaskFieldDriveReplaceRequest,
+    responses(
+        (status = 200, description = "Replaced a mask antenna", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid mask antenna"),
+        (status = 404, description = "Mask antenna not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn replace_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<MaskFieldDriveReplaceRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_replace_mask_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        &drive_id,
+        mask_field_drive_from_resource(req.drive)?,
+    )?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("replace_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable mask antenna id")),
+    request_body = FieldDriveDeleteRequest,
+    responses(
+        (status = 200, description = "Deleted a mask antenna", body = AuthoringTransactionResponse),
+        (status = 404, description = "Mask antenna not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn delete_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<FieldDriveDeleteRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_delete_mask_field_drive_transaction(&mut scene, req.base_revision, &drive_id)?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("delete_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/ready-antennas",
+    responses(
+        (status = 200, description = "Ready antennas of fullmag.antennas", body = ReadyAntennaListResource),
+    ),
+    tag = "model"
+)]
+pub async fn get_ready_antennas(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ReadyAntennaListResource>, ApiError> {
+    let repo_root = state.repo_root.clone();
+    let registry = tokio::task::spawn_blocking(move || {
+        crate::script::ready_antennas_via_python_helper(&repo_root)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("ready-antenna registry task failed: {error}")))??;
+    serde_json::from_value(registry).map(Json).map_err(|error| {
+        ApiError::internal(format!("invalid ready-antenna registry: {error}"))
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/ready-antennas/terms",
+    request_body = ReadyAntennaTermsRequest,
+    responses(
+        (status = 200, description = "Mask terms returned by one ready-antenna call", body = ReadyAntennaTermsResource),
+        (status = 400, description = "Unknown antenna or invalid arguments"),
+    ),
+    tag = "model"
+)]
+pub async fn build_ready_antenna_terms(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReadyAntennaTermsRequest>,
+) -> Result<Json<ReadyAntennaTermsResource>, ApiError> {
+    if req.arguments.values().any(|value| !value.is_finite()) {
+        return Err(ApiError::bad_request(
+            "ready_antenna_rejected: every argument must be a finite number",
+        ));
+    }
+    let repo_root = state.repo_root.clone();
+    let terms = tokio::task::spawn_blocking(move || {
+        crate::script::rebuild_ready_antenna_terms_via_python_helper(
+            &repo_root,
+            &req.function,
+            &req.arguments,
+        )
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("ready-antenna task failed: {error}")))??;
+    let terms = terms
+        .into_iter()
+        .map(|term| serde_json::from_value(serde_json::to_value(term)?))
+        .collect::<Result<Vec<MaskTermResource>, serde_json::Error>>()
+        .map_err(|error| ApiError::internal(format!("failed to serialize mask term: {error}")))?;
+    Ok(Json(ReadyAntennaTermsResource { terms }))
 }
 
 #[utoipa::path(
@@ -4671,6 +4854,115 @@ fn apply_create_coupling_transaction(
 fn validate_field_drive_scene(scene: &SceneDocument) -> Result<(), ApiError> {
     fullmag_authoring::validate_scene_document(scene)
         .map_err(|error| ApiError::bad_request(format!("invalid field drive scene: {error}")))
+}
+
+/// A mask antenna from its resource, with every equation, array and name
+/// checked before it enters the scene (the codes of `mask-function-v1`).
+fn mask_field_drive_from_resource(
+    resource: MaskFieldDriveResource,
+) -> Result<fullmag_ir::MaskFieldDriveIR, ApiError> {
+    let drive = resource
+        .into_ir()
+        .map_err(|error| ApiError::bad_request(format!("invalid mask antenna: {error}")))?;
+    let mut errors = Vec::new();
+    drive.validate_definition("drive", &mut errors);
+    if errors.is_empty() {
+        Ok(drive)
+    } else {
+        Err(ApiError::bad_request(errors.join("\n")))
+    }
+}
+
+fn mask_field_drive_identity_taken(
+    scene: &SceneDocument,
+    drive: &fullmag_ir::MaskFieldDriveIR,
+    except_index: Option<usize>,
+) -> bool {
+    scene
+        .field_drives
+        .drives
+        .iter()
+        .any(|entry| entry.id == drive.id || entry.name == drive.name)
+        || scene
+            .field_drives
+            .mask_drives
+            .iter()
+            .enumerate()
+            .any(|(index, entry)| {
+                Some(index) != except_index && (entry.id == drive.id || entry.name == drive.name)
+            })
+}
+
+fn apply_create_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive: fullmag_ir::MaskFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if mask_field_drive_identity_taken(scene, &drive, None) {
+        return Err(ApiError::conflict(format!(
+            "field drive id or name already exists: {}/{}",
+            drive.id, drive.name
+        )));
+    }
+    scene.field_drives.mask_drives.push(drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives.pop();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_replace_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+    drive: fullmag_ir::MaskFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if drive.id != drive_id {
+        return Err(ApiError::bad_request(
+            "mask antenna replacement cannot modify the stable id",
+        ));
+    }
+    let index = scene
+        .field_drives
+        .mask_drives
+        .iter()
+        .position(|entry| entry.id == drive_id)
+        .ok_or_else(|| ApiError::not_found(format!("mask antenna not found: {drive_id}")))?;
+    if mask_field_drive_identity_taken(scene, &drive, Some(index)) {
+        return Err(ApiError::conflict(format!(
+            "field drive name already exists: {}",
+            drive.name
+        )));
+    }
+    let previous = std::mem::replace(&mut scene.field_drives.mask_drives[index], drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives[index] = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_delete_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let index = scene
+        .field_drives
+        .mask_drives
+        .iter()
+        .position(|entry| entry.id == drive_id)
+        .ok_or_else(|| ApiError::not_found(format!("mask antenna not found: {drive_id}")))?;
+    let removed = scene.field_drives.mask_drives.remove(index);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives.insert(index, removed);
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn apply_create_field_drive_transaction(

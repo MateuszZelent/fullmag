@@ -167,6 +167,46 @@ READY_ANTENNAS: dict[str, ReadyAntennaSpec] = {
 }
 
 
+def registry_ir() -> dict[str, object]:
+    """The ready antennas as JSON for the API: function, summary and arguments."""
+    return {
+        "antennas": [
+            {
+                "function": spec.name,
+                "summary": spec.summary,
+                "arguments": [
+                    {
+                        "name": argument.name,
+                        "unit": argument.unit,
+                        "doc": argument.doc,
+                        **({} if argument.default is None else {"default": argument.default}),
+                    }
+                    for argument in spec.arguments
+                ],
+            }
+            for spec in READY_ANTENNAS.values()
+        ]
+    }
+
+
+def rebuild_terms_ir(function: str, arguments: Mapping[str, float]) -> list[dict[str, object]]:
+    """The terms of one ready-antenna call as ``MaskTermIR`` payloads with their origin."""
+    from fullmag.model.mask_field_drive import MaskTerm
+
+    terms = []
+    for field, drive in rebuild(function, arguments):
+        payload = MaskTerm(field, drive).to_ir()
+        call = field.library_call
+        payload["origin"] = {
+            "function": call.function,
+            "arguments": dict(call.arguments),
+            "call_index": 0,
+            "output_index": call.output_index,
+        }
+        terms.append(payload)
+    return terms
+
+
 def rebuild(function: str, arguments: Mapping[str, float]) -> tuple[tuple[MaskFunction, TimeFunction], ...]:
     """Call a ready antenna again from a term's ``origin`` (function name and arguments)."""
     spec = READY_ANTENNAS.get(function)
@@ -187,4 +227,6 @@ __all__ = [
     "gaussian_k_source",
     "gaussian_k_source_mask",
     "rebuild",
+    "rebuild_terms_ir",
+    "registry_ir",
 ]

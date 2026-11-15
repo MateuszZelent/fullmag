@@ -264,6 +264,84 @@ impl MaskFieldDriveIR {
         Ok(updated)
     }
 
+    /// The checks that need no problem: schema version, id and name, shape,
+    /// position, the number and names of the terms, every equation, array and
+    /// ready-antenna origin. `label` prefixes the paths in the messages.
+    /// Returns whether a time function reads `t`.
+    pub fn validate_definition(&self, label: &str, errors: &mut Vec<String>) -> bool {
+        if self.schema_version != MASK_FIELD_DRIVE_SCHEMA_VERSION {
+            errors.push(format!(
+                "mask_field_drive_invalid: {label}.schema_version must be '{MASK_FIELD_DRIVE_SCHEMA_VERSION}'"
+            ));
+        }
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            errors.push(format!(
+                "mask_field_drive_invalid: {label} id and name must not be empty"
+            ));
+        }
+        validate_shape(label, &self.shape, errors);
+        if !finite3(&self.position_m) {
+            errors.push(format!(
+                "mask_shape_invalid: {label}.position_m must be finite"
+            ));
+        }
+        if self.terms.is_empty() || self.terms.len() > MAX_MASK_TERMS {
+            errors.push(format!(
+                "mask_too_many_terms: {label} has {} terms; a drive needs 1 to {MAX_MASK_TERMS}",
+                self.terms.len()
+            ));
+        }
+        let mut time_dependent = false;
+        let mut term_names = BTreeSet::new();
+        for (term_index, term) in self.terms.iter().enumerate() {
+            let term_label = format!("{label}.terms[{term_index}]");
+            if let Some(name) = &term.name {
+                if !valid_term_name(name) {
+                    errors.push(format!(
+                        "mask_field_drive_invalid: {term_label}.name '{name}' must use letters, digits and '_', start with a letter or '_' and have at most 64 characters"
+                    ));
+                } else if !term_names.insert(name.as_str()) {
+                    errors.push(format!(
+                        "mask_field_drive_invalid: {term_label}.name '{name}' is used by another term of the drive"
+                    ));
+                }
+            }
+            match &term.mask {
+                MaskSourceIR::Function { function } => {
+                    validate_function(
+                        &format!("{term_label}.mask"),
+                        function,
+                        FunctionKind::Mask,
+                        errors,
+                    );
+                }
+                sampled @ MaskSourceIR::Sampled { .. } => {
+                    validate_sampled(&format!("{term_label}.mask"), sampled, errors);
+                }
+            }
+            if let Some(time) = &term.time {
+                if let Some(compiled) = validate_function(
+                    &format!("{term_label}.time"),
+                    time,
+                    FunctionKind::Time,
+                    errors,
+                ) {
+                    time_dependent |= compiled.depends_on_variables();
+                }
+            }
+            if let Some(origin) = &term.origin {
+                if origin.function.trim().is_empty()
+                    || origin.arguments.values().any(|value| !value.is_finite())
+                {
+                    errors.push(format!(
+                        "mask_field_drive_invalid: {term_label}.origin needs a function name and finite arguments"
+                    ));
+                }
+            }
+        }
+        time_dependent
+    }
+
     /// `true` when any term has a time function that reads `t`.
     pub fn is_time_dependent(&self) -> bool {
         self.terms.iter().any(|term| {
@@ -421,16 +499,11 @@ pub(crate) fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<S
 
     for (index, drive) in problem.mask_field_drives.iter().enumerate() {
         let label = format!("mask_field_drives[{index}]");
-        if drive.schema_version != MASK_FIELD_DRIVE_SCHEMA_VERSION {
-            errors.push(format!(
-                "mask_field_drive_invalid: {label}.schema_version must be '{MASK_FIELD_DRIVE_SCHEMA_VERSION}'"
-            ));
-        }
-        if drive.id.trim().is_empty() || drive.name.trim().is_empty() {
-            errors.push(format!(
-                "mask_field_drive_invalid: {label} id and name must not be empty"
-            ));
-        } else if !ids.insert(drive.id.as_str()) {
+        let time_dependent = drive.validate_definition(&label, errors);
+        if !drive.id.trim().is_empty()
+            && !drive.name.trim().is_empty()
+            && !ids.insert(drive.id.as_str())
+        {
             errors.push(format!(
                 "mask_field_drive_invalid: {label}.id '{}' is already used by another field drive",
                 drive.id
@@ -452,66 +525,6 @@ pub(crate) fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<S
                 if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
                     errors.push(format!(
                         "mask_target_unknown: {label}.target region '{object_id}/{region_id}' does not exist"
-                    ));
-                }
-            }
-        }
-        validate_shape(&label, &drive.shape, errors);
-        if !finite3(&drive.position_m) {
-            errors.push(format!(
-                "mask_shape_invalid: {label}.position_m must be finite"
-            ));
-        }
-        if drive.terms.is_empty() || drive.terms.len() > MAX_MASK_TERMS {
-            errors.push(format!(
-                "mask_too_many_terms: {label} has {} terms; a drive needs 1 to {MAX_MASK_TERMS}",
-                drive.terms.len()
-            ));
-        }
-        let mut time_dependent = false;
-        let mut term_names = BTreeSet::new();
-        for (term_index, term) in drive.terms.iter().enumerate() {
-            let term_label = format!("{label}.terms[{term_index}]");
-            if let Some(name) = &term.name {
-                if !valid_term_name(name) {
-                    errors.push(format!(
-                        "mask_field_drive_invalid: {term_label}.name '{name}' must use letters, digits and '_', start with a letter or '_' and have at most 64 characters"
-                    ));
-                } else if !term_names.insert(name.as_str()) {
-                    errors.push(format!(
-                        "mask_field_drive_invalid: {term_label}.name '{name}' is used by another term of the drive"
-                    ));
-                }
-            }
-            match &term.mask {
-                MaskSourceIR::Function { function } => {
-                    validate_function(
-                        &format!("{term_label}.mask"),
-                        function,
-                        FunctionKind::Mask,
-                        errors,
-                    );
-                }
-                sampled @ MaskSourceIR::Sampled { .. } => {
-                    validate_sampled(&format!("{term_label}.mask"), sampled, errors);
-                }
-            }
-            if let Some(time) = &term.time {
-                if let Some(compiled) = validate_function(
-                    &format!("{term_label}.time"),
-                    time,
-                    FunctionKind::Time,
-                    errors,
-                ) {
-                    time_dependent |= compiled.depends_on_variables();
-                }
-            }
-            if let Some(origin) = &term.origin {
-                if origin.function.trim().is_empty()
-                    || origin.arguments.values().any(|value| !value.is_finite())
-                {
-                    errors.push(format!(
-                        "mask_field_drive_invalid: {term_label}.origin needs a function name and finite arguments"
                     ));
                 }
             }

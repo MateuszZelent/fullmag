@@ -207,6 +207,27 @@ class ReadyAntennaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown arguments \\['B01'\\]"):
             rebuild(NAME, {**SMALL, "B01": 1.0})
 
+    def test_registry_and_terms_for_the_api(self) -> None:
+        from fullmag.antennas import rebuild_terms_ir, registry_ir
+
+        (entry,) = registry_ir()["antennas"]
+        self.assertEqual(entry["function"], NAME)
+        self.assertEqual(entry["arguments"][0], {"name": "amplitude", "unit": "T", "doc": "peak field"})
+        self.assertEqual(entry["arguments"][-1]["default"], 0.0)
+        (term,) = rebuild_terms_ir(NAME, SMALL)
+        self.assertEqual(
+            term["origin"],
+            {
+                "function": NAME,
+                "arguments": {**SMALL, "center_y": 0.0, "t0": 0.0},
+                "call_index": 0,
+                "output_index": 0,
+            },
+        )
+        ((field, drive),) = gaussian_k_source(**SMALL)
+        self.assertEqual(term["mask"], {"kind": "function", "function": field.to_ir()})
+        self.assertEqual(term["time"], drive.to_ir())
+
     def test_update_drops_the_origin(self) -> None:
         _, film = film_study()
         antenna = film.add_simpleantenna.arbitrary_mask(fm.Box(80e-9, 40e-9, 20e-9), frame="world")

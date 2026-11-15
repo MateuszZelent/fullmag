@@ -817,6 +817,196 @@ pub struct FieldDriveDeleteRequest {
     pub base_revision: Option<u64>,
 }
 
+/// Frame of a mask antenna's position and of its mask coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskFrameResource {
+    World,
+    Local,
+}
+
+/// Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MaskShapeResource {
+    Box {
+        size: [f64; 3],
+        center: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+        center: [f64; 3],
+        axis: [f64; 3],
+    },
+    Sphere {
+        radius: f64,
+        center: [f64; 3],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionParameterResource {
+    pub name: String,
+    pub value: f64,
+    /// Authored text of the value, for display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionLocalResource {
+    pub name: String,
+    /// `field_expr.v1` text.
+    pub expression: String,
+}
+
+/// A mask function of `x, y, z` (three outputs, tesla) or a time function of
+/// `t` (one output), as `field_expr.v1` equations.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFunctionResource {
+    pub expression_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<MaskFunctionParameterResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locals: Vec<MaskFunctionLocalResource>,
+    pub outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MaskSourceResource {
+    Function {
+        function: MaskFunctionResource,
+    },
+    /// An array mask written by a loop: float32 3-vectors in tesla.
+    Sampled {
+        encoding: String,
+        data: String,
+        sha256: String,
+        size: [u32; 3],
+        cell_m: [f64; 3],
+        origin_m: [f64; 3],
+    },
+}
+
+/// The ready-antenna call (`fullmag.antennas`) that produced a term.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskLibraryCallResource {
+    pub function: String,
+    pub arguments: BTreeMap<String, f64>,
+    pub call_index: u32,
+    pub output_index: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskTermResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub mask: MaskSourceResource,
+    /// Absent: a static term.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<MaskFunctionResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MaskLibraryCallResource>,
+}
+
+/// A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MaskFieldDriveResource {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_field_drive_enabled")]
+    pub enabled: bool,
+    pub target: FieldTargetResource,
+    pub shape: MaskShapeResource,
+    pub position_m: [f64; 3],
+    pub frame: MaskFrameResource,
+    pub terms: Vec<MaskTermResource>,
+    pub time_origin: FieldTimeOriginResource,
+    pub activation: DriveActivationResource,
+}
+
+impl MaskFieldDriveResource {
+    pub fn into_ir(self) -> Result<fullmag_ir::MaskFieldDriveIR, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(self)?)
+    }
+
+    pub fn from_ir(value: fullmag_ir::MaskFieldDriveIR) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveListResource {
+    pub scene_revision: u64,
+    pub drives: Vec<MaskFieldDriveResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: MaskFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MaskFieldDriveReplaceRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: MaskFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaArgumentResource {
+    pub name: String,
+    /// SI unit of the value.
+    pub unit: String,
+    pub doc: String,
+    /// Absent: the argument is required, or its default follows another argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
+}
+
+/// A ready antenna of `fullmag.antennas`: a function that returns mask terms.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaResource {
+    /// Qualified name, the `function` of a term's origin.
+    pub function: String,
+    pub summary: String,
+    pub arguments: Vec<ReadyAntennaArgumentResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaListResource {
+    pub antennas: Vec<ReadyAntennaResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadyAntennaTermsRequest {
+    pub function: String,
+    pub arguments: BTreeMap<String, f64>,
+}
+
+/// The terms one ready-antenna call returns, each with its origin.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReadyAntennaTermsResource {
+    pub terms: Vec<MaskTermResource>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentTransportListResource {
     pub scene_revision: u64,
