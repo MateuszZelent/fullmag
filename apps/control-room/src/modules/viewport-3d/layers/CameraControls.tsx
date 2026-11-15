@@ -108,7 +108,8 @@ const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
   radius: 1e-6,
   size: [1e-6, 1e-6, 1e-6],
 };
-export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
+import { VIEWPORT_3D_WORLD_UP } from "../viewport3dCameraModel";
+export { VIEWPORT_3D_WORLD_UP } from "../viewport3dCameraModel";
 const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;

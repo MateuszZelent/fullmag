@@ -1,8 +1,8 @@
+import { ensureViewportSettingsSection, getViewportSettingsRegion, readViewportInspectorState, restoreViewportInspectorState, selectViewportInspectorContext } from "./viewport-export-browser-qa.mjs";
 import { createHash } from "node:crypto";
 
 const VIEWPORT_SELECTOR = ".fm-viewport-3d";
 const CANVAS_SELECTOR = `${VIEWPORT_SELECTOR} canvas`;
-const SETTINGS_DIALOG_NAME = "3D View Settings";
 const THEME_STORAGE_KEY = "fullmag.control-room.theme";
 const MAX_ACTION_TIMEOUT_MS = 30_000;
 const MAX_RESTORE_TIMEOUT_MS = 4_000;
@@ -61,11 +61,9 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
 
   const viewport = page.locator(VIEWPORT_SELECTOR);
   const canvas = page.locator(CANVAS_SELECTOR);
-  const settingsDialog = page.getByRole("dialog", {
-    exact: true,
-    name: SETTINGS_DIALOG_NAME,
-  });
+  const settingsDialog = getViewportSettingsRegion(page);
   let originalDialogOpen = null;
+  let originalInspectorState = null;
   let originalTheme = null;
   let originalThemePreference = null;
   let originalThemeStorage = { available: false, value: null };
@@ -81,6 +79,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
       throw new Error("Viewport layout QA requires exactly one visible 3D canvas");
     }
 
+    originalInspectorState = await readViewportInspectorState(page);
     originalDialogOpen = await settingsDialog.isVisible().catch(() => false);
     originalTheme = await readThemeMode(page);
     originalThemePreference = await page.locator("html").getAttribute("data-theme-preference");
@@ -146,7 +145,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
 
     if (originalDialogOpen !== null) {
       await restore("original settings dialog state", async () => {
-        await setDialogOpen(page, settingsDialog, originalDialogOpen, restoreTimeout);
+        await restoreViewportInspectorState(page, originalInspectorState, restoreTimeout);
         const actual = await settingsDialog.isVisible().catch(() => false);
         if (actual !== originalDialogOpen) {
           throw new Error(`expected open=${originalDialogOpen}, got open=${actual}`);
@@ -599,17 +598,9 @@ async function restoreThemePreference(page, value) {
 
 async function setDialogOpen(page, dialog, open, timeout) {
   if (await dialog.isVisible().catch(() => false) === open) return;
-  if (open) {
-    const trigger = page.getByRole("button", { name: /view settings/i });
-    await trigger.waitFor({ state: "visible", timeout });
-    await trigger.click({ timeout });
-    await dialog.waitFor({ state: "visible", timeout });
-    return;
-  }
-  const close = dialog.getByRole("button", { exact: true, name: "Close" });
-  await close.waitFor({ state: "visible", timeout });
-  await close.click({ timeout });
-  await dialog.waitFor({ state: "hidden", timeout });
+  if (open) await ensureViewportSettingsSection(page, "View", timeout);
+  else await selectViewportInspectorContext(page, "selection", timeout);
+  await dialog.waitFor({ state: open ? "visible" : "hidden", timeout });
 }
 
 async function waitForThemeAndFrame(page, theme) {
