@@ -268,13 +268,29 @@ describe("Inspector design-system reference contract", () => {
 
   it("keeps the main Study surface and pipeline on compact groups", () => {
     const study = read("src/modules/inspector/panels/StudyInspectorPanel.tsx");
+    const sections = read(
+      "src/modules/inspector/panels/StudyInspectorSections.tsx",
+    );
     const pipeline = read(
       "src/modules/inspector/panels/StudyPipelineSection.tsx",
     );
 
-    expect(study).toContain("InspectorGroup");
-    expect(study).not.toMatch(/<\/?InspectorSection\b/);
-    expect(study).not.toContain("<Accordion");
+    expect(study).toContain('from "./StudyInspectorSections"');
+    for (const section of [
+      "StudyRuntimeSection",
+      "StudySelectedStageSection",
+      "StudyBoundarySection",
+      "StudyRecoverySection",
+      "StudyHistorySection",
+    ]) {
+      expect(study).toMatch(new RegExp(`<${section}\\b`));
+      expect(sections).toMatch(new RegExp(`export function ${section}\\b`));
+    }
+    expect(sections).toMatch(/<InspectorGroup\b/);
+    for (const surface of [study, sections]) {
+      expect(surface).not.toMatch(/<\/?InspectorSection\b/);
+      expect(surface).not.toContain("<Accordion");
+    }
     expect(pipeline).toContain("InspectorGroup");
     expect(pipeline).not.toMatch(/<\/?InspectorSection\b/);
   });
