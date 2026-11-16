@@ -46,7 +46,9 @@ _FUNCTIONS_1 = frozenset(
 )
 _FUNCTIONS_2 = frozenset({"atan2", "min", "max"})
 _MATH_ALIASES = {"fabs": "abs"}
-_VARIABLES = {"mask": ("x", "y", "z"), "time": ("t",)}
+# "space_time": one function of position and time, split into mask and time
+# functions by fullmag.model.space_time before it reaches the IR.
+_VARIABLES = {"mask": ("x", "y", "z"), "time": ("t",), "space_time": ("x", "y", "z", "t")}
 _RESERVED = frozenset({"x", "y", "z", "t", "pi"}) | _FUNCTIONS_1 | _FUNCTIONS_2
 _AUGMENTED_OPERATORS = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "^"}
 
@@ -379,7 +381,7 @@ class _Transpiler:
         returned = body[-1].value
         if returned is None:
             raise self.fail(body[-1], "return a value")
-        if self.kind == "mask":
+        if self.kind in ("mask", "space_time"):
             if not isinstance(returned, ast.Tuple) or len(returned.elts) != 3:
                 raise self.fail(returned, "a mask function must return a tuple (Bx, By, Bz)")
             outputs = tuple(self.expression(element) for element in returned.elts)

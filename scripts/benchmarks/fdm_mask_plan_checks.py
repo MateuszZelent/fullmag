@@ -60,6 +60,10 @@ def mask_minus_cos_kx(x, y, z, B, k):
     return (-B * cos(k * x), 0.0, 0.0)
 
 
+def travelling(x, y, z, t, B, k, f):
+    return (B * sin(k * x - 2 * pi * f * t), 0.0, 0.0)
+
+
 def cos_wt(t, f):
     return cos(2 * pi * f * t)
 
@@ -390,6 +394,13 @@ def cases() -> list[Case]:
              "antenna.add(fm.mask(mask_minus_cos_kx, B=1e-3, k=2 * pi / 40e-9), fm.time(sin_wt, f=3.6e9), name='s')",
              (Term("mask_sin_kx", {"B": 1e-3, "k": k}, "cos_wt", {"f": 3.6e9}),
               Term("mask_minus_cos_kx", {"B": 1e-3, "k": k}, "sin_wt", {"f": 3.6e9})), whole),
+        # One function of position and time; fm.space_time splits it into the two
+        # terms of "two_terms".
+        Case("space_time",
+             f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world')\n"
+             "antenna.add_space_time(travelling, B=1e-3, k=2 * pi / 40e-9, f=3.6e9)",
+             (Term("mask_sin_kx", {"B": 1e-3, "k": k}, "cos_wt", {"f": 3.6e9}),
+              Term("mask_minus_cos_kx", {"B": 1e-3, "k": k}, "sin_wt", {"f": 3.6e9})), whole),
         Case("reassigned_locals",
              f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE}, frame='world', time_origin='absolute')\n"
              "antenna.add(fm.mask(reassigned, B01=0.2e-3, wavelength=40e-9, fwhm_y=30e-9, xs=10e-9), "
@@ -445,11 +456,6 @@ def cases() -> list[Case]:
              f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE})\n"
              "antenna.add(fm.mask(uniform, b=1e-3), fm.time(log_time))",
              error="mask_expression_non_finite"),
-        Case("fem",
-             f"antenna = film.add_simpleantenna.arbitrary_mask({WHOLE})\n"
-             "antenna.add(fm.mask(uniform, b=1e-3))",
-             error="mask_field_drive_unsupported_lane:fem", engine="fem",
-             universe_size="(160e-9, 80e-9, 60e-9)"),
         Case("multilayer",
              "cap = study.geometry(fm.Box(size=(80e-9, 40e-9, 5e-9), name='cap').translate((0.0, 0.0, 20e-9)), name='cap')\n"
              "cap.Ms = 800e3\ncap.Aex = 13e-12\ncap.alpha = 0.01\ncap.m = fm.texture.uniform(1.0, 0.0, 0.0)\n"

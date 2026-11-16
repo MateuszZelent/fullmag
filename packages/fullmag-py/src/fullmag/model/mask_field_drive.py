@@ -181,6 +181,18 @@ class MaskAntenna:
                 return index
         raise ValueError(f"mask_update_invalid: antenna {self.id!r} has no term named {term!r}")
 
+    def add_space_time(self, function, /, **values: float) -> "MaskAntenna":
+        """Add every term of one function ``f(x, y, z, t, ...) -> (Bx, By, Bz)``.
+
+        The function is split into ``mask(x, y, z) * time(t)`` terms by
+        ``fm.space_time`` (values of its further parameters are given here).
+        """
+        from fullmag.model.space_time import space_time
+
+        for mask, time in space_time(function, **values):
+            self.add(mask, time)
+        return self
+
     def with_parameters(
         self,
         *,

@@ -101,6 +101,24 @@ where $\boldsymbol\beta_i$ is the authored function. $\mathbf r_0$ is the author
 `position` in the target's object frame (translation only in v1); a global target
 has no object, and its frame is the world frame.
 
+A field authored as one function $\mathbf B(\mathbf r,\tau)$ is brought to the form
+{eq}`mask-field` exactly, by distributing sums, products and integer powers and by
+
+```{math}
+:label: mask-space-time-split
+\begin{aligned}
+\sin(a+b)&=\sin a\cos b+\cos a\sin b,\\
+\cos(a+b)&=\cos a\cos b-\sin a\sin b,\\
+\exp(a+b)&=\exp a\,\exp b,
+\end{aligned}
+\qquad a=a(\mathbf r),\quad b=b(\tau).
+```
+
+A travelling wave $B\sin(kx-\omega\tau)$ becomes the two terms
+$[B\sin kx]\cos\omega\tau+[-B\cos kx]\sin\omega\tau$. No approximation is
+made; a function that these rules do not turn into a finite sum (a moving
+Gaussian $\exp[-(x-v\tau)^2/s^2]$) is rejected.
+
 (symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -221,6 +239,17 @@ def uniform_layers(field, bz, n_layers):
 antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 ```
 
+One function of position and time is split into terms by {eq}`mask-space-time-split`:
+
+```python
+# %% One function of position and time
+def wave(x, y, z, t, B, k, f):
+    return (B * sin(k * x - 2 * pi * f * t), 0.0, 0.0)
+
+
+antenna.add_space_time(wave, B=1 * mT, k=2 * pi / (196 * nm), f=4.5 * GHz)
+```
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
 | `study.add_simpleantenna.arbitrary_mask(target, …)`, `magnet.add_simpleantenna.arbitrary_mask(…)`, `region.add_simpleantenna.arbitrary_mask(…)` | magnet, region of a magnet, or `"global"` | required (bound by a scoped factory) | $1$ | an existing magnet or region; `target=` on a scoped factory raises `scoped_target_override_not_allowed` | cells (FDM) or nodes (FEM) the drive may act on | FDM and FEM, CPU/GPU | `mask_field_drives[].target` (`global`, `object`, `region`) |
@@ -232,6 +261,7 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 | `antenna.add(mask, time, name=None)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None`; `str` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected; names unique within the antenna | one term of {eq}`mask-field` | FDM and FEM, CPU/GPU | `mask_field_drives[].terms[]` (`name`) |
 | `fm.mask(function, **values)` | restricted function + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1`; every parameter needs a value | function mask $\boldsymbol\beta_i$ | FDM and FEM, CPU/GPU | `terms[].mask` (`kind: function`) |
 | `fm.time(function, **values)` | restricted function + numbers | required | $1$ | rules of `mask-function-v1` | time function $f_i$ | FDM and FEM, CPU/GPU | `terms[].time` |
+| `fm.space_time(function, **values)`, `antenna.add_space_time(function, **values)` | restricted function of `x, y, z, t` + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1` section 7; `mask_not_separable`, `mask_too_many_terms` | the terms of {eq}`mask-space-time-split`, as `(mask, time)` pairs or added to the antenna | FDM and FEM, CPU/GPU | `terms[]` (ordinary function terms) |
 | `study.new_vector_mask(size, cell, origin)` | 3 ints, 3 floats, 3 floats | the FDM grid of the study | $\mathrm{m}$ | positive size and cell; a lattice is required when the study has no FDM cell | array mask $\mathbf A_{ijk}$ | FDM and FEM, CPU/GPU | `terms[].mask` (`kind: sampled`) |
 | `VectorMask.set_vector(i, j, k, value)` | ints, 3 floats | — | $\mathrm{T}$ | indices in range, finite values | one lattice value | FDM and FEM, CPU/GPU | array file |
 | `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive from this pipeline point on | FDM and FEM, CPU/GPU | stage action `add_mask_field_drive` |
@@ -452,6 +482,7 @@ every regional drive.
 |---|---|
 | restricted Python → equations | `packages/fullmag-py/src/fullmag/model/mask_function.py` |
 | antennas, targets, terms, Update | `packages/fullmag-py/src/fullmag/model/mask_field_drive.py`, `packages/fullmag-py/src/fullmag/world.py` |
+| {eq}`mask-space-time-split` | `packages/fullmag-py/src/fullmag/model/space_time.py` |
 | equation language and bytecode | `crates/fullmag-expr` |
 | IR types, validation, Update | `crates/fullmag-ir/src/mask_field_drive.rs` |
 | {eq}`mask-support`, {eq}`mask-fdm-basis`, {eq}`mask-fem-basis` | `crates/fullmag-plan/src/mask_field.rs` |

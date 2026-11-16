@@ -3,6 +3,7 @@
 from . import couplings, fields, init, select, shapes, units
 from .units import GHz, MHz, T, mT, mm, nm, ns, ps, um
 from .model.mask_function import mask, time
+from .model.space_time import space_time
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -496,6 +497,7 @@ __all__ = [
     "TimeFunction",
     "mT",
     "mask",
+    "space_time",
     "mm",
     "nm",
     "ns",

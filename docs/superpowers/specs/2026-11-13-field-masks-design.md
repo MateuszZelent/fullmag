@@ -278,8 +278,8 @@ Limits: 4096 characters and 512 nodes per equation. The crate parses, prints
 canonically, evaluates a function (parameters → locals → outputs) and compiles a
 time function to bytecode `fullmag_time_expr.v1` (flat `f64` array; opcode table
 in the plan). The same interpreter exists as a header-only C function for host
-code (`native/include/fullmag_time_expression.h`). For L2 the crate later gains
-`separate` (section 8).
+code (`native/include/fullmag_time_expression.h`). L2 is split in the Python
+authoring layer (section 8).
 
 ## 6. Planner and runtime
 
@@ -327,13 +327,32 @@ mumax3 also drives every step from the host. The plan measures it.
 
 ## 8. L2: one function of space and time (Mateusz's form)
 
-`study.add_simpleantenna.arbitrary_mask(function=f(x, y, z, t, …), target, shape,
-position, frame, name)`. The function is transpiled with the same rules, then
-`fullmag_expr::separate` rewrites each output as `Σ S_j(x,y,z)·T_j(t)` (sums,
-products, `sin/cos(u+v)`, `exp(u+v)`, integer powers 2..4) and the result is
-stored as ordinary L0 terms. A function that does not separate →
-`mask_not_separable` naming the sub-expression; more than 8 terms →
-`mask_too_many_terms`. The IR and the UI show the L0 terms.
+Built on 2026-11-16 in the Python authoring layer:
+
+```python
+def wave(x, y, z, t, B, k, f):
+    return (B * sin(k * x - 2 * pi * f * t), 0.0, 0.0)
+
+
+antenna.add_space_time(wave, B=1 * mT, k=2 * pi / (196 * nm), f=4.5 * GHz)
+# the same, as a user module returning pairs:
+for field, drive in fm.space_time(wave, B=1 * mT, k=2 * pi / (196 * nm), f=4.5 * GHz):
+    antenna.add(field, drive)
+```
+
+The function is transpiled with the same rules, then `fm.space_time` rewrites
+each output as `Σ S_j(x,y,z)·T_j(t)` (sums, products, quotients by a factor of
+one kind, `sin/cos(u+v)`, `exp(u+v)`, integer powers 2..4) and returns ordinary
+L0 pairs. A function that does not separate → `mask_not_separable` naming the
+sub-expression; more than 8 terms → `mask_too_many_terms`. The IR, the UI and
+an exported script show the L0 terms (`mask-function-v1` section 7).
+
+Differences from the first design: the entry point is `fm.space_time(f, …)` and
+`antenna.add_space_time(f, …)`, with values at the call as in `fm.mask`, not
+`arbitrary_mask(function=…)`; the split is Python code
+(`fullmag/model/space_time.py`), because the IR and every later layer know only
+L0 terms, so there is no `fullmag_expr::separate` and no API endpoint. The
+Control Room has no dialog for this form: its panel edits the terms.
 
 ## 9. Later
 
@@ -369,7 +388,8 @@ demag="truncated_images", images=(4,256,0))` with CUDA double, no thermal step.
    available. (assumed)
 4. Masks exist next to `RegionalFieldDrive`; nothing is removed. (assumed)
 5. Names: `study.add_simpleantenna.arbitrary_mask(...)`, `.add(mask, time)`, `fm.mask(f, …)`,
-   `fm.time(g, …)`, `study.new_vector_mask()` for L0; `arbitrary_mask(function=…)` for L2. (proposed)
+   `fm.time(g, …)`, `study.new_vector_mask()` for L0; `fm.space_time(f, …)` and
+   `antenna.add_space_time(f, …)` for L2. (built)
 6. The user's own loop-style masks are authored in the script only; the UI shows and
    keeps them. Ready antennas of `fullmag.antennas` (either style) are editable in the
    UI through their arguments. (proposed)

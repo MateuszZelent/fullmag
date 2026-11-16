@@ -145,13 +145,13 @@ value stack of at most 64 entries and one input, `t`.
 | `scoped_target_override_not_allowed` | Python authoring | `target=` given to `magnet.add_simpleantenna` or `region.add_simpleantenna` |
 | `mask_update_invalid` | Python authoring, stage materialization | Update of an inactive id or of a non-mask drive, an unknown parameter, a missing or unknown term selector, an empty patch, a non-finite value, or time parameters for a static term |
 | `mask_shape_invalid` | IR validation | a non-positive or non-finite shape size, a non-finite position, a zero cylinder axis, or a CSG shape (not part of v1) |
-| `mask_too_many_terms` | IR validation, runner, native FEM | zero terms, or more than 8 terms on one drive, or more than 8 mask terms active in one stage on a GPU lane |
+| `mask_too_many_terms` | IR validation, runner, native FEM, `fm.space_time` | zero terms, or more than 8 terms on one drive, or more than 8 mask terms active in one stage on a GPU lane, or a space-time function that expands to more than 8 terms |
 | `mask_array_invalid` | IR validation, planner | array mask with a bad lattice, an unknown encoding, data that is not base64 or zlib, a wrong sha256 or a byte count that does not match the lattice |
 | `mask_support_empty` | planner | no magnetic cell (FDM) or node (FEM) of the target lies inside the shape |
 | `mask_expression_non_finite` | planner, runner, native FEM | a mask value at a supported cell or node, a time value on the stage horizon, or a time factor during the run, is not finite |
 | `mask_field_drive_unsupported_lane` | planner, runner | the resolved lane does not realize mask field drives (`fdm_multilayer`; `fem_reference`: the Rust FEM reference reduction of a statically periodic plan; `fdm_cuda`: a native library without host-multiplier drives) |
 | `mask_not_periodic` | planner (FEM) | a mask has different values on the two nodes of a periodic node pair |
-| `mask_not_separable` | separation (single-function form) | the function is not a finite sum of space × time factors |
+| `mask_not_separable` | `fm.space_time` | the function is not a finite sum of (function of position) × (function of time) under the rules of section 7, or it returns a zero field; the message quotes the sub-expression |
 
 (mask-function-v1-origin)=
 ## 6. Ready-antenna origin
@@ -171,3 +171,55 @@ outputs. The planner and the solvers ignore it.
   and values for every term; otherwise it writes the terms as functions.
 - A loop-style ready antenna (`style="loop"`) returns an array mask without an
   origin; it is exported as data like any array mask.
+
+(mask-function-v1-space-time)=
+## 7. Space-time functions
+
+```python
+def wave(x, y, z, t, B, k, f):
+    return (B * sin(k * x - 2 * pi * f * t), 0.0, 0.0)
+
+
+antenna.add_space_time(wave, B=1 * mT, k=2 * pi / (196 * nm), f=4.5 * GHz)
+```
+
+`fm.space_time(function, **values)` takes one function under the rules of
+section 2 with leading parameters exactly `x, y, z, t` and a 3-tuple return. It
+returns a tuple of `(mask, time)` pairs for `antenna.add(mask, time)`;
+`antenna.add_space_time(function, **values)` adds every pair. The pairs are
+ordinary function terms: nothing else is stored in `ProblemIR`, and the scene,
+the Control Room and an exported script show the terms, not the function.
+
+Each output is rewritten, after the local equations are substituted, as a sum
+of (factor of position) × (factor of time):
+
+| Expression | Terms |
+|---|---|
+| `u` without `t` | `(u, 1)` |
+| `u` without `x`, `y`, `z` | `(1, u)` |
+| `u + v`, `u - v`, `-u` | the terms of the operands; a minus sign goes to the position factor |
+| `u * v` | every product of a term of `u` and a term of `v` |
+| `u / v`, with `v` of one kind | `v` divides the factor of its kind |
+| `u ^ n`, `n` = 2, 3, 4 | the repeated product |
+| `sin(a + b)` | `(sin(a), cos(b))`, `(cos(a), sin(b))` |
+| `cos(a + b)` | `(cos(a), cos(b))`, `(-sin(a), sin(b))` |
+| `exp(a + b)` | `(exp(a), exp(b))` |
+
+Here `a` holds the addends without `t` (constants included) and `b` the addends
+of time only. For `sin` and `cos`, a time part written as `-c` is used as `c`
+with the sign moved to the position factor, so `sin(k * x - w * t)` gives the
+time functions `cos(w * t)` and `sin(w * t)`.
+
+Terms with the same time factor (compared as text) become one term whose
+components are the sums of the position factors; a component without a
+contribution is `0.0`. A term whose time factor is 1 has no time function
+(a static term). Terms keep the order of first appearance. Term `i` (from 1)
+is named `<function>_space_<i>` and `<function>_time_<i>`, and each function
+carries the parameters its equations use.
+
+No algebraic simplification is done: `cos(w * t) * sin(w * t)` and
+`sin(w * t) * cos(w * t)` are two terms. Any other expression that depends on
+both position and time is rejected with `mask_not_separable` and the
+expression (for a call, the whole call, for example
+`exp(-(x - v * t) ^ 2 / s ^ 2)`); more than 8 terms are rejected with
+`mask_too_many_terms`.
