@@ -324,7 +324,13 @@ for field, drive in <function>(study, <name>=<value>, ...):                     
 - [ ] **Step 4b: Stage probe** (extends Task 5's probe): a script `run 10 ps → add_field_drive(antenna) → run 10 ps → run 10 ps → remove_field_drive → run 10 ps` plans to: no `mask_field_term_bases` in run 1, one basis in runs 2 and 3, none in run 4. With `time_origin="absolute"`, the planned `time_stage.start_time_s` of run 2 equals 10 ps; with a relaxation stage inserted before run 2 it still equals 10 ps (note 0530). If the relaxation advances it, record the measured value as a finding; do not change the clock in this task.
 - [ ] **Step 5: Commit** `feat(stages): add and remove mask antennas in the study pipeline`.
 
-### Task 8: Control Room panel — DONE 2026-11-16 (API resource and panel; not opened in a browser)
+### Task 8: Control Room panel — DONE 2026-11-16 (API resource, panel and stage inspector `59790343f`; not opened in a browser)
+
+Stage actions: the Add and Update stages of a mask antenna have a read-only inspector
+(`stages/MaskFieldDriveStageInspector.tsx`, summary model `maskFieldDriveStageSummary.ts`) and
+the Explorer labels "Add Antenna" / "Update Antenna". A staged antenna lives in the stage
+payload, not in `mask_drives`, so `MaskAntennaPanel` edits whole-study antennas only; action
+stages of the canonical pipeline are read-only in the stage inspector for every drive kind.
 
 Realized: API `mask-field-drives` CRUD and `ready-antennas` (list, terms), checked on the live API (replace, 400 with the equation path, 409 duplicate, 404); the scene resource carries `mask_drives`. Control Room: typed client and resource hooks, mask antennas as modules under the scope of their target in the Explorer, `MaskAntennaPanel` (target, shape, position, frame, time origin, terms with parameters, local equations and outputs, static toggle, array masks read-only, ready-antenna argument forms that rebuild their terms, create and delete), a list section and the ribbon item "Mask Antenna". Checks in the frontend container: `tsc --noEmit`, `eslint src --max-warnings=0`, `vitest run` (9779 passed; the one failure, `scripts/resolve-pnpm-invocation.test.mjs`, needs `apps/web`, which the managed shadow does not contain). Not done: the stage inspector for `add_mask_field_drive`/`update_mask_field_drive` stages (they show as generic action stages), and a browser session with the panel.
 
@@ -389,7 +395,36 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 
 - [ ] **Step 4:** Write the report with every measured number.
 
-### Task 11: Short trajectory, feasibility, evidence
+### Task 11: Short trajectory, feasibility, evidence — RUN 2026-11-16; antenna-response control OPEN (GPU hang)
+
+Result (`~/git/simulations/compare_racetrack_short.md`, stores in
+`~/git/simulations/fullmag/racetrack_3.6GHz/short_pbc_gpu` and
+`~/git/simulations/amumax/racetrack_3.6GHz/reference_{short,matched}.zarr`):
+
+- fullmag FDM CUDA double, PBC images (4, 256), absorbing boundary, through the managed API:
+  1005 steps, 100 ps, completed. About 20 min from submit to the first step (API process up to
+  9.5 GB, backend container 17.3 GiB), 669 s of stepping (1.50 steps/s). mumax3 (single
+  precision): 1 min 40 s with the cached kernel, 7.5 min with the kernel build. Device memory was
+  not recorded. At this rate the 16.53 ns of the full script take about 31 h (gate of Step 2:
+  above 24 h, so no full run without the user's decision); mumax3 needs about 4.6 h.
+- m at t = 0 equals mumax3 (2.8e-17). With mumax3 saved at the fullmag sample times,
+  max |Δm| over active cells is 5.3e-3 (10 ps), 7.5e-3 (20 ps), 8.8e-3 (30 ps), 9.5e-3 (40 ps),
+  1.04e-2 (50 ps) … 1.95e-2 (100 ps); rms 1.0e-4 → 6.6e-4. The threshold 1e-2 holds to 40 ps.
+  The largest cells are YIG in the top layers below the track (ix 387..396); farther than
+  100 nm from the track the maximum at 100 ps is 8.6e-3 (rms 2.6e-4). The run starts from the
+  unrelaxed state, so m changes by up to 2 (rms 3.1e-2) in these 100 ps.
+- Hypotheses (not examined): the difference grows about linearly in time and sits where the
+  stray field of the track acts, which points to a small systematic difference of the
+  effective field (demagnetization kernel or its periodic images, single against double
+  precision of the kernel) and not to the antenna, whose inputs are equal (Task 10).
+- Open: the response to the antenna alone, m(with) − m(without) in both codes
+  (`compare_racetrack_short.py` computes it when the control stores exist). The fullmag control
+  run without the antenna failed at step 967 with `CUDA error in reduce_adaptive_error_policy:
+  cudaEventRecord(compute_done_event): an illegal memory access was encountered (700)` and the
+  WSL GPU driver (`dxg`) stopped answering (`nvidia-smi` hangs); evidence in
+  `~/git/simulations/fullmag/racetrack_3.6GHz/short_pbc_gpu_noantenna_failed`. A control with
+  the antenna at zero amplitude would keep the host-driven step loop of the antenna run.
+
 
 **Files:**
 - Create: `~/git/simulations/amumax/racetrack_3.6GHz/reference_short.mx3` (`original.mx3` without the block `setsolver(6)` … the four `saveas` lines; `t0 := 0`; `autosave(m, 10e-12)`, `tableautosave(1e-12)`, `run(100e-12)`)
@@ -468,6 +503,27 @@ Added on the user's request of 2026-11-14 (finish the antennas completely, FEM i
    API (merge patch removing `study.fdm`).
 7. FEM fields are stored as three blocks (all x, all y, all z) and FDM fields
    interleaved; the field arrays carry neither the layout nor node coordinates.
+   (2026-11-16: FDM CUDA with the `continuous` layout also writes three blocks.)
+
+Found on 2026-11-16 (not fixed):
+
+8. On the API route an FDM script with `study.pbc(...)` and a plain cell
+   (`study.cell(...)` or `study.fdm(default_cell=...)` alone) is rejected ("cell_size cannot be
+   combined with maximum_element_size, …"): the canonical script writes `study.pbc(...)`,
+   which sets the periodic pair ids of the default mesh, before
+   `study.objects.mesh.defaults(cell_size=...)`. The rejected scene blocks the workspace as in
+   finding 6 (repair: merge patch `{"study": {"pbc": null}}`). A script passes with
+   `study.fdm(default_cell=..., demag=fm.FDMDemag(strategy="single_grid"))`, which plans to
+   the same backend plan as the plain cell.
+9. The scene script writes the external field and shape sizes with 12 significant digits
+   (`B_ext` −0.014999999997715363 T becomes −0.0149999999977 T after the scene round trip).
+10. Correction of finding 4: the `continuous` layout records the sample times in
+    `continuous/index.jsonl`.
+11. FDM CUDA without a time-dependent drive (captured adaptive graph) failed once at step 967
+    of the 2.4 M cell racetrack with CUDA error 700 in `reduce_adaptive_error_policy`; the WSL
+    GPU driver then hung. Cause not examined (driver reset or a fault of the graph path).
+12. The 2.4 M cell racetrack needs about 20 min and 17 GiB of host memory in the API before
+    the first step; the solver itself then runs at 1.5 steps/s in double precision.
 
 ## User decisions (2026-11-13)
 

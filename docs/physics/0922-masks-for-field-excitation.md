@@ -575,8 +575,23 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   absorbing boundary of the script (damping regions), the planned $\alpha$ equals
   the dump in every active cell (204 values).
 
+- Reference (item 4, trajectory, 2026-11-16): the same model with the antenna on from
+  $t=0$, periodic images (4, 256) and the absorbing boundary, started from the unrelaxed
+  state, on FDM CUDA in double precision against mumax3 in single precision saved at the
+  same times. The states are equal at $t=0$ (2.8e-17). The largest $|\Delta\mathbf m|$
+  over the 2 404 728 active cells is 5.3e-3 at 10 ps, 9.5e-3 at 40 ps and 1.9e-2 at
+  100 ps (rms 1.0e-4, 3.3e-4 and 6.6e-4), while $\mathbf m$ itself changes by up to 2
+  (rms 3.1e-2). The largest cells lie in the YIG below the track; farther than 100 nm
+  from it the maximum at 100 ps is 8.6e-3. This run compares the whole solver, not the
+  antenna alone: the response to the antenna, $\mathbf m$ with minus $\mathbf m$
+  without the antenna in both codes, is not measured yet
+  (`~/git/simulations/compare_racetrack_short.md`).
+- Single-function form: `fm.space_time` reproduces its function at 5 points and 5 times
+  to 1e-12 (10 tests); a travelling wave plans to the maps and time programs of the
+  hand-written pair of terms with error 0 (probe case `space_time`).
+
 Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
-(untouched cells, energy closed form) and the trajectory of item 4 are open.
+(untouched cells, energy closed form) and the antenna response of item 4 are open.
 
 (limitations)=
 ## 11. Limitations and deferred work
