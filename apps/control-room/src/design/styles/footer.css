@@ -18,7 +18,7 @@
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-default);
   background: var(--fm-bg-panel);
-  padding: var(--fm-space-1) var(--fm-space-2);
+  padding: 2px var(--fm-space-2);
 }
 
 .fm-footer__tabs {
@@ -205,4 +205,11 @@
   font-size: var(--fm-font-size-control);
   line-height: 1.5;
   text-align: center;
+}
+
+.fm-footer__telemetry-navigation { flex: 0 0 auto; min-width: 0; }
+.fm-footer__telemetry-navigation[hidden] { display: none; }
+.fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-2); }
+@container footer (width < 760px) {
+  .fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-1); font-size: var(--fm-font-size-help); }
 }

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { checkFooterReadability } from "./lib/viewport-layout-browser-qa.mjs";
 import { createServer } from "node:net";
 import path from "node:path";
 
@@ -539,7 +540,18 @@ try {
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
+  // Footer UI has its own bounded checks; it does not depend on a solver run
+  // or field materialization in a separate interactive development session.
+  const footerReadability = await checkFooterReadability(page, {
+    assertCanvas: () => assertCanvasHasFidelity(page),
+    timeout: 30_000,
+  });
+  for (const capture of footerReadability.captures) {
+    await writeFile(path.join(auditArtifactsDirectory, `footer-${capture.theme}.png`), Buffer.from(capture.png_base64, "base64"));
+  }
+  if (errors.length > 0) throw new Error(`Footer browser errors: ${errors.join("\n")}`);
   await writeAuditArtifact({
+    footerReadability,
     after,
     afterUnmount,
     afterUnmountRuntime,
@@ -584,6 +596,13 @@ try {
     `gpuUploaded=${formatBytes(gpuAfterStress.bufferBytesUploaded)}`,
   );
 } catch (error) {
+  if (error.footerReadability) {
+    await mkdir(auditArtifactsDirectory, { recursive: true });
+    await writeFile(path.join(auditArtifactsDirectory, "footer-partial.json"), `${JSON.stringify(error.footerReadability, null, 2)}\n`);
+    for (const capture of error.footerReadability.captures) {
+      await writeFile(path.join(auditArtifactsDirectory, `footer-${capture.theme}.png`), Buffer.from(capture.png_base64, "base64"));
+    }
+  }
   await reportAuditFailure(page, fixture, {
     errors,
     fieldRequests,

@@ -22,7 +22,7 @@ const THEME_PALETTES = Object.freeze([
 ]);
 
 /** Exercise the bottom dock through its actual tabs and panel controls. */
-async function checkFooterReadability(page, { assertCanvas, timeout }) {
+export async function checkFooterReadability(page, { assertCanvas, timeout }) {
   const footer = page.locator(".fm-footer");
   const tabs = footer.getByRole("tablist", { name: "Bottom diagnostics", exact: true });
   const frame = page.locator('[data-panel-frame="panel-bottom"]');
@@ -30,9 +30,22 @@ async function checkFooterReadability(page, { assertCanvas, timeout }) {
   const originalTab = await tabs.locator('[aria-selected="true"]').innerText();
   const originalMode = await frame.getAttribute("data-panel-mode");
   const samples = [];
+  const compactLayouts = [];
   const captures = [];
   let lowPanel = null;
   let floatingBounds = null;
+  let originalDividerY = null;
+  const divider = page.getByRole("separator", { name: "Resize bottom diagnostics", exact: true });
+  const dragDivider = async (targetY) => {
+    const box = await divider.boundingBox();
+    if (!box) throw new Error("Bottom dock divider is unavailable");
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, targetY, { steps: 4 });
+    await page.mouse.up();
+    await waitForLayoutFrame(page);
+  };
   const labels = ["Logs", "Telemetry", "Diagnostics", "Engine", "Operations", "Problems", "Quick Chart"];
   const menuAction = async (name) => {
     await frame.getByRole("button", { name: "Diagnostics panel menu", exact: true }).click();
@@ -103,9 +116,34 @@ async function checkFooterReadability(page, { assertCanvas, timeout }) {
         samples.push({ theme: theme.mode, tab: label, ...sample });
       }
       await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
+      await waitForLayoutFrame(page);
+      const initialFooter = await footer.boundingBox();
+      if (initialFooter.height > 110) {
+        const box = await divider.boundingBox();
+        if (!box) throw new Error("Cannot test the footer at its minimum dock height");
+        originalDividerY = box.y + box.height / 2;
+        await dragDivider(originalDividerY + initialFooter.height - 104);
+      }
+      const compact = await footer.evaluate((root) => {
+        const chrome = root.querySelector('.fm-footer__bar');
+        const navigation = root.querySelector('[aria-label="Telemetry views"]');
+        const bounds = root.getBoundingClientRect();
+        const visible = [...root.querySelectorAll('.fm-footer-telemetry__metric-summary')].filter((summary) => {
+          const value = summary.querySelector('.fm-footer-telemetry__metric-value').getBoundingClientRect();
+          const x = (value.left + value.right) / 2, y = (value.top + value.bottom) / 2;
+          return value.top >= bounds.top && value.bottom <= bounds.bottom && summary.contains(document.elementFromPoint(x, y));
+        });
+        return { height: bounds.height, visible_values: visible.length, navigation_in_header: chrome.contains(navigation) };
+      });
+      if (compact.height > 110 || !compact.navigation_in_header || compact.visible_values < 1) throw new Error(`Compact footer hid all values: ${JSON.stringify(compact)}`);
+      compactLayouts.push({ theme: theme.mode, ...compact });
       const image = await footer.screenshot({ type: "png", animations: "disabled", timeout });
       if (image.length > NARROW_PNG_LIMIT_BYTES) throw new Error("Footer screenshot exceeded bounded output size");
       captures.push({ theme: theme.mode, png_base64: image.toString("base64"), sha256: createHash("sha256").update(image).digest("hex") });
+      if (originalDividerY !== null) {
+        await dragDivider(originalDividerY);
+        originalDividerY = null;
+      }
     }
     if (originalMode !== "docked") throw new Error("Footer QA requires the standard docked starting layout");
     await menuAction("Float panel");
@@ -118,12 +156,16 @@ async function checkFooterReadability(page, { assertCanvas, timeout }) {
     const first = tabs.getByRole("tab", { name: "Logs", exact: true });
     await first.click();
     await first.press("End");
+    await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Quick Chart", null, { timeout });
     if (await tabs.locator('[aria-selected="true"]').innerText() !== "Logs") throw new Error("Arrow navigation activated an expensive footer panel before confirmation");
     await page.keyboard.press("Enter");
     const last = tabs.getByRole("tab", { name: "Quick Chart", exact: true });
+    await page.waitForFunction(() => document.querySelector('.fm-footer__tabs [aria-selected="true"]')?.textContent?.trim() === "Quick Chart", null, { timeout });
     if (await last.getAttribute("aria-selected") !== "true") throw new Error("End/Enter failed to reach last footer tab");
     await last.press("Home");
+    await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Logs", null, { timeout });
     await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector('.fm-footer__tabs [aria-selected="true"]')?.textContent?.trim() === "Logs", null, { timeout });
     await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
     const metrics = footer.locator(".fm-footer-telemetry__metrics-grid");
     if (await metrics.count()) {
@@ -143,7 +185,16 @@ async function checkFooterReadability(page, { assertCanvas, timeout }) {
         return bottom > top && node.contains(document.elementFromPoint(x, (top + bottom) / 2));
       });
       if (!reachable) throw new Error("Last metric is clipped or covered in a low footer");
+      const summary = lastMetric.locator("summary");
+      await summary.press("Enter");
+      await lastMetric.locator(".fm-footer-telemetry__metric-detail").waitFor({ state: "visible", timeout });
+      await summary.press("Enter");
+      await lastMetric.locator(".fm-footer-telemetry__metric-detail").waitFor({ state: "hidden", timeout });
+      lowPanel.keyboard_details = "open/close verified";
     } else throw new Error("Telemetry fixture omitted the metrics container");
+  } catch (error) {
+    error.footerReadability = { samples, captures, compact_layouts: compactLayouts, low_panel: lowPanel };
+    throw error;
   } finally {
     if (await frame.getAttribute("data-panel-mode") === "floating" && originalMode === "docked") {
       if (floatingBounds) {
@@ -161,9 +212,10 @@ async function checkFooterReadability(page, { assertCanvas, timeout }) {
       await menuAction("Dock panel");
     }
     await tabs.getByRole("tab", { name: originalTab.trim(), exact: true }).click();
+    if (originalDividerY !== null) await dragDivider(originalDividerY);
   }
   await assertCanvas("after footer tab and low-panel checks");
-  return { state: "passed", samples, captures, low_panel: lowPanel, keyboard: "End/Home + Enter verified" };
+  return { state: "passed", samples, captures, compact_layouts: compactLayouts, low_panel: lowPanel, keyboard: "End/Home + Enter verified" };
 }
 
 /**
@@ -328,6 +380,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
     );
     error.partialProof = {
       captures,
+      footer_readability: operationError?.footerReadability ?? footerReadability,
       original_browser_viewport: originalViewport,
       original_dialog_open: originalDialogOpen,
       original_theme: originalTheme,

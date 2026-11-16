@@ -1721,28 +1721,25 @@ function TelemetryMetric({
 }) {
   const tooltip = `${label}: ${value}${unit ? ` ${unit}` : ""}\n${detail}\n${subdetail}`;
   return (
-    <div
-      className="fm-footer-telemetry__metric"
-      data-group={group}
-      role="group"
-      aria-label={tooltip.replaceAll("\n", ". ")}
-      title={tooltip}
-    >
-      <div className="fm-footer-telemetry__metric-label">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <div className="fm-footer-telemetry__metric-value">
-        <span>{value}</span>
-        {unit ? (
-          <span className="fm-footer-telemetry__metric-unit">{unit}</span>
-        ) : null}
-      </div>
+    <details className="fm-footer-telemetry__metric" data-group={group} title={tooltip}>
+      <summary
+        className="fm-footer-telemetry__metric-summary"
+        aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. Details`}
+      >
+        <span className="fm-footer-telemetry__metric-label">
+          {icon}
+          <span>{label}</span>
+        </span>
+        <span className="fm-footer-telemetry__metric-value">
+          <span>{value}</span>
+          {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
+        </span>
+      </summary>
       <div className="fm-footer-telemetry__metric-detail">
         <span>{detail}</span>
         <span>{subdetail}</span>
       </div>
-    </div>
+    </details>
   );
 }
 

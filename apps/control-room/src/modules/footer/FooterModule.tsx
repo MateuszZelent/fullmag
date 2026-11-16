@@ -1,5 +1,7 @@
 "use client";
 
+import { createPortal } from "react-dom";
+
 import { PanelChrome } from "@/shared/ui/PanelFrame";
 import {
   Activity,
@@ -60,6 +62,13 @@ const FOOTER_PANEL_CLASS_NAME =
 const FOOTER_CONTENT_CLASS_NAME =
   "fm-footer__content flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden";
 
+const telemetryNavigation = (
+  <TabsList aria-label="Telemetry views" className="fm-footer-telemetry-tabs__list" presentation="segmented">
+    <TabsTrigger value="overview">Overview</TabsTrigger>
+    <TabsTrigger value="antenna">Antenna</TabsTrigger>
+  </TabsList>
+);
+
 export default function FooterModule(props: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="FooterModule">
@@ -71,6 +80,7 @@ export default function FooterModule(props: ModuleProps) {
 function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
   const tabList = useRef<HTMLDivElement>(null);
+  const [telemetryNavigationHost, setTelemetryNavigationHost] = useState<HTMLDivElement | null>(null);
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
     isEqual: footerTelemetryStatusEquals,
   });
@@ -110,6 +120,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     const selected = tabList.current?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (selected && tabList.current) revealFooterTab(tabList.current, selected);
   }, [activeTab]);
+
 
   return (
     <Tabs
@@ -162,6 +173,11 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             Quick Chart
           </TabsTrigger>
         </TabsList>
+        <div
+          className="fm-footer__telemetry-navigation"
+          ref={setTelemetryNavigationHost}
+          hidden={activeTab !== "telemetry"}
+        />
       </PanelChrome>
 
       <TabsContent value="logs" className={FOOTER_CONTENT_CLASS_NAME}>
@@ -179,10 +195,9 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             }}
             className="fm-footer-telemetry-tabs"
           >
-            <TabsList aria-label="Telemetry views" className="fm-footer-telemetry-tabs__list">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="antenna">Antenna</TabsTrigger>
-            </TabsList>
+            {telemetryNavigationHost
+              ? createPortal(telemetryNavigation, telemetryNavigationHost)
+              : telemetryNavigation}
             <TabsContent value={telemetryTab} className="fm-footer-telemetry-tabs__content">
               <FooterTelemetry
                 bus={kernel.bus}
