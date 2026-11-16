@@ -331,6 +331,16 @@ fn validate_scene_document_with_mode(
     }
 
     for object in &scene.objects {
+        if let Some(reference) = &object.geometry.source_asset {
+            if object.geometry.geometry_kind != "ImportedGeometry" {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "object '{}' source_asset requires ImportedGeometry", object.id
+                )));
+            }
+            reference.validate().map_err(|error| {
+                SceneDocumentValidationError::new(format!("object '{}': {error}", object.id))
+            })?;
+        }
         if object.id.trim().is_empty() {
             return Err(SceneDocumentValidationError::new(
                 "scene object ids must not be empty",

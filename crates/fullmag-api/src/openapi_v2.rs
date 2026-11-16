@@ -6,6 +6,8 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::router_v2::handlers::model::imported_surface::get_imported_source_surface,
+        crate::router_v2::handlers::model::imported_surface::get_imported_source_surface_topology,
         crate::router_v2::handlers::platform::compute_profiles::get_compute_profiles,
         crate::router_v2::handlers::platform::compute_profiles::post_compute_profile,
         crate::router_v2::handlers::platform::compute_preview::post_compute_preview,
@@ -392,6 +394,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::platform::output_storage::put_output_storage_defaults,
     ),
     components(schemas(
+        crate::schemas::imported_surface::ImportedSourceSurfaceQuery,
         crate::schemas::instances::InstanceSessionSummary,
         crate::schemas::instances::DiscoveredInstance,
         crate::schemas::instances::InstanceDiscoveryResource,

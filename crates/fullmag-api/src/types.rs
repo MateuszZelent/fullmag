@@ -1456,6 +1456,8 @@ pub(crate) struct ImportSessionAssetRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionAssetImportResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     pub asset_id: String,
     pub session_id: String,
     pub artifact_ref: String,
@@ -2342,6 +2344,7 @@ mod tests {
             output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                source_asset: None,
                 name: "body".to_string(),
                 region_name: None,
                 geometry_kind: "Box".to_string(),

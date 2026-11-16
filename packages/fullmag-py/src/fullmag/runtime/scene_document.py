@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
+from fullmag.runtime.imported_geometry_assets import imported_geometry_source_asset_fields
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
@@ -1737,6 +1738,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "name": name,
                 "role": role,
                 "geometry": {
+                    **imported_geometry_source_asset_fields(geometry),
                     "geometry_kind": str(geometry.get("geometry_kind", "")),
                     "geometry_params": geometry_params,
                     "bounds_min": geometry.get("bounds_min"),
@@ -2096,6 +2098,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "name": name,
             "role": role,
             "region_name": obj.get("region_name"),
+            **imported_geometry_source_asset_fields(geometry),
             "geometry_kind": str(geometry.get("geometry_kind", "")),
             "geometry_params": geometry_params,
             "bounds_min": geometry.get("bounds_min"),

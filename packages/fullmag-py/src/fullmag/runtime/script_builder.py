@@ -2730,7 +2730,7 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         if not isinstance(source, str) or not source:
             raise ValueError("ImportedGeometry requires a source path.")
         kwargs = {"source": source}
-        for key in ("scale", "volume", "name"):
+        for key in ("scale", "units", "volume", "name"):
             if params.get(key) is not None:
                 kwargs[key] = params[key]
         expression = f"fm.ImportedGeometry({_python_keyword_args(kwargs)})"
@@ -10247,6 +10247,9 @@ def _render_geometry_expr_from_override(
             kwargs.append(f"scale={_py_tuple3(tuple(float(value) for value in scale))}")
         elif isinstance(scale, (int, float)) and float(scale) != 1.0:
             kwargs.append(f"scale={_py_number(float(scale))}")
+        units = params.get("units")
+        if isinstance(units, str):
+            kwargs.append(f"units={_py_repr(units)}")
         volume = params.get("volume")
         if isinstance(volume, str) and volume and volume != "full":
             kwargs.append(f"volume={_py_repr(volume)}")

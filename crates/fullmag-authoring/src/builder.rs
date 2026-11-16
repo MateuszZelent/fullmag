@@ -793,6 +793,8 @@ pub struct ScriptBuilderMeshInterfaceState {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderGeometryEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_asset: Option<crate::scene::SceneImportedGeometryAssetRef>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_name: Option<String>,

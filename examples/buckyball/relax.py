@@ -1,8 +1,8 @@
 """Zero-field buckyball relaxation, FEM GPU, double precision.
 
-Prepare the hollow mesh with build_hollow_mesh.py and prepare_mesh.py in the
-selected managed backend, then activate this script in Fullmag; relaxation starts
-automatically and remains visible in the interactive workspace.
+Import this script into the selected managed backend. The shared STL importer
+classifies the nested shells and builds one conforming FEM mesh containing
+magnetic walls, cavity air and exterior air before relaxation.
 Material and size come from
 params.txt: Ms=400 kA/m, A=8 pJ/m, outer size=5 um. The largest STL bounding-box
 extent defines the outer size; STL coordinates have no intrinsic units.
@@ -10,8 +10,9 @@ extent defines the outer size; STL coordinates have no intrinsic units.
 The initial state is saturated along +x, without a preparatory field stage.
 This finds a local energy minimum, not a guaranteed ground state. Repeat with
 other initial states and finer meshes before drawing physical conclusions.
-The user-selected coarse mesh has a nominal 32 nm magnetic sizing target and
-1,420,157 tetrahedra in total. This exceeds the exchange length (~8.9 nm), so
+The coarse mesh has a nominal 32 nm magnetic sizing target. Its realized node
+and element counts must be checked before GPU admission. This target exceeds
+the exchange length (~8.9 nm), so
 the saved state is preliminary and requires mesh convergence before FMR claims.
 Actual edge lengths and domain quality must be read from the mesh report;
 airbox convergence also requires an independent check.
@@ -90,12 +91,9 @@ study.b_ext(0.0, 0.0, 0.0)
 study.fem_demag_solver(
     solver="CG", preconditioner="AMG", rtol=1e-10, max_iterations=1000,
 )
-# The supplied STL has nested exterior/cavity shells. build_hollow_mesh.py
-# creates walls plus both air domains, and prepare_mesh.py validates and writes
-# this SI MeshIR before API activation. Configuration capture stays declarative.
-study.domain_mesh(
-    RUN_DIR / "geometry_check_32nm.mesh.json", region_markers={"buckyball": 1},
-)
+# The shared STL mesher resolves nested shells into walls and cavity/exterior
+# air. Do not inject a separately generated mesh: Build Mesh and Compute must
+# exercise the same imported-geometry path used by the UI.
 
 # %% Relax and retain energy/torque diagnostics plus the final magnetization
 # A saved candidate is an equilibrium only after the terminal stop reason and
@@ -117,8 +115,6 @@ study.stages.add_relax(
         fields=[],
     )
 )
-study.stages.add_save_state(
-    artifact_name="buckyball_32nm_final_candidate_m.zarr",
-    format="zarr",
-    dataset="m",
-)
+# Accepted FEM relaxation persists the final magnetization as m_final.json and
+# binds its immutable state receipt to the completed run. Check the terminal
+# stop reason and torque before using that candidate as an equilibrium.

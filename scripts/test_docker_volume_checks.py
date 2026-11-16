@@ -119,7 +119,7 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+        paths = (*checks.IMPORT_FILES, *checks.STL_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
                  'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
                  'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
                  'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
@@ -143,6 +143,29 @@ class FrontendImportCheckTests(unittest.TestCase):
         result = checks.frontend_import_checks(self.control, self.root,
             identity or {'worktree_id': 'selected'}, scope=scope)
         return result, self.control.write.call_args.args[1]
+
+    def test_stl_retry_preserves_failed_attempt_receipt_and_logs(self):
+        self.execute.side_effect = [
+            (b'pass', b''), (b'pass', b''), (b'pass', b''),
+            codegen.CodegenError('failed test', exit_code=1, stdout=b'first failure'),
+            (b'pass', b''),
+        ]
+        failed_code, failed = self.run_checks('frontend-stl')
+        first_root = self.control.write.call_args.args[0].removesuffix('/receipt.json')
+        self.assertEqual(failed_code, 1)
+        self.assertEqual(failed['state'], 'failed')
+        first_logs = {call.args[0] for call in self.control.write_bytes.call_args_list}
+        self.execute.side_effect = None
+        self.control.write_bytes.reset_mock()
+        passed_code, passed = self.run_checks('frontend-stl')
+        second_root = self.control.write.call_args.args[0].removesuffix('/receipt.json')
+        second_logs = {call.args[0] for call in self.control.write_bytes.call_args_list}
+        self.assertEqual(passed_code, 0)
+        self.assertEqual(passed['state'], 'succeeded')
+        self.assertNotEqual(first_root, second_root)
+        self.assertTrue(all(path.startswith(first_root + '/') for path in first_logs))
+        self.assertTrue(all(path.startswith(second_root + '/') for path in second_logs))
+        self.assertTrue(first_logs.isdisjoint(second_logs))
 
     def enable_field_map_source_services(self):
         namespace = 'namespaces/' + 'a' * 32

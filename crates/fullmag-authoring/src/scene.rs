@@ -252,8 +252,42 @@ pub struct SceneMeshInterface {
     pub config: ScriptBuilderPerGeometryMeshState,
 }
 
+/// Immutable project-owned source; this is not a generated solver mesh.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SceneImportedGeometryAssetRef {
+    pub asset_id: String,
+    pub content_sha256: String,
+    pub archive_path: String,
+}
+
+impl SceneImportedGeometryAssetRef {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.asset_id.is_empty() || self.asset_id.len() > 256
+            || self.asset_id.trim() != self.asset_id
+            || self.asset_id.chars().any(|c| c.is_control() || c == '/' || c == '\\')
+        {
+            return Err("source_asset.asset_id must be a nonempty bounded identifier");
+        }
+        if self.content_sha256.len() != 64
+            || !self.content_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("source_asset.content_sha256 must be 64 lowercase hexadecimal digits");
+        }
+        if !self.archive_path.starts_with("project/assets/")
+            || self.archive_path.chars().any(|c| c.is_control() || c == '\\' || c == ':')
+            || self.archive_path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err("source_asset.archive_path must be a normalized path under project/assets/");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneGeometry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_asset: Option<SceneImportedGeometryAssetRef>,
     pub geometry_kind: String,
     #[serde(default)]
     pub geometry_params: Value,

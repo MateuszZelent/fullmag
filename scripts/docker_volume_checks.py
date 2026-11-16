@@ -271,6 +271,29 @@ FRONTEND_COMMANDS = (
     ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint', *IMPORT_FILES, '--max-warnings=0')),
 )
 
+
+STL_FILES = (*IMPORT_FILES,
+    'src/kernel/api/transportLimits.ts',
+    'src/kernel/api/ControlRoomApi.ts', 'src/kernel/api/ControlRoomApi.test.ts',
+    'src/kernel/api/apiPaths.ts', 'src/kernel/api/apiTypes.ts',
+    'src/kernel/authoring/geometryLifecycleCommandContributions.ts',
+    'src/kernel/authoring/importedStlImport.ts', 'src/kernel/authoring/importedStlImport.test.ts',
+    'src/modules/viewport-3d/viewport3dResources.ts',
+    'src/modules/viewport-3d/viewport3dImportedSurfaceModel.ts',
+    'src/modules/viewport-3d/viewport3dImportedSurfaceModel.test.ts',
+    'src/modules/viewport-3d/viewport3dPrimitiveModel.ts',
+    'src/modules/viewport-3d/layers/PrimitiveObjectLayerModel.ts',
+    'src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts',
+)
+STL_COMMANDS = (
+    *FRONTEND_COMMANDS[:2],
+    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
+    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
+                '--pool=threads', '--maxWorkers=2')),
+    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'lint')),
+)
+
+
 ANTENNA_FILES = (
     'src/modules/inspector/panels/antenna/MicrostripGeometryEditorModel.ts',
     'src/modules/inspector/panels/antenna/MicrostripGeometryEditor.tsx',
@@ -631,9 +654,10 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if scope not in ('frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
+        'frontend-stl': (STL_FILES, STL_COMMANDS),
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
         'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
         'frontend-field-map': (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
@@ -658,6 +682,16 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
         receipt.update(runtime_qualification='NOT VERIFIED',
                        qualification='source-only; no API or runtime commands or proof')
     root = f'verification/{scope}-checks'
+    if scope == 'frontend-stl':
+        # Keep every failed/passed attempt and its logs; retries must not
+        # overwrite the evidence they are intended to explain.
+        import uuid
+        root += '/attempts/' + uuid.uuid4().hex
+        receipt['receipt_path'] = root + '/receipt.json'
+        control.write('verification/frontend-stl-checks/current.json', {
+            'schema': 'fullmag.frontend-check-attempt-ref.v1',
+            'receipt_path': receipt['receipt_path'],
+        })
     def services():
         if source_only_field_map:
             return _field_map_source_services(control, selected, identity, codegen)
@@ -786,7 +820,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('all', 'source-capture', 'activation-history', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('authoring-contracts', 'stl-api-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -808,7 +842,10 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if args.scope in ('authoring-contracts', 'stl-api-contracts'):
+        from docker_authoring_contract_checks import run
+        return run(control, selected, identity, scope=args.scope)
+    if args.scope in ('frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
     if args.initial_attempt is not None:
         return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)
