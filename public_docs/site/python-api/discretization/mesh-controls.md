@@ -237,11 +237,11 @@ study.stages.add_relax(
 )
 ```
 
-Ten dokładny blok przeszedł podczas przeglądu test wykonania kontraktu authoringu z zastąpioną
-wyłącznie kosztowną materializacją siatki; konstrukcja domeny, polityk i etapu zakończyła się bez
-wyjątku. Integracyjnym wzorcem repozytoryjnym jest
-`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; przykład skraca
-kwalifikację SP4, ale zachowuje jej stage-first budowę domeny, filmu i etapu relaksacji.
+This exact block passed an authoring-contract execution check during review with only the
+expensive mesh materialization mocked; domain, policy, and stage construction completed without
+exception. The repository integration pattern is
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; this example
+shortens the SP4 qualification run while preserving its stage-first domain, film, and relaxation setup.
 
 ## Control Room crosswalk
 

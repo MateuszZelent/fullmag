@@ -115,7 +115,22 @@ Focused repository tests covering this contract include: test_region_registries_
 (python-api-geometry-regions-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Object-owned spatial regions (`ObjectRegion`) are inspected and authored in Control Room under `Model Explorer -> Objects -> <object> -> Regions` (`ObjectRegionsPanel`, `RegionsListPanel`, and `inspector/panels/region/` sub-panels: `ObjectRegionOverviewPanel`, `ObjectRegionGeometryPanel`, `ObjectRegionMagneticParametersPanel`, `ObjectRegionMeshPanel`, `ObjectRegionTexturePanel`, `ObjectRegionVisualizationPanel`, `ObjectRegionDiagnosticsPanel`, `ObjectRegionNestedRegionsPanel`). UI geometry drafts validate bounds against the owning object (`clampObjectRegionDraftShapeToOwnerBounds`); arbitrary selection combinators not represented by region boxes stay Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Region geometry bounds, material overrides, texture, & mesh policy | `Model Explorer -> Objects -> <object> -> Regions -> <region>` (`ObjectRegionsPanel`) | `partial` | `QuantityFieldDraftScope` validation & `runAuthoringMutationWithHistory` |
+| Complex scripted selectors or unsupported nested rules | Python DSL | `not implemented` | Preserved read-only; author in Python |
+
+```{image} /_static/images/ui/inspector-material-and-regions.png
+:alt: Control Room Object Regions inspector listing Pinning Annulus and Skyrmion Core cylindrical regions for obj_yig_film with Add Region controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/objects-and-materials`.
 
 (python-api-geometry-regions-scientific-bibliography)=
 ## Scientific bibliography

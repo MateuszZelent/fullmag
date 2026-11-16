@@ -123,16 +123,21 @@ No new physical model is introduced; references belong to the interactions consu
 
 ## Control Room crosswalk
 
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: Scalar object material fields (`ObjectMaterialPanel`), region overrides (`ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel`), and the `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` in `ObjectMagneticTexturePanel` are partial; unlisted presets and spatial callbacks remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft (`commitMagneticTextureApply`); authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
+Frontend support is not implemented for texture presets, spatial expressions, and arguments not exposed by `ObjectMagneticTexturePanel`.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring a ferromagnet initial magnetization
+:width: 92%
+```
 
 ## Source-code index
 

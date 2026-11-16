@@ -111,7 +111,22 @@ Focused repository tests covering this contract include: test_prescribed_sot_can
 (python-api-interactions-spin-orbit-torque-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Prescribed spin–orbit torques (`prescribed_sot`: $\xi_{\text{DL}}$, $\xi_{\text{FL}}$, stack normal, bound to prescribed current density or an upstream `current_transport` source) are edited in Control Room through `SpinAuthoringInspector` (`SpinTorqueInspectorPanel`) under `spin-torque` selection, subject to active-lane capability gating (`useActiveLaneCapabilities`). Spatially varying scripted torque coefficients without inspector widgets remain Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `prescribed_sot` efficiencies ($\xi_{\text{DL}}$, $\xi_{\text{FL}}$), normal, & current source binding | `Model Explorer -> Physics -> Spin Torque` (`SpinAuthoringInspector`, `SpinTorqueInspectorPanel`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| Spatial torque coefficient maps without a named UI field | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Spin Torque (SOT/STT) and Spin Transport inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-interactions-spin-orbit-torque-scientific-bibliography)=
 ## Scientific bibliography

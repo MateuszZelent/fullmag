@@ -1,6 +1,6 @@
 ---
 title: Choosing a Solver
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -48,11 +48,13 @@ The canonical FEM pages are
 Both FDM and FEM expose CPU and GPU execution lanes. The device choice is request metadata; the
 runtime records the resolved device and precision in the result.
 
-- The local CPU runtime is the common validation path and is covered by the repository smoke and
-  qualification scripts.
-- FDM CUDA and FEM GPU use managed CUDA runtimes through the repository recipes. Executed GPU
-  evidence requires a recorded device identity in the result; presence of GPU source or a
-  successful host build is not device-parity proof.
+- The local CPU runtime inside the Docker DEV group (`just docker-dev`) is the common
+  interactive and headless workflow and is covered by the repository smoke and qualification
+  scripts.
+- FDM CUDA and FEM GPU run inside the container-backed CUDA runtime (enabled through
+  `just docker-dev` / `just docker-dev-toolchain` with NVIDIA GPU access, or dedicated managed
+  qualification recipes). Executed GPU evidence requires a recorded device identity in the result;
+  presence of GPU source or a successful host build is not device-parity proof.
 
 ## Support and qualification matrix
 

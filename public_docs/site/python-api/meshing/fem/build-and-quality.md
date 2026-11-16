@@ -108,10 +108,23 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Objects -> <object> -> Mesh -> Quality`, then
-`Model Explorer -> Mesh -> Build Shared-Domain Mesh`. Use **Apply** to store
-policy and **Build Mesh** to materialize it; report, readiness, and dependent
-resources are invalidated until success. See [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Objects -> <object> -> Mesh` (`ObjectMeshPolicyPanel` / Quality & History tabs) and
+`Model Explorer -> Universe / Airbox -> Mesh` (`AirboxMeshParametersPanel` / `AirboxMeshBuildLanePanel`).
+Use **Apply Object Policy** / **Build Mesh** (`mesh.build-selected`) or **Apply & Build Shared-Domain Mesh**
+(`mesh.build-shared-domain`) to materialize the shared mesh. `MeshQualityStatisticsView` exposes element/boundary
+counts, edge-length/size distributions, inverted/degenerate diagnostics, and latest-successful build preservation so a
+failed rebuild never erases the last good mesh. See {doc}`/frontend/meshing/object-mesh`,
+{doc}`/frontend/meshing/quality-and-reports`, and [Control Room capability register](/frontend/capability-register).
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel configuring FEM object mesh sizing, swept strategy, and build trigger
+:width: 92%
+```
+
+```{image} /_static/images/ui/explorer-jobs-and-diagnostics-tabs.png
+:alt: Explorer Jobs and Diagnostics tabs tracking mesh build status and diagnostic outputs
+:width: 92%
+```
 
 ## 6. Backend and frontend support
 

@@ -27,7 +27,12 @@ mumax3-compatibility
 ```
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Magnetization` for supported texture controls. Presets or parameters without a matching control are `TODO: frontend support`; do not claim UI support from Python availability. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Objects -> <object> -> Magnetization` (`ObjectMagneticTexturePanel`) to pick from the built-in `MAGNETIZATION_TEXTURE_PRESETS` family and commit initial magnetization through `commitMagneticTextureApply`. Presets, spatial field expressions, or parameters without a matching control are `TODO: frontend support`; do not claim UI support from Python availability. See {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
+
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel displaying texture preset controls
+:width: 92%
+```
 
 ## API and source scope
 

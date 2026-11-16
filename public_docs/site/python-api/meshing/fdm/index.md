@@ -123,15 +123,14 @@ model, and public boundary-correction fields do not establish universal kernel s
 
 ## Control Room crosswalk
 
-Status: Frontend support is not implemented unless a named source-backed panel is added.
+Status: Control Room exposes a read-only structured-grid inspection panel for FDM studies ({doc}`/frontend/meshing/fdm-grid-view`); interactive authoring of `FDM`, `FDMGrid`, and `FDMDemag` remains `not implemented` in the browser.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `See the capability register; no page-specific route is established` | `not implemented` | No supported frontend transaction |
-| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `not implemented` | Python-only until implemented |
+| Structured grid dimensions and inspection | `Model Explorer -> Study / Discretization (FDM grid view)` | `inspection-only` | Read-only grid dimensions, cell spacing, and domain extents ({doc}`/frontend/meshing/fdm-grid-view`) |
+| Authoring `FDM`, `FDMGrid`, and `FDMDemag` fields | `See the capability register; no editable FDM authoring route is established` | `not implemented` | Python-only until implemented |
 
-frontend support is not implemented for this API surface and its parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
+See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
 
 ## Source-code index

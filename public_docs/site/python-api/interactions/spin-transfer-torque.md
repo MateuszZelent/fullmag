@@ -114,7 +114,23 @@ Focused repository tests covering this contract include: test_slonczewski_canoni
 (python-api-interactions-spin-transfer-torque-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Slonczewski ($\lambda$ asymmetry, $\epsilon'$, polarization, free-layer thickness, fixed-layer orientation) and Zhang–Li ($\beta$ non-adiabaticity) spin-transfer torques are editable in Control Room through `SpinAuthoringInspector` (`SpinTorqueInspectorPanel`), bound to prescribed current densities or an upstream `current_transport` record. Custom spatially resolved polarizer arrays or interface models without named UI controls stay Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `slonczewski` & `zhang_li` parameters and current binding | `Model Explorer -> Physics -> Spin Torque` (`SpinAuthoringInspector`, `SpinTorqueInspectorPanel`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| Spin interface parameters & FEM orientation verification | `SpinInterfaceInspectorPanel` | `partial` | `verifySpinInterfaceMeshOrientation` & scene transaction |
+| Parameters without a named UI field | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Spin-Transfer and Spin-Orbit Torque inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-interactions-spin-transfer-torque-scientific-bibliography)=
 ## Scientific bibliography

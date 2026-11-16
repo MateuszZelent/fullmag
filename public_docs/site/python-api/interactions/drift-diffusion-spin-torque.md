@@ -127,7 +127,22 @@ Focused repository tests covering this contract include: test_m1_module_serializ
 (python-api-interactions-drift-diffusion-spin-torque-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Self-consistent spin drift-diffusion (`spin_transport`) and transparent/mixing spin interfaces are editable in Control Room via `TransportAuthoringInspector` (`spin-transport` selection route) and `SpinInterfaceInspectorPanel` (`spin-interface`, including FEM shared `tet4` interface facet normal verification), subject to lane readiness (`transport-authoring-validation.v1`). Transient capacitance or spatial material closures absent from those forms stay Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `spin_transport` & `SpinInterface` parameters + transport validation | `TransportAuthoringInspector` & `SpinInterfaceInspectorPanel` | `partial` | `runAuthoringMutationWithHistory` & `transport-authoring-validation.v1` |
+| Parameters without a named UI field | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Spin Transport and Spin Interface inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-interactions-drift-diffusion-spin-torque-scientific-bibliography)=
 ## Scientific bibliography

@@ -1,6 +1,6 @@
 ---
 title: Getting started
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -16,15 +16,17 @@ criteria, and expected artifacts.
 
 ## Recommended sequence
 
-1. **{doc}`Installation <installation>`** — install the Python package and prepare an executable
-   runtime.
+1. **{doc}`Installation <installation>`** — install `fullmag` from PyPI or source and start the
+   Docker Compose DEV runtime.
 2. **{doc}`First FDM simulation <first-fdm-simulation>`** — run a structured-grid relaxation through
    the CPU FDM lane.
 3. **{doc}`First FEM simulation <first-fem-simulation>`** — run the corresponding physical workflow
    on an unstructured FEM mesh with an airbox demagnetization solve.
 4. **{doc}`Choosing a solver <choosing-a-solver>`** — select FDM or FEM and CPU or GPU from the
    documented capability and validation scope.
-5. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
+5. **{doc}`Interactive Live Python & REPL <interactive-python>`** — connect a terminal, script, or
+   Jupyter notebook directly to a running Control Room session via `fm.connect()`.
+6. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
    browser interface.
 
 ## Public authoring contract
@@ -93,11 +95,16 @@ scientific qualification.
 
 ## Running a tracked example
 
-After completing the installation page, execute the repository-owned FDM smoke scenario:
+After configuring the Docker DEV workspace on the installation page, execute the repository-owned
+FDM smoke scenario inside your checkout's Compose group:
 
 ```console
-just run-headless examples/fdm_cpu_relax_smoke.py
+just fullmag-dev-container examples/fdm_cpu_relax_smoke.py
 ```
+
+If your `just docker-dev` group is already running with an empty workspace, run
+`just docker-dev-script examples/fdm_cpu_relax_smoke.py` instead, or attach interactively from
+Python with {doc}`interactive-python`.
 
 Use the FDM and FEM tutorials for complete copyable studies, expected outputs, and stated limits.
 
@@ -108,6 +115,7 @@ installation
 first-fdm-simulation
 first-fem-simulation
 choosing-a-solver
+interactive-python
 control-room
 ```
 ## Control Room crosswalk

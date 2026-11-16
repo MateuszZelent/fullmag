@@ -609,3 +609,39 @@ main article span.math {
     border-left: 0;
   }
 }
+
+/* Control Room UI screenshots and responsive comparison galleries */
+main article figure.fm-ui-figure {
+  margin: 1.5rem 0;
+  padding: 0.75rem;
+  background: var(--fm-docs-bg-surface);
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.5rem;
+}
+
+main article figure.fm-ui-figure img,
+main article img.fm-ui-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 0.35rem;
+  border: 1px solid var(--fm-docs-border-subtle);
+}
+
+main article figure.fm-ui-figure figcaption {
+  margin-top: 0.65rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--fm-docs-text-muted);
+}
+
+.fm-ui-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.fm-ui-gallery figure.fm-ui-figure {
+  margin: 0;
+}

@@ -126,10 +126,12 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.*
 ```
 
-Exterior geometry (size, padding, center) is editable in the universe geometry
-panels; air sizing lives in **Airbox Mesh Parameters**
-({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview:
-{doc}`../../../../frontend/meshing/index`.
+Exterior geometry (`mode`, `size`, `padding`, `center`) is editable in the universe geometry panels (`AirboxMeshParametersPanel`); air sizing and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) live in **Airbox Mesh Parameters** ({doc}`../../../../frontend/meshing/airbox-mesh`). Full panel overview: {doc}`../../../../frontend/meshing/index`.
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering the FEM exterior airbox domain framing the magnetic geometry
+:width: 92%
+```
 
 ## 6. Backend support
 

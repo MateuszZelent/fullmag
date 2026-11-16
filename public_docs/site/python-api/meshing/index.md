@@ -17,7 +17,12 @@ Python meshing is divided first by discretization:
 
 This branch owns public commands and lowering. Backend algorithms are under
 {doc}`../../numerical-methods/meshing/index`; matching Control Room panels under
-{doc}`../../frontend/meshing/index`.
+{doc}`../../frontend/meshing/index` (`ObjectMeshPolicyPanel`, `ObjectRegionMeshPanel`, Airbox Mesh Parameters, and the read-only FDM structured-grid view).
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel for FEM object mesh sizing and airbox configuration
+:width: 92%
+```
 
 ```{toctree}
 :maxdepth: 4

@@ -110,7 +110,22 @@ Focused repository tests covering this contract include: test_prescribed_density
 (python-api-current-and-excitations-prescribed-current-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Prescribed current densities and upstream current-transport bindings for spin-torque (`SpinAuthoringInspector`: `zhang_li`, `slonczewski`, `prescribed_sot`) and Oersted calculations are configurable in Control Room via `TransportAuthoringInspector` and `SpinAuthoringInspector`. Spatially varying scripted current-density arrays without an exposed UI control remain Python-only (`not implemented`).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Prescribed current density vector / waveform & downstream torque binding | `TransportAuthoringInspector` & `SpinAuthoringInspector` | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| Arbitrary array or callable prescribed current profiles | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Transport and Spin Torque inspectors configuring prescribed current sources and SOT/STT parameters
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-prescribed-current-scientific-bibliography)=
 ## Scientific bibliography
