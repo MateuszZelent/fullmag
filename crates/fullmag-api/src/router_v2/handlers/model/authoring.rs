@@ -1008,7 +1008,9 @@ pub async fn delete_oersted_field(
 pub async fn get_authoring_scene(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    // Read the committed scene while Compute prepares its next immutable run.
+    // The loader still validates this identity before returning/publishing it.
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;

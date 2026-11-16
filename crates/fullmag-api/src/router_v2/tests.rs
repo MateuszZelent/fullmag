@@ -17718,6 +17718,35 @@ async fn authoring_scene_get_returns_current_scene() {
 }
 
 #[tokio::test]
+async fn authoring_scene_get_does_not_wait_for_stl_compute_transition() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+    // Compute keeps this fence while preparing its immutable inputs. A fresh
+    // browser must still receive the already committed scene for its viewport.
+    let _transition = state.current_live_session_transition.lock().await;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/scene")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("committed scene reads must not wait behind Compute")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["scene"]["name"], "Scene");
+    assert_eq!(json["revision"], 3);
+}
+
+#[tokio::test]
 async fn authoring_scene_put_commits_scene_document() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
