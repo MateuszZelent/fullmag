@@ -165,3 +165,22 @@ with fm.ExecutionContext():
 
 `ExecutionContext` owns the mutable flat authoring state and restores the previous binding on exit,
 including exception paths. Entering a context does not build a mesh or start a solver.
+
+## Acknowledgements, EU Funding &amp; Scientific Heritage
+
+Mateusz Zelent acknowledges funding from the European Union's Horizon Europe programme under
+**HORIZON-MSCA-2024-PF-01**, Marie Skłodowska-Curie Grant Agreement No. **101208951 (CNMA)**
+(hosted at Fachbereich Physik and Landesforschungszentrum OPTIMAS, RPTU Kaiserslautern-Landau).
+
+FullMag's workflow, numerical abstractions, and cross-validation benchmarks draw inspiration from
+the open-source micromagnetics community, including **MuMax3** ([doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186)),
+**Amumax** (<https://github.com/MathieuMoalic/amumax>),
+**mumax⁺** ([doi:10.1038/s41524-025-01893-y](https://doi.org/10.1038/s41524-025-01893-y)),
+**Boris Computational Spintronics** (*J. Appl. Phys.* **128**, 243902, 2020),
+**OOMMF** (NISTIR 6376, 1999),
+**TetraX** ([doi:10.1063/5.0054169](https://doi.org/10.1063/5.0054169); [doi:10.14278/rodare.1418](https://doi.org/10.14278/rodare.1418)),
+**Tetmag** (<https://github.com/R-Hertel/tetmag>), and
+**NeuralMag** ([doi:10.1038/s41524-025-01688-1](https://doi.org/10.1038/s41524-025-01688-1)).
+
+For full institutional attributions, literature references, and citation instructions, see the
+[Acknowledgements &amp; EU Grant page](https://fullmag.mzelent.pl/acknowledgements/index.html).
