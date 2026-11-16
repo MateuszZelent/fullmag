@@ -606,6 +606,15 @@ Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
 - Masks as the scope of absorbing layers, material parameters and table averages.
 - Any time-dependent drive, including a mask term, makes FDM CUDA use the
   host-driven step loop instead of the captured adaptive graph.
+- The limit of 8 mask terms in one stage on a GPU lane is checked when the
+  device solver starts, not by the planner: two antennas of 5 terms plan and run
+  on CPU and fail at the start of a GPU run.
+- FEM eigenmode and frequency-response stages ignore mask drives, as they ignore
+  regional drives.
+- On FDM CUDA a non-finite time factor met outside a step (an energy or an
+  observable computed between steps) is replaced by 0 for that value; inside a
+  step it fails the step. The check at 4097 times of the stage before stepping
+  makes this rare.
 
 (scientific-bibliography)=
 ## 12. Scientific bibliography

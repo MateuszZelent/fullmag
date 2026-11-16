@@ -376,6 +376,17 @@ export function readyAntennaDefaultArguments(
 }
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// Parameter and local names become Python names in the exported script.
+const PYTHON_KEYWORDS = new Set([
+  "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class",
+  "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global",
+  "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
+  "try", "while", "with", "yield",
+]);
+
+function isScriptName(name: string): boolean {
+  return IDENTIFIER.test(name) && !PYTHON_KEYWORDS.has(name);
+}
 
 /** Local checks only; the server validates every equation and the target. */
 export function validateMaskAntennaDraft(drive: MaskFieldDriveResource): string[] {
@@ -418,8 +429,10 @@ export function validateMaskAntennaDraft(drive: MaskFieldDriveResource): string[
         errors.push(`${label}: every ${role} equation needs an expression.`);
       }
       for (const parameter of target.parameters ?? []) {
-        if (!IDENTIFIER.test(parameter.name)) {
-          errors.push(`${label}: parameter '${parameter.name}' must be an identifier.`);
+        if (!isScriptName(parameter.name)) {
+          errors.push(
+            `${label}: parameter '${parameter.name}' must be an identifier that is not a Python keyword.`,
+          );
         }
         if (!Number.isFinite(parameter.value)) {
           errors.push(`${label}: parameter '${parameter.name}' must be a finite number.`);

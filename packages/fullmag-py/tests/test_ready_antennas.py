@@ -240,6 +240,13 @@ class ReadyAntennaTests(unittest.TestCase):
         self.assertNotIn("origin", later)
         self.assertIn("origin", antenna.to_ir()["terms"][0])
 
+    def test_another_time_function_drops_the_origin(self) -> None:
+        _, film = film_study()
+        antenna = film.add_simpleantenna.arbitrary_mask(fm.Box(80e-9, 40e-9, 20e-9), frame="world")
+        for field, _ in gaussian_k_source(**SMALL):
+            antenna.add(field, fm.time(lambda_free_sine, f=7e9))
+        self.assertNotIn("origin", antenna.to_ir()["terms"][0])
+
     def test_style_errors(self) -> None:
         with self.assertRaisesRegex(ValueError, "n_layers applies to style='loop'"):
             gaussian_k_source(**SMALL, n_layers=9)

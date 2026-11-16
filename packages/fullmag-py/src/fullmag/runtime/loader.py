@@ -281,9 +281,7 @@ class LoadedProblem:
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
-            mask_field_drives=tuple(
-                drive for drive in candidate.mask_field_drives if drive.id not in introduced_ids
-            ),
+            mask_field_drives=self._base_mask_field_drives(candidate, introduced_ids),
             antenna_target_projections=tuple(
                 projection for projection in candidate.antenna_target_projections
                 if projection.id not in introduced_projection_ids
@@ -299,6 +297,28 @@ class LoadedProblem:
             runtime_metadata=runtime_metadata,
             study=study,
         )
+
+    def _base_mask_field_drives(
+        self, candidate: Problem, introduced_ids: set[str]
+    ) -> tuple[object, ...]:
+        """Whole-study mask antennas as they are before the first stage.
+
+        Stage actions update or remove a whole-study antenna in the final problem;
+        the base keeps the definition captured before any stage ran. Antennas added
+        with ``study.field_drives.add`` after the first stage are kept as well.
+        """
+        if not self.stages:
+            return tuple(
+                drive for drive in candidate.mask_field_drives if drive.id not in introduced_ids
+            )
+        initial = tuple(self.stages[0].problem.mask_field_drives)
+        initial_ids = {drive.id for drive in initial}
+        late = tuple(
+            drive
+            for drive in candidate.mask_field_drives
+            if drive.id not in initial_ids and drive.id not in introduced_ids
+        )
+        return initial + late
 
     def study_pipeline_document(self) -> dict[str, object] | None:
         from fullmag.runtime.script_builder import export_study_pipeline_document

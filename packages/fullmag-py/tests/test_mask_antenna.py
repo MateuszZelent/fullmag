@@ -60,6 +60,12 @@ class MaskAntennaTests(unittest.TestCase):
         self.assertEqual(len(antenna.terms), 2)
         self.assertIsNone(antenna.terms[1].time)
 
+    def test_a_second_antenna_with_the_same_name_is_rejected(self) -> None:
+        study, film = study_with_film()
+        study.add_simpleantenna.arbitrary_mask(film, fm.Box(50e-9, 50e-9, 10e-9), name="Source")
+        with self.assertRaisesRegex(ValueError, "duplicate antenna name 'Source'"):
+            study.add_simpleantenna.arbitrary_mask(film, fm.Box(50e-9, 50e-9, 10e-9), name="Source")
+
     def test_bare_callable_is_rejected_with_hint(self) -> None:
         study, film = study_with_film()
         antenna = study.add_simpleantenna.arbitrary_mask(film, fm.Box(50e-9, 50e-9, 10e-9))

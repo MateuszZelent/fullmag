@@ -107,6 +107,18 @@ STAGED_SCRIPT = ANTENNA_SCRIPT.split("antenna = film.add_simpleantenna")[0] + te
     """
 )
 
+WHOLE_STUDY_HEADER = ANTENNA_SCRIPT.split("def antenna_mask")[0] + textwrap.dedent(
+    """
+    def ramp(x, y, z, B):
+        return (B * x, 0.0, 0.0)
+
+
+    def wave(t, f0):
+        return sin(2 * pi * f0 * t)
+    """
+)
+
+
 def _without_sources(value: object) -> object:
     """Parameter sources are display text and are not exported."""
     if isinstance(value, dict):
@@ -204,6 +216,68 @@ class MaskAntennaSceneTests(unittest.TestCase):
             "time_parameters={'frequency': 4000000000.0}, term='carrier', stage_id='source_changed')",
             source.replace('"', "'"),
         )
+
+    def _stage_drives(self, path: Path) -> list[tuple[str | None, str | None, object]]:
+        loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+        result = []
+        for stage in loaded.stages:
+            kind = stage.action.get("kind") if isinstance(stage.action, dict) else None
+            drives = stage.problem.to_ir(include_geometry_assets=False).get("mask_field_drives", [])
+            result.append((stage.stage_id, kind, _without_sources(drives)))
+        fm.reset()
+        return result
+
+    def _assert_both_round_trips(self, script: str) -> None:
+        """Script -> scene -> script and script -> script keep every stage's antennas."""
+        from fullmag.runtime.script_builder import render_loaded_problem_as_script
+
+        original, rendered, _ = self._round_trip(script)
+        before = self._stage_drives(original)
+        self.assertEqual(self._stage_drives(rendered), before)
+        loaded = fm.load_problem_from_script(original, lightweight_assets=True)
+        direct = original.parent / "direct.py"
+        direct.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+        fm.reset()
+        self.assertEqual(self._stage_drives(direct), before)
+
+    def test_whole_study_antenna_updated_by_a_stage_keeps_its_base_values(self) -> None:
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.update_field_drive(a, mask_parameters={"B": 5e-3}, stage_id="u")
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        ))
+
+    def test_whole_study_antenna_removed_by_a_stage_survives_export(self) -> None:
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive("a", stage_id="off")
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        ))
+
+    def test_functions_with_equal_bodies_keep_their_names(self) -> None:
+        script = WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            def ramp_copy(x, y, z, B):
+                return (B * x, 0.0, 0.0)
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            a.add(fm.mask(ramp_copy, B=2e-3), fm.time(wave, f0=2e9))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        )
+        self._assert_both_round_trips(script)
 
     def test_script_without_masks_renders_without_mask_sections(self) -> None:
         plain = ANTENNA_SCRIPT.split("def antenna_mask")[0] + 'study.stages.add_run(stage_id="run", until=1e-12)\n'

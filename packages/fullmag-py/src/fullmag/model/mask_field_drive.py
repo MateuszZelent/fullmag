@@ -256,7 +256,9 @@ class MaskAntenna:
         tokens: dict[int, int] = {}
         for term, payload in zip(self._terms, terms):
             call = getattr(term.mask, "library_call", None)
-            if call is not None:
+            # A mask of a ready antenna paired with another time function is no
+            # longer the call's output: it is written as plain functions.
+            if call is not None and getattr(term.time, "library_call", None) == call:
                 payload["origin"] = {
                     "function": call.function,
                     "arguments": dict(call.arguments),

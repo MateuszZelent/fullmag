@@ -6099,6 +6099,15 @@ def _create_mask_antenna(
 ) -> MaskAntenna:
     used = {antenna.id for antenna in _state._created_mask_antennas}
     used |= {drive.id for drive in _state._field_drives}
+    if name is not None:
+        # Names identify antennas and drives in the Control Room and its API,
+        # which refuse a second drive with the same name.
+        taken_names = {antenna.name for antenna in _state._created_mask_antennas}
+        taken_names |= {drive.name for drive in _state._field_drives}
+        if name in taken_names:
+            raise ValueError(
+                f"duplicate antenna name {name!r}; give each antenna its own name"
+            )
     if id is None:
         base = "antenna" if name is None else "_".join(name.lower().split()) or "antenna"
         id = base

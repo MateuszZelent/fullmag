@@ -167,6 +167,24 @@ describe("mask antenna panel model", () => {
     ]);
   });
 
+  it("refuses Python keywords as parameter names, since the script writes them", () => {
+    const term = readyTerm(2e-4);
+    if (term.mask.kind !== "function") throw new Error("function mask expected");
+    const renamed: MaskTermResource = {
+      ...term,
+      mask: {
+        ...term.mask,
+        function: {
+          ...term.mask.function,
+          parameters: [{ name: "lambda", value: 2.79e-7 }],
+        },
+      },
+    };
+    expect(validateMaskAntennaDraft(antenna([renamed]))).toEqual([
+      "Term 1: parameter 'lambda' must be an identifier that is not a Python keyword.",
+    ]);
+  });
+
   it("summarises an antenna for the list", () => {
     expect(maskAntennaSummary(antenna([readyTerm(2e-4), createMaskAntennaDraft([]).terms[0]])))
       .toBe("2 terms · 1 ready antenna · active");

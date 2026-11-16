@@ -1261,10 +1261,16 @@ def _render_scene_document_bootstrap(
     staged_mask_payloads = (
         _staged_mask_payloads(builder.get("stages") or []) if include_authored_stages else []
     )
-    math_names = _mask_math_names(staged_mask_payloads)
+    # Whole-study antennas exist before the stages, which may update or remove them.
+    whole_study_mask_payloads = [
+        dict(payload)
+        for payload in (builder.get("mask_field_drives") or [])
+        if include_authored_stages and isinstance(payload, Mapping)
+    ]
+    math_names = _mask_math_names([*whole_study_mask_payloads, *staged_mask_payloads])
     lines = [
         "import fullmag as fm",
-        *_mask_library_imports(staged_mask_payloads),
+        *_mask_library_imports([*whole_study_mask_payloads, *staged_mask_payloads]),
         *([f"from math import {', '.join(math_names)}"] if math_names else []),
         "",
         f"study = fm.study({_python_literal(str(builder.get('study_name') or 'scene_document'))})",
@@ -1496,7 +1502,13 @@ def _render_scene_document_bootstrap(
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
         region_vars: dict[tuple[str, str], str] = {}
-        if any("magnetization_assignments" in stage for stage in authored_stages):
+        antenna_targets_region = any(
+            _normalize_mapping(payload.get("target")).get("kind") == "region"
+            for payload in [*whole_study_mask_payloads, *staged_mask_payloads]
+        )
+        if antenna_targets_region or any(
+            "magnetization_assignments" in stage for stage in authored_stages
+        ):
             region_lines, region_vars = _render_region_owned_authoring_from_override(
                 objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
             )
@@ -1505,6 +1517,7 @@ def _render_scene_document_bootstrap(
             reserved_names={"study", "fm", *snapshot_handles.values(), *region_vars.values()},
             source_root=Path.cwd(),
         )
+        lines.extend(_render_mask_field_drives(whole_study_mask_payloads, mask_renderer))
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
@@ -6768,8 +6781,11 @@ class _MaskAntennaRenderer:
         fallback: str,
         def_lines: list[str],
     ) -> str:
+        # One def per function: the same name and the same equations. Two functions
+        # with equal bodies but different names stay two defs, so their names
+        # survive the round trip.
         body_key = json.dumps(
-            {key: function.get(key) for key in ("locals", "outputs")}
+            {key: function.get(key) for key in ("name", "locals", "outputs")}
             | {"parameters": [item["name"] for item in function.get("parameters") or []]},
             sort_keys=True,
         )

@@ -103,7 +103,9 @@ def gaussian_k_source(
             call_token=next(_CALLS),
             output_index=0,
         )
-        return ((field.with_library_call(call), drive),)
+        # Both functions carry the call: the term is the call's output only while
+        # its mask and its time function are the ones the call returned.
+        return ((field.with_library_call(call), drive.with_library_call(call)),)
     if style != "loop":
         raise ValueError(f"gaussian_k_source: style must be 'function' or 'loop', got {style!r}")
     if study is None or not hasattr(study, "new_vector_mask"):
