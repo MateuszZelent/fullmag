@@ -37,6 +37,15 @@ m_n=\mathbf m\cdot\hat{\mathbf n}.
 w_{\mathrm b}=D\,\mathbf m\cdot(\nabla\times\mathbf m).
 ```
 
+```{figure} /_static/diagrams/dmi-three-variants-chirality.svg
+:alt: Three-panel DMI comparison across interfacial DMI, isotropic bulk DMI, and rotated interfacial DMI, summarizing the chiral textures, signs, and planner gates validated across Fullmag lanes.
+:width: 100%
+:name: fig-dmi-validation-variants-overview
+:class: fm-physics-figure
+
+Overview of Fullmag's three DMI variants and their target chiral textures—1D Néel cycloid and 2D Néel skyrmion (a), 1D Bloch helix and 2D Bloch skyrmion (b), and Göbel 2019 in-plane bimeron (c)—used to structure sign-reversal, derivative, and benchmark validation gates (Rohart & Thiaville 2013; Cortés-Ortuño et al. 2018; Göbel et al. 2019).
+```
+
 (dmi-validation-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -149,8 +158,10 @@ implementation symbols and tests used by this page.
 ## Validation strategy
 
 DMI validation relies on analytic checks, cross-backend comparison, and sign/symmetry
-tests. Unlike exchange or demagnetization, DMI has no standard problem with a universally
-accepted reference solution. The validation therefore focuses on:
+tests. While NIST $\mu\mathrm{MAG}$ does not host an official numbered DMI standard problem,
+Cortés-Ortuño *et al.* (2018) established a community standard problem for chiral DMI media,
+complemented in Fullmag by the Göbel *et al.* (2019) bimeron reproduction and analytic
+operator checks:
 
 1. **Zero-field test**: uniform magnetization produces zero DMI field and zero DMI energy.
 2. **Sign reversal**: $D \to -D$ reverses the field and energy sign.
@@ -229,31 +240,11 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 (dmi-validation-scientific-bibliography)=
 ## Scientific bibliography
 
-1. S. Rohart and A. Thiaville, "Skyrmion confinement in ultrathin film nanostructures in
-   the presence of Dzyaloshinskii-Moriya interaction," *Physical Review B* **88**, 184422
-   (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
-2. FullMag internal notes: `docs/physics/0404-interfacial-dmi.md`,
-   `docs/physics/0405-bulk-dmi.md`, `docs/physics/0406-rotated-interfacial-dmi.md`,
-   `docs/physics/0812-fem-dmi-weak-residual-proof-fixture.md`.
-3. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov, “Magnetic
-   bimerons as skyrmion analogues in in-plane magnets,” *Physical Review B*
-   **99**, 060407(R) (2019),
-   [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407).
+1. S. Rohart and A. Thiaville, “Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction,” *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) | [arXiv:1310.0666](https://arxiv.org/abs/1310.0666).
+2. D. Cortés-Ortuño, M. Beg, V. Nehruji, L. Breth, R. Pepper, T. Kluyver, G. Downing, T. Hesjedal, P. Hatton, T. Lancaster, R. Hertel, O. Hovorka, and H. Fangohr, “Proposal for a micromagnetic standard problem for materials with Dzyaloshinskii–Moriya interaction,” *New Journal of Physics* **20**(11), 113015 (2018). [doi:10.1088/1367-2630/aaea1c](https://doi.org/10.1088/1367-2630/aaea1c) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/aaea1c/pdf) | [arXiv:1803.11174](https://arxiv.org/abs/1803.11174).
+3. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov, “Magnetic bimerons as skyrmion analogues in in-plane magnets,” *Physical Review B* **99**(6), 060407(R) (2019). [doi:10.1103/PhysRevB.99.060407](https://doi.org/10.1103/PhysRevB.99.060407) | [arXiv:1811.07068](https://arxiv.org/abs/1811.07068).
 
 (dmi-validation-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |

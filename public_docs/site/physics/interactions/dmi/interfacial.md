@@ -102,6 +102,15 @@ boundary stationarity law is
 The native FEM weak residual contains the volume first variation and therefore carries the
 natural boundary physics. Adding a separate identical DMI boundary term would double-count it.
 
+```{figure} /_static/diagrams/dmi-boundary-canting-and-normals.svg
+:alt: Two-panel diagram showing (a) the numerically solved Rohart-Thiaville chiral boundary canting profile m_z(x) under 2A d_nu m + D[(n_hat x nu) x m] = 0 across an open nanostrip, and (b) FDM fixed +z_hat interface normal with ghost boundary correction versus FEM general normalized interface normal n_hat carrying the natural boundary term weakly.
+:width: 100%
+:name: fig-interfacial-dmi-boundary-canting
+:class: fm-physics-figure
+
+Chiral edge canting profile solved from $2A\partial_{\boldsymbol\nu}\mathbf m + D[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m]=\mathbf 0$ and comparison of FDM fixed $+\hat{\mathbf z}$ normal closure versus FEM general normalized interface normal $\hat{\mathbf n}$ (Rohart & Thiaville 2013).
+```
+
 (interfacial-dmi-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -362,28 +371,11 @@ matched state/precision, and a documented tolerance.
 (interfacial-dmi-scientific-bibliography)=
 ## Scientific bibliography
 
-- Rohart, S. and Thiaville, A., “Skyrmion stability, metastability and dynamics in ultrathin
-  magnetic films,” *Physical Review B* **88**, 184422 (2013), DOI:
-  `10.1103/PhysRevB.88.184422`.
-- Bogdanov, A. N. and Rößler, U. K., “Chiral symmetry breaking in magnetic thin films and
-  multilayers,” *Physical Review Letters* **87**, 037203 (2001), DOI:
-  `10.1103/PhysRevLett.87.037203`.
-- FullMag canonical note: `docs/physics/0404-interfacial-dmi.md`.
+1. S. Rohart and A. Thiaville, “Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction,” *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) | [arXiv:1310.0666](https://arxiv.org/abs/1310.0666).
+2. A. Fert, V. Cros, and J. Sampaio, “Skyrmions on the track,” *Nature Nanotechnology* **8**(3), 152–156 (2013). [doi:10.1038/nnano.2013.29](https://doi.org/10.1038/nnano.2013.29).
+3. A. N. Bogdanov and U. Rößler, “Chiral Symmetry Breaking in Magnetic Thin Films and Multilayers,” *Physical Review Letters* **87**(3), 037203 (2001). [doi:10.1103/PhysRevLett.87.037203](https://doi.org/10.1103/PhysRevLett.87.037203) | [Open-access repository](https://doi.org/10.17877/de290r-6428).
 
 (interfacial-dmi-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Claim/equation | Repository path | Stable symbol | Responsibility | Lane |

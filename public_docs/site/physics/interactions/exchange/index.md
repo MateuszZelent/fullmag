@@ -98,6 +98,15 @@ A(\nabla\mathbf m)\mathbf n
 \qquad\text{on }\partial\Omega_m.
 ```
 
+```{figure} /_static/diagrams/exchange-fdm-stencil-vs-fem-weak.svg
+:alt: Three-panel diagram comparing continuum exchange stiffness and natural Neumann boundary condition, the FDM six-neighbor stencil with inactive-neighbor clamping and FP64 T0/T1 sub-cell corrections, and the FEM P1 H1 weak form with lumped and consistent mass projections.
+:width: 100%
+:name: fig-exchange-fdm-stencil-vs-fem-weak
+:class: fm-physics-figure
+
+Continuum bulk exchange stiffness, six-neighbor FDM discretization with inactive-cell Neumann clamping and FP64 T0/T1 corrections, and conforming $H^1(\Omega_m)$ FEM stiffness assembly with lumped and consistent mass projections (Abert 2019; Vansteenkiste et al. 2014).
+```
+
 (physics-interactions-exchange-index-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -607,17 +616,13 @@ files and the shared worktree contains unrelated user changes.
 (physics-interactions-exchange-index-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
-   [Bibliographic record](https://search.worldcat.org/title/536451).
-2. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
-   National Institute of Standards and Technology, 1999.
-   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
-3. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical
-   Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-4. T. Schrefl, G. Hrkac, S. Bance, D. Suess, O. Ertl, and J. Fidler, “Numerical methods in
-   micromagnetics (finite element method),” in *Handbook of Magnetism and Advanced Magnetic
-   Materials*, Wiley, 2007.
+1. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) | [Open-access PDF (CC-BY)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) | [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+2. A. Vansteenkiste, J. Leliaert, M. Dvornik, F. Garcia-Sanchez, and B. Van Waeyenberge, “The design and verification of MuMax3,” *AIP Advances* **4**(10), 107133 (2014). [doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/adv/article-pdf/doi/10.1063/1.4899186/12878560/107133_1_online.pdf) | [arXiv:1406.7635](https://arxiv.org/abs/1406.7635).
+3. M. J. Donahue and D. G. Porter, *OOMMF user's guide, version 1.0*, NISTIR 6376, National Institute of Standards and Technology (1999). [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376) (public domain).
+4. C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949). [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+5. P. Heistracher, C. Abert, F. Bruckner, T. Schrefl, and D. Suess, “Proposal for a micromagnetic standard problem: Domain wall pinning at phase boundaries,” *Journal of Magnetism and Magnetic Materials* **548**, 168875 (2021). [doi:10.1016/j.jmmm.2021.168875](https://doi.org/10.1016/j.jmmm.2021.168875) | [Open-access PDF (CC-BY)](https://www.sciencedirect.com/science/article/pii/S0304885321010817/pdf) | [arXiv:2107.07855](https://arxiv.org/abs/2107.07855).
+6. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers / Wiley, New York (1963). [WorldCat record](https://search.worldcat.org/title/536451).
+7. T. Schrefl, G. Hrkac, S. Bance, D. Suess, O. Ertl, and J. Fidler, “Numerical methods in micromagnetics (finite element method),” in *Handbook of Magnetism and Advanced Magnetic Materials*, Wiley (2007).
 
 (physics-interactions-exchange-index-source-code-index)=
 ## Source-code and test index
@@ -635,18 +640,3 @@ files and the shared worktree contains unrelated user changes.
 The implementation table above is the authoritative path-and-symbol map for this review candidate.
 The bibliography is scientific authority; the source index is implementation authority. Neither
 substitutes for an executed numerical qualification artifact.
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.
