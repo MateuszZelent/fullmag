@@ -367,6 +367,24 @@ pozostaje podglądem, bez objętościowego solvera FEM. Żądany mesh size i SI
 pozostają w authoringu, a rzeczywiste objętości, topologia i markery w raporcie
 oraz `geometry_assets.fem_domain_mesh_asset`.
 
+Dla komponentów STL z typowanymi liczbowymi polami rozmiaru importer
+skaluje współrzędne robocze z metrów do mikrometrów przed klasyfikacją
+powierzchni. Parametry rozmiaru, airbox i selektory używają tego samego
+przelicznika. Węzły wracają do metrów, a statystyki objętości globalnej
+oraz każdej domeny do metrów sześciennych przed materializacją MeshIR.
+Znaczniki i tożsamość elementów nie zmieniają się. Pola zawierające surowe
+wyrażenia Gmsh, nieznane rodzaje pól oraz polityki z dolnymi ograniczeniami
+zachowują dotychczasowy układ SI; importer nie interpretuje ich wyrażeń
+ani nie zmienia niejawnie jednostek. Dotyczy to również selektorów warstw
+brzegowych oraz aktywnych kontroli krzywizny i wąskich obszarów, w tym
+ustawień wynikających z presetu. Ta ścieżka nie ma jeszcze dowodu
+odporności numerycznej dla rzeczywistego BuckyBall.
+
+Klasyfikacja tworzy płaty z wymuszoną możliwością parametryzacji przed
+`createGeometry`. Pojedynczy import korzysta z tej samej ścieżki komponentowej
+co wiele importów: lokalny rozmiar materiału jest ograniczony do odzyskanych
+objętości, a nie całego prostopadłościanu obejmującego źródło.
+
 Regresja przyjęcia obejmuje generyczny import pustego sześcianu o objętości
 materiału 7 i wnęki 1 w universe o objętości 64: powietrze zewnętrzne 56,
 łącznie powietrze 57. Wymaga dodatnich objętości Tet4, pełnej rozłącznej
@@ -486,3 +504,6 @@ stany bezczynności, również bez opcjonalnych preconditions.
 | Klasyfikacja powłok STL | `packages/fullmag-py/src/fullmag/meshing/_stl_shells.py` | `classify_closed_shells` | Manifold, BVH/SAT, objętości ze znakiem i zawieranie | FEM geometry input | 23 source tests; actual BuckyBall source analysis |
 | Wnętrze powłoki | `packages/fullmag-py/src/fullmag/meshing/_stl_shells.py` | `_winding` | Suma zorientowanych kątów bryłowych | FEM geometry input | Concave-parent and nesting source tests |
 | Materiał z wnękami | `packages/fullmag-py/src/fullmag/meshing/_gmsh_stl_shells.py` | `material_shell_volumes` | Zewnętrzna pętla i bezpośrednie otwory, owner z element IDs | FEM geometry input | Generic Gmsh cube-domain diagnostics; managed runtime NOT VERIFIED |
+| Współrzędne robocze STL | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_work_coordinate_scale` | Typowane pola liczbowe w mikrometrach; surowe wyrażenia i dolne polityki w SI | FEM CPU/GPU geometry input | source tests; managed BuckyBall NOT VERIFIED |
+| Przywrócenie SI | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_mesh_in_si` | Węzły w metrach i statystyki objętości w metrach sześciennych | FEM CPU/GPU geometry input | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics`; source proof |
+| Regresja współrzędnych STL | `packages/fullmag-py/tests/test_stl_coordinate_conditioning.py` | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics` | Niezależna kontrola węzłów i globalnych oraz domenowych objętości | FEM CPU/GPU geometry input | source tests |

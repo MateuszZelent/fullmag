@@ -386,6 +386,30 @@
       "symbol": "material_shell_volumes",
       "responsibility": "Source-owned even-depth material and immediate cavity holes",
       "backend": "FEM CPU/GPU geometry input"
+    },
+    {
+      "id": "stl-work-coordinate-scale",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "_stl_work_coordinate_scale",
+      "responsibility": "Use micrometre work coordinates for supported typed numeric fields; preserve SI for uninterpreted expressions and lower policies",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested; managed BuckyBall runtime not verified"
+    },
+    {
+      "id": "stl-work-mesh-si",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "_stl_mesh_in_si",
+      "responsibility": "Restore metre node coordinates and cubic-metre global and domain quality volumes",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested"
+    },
+    {
+      "id": "stl-coordinate-conditioning-test",
+      "path": "packages/fullmag-py/tests/test_stl_coordinate_conditioning.py",
+      "symbol": "test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics",
+      "responsibility": "Check SI output and quality with no input mutation",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested"
     }
   ],
   "public_api": {

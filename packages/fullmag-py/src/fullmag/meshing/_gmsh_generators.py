@@ -36,6 +36,7 @@ from ._gmsh_types import (
     MeshData,
     MeshOptions,
     validate_periodic_mesh_options,
+    resolve_mesh_size_controls,
     SharedDomainMeshResult,
     SizeFieldData,
 )
@@ -47,6 +48,7 @@ from ._gmsh_infra import (
     _normalize_scale_xyz,
     _source_hmax_from_scale,
     _scale_mesh_nodes,
+    _quality_volumes_in_si,
 )
 from ._gmsh_extraction import (
     _extract_mesh_data,
@@ -1177,11 +1179,64 @@ def _build_stl_volume_model_for_component(
     return volume_groups[path.stem],surface_groups[path.stem]
 
 
+def _stl_work_coordinate_scale(options: MeshOptions) -> float:
+    """Condition typed numeric sizing without reinterpreting raw Gmsh fields."""
+    supported = {
+        "ComponentVolumeConstant", "ComponentRestrictedBox",
+        "ComponentRestrictedRectangularPerimeter", "ComponentRestrictedCylinder",
+        "ComponentRestrictedSphere", "ComponentRestrictedGradedBox",
+        "ComponentRestrictedGradedCylinder", "ComponentRestrictedGradedSphere",
+        "AxisAlignedBoxDistanceThreshold", "EdgeDistanceThreshold",
+        "CornerDistanceThreshold", "BoundsSurfaceThreshold",
+    }
+    # Optional selectors and feature controls currently evaluate in their own
+    # SI frame. Keep that contract until their adapters support work units.
+    controls = resolve_mesh_size_controls(options)
+    if (
+        options.boundary_layer_target_surface_selectors
+        or options.boundary_layer_target_curve_selectors
+        or int(controls["resolved_size_from_curvature"]) > 0
+        or int(controls["resolved_narrow_regions"]) > 0
+    ):
+        return 1.0
+    # The existing lower-only field stack and arbitrary expressions have their
+    # own coordinate contracts. Retain their SI behavior rather than guessing.
+    if options.lower_bound_fields or any(
+        config.get("kind") not in supported for config in options.size_fields
+    ):
+        return 1.0
+    return 1e6
+
+
+def _scale_stl_source_nodes(gmsh: Any, coordinate_scale: float) -> None:
+    if coordinate_scale != 1.0:
+        gmsh.model.mesh.affineTransform([
+            coordinate_scale,0.,0.,0., 0.,coordinate_scale,0.,0.,
+            0.,0.,coordinate_scale,0.,
+        ])
+
+
+def _stl_mesh_in_si(mesh: MeshData, coordinate_scale: float) -> MeshData:
+    if coordinate_scale == 1.0:
+        return mesh
+    return _dc_replace(
+        mesh,
+        nodes=mesh.nodes / coordinate_scale,
+        quality=_quality_volumes_in_si(mesh.quality, coordinate_scale),
+        per_domain_quality=(
+            {marker: _quality_volumes_in_si(report, coordinate_scale)
+             for marker, report in mesh.per_domain_quality.items()}
+            if mesh.per_domain_quality is not None else None
+        ),
+    )
+
+
 def _build_stl_volume_models_for_components(
     gmsh: Any,
     components: list[ComponentDescriptor],
     *,
     return_topology: bool = False,
+    coordinate_scale: float = 1.0,
 ):
     """Classify all STL shells once, retaining exact source-element owners."""
     owners: dict[int,str] = {}
@@ -1190,7 +1245,8 @@ def _build_stl_volume_models_for_components(
         raise StlTopologyError('STL source-component identities must be unique')
     for component in components:
         merge_owned_stl(gmsh,component.stl_path,component.geometry_name,owners)
-    topology = classify_owned_stl_shells(gmsh,owners)
+    _scale_stl_source_nodes(gmsh, coordinate_scale)
+    topology = classify_owned_stl_shells(gmsh,owners,reparametrize=True)
     gmsh.model.mesh.createGeometry()
     volumes,surfaces = material_shell_volumes(gmsh,topology)
     if set(volumes) != set(names):
@@ -1224,6 +1280,10 @@ def generate_shared_domain_mesh_from_components(
         opts,
         context="shared-domain STL mesh",
     )
+    coordinate_scale = _stl_work_coordinate_scale(shared_stl_opts)
+    hmax = hmax * coordinate_scale
+    airbox = _scale_airbox_options(airbox, coordinate_scale)
+    emit_progress(f"Gmsh: STL working coordinate scale from SI = {coordinate_scale:g}")
     gmsh = _import_gmsh()
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
@@ -1241,6 +1301,7 @@ def generate_shared_domain_mesh_from_components(
             gmsh,
             components,
             return_topology=True,
+            coordinate_scale=coordinate_scale,
         )
         for component_index, comp in enumerate(components, start=1):
             new_vols = component_volume_tags[comp.geometry_name]
@@ -1302,6 +1363,7 @@ def generate_shared_domain_mesh_from_components(
             hmax,
             order,
             shared_stl_opts,
+            hscale=coordinate_scale,
             preexisting_field_ids=airbox_field_ids,
             preexisting_lower_bound_field_ids=airbox_lower_bound_field_ids,
             component_volume_tags=component_volume_tags,
@@ -1323,6 +1385,7 @@ def generate_shared_domain_mesh_from_components(
             has_physical_groups=True,
             per_domain_quality=per_domain_quality,
         )
+        mesh = _stl_mesh_in_si(mesh, coordinate_scale)
         emit_progress(
             f"Gmsh: component-aware mesh ready — "
             f"{mesh.n_nodes} nodes, {mesh.n_elements} elements, "

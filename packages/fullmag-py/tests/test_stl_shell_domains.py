@@ -206,6 +206,18 @@ class ImportedStlShellDomainTests(unittest.TestCase):
         volumes, centroids, cell_nodes = _signed_tet_data(mesh)
         self.assertGreater(len(volumes), 0)
         self.assertTrue(np.all(volumes > 0.0), "all imported-domain Tet4 cells must be positive")
+        self.assertIsNotNone(mesh.quality)
+        self.assertTrue(mesh.per_domain_quality)
+        reports = [(mesh.quality, volumes)] + [
+            (quality, volumes[markers == marker])
+            for marker, quality in mesh.per_domain_quality.items()
+        ]
+        for quality, selected in reports:
+            np.testing.assert_allclose(
+                [quality.volume_min, quality.volume_max, quality.volume_mean, quality.volume_std],
+                [selected.min(), selected.max(), selected.mean(), selected.std()],
+                rtol=1e-8, atol=0.,
+            )
         total_volume = float(volumes.sum())
         magnetic_volume = _volume_for_marker(volumes, markers, magnetic_marker)
         air_volume = _volume_for_marker(volumes, markers, 0)
@@ -542,6 +554,7 @@ class ImportedStlShellConstructionTests(unittest.TestCase):
             generators,'collect_orphan_entity_diagnostics',return_value=[]), patch.object(
             generators,'_GmshProgressLogger',return_value=nullcontext()), patch.object(
             generators,'_apply_post_mesh_options'), patch.object(
+            generators,'_stl_mesh_in_si',return_value=mesh), patch.object(
             generators,'_extract_mesh_data',return_value=mesh) as extract:
             result = generators.generate_shared_domain_mesh_from_components(
                 components,hmax=.2,options=MeshOptions(compute_quality=False))
