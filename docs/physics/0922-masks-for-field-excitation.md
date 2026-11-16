@@ -582,16 +582,18 @@ Recorded results (2026-11-14, branch `codex/field-masks-20261113`):
   over the 2 404 728 active cells is 5.3e-3 at 10 ps, 9.5e-3 at 40 ps and 1.9e-2 at
   100 ps (rms 1.0e-4, 3.3e-4 and 6.6e-4), while $\mathbf m$ itself changes by up to 2
   (rms 3.1e-2). The largest cells lie in the YIG below the track; farther than 100 nm
-  from it the maximum at 100 ps is 8.6e-3. This run compares the whole solver, not the
-  antenna alone: the response to the antenna, $\mathbf m$ with minus $\mathbf m$
-  without the antenna in both codes, is not measured yet
+  from it the maximum at 100 ps is 8.6e-3. This compares the whole solver. The
+  response to the antenna alone, $\mathbf m$ with the antenna minus $\mathbf m$ with
+  the antenna at zero amplitude (fullmag) or without it (mumax3), has the same maximum
+  in both codes (2.34e-3 at 100 ps); the codes differ by 1.7e-5 (0.7 % of the
+  response; 1.2 % at 10 ps), rms 1.3e-6
   (`~/git/simulations/compare_racetrack_short.md`).
 - Single-function form: `fm.space_time` reproduces its function at 5 points and 5 times
   to 1e-12 (10 tests); a travelling wave plans to the maps and time programs of the
   hand-written pair of terms with error 0 (probe case `space_time`).
 
 Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
-(untouched cells, energy closed form) and the antenna response of item 4 are open.
+(untouched cells, energy closed form) is open.
 
 (limitations)=
 ## 11. Limitations and deferred work

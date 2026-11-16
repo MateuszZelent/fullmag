@@ -395,7 +395,7 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 
 - [ ] **Step 4:** Write the report with every measured number.
 
-### Task 11: Short trajectory, feasibility, evidence — RUN 2026-11-16; antenna-response control OPEN (GPU hang)
+### Task 11: Short trajectory, feasibility, evidence — DONE 2026-11-16 (antenna response equals mumax3 to 0.7 %)
 
 Result (`~/git/simulations/compare_racetrack_short.md`, stores in
 `~/git/simulations/fullmag/racetrack_3.6GHz/short_pbc_gpu` and
@@ -417,9 +417,12 @@ Result (`~/git/simulations/compare_racetrack_short.md`, stores in
   stray field of the track acts, which points to a small systematic difference of the
   effective field (demagnetization kernel or its periodic images, single against double
   precision of the kernel) and not to the antenna, whose inputs are equal (Task 10).
-- Open: the response to the antenna alone, m(with) − m(without) in both codes
-  (`compare_racetrack_short.py` computes it when the control stores exist). The fullmag control
-  run without the antenna failed at step 967 with `CUDA error in reduce_adaptive_error_policy:
+- Response to the antenna alone (after the GPU was reset by a reboot): fullmag with the antenna
+  at zero amplitude (`short_pbc_gpu_zeroantenna`, same host-driven step loop) and mumax3 without
+  the antenna (`reference_matched_noantenna.zarr`). Max response 2.340e-3 in both codes at
+  100 ps; difference 1.66e-5 (0.7 %), rms 1.3e-6; 1.2 % at 10 ps. Near the track mumax3 shows
+  ~1e-6 of float32 noise between its two runs, fullmag ~1e-8. The first control attempt
+  (antenna removed) failed at step 967 with `CUDA error in reduce_adaptive_error_policy:
   cudaEventRecord(compute_done_event): an illegal memory access was encountered (700)` and the
   WSL GPU driver (`dxg`) stopped answering (`nvidia-smi` hangs); evidence in
   `~/git/simulations/fullmag/racetrack_3.6GHz/short_pbc_gpu_noantenna_failed`. A control with
