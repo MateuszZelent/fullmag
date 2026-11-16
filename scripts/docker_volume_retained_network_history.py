@@ -138,8 +138,15 @@ def validate_retained_history(control, *, failed_attempt, original, publications
     for value, label in ((stop, 'Managed stop'), (recreation, 'Managed recreation')):
         inputs = value.get('inputs')
         require(value.get('state') == 'succeeded' and isinstance(inputs, dict)
-                and inputs.get('attempt') == verified_attempt and inputs.get('config_sha256') == config_sha
-                and inputs.get('source_root') == identity.get('source_root'), label + ' does not bind verified runtime')
+                and inputs.get('attempt') == verified_attempt and inputs.get('config_sha256') == config_sha,
+                label + ' does not bind verified runtime')
+    stop_inputs = stop['inputs']
+    recreation_inputs = recreation['inputs']
+    require(stop_inputs.get('source_root') == identity.get('source_root'),
+            'Managed stop source root differs from the selected checkout')
+    require('source_root' not in recreation_inputs
+            or recreation_inputs['source_root'] == identity.get('source_root'),
+            'Managed recreation source root differs from the selected checkout')
     require(stop.get('idle_backend_stopped') is True and stop.get('config_sha256') == config_sha
             and stop.get('backend_container') == backend and stop.get('frontend_container') == frontend,
             'Managed stop is not the exact successful stop-only operation')

@@ -361,6 +361,18 @@ generacje, pule i statusy obydwu dzieci schedulera. `retained_history` zwraca
 manifest ścieżka → SHA-256 oraz `manifest_sha256`; żądanie ani dane techniczne
 nie są zapisywane w hostowym storage.
 
+Dowód stopu i recreation uwzględnia różnicę między ich producerami. Receipt
+managed stop musi zawierać w `inputs.source_root` dokładny root wybranego
+checkoutu. Producer `recreate-services` wiąże receipt z próbą zweryfikowanego
+development i jej `config_sha256`, ale nie zapisuje `inputs.source_root`;
+dlatego brak tego klucza jest dopuszczalny. Jeśli klucz występuje, musi
+wskazywać ten sam checkout — wartość obca lub `null` jest odrzucana.
+Pochodzenie recreation nadal potwierdzają grupa/namespace, zgodna próba i hash
+Compose oraz zgodne fingerprint i stan obu snapshotów usług z właściwymi
+etykietami źródła.
+`previous_state_root` wskazuje zachowane dane runtime; nie zastępuje tokenu
+zweryfikowanej próby development.
+
 Po ocenie preview apply wymaga tych samych pinów oraz
 `--apply --expected-plan-sha256 <plan_sha256-z-preview>`. Hash planu obejmuje
 całą stabilną obserwację, w tym manifest. Przed publikacją następuje ponowny

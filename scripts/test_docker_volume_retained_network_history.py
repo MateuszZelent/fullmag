@@ -15,6 +15,7 @@ def raw(value):
 
 def fixture():
     old, current, failed, stop, recreation = (char * 32 for char in '12345')
+    retained_state = '9' * 32
     identity = dict(source_root='/source', project_name='test-project', project_id='test',
                     worktree_id='test-worktree', checkout_kind='worktree')
     control = SimpleNamespace(identity=identity, project='test-project', volume='test-control', namespace='')
@@ -51,7 +52,7 @@ def fixture():
     provenance['native_source_identity_sha256'] = digest(raw(provenance['native_source_identity']))
     previous = dict(common, phase='development', attempt=old, state='succeeded', started_at=1, finished_at=2,
                     config_sha256=config_sha, backend_container=backend, frontend_container=frontend,
-                    backend_build_receipt_sha256='e' * 64, state_root='/runtime/' + old)
+                    backend_build_receipt_sha256='e' * 64, state_root='/runtime/' + retained_state)
     failed_current = dict(common, phase='development', attempt=current, state='failed-confirmed',
                           started_at=7, finished_at=8, error='cache failure before Compose')
     original = dict(common, phase='development', attempt=failed, state='outcome-unknown-resources-retained',
@@ -61,7 +62,7 @@ def fixture():
                     idle_backend_stopped=True, backend_container=backend, frontend_container=frontend,
                     config_sha256=config_sha)
     rec_doc = dict(common, phase='recreate-services', attempt=recreation, state='succeeded', started_at=5,
-                   finished_at=6, inputs=dict(source_root='/source', attempt=old, config_sha256=config_sha),
+                   finished_at=6, inputs=dict(attempt=old, config_sha256=config_sha),
                    removed_containers=[backend, frontend], fresh_state=False, previous_state_root=previous['state_root'])
     documents = {'development/current.json': raw(failed_current), 'development/verified.json': raw(previous),
                  'backend/runtime-provenance.json': raw(provenance),
@@ -104,6 +105,77 @@ class RetainedHistoryTests(unittest.TestCase):
     def validate(self, documents, control, kwargs):
         with patch.object(history, 'read_raw', side_effect=lambda c, p, optional=False: documents.get(p)):
             return history.validate_retained_history(control, **kwargs)
+
+    @staticmethod
+    def replace_operation(documents, kwargs, phase, document):
+        token = kwargs['stop_attempt'] if phase == 'iteration' else kwargs['recreation_attempt']
+        root = f'{phase}/attempts/{token}'
+        payload = raw(document)
+        documents[root + '/receipt.json'] = payload
+        documents[root + '/terminal.json'] = payload
+        pin_name = 'stop_sha256' if phase == 'iteration' else 'recreation_sha256'
+        kwargs[pin_name] = digest(payload)
+
+    def test_recreation_source_root_is_optional_but_must_match_when_present(self):
+        import json
+        control, documents, kwargs = fixture()
+        original = self.validate(documents, control, kwargs)
+        self.assertEqual(original['mode'], 'retained-prestart')
+        rec_path = 'recreate-services/attempts/' + kwargs['recreation_attempt'] + '/terminal.json'
+        rec_doc = json.loads(documents[rec_path])
+        rec_doc['inputs']['source_root'] = '/source'
+        self.replace_operation(documents, kwargs, 'recreate-services', rec_doc)
+        self.assertEqual(self.validate(documents, control, kwargs)['mode'], 'retained-prestart')
+
+    def test_stop_and_recreation_inputs_reject_wrong_source_attempt_or_config(self):
+        import json
+        cases = (
+            ('stop-missing-source-root', 'iteration', 'source_root', 'missing'),
+            ('stop-foreign-source-root', 'iteration', 'source_root', '/foreign'),
+            ('stop-null-source-root', 'iteration', 'source_root', None),
+            ('stop-state-token-as-attempt', 'iteration', 'attempt', '9' * 32),
+            ('recreation-foreign-source-root', 'recreate-services', 'source_root', '/foreign'),
+            ('recreation-null-source-root', 'recreate-services', 'source_root', None),
+            ('recreation-state-token-as-attempt', 'recreate-services', 'attempt', '9' * 32),
+            ('stop-config-drift', 'iteration', 'config_sha256', '0' * 64),
+            ('recreation-config-drift', 'recreate-services', 'config_sha256', '0' * 64),
+        )
+        for name, phase, input_key, value in cases:
+            with self.subTest(name=name):
+                control, documents, kwargs = fixture()
+                token = kwargs['stop_attempt'] if phase == 'iteration' else kwargs['recreation_attempt']
+                terminal_path = f'{phase}/attempts/{token}/terminal.json'
+                operation_doc = json.loads(documents[terminal_path])
+                if value == 'missing':
+                    operation_doc['inputs'].pop(input_key, None)
+                else:
+                    operation_doc['inputs'][input_key] = value
+                self.replace_operation(documents, kwargs, phase, operation_doc)
+                with self.assertRaises(BuildControlError):
+                    self.validate(documents, control, kwargs)
+
+    def test_stop_and_removal_snapshots_reject_source_label_drift(self):
+        import json
+        for changed in ('stop', 'removal', 'both'):
+            with self.subTest(changed=changed):
+                control, documents, kwargs = fixture()
+                stop_path = 'iteration/attempts/' + kwargs['stop_attempt'] + '/idle-stop-containers.json'
+                removal_path = ('recreate-services/attempts/' + kwargs['recreation_attempt']
+                                + '/retained-containers.json')
+                if changed in ('stop', 'both'):
+                    stop_snapshot = json.loads(documents[stop_path])
+                    stop_snapshot['backend']['Config']['Labels']['org.fullmag.source.project-id'] = 'foreign-project'
+                    documents[stop_path] = raw(stop_snapshot)
+                    stop_terminal_path = 'iteration/attempts/' + kwargs['stop_attempt'] + '/terminal.json'
+                    stop_doc = json.loads(documents[stop_terminal_path])
+                    stop_doc['idle_stop_containers_sha256'] = digest(documents[stop_path])
+                    self.replace_operation(documents, kwargs, 'iteration', stop_doc)
+                if changed in ('removal', 'both'):
+                    removal_snapshot = json.loads(documents[removal_path])
+                    removal_snapshot['backend']['Config']['Labels']['org.fullmag.source.project-id'] = 'foreign-project'
+                    documents[removal_path] = raw(removal_snapshot)
+                with self.assertRaises(BuildControlError):
+                    self.validate(documents, control, kwargs)
 
     def test_retained_current_and_verified_are_bound_to_distinct_terminal_receipts(self):
         control, documents, kwargs = fixture()
