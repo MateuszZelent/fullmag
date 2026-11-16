@@ -57,7 +57,7 @@ from ._gmsh_swept import (
     generate_disconnected_mixed_p1_mesh,
     _supports_scoped_layer_partitioned_box,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport, _MIXED_CELL_LOCAL_FACETS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -667,24 +667,50 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
 
 def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
+    """Export the closed cell exterior without mutating the frozen artifact.
+
+    Published facets may be an unoriented subset of physical interfaces, with
+    periodic cuts omitted. They cannot define this temporary closed solid.
+    """
+    owners: dict[tuple[int, ...], tuple[tuple[int, ...], int] | None] = {}
+    for ordinal, family in enumerate(mesh.cell_types):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            face = tuple(int(cell[index]) for index in local_face)
+            key = tuple(sorted(face))
+            if key in owners:
+                if owners[key] is None:
+                    raise ValueError("frozen magnetic mesh has a nonmanifold cell face")
+                owners[key] = None
+            else:
+                owners[key] = (face, ordinal)
+
+    triangles: list[np.ndarray] = []
+    for owner in owners.values():
+        if owner is None:
+            continue
+        face, ordinal = owner
+        ids = np.asarray(face, dtype=np.int32)
+        cell_center = mesh.nodes[mesh.cell_node_ids(ordinal)].mean(axis=0)
+        candidates = [ids] if len(ids) == 3 else [ids[[0,1,2]], ids[[0,2,3]]]
+        for triangle in candidates:
+            vertices = np.asarray(mesh.nodes[triangle], dtype=np.float64)
+            normal = np.cross(vertices[1]-vertices[0], vertices[2]-vertices[0])
+            if not np.all(np.isfinite(normal)) or float(np.linalg.norm(normal)) == 0.0:
+                raise ValueError("frozen magnetic mesh has a degenerate exterior triangle")
+            if float(np.dot(normal, cell_center-vertices.mean(axis=0))) > 0.0:
+                triangle = triangle[[0,2,1]]
+            triangles.append(triangle)
+    if not triangles:
+        raise ValueError("frozen magnetic mesh has no closed exterior surface")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        triangles: list[np.ndarray] = []
-        for ordinal, facet_type in enumerate(mesh.facet_types):
-            facet = mesh.facet_node_ids(ordinal)
-            if facet_type == "tri3":
-                triangles.append(facet)
-            else:
-                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
         for face in triangles:
             v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
             normal = np.cross(v1 - v0, v2 - v0)
-            norm = float(np.linalg.norm(normal))
-            if norm > 0.0:
-                normal = normal / norm
-            else:
-                normal = np.zeros(3, dtype=np.float64)
+            normal = normal / float(np.linalg.norm(normal))
             handle.write(
                 f"  facet normal {normal[0]:.17g} {normal[1]:.17g} {normal[2]:.17g}\n"
             )

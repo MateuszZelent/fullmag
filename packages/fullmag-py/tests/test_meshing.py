@@ -7848,6 +7848,9 @@ class MeshScaffoldTests(unittest.TestCase):
             "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
             return_value=_FakeSurface(),
         ), patch(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
+            side_effect=RuntimeError("fixture exercises the legacy mesh fake"),
+        ) as generate_component_mesh, patch(
             "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
             return_value=shared_domain_mesh,
         ), patch(
@@ -7860,6 +7863,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 study_universe={"mode": "manual", "size": [8.0, 8.0, 8.0], "center": [0.0, 0.0, 0.0]},
             )
 
+        generate_component_mesh.assert_called_once()
         np.testing.assert_array_equal(mesh.element_markers, np.asarray([1, 2, 0], dtype=np.int32))
         self.assertEqual(region_markers[0], {"geometry_name": "left", "marker": 1})
         self.assertEqual(region_markers[1]["marker"], 2)
@@ -9186,8 +9190,14 @@ class MeshScaffoldTests(unittest.TestCase):
             "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
             return_value=_FakeSurface(),
         ), patch(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
+            side_effect=RuntimeError("fixture exercises the legacy mesh fake"),
+        ) as generate_component_mesh, patch(
             "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
             return_value=shared_domain_mesh,
+        ), patch(
+            "fullmag.meshing.asset_pipeline._contains_points_in_geometry",
+            side_effect=AssertionError("point containment fallback should not run"),
         ):
             realize_fem_domain_mesh_asset(
                 [left, right],
@@ -9195,6 +9205,7 @@ class MeshScaffoldTests(unittest.TestCase):
                 study_universe={"mode": "manual", "size": [8.0, 8.0, 8.0], "center": [0.0, 0.0, 0.0]},
             )
 
+        generate_component_mesh.assert_called_once()
         output = stderr.getvalue()
         self.assertIn("Total mesh: 3 tetrahedra, 12 nodes, 3 boundary faces", output)
         self.assertIn(

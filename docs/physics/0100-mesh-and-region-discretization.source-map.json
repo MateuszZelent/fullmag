@@ -410,6 +410,14 @@
       "responsibility": "Check SI output and quality with no input mutation",
       "backend": "FEM CPU/GPU geometry input",
       "evidence_status": "source-tested"
+    },
+    {
+      "id": "frozen-boundary-stl-export",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_write_frozen_boundary_ascii_stl",
+      "responsibility": "Derive closed outward temporary STL from exterior volume-cell faces, including periodic cuts, without altering the frozen mesh",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source tests; no new solver/PBC qualification"
     }
   ],
   "public_api": {

@@ -385,6 +385,17 @@ Klasyfikacja tworzy płaty z wymuszoną możliwością parametryzacji przed
 co wiele importów: lokalny rozmiar materiału jest ograniczony do odzyskanych
 objętości, a nie całego prostopadłościanu obejmującego źródło.
 
+Tymczasowy STL granicy zamrożonej siatki magnetycznej jest wyprowadzany
+z zewnętrznych ścian komórek objętościowych. Metadane faset mogą zawierać
+tylko fizyczny interfejs, pomijając przekroje periodyczne, i nie określają
+orientacji całej zamkniętej powłoki. Ściany mające dwóch właścicieli są
+wewnętrzne; więcej niż dwóch właścicieli powoduje odrzucenie siatki.
+Pozostałe ściany są orientowane na zewnątrz ich komórki, a czworokąty
+dzielone na trójkąty. Dotyczy to wyłącznie wejścia pomocniczego generatora
+powietrza: zamrożone węzły, komórki, fasety, markery i pary periodyczne
+pozostają niezmienione. Nie osłabia to walidacji STL dostarczonego przez
+użytkownika ani nie kwalifikuje nowej realizacji PBC w solverze.
+
 Regresja przyjęcia obejmuje generyczny import pustego sześcianu o objętości
 materiału 7 i wnęki 1 w universe o objętości 64: powietrze zewnętrzne 56,
 łącznie powietrze 57. Wymaga dodatnich objętości Tet4, pełnej rozłącznej
@@ -506,4 +517,5 @@ stany bezczynności, również bez opcjonalnych preconditions.
 | Materiał z wnękami | `packages/fullmag-py/src/fullmag/meshing/_gmsh_stl_shells.py` | `material_shell_volumes` | Zewnętrzna pętla i bezpośrednie otwory, owner z element IDs | FEM geometry input | Generic Gmsh cube-domain diagnostics; managed runtime NOT VERIFIED |
 | Współrzędne robocze STL | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_work_coordinate_scale` | Typowane pola liczbowe w mikrometrach; surowe wyrażenia i dolne polityki w SI | FEM CPU/GPU geometry input | source tests; managed BuckyBall NOT VERIFIED |
 | Przywrócenie SI | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_mesh_in_si` | Węzły w metrach i statystyki objętości w metrach sześciennych | FEM CPU/GPU geometry input | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics`; source proof |
+| Eksport granicy zamrożonej siatki | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_write_frozen_boundary_ascii_stl` | Zewnętrzne ściany komórek, orientacja na zewnątrz i domknięcie przekrojów periodycznych w pomocniczym STL | FEM CPU/GPU geometry input | `test_frozen_boundary_stl_export.py`; source tests |
 | Regresja współrzędnych STL | `packages/fullmag-py/tests/test_stl_coordinate_conditioning.py` | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics` | Niezależna kontrola węzłów i globalnych oraz domenowych objętości | FEM CPU/GPU geometry input | source tests |
