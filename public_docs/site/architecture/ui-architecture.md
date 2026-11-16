@@ -11,52 +11,65 @@ owner: fullmag-public-docs
 
 The **FullMag Control Room** (`apps/control-room`) is built as a modular, resource-first web application designed for interactive micromagnetic problem authoring, high-throughput WebGL visualization, and live runtime observation.
 
-It bridges browser interaction with FullMag's underlying Rust/C++ solvers through OpenAPI v2 contracts, canonical `ProblemIR` representations, and HTTP binary resources and WebSocket invalidation events.
+It bridges browser interaction with FullMag's underlying Rust/C++ solvers and `fullmag.live`
+Python sessions through **OpenAPI v2** JSON control-plane contracts, canonical `ProblemIR`
+lowering, HTTP binary data-plane codecs, and WebSocket invalidation events.
 
 ---
 
 ## Architectural Principles
 
-```text
-graph TD
-    A["User Interactions (Ribbon / Explorer / Viewport / Inspector)"] --> B["Module Kernel & Registry"]
-    B --> C["Resource Controllers & Draft Isolation"]
-    C --> D["OpenAPI v2 HTTP Client & WebSocket Invalidation"]
-    D --> E["FullMag Rust/C++ Backend Session Engine"]
-    E --> F["Canonical ProblemIR Lowering & Validation"]
-    F --> G["FDM & FEM CPU/GPU Solvers"]
-    G --> H["Binary Vector Buffers & Realtime Metrics"]
-    H --> I["Three.js / WebGL 3D Viewport & ECharts"]
+```
+User Interactions / Live Python (`fm.connect`)
+   ──> Authoring Transaction (`scene_revision` fenced) or Control Command
+   ──> OpenAPI v2 Session API & Canonical ProblemIR Lowering
+   ──> WebSocket Revision Invalidation ──> Scoped Resource Cache Invalidation
+   ──> HTTP Binary Data Plane (`FMVP` / `FMMT` / `FMRM` / `FMCS` / `FMTB` / `FMMQ`)
+   ──> Three.js R3F 3D Viewport, 2D Field Map & ECharts Plots
 ```
 
-1. **Physical-Model Alignment**: The UI operates on micromagnetic domain concepts (geometry, materials, physical interactions, discretization, and stages) rather than exposing numerical storage details.
-2. **Modular Kernel Architecture**: Feature areas are self-contained modules (`src/modules/*`) registered dynamically with the core shell.
-3. **Explicit Draft Isolation**: Inspector property edits remain in an isolated draft state until committed by the user, preventing partial or corrupt configuration frames from reaching the active solver session.
-4. **SSR Hydration Consistency**: Client components reading runtime state use `useSyncExternalStore` or hydration gates so the first client render matches the server-rendered state.
-5. **Token-First Design System**: Styling is governed by central `--fm-*` CSS tokens (Catppuccin Mocha for dark mode, Latte for light mode), Tailwind CSS, and shadcn/ui shared primitives.
+1. **Physical-Model Alignment**: The UI operates on micromagnetic domain concepts (`object_id`, regions, materials, physical interactions, discretization, and stages) rather than mixing UI display names with solver behavior.
+2. **Modular Kernel Architecture**: Feature areas are self-contained modules (`src/modules/*`) registered dynamically into kernel layout slots (`src/kernel/module`).
+3. **Explicit Draft Isolation & Conflict Fencing**: Inspector property edits stay in isolated draft stores (`"staged"`, `"liveViewport"`, or `"immediate"`) until committed with `scene_revision` preconditions so neither partial drafts nor concurrent Python writes overwrite state silently.
+4. **SSR Hydration Consistency**: Client components reading runtime, tab-route, or theme stores use `useSyncExternalStore` or hydration gates so the first client render matches server-rendered HTML.
+5. **Token-First Design System**: Central `--fm-*` CSS custom properties (`theme.css`) implement Catppuccin **Mocha** (`data-theme="dark"`) and Catppuccin **Latte** (`data-theme="light"`), paired with Tailwind utilities and shadcn/Radix shared primitives.
 
 ---
 
-## Module Kernel & Layout Slots
+## Shell Routing, Module Kernel & Layout Slots
 
-The Control Room shell layout is partitioned into flexible **Layout Slots** managed by `src/kernel/module`:
+Browser URL routing (`src/kernel/layout/tabRoutes.ts`, `InstanceTabStrip.tsx`) supports `/home`
+(non-blocking Start Screen overlay preserving mounted sessions), `/session/<slug>`,
+`/session/<slug>?port=<port>`, and `/instance/<port>` for switching seamlessly across parallel
+local instances or Docker Compose development groups.
+
+The Control Room shell layout partitions responsibilities across `kernel/` and `modules/`:
 
 ```
 apps/control-room/src/
-├── kernel/              # Core shell runtime, layout manager, API client, event bus
-│   ├── api/             # OpenAPI v2 client, generated types, binary codecs
+├── kernel/              # Core shell runtime, layout, API client, event bus, codecs
+│   ├── api/             # OpenAPI v2 client, generated types, binary codecs (FMVP/FMMT/FMRM/FMCS/FMTB/FMMQ...)
+│   ├── authoring/       # History mutations, quantity fields, draft guards
+│   ├── commands/        # CommandRegistry, shortcuts, diagnostics, workspace policy
+│   ├── layout/          # InstanceTabStrip, tabRoutes, AppMenuBar, layout persistence
 │   ├── module/          # Module registry, manifest resolver, slot contracts
-│   ├── resources/       # Revision-aware resource hooks and invalidation
-│   ├── selection/       # Selection controller
-│   └── layout/          # Layout controller and persistence
+│   ├── realtime/        # WebSocket RealtimeClient & RealtimeInvalidationBridge
+│   ├── resources/       # Revision-aware resource hooks, cache scoping, invalidation
+│   └── selection/       # Unified selection controller across tree, 3D, 2D & plots
 └── modules/             # Self-contained UI feature modules
-    ├── ribbon/          # Header strip tabs & command groups
-    ├── explorer/        # Semantic tree model browser
-    ├── viewport-3d/     # WebGL canvas, Three.js scene, vector field shaders
-    ├── inspector/       # Property panel, draft editor, unit converters
-    ├── live-charts/     # ECharts time-series & energy component graphs
-    ├── status-bar/      # Session state, solver engine, device metrics
-    └── app-menu/        # Command palette (Ctrl+K) & workspace settings
+    ├── start/           # Start Screen hub (/home), templates, import, recent work, instance discovery
+    ├── ribbon/          # Discretization-aware Ribbon tabs & placeholder stripping
+    ├── explorer/        # Five-tab semantic browser (Model, Resources, Results, Jobs, Diagnostics)
+    ├── inspector/       # InspectorRegistry, route catalog & domain-specific semantic panels
+    ├── viewport-3d/     # WebGL/Three.js R3F scene, studio HDRI & transparent/view PNG capture
+    ├── field-map/       # 2D planar probe map, streamlines/contours, multislice & snapshot replay
+    ├── live-charts/     # Real-time ECharts magnetization, energy & convergence traces
+    ├── analysis-plots/  # ECharts dispersion, S(k,f) heatmap, Gamma FFT, FMR & hysteresis charts
+    ├── analysis-*/      # Analysis feature modules (dispersion, hysteresis, resonance)
+    ├── results-navigator/ # Durable SolutionSet browser & saved-result playback
+    ├── overlay/         # Command Palette (Ctrl+Shift+P), MeshBuildDialog, notifications
+    ├── footer/          # Bottom dock (Logs, Telemetry, Diagnostics, Engine, Operations/Mesh Jobs, Problems, Quick Chart)
+    └── status-bar/      # Live session state, readiness helper, mesh/compute progress
 ```
 
 ### Module Manifest Contract

@@ -113,10 +113,17 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.* 
 ```
 
-The **Airbox Mesh Parameters** inspector edits air sizing; exterior geometry
-(size/padding/center) lives in the universe geometry panels; the magnetostatic
-realization choice (`study.demag`) is made in the Physics/Demag panel. Full
-description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) edits air sizing, growth rate, grading, curvature, and narrow-region resolution, and exposes **Apply Airbox Policy** and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) alongside read-only `effective_config`; exterior geometry (size/padding/center) lives in the universe geometry panels; the magnetostatic realization choice (`study.demag`) is made in the Physics/Demag panel. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel configuring FEM airbox padding, element sizing, and grading
+:width: 92%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM object mesh framed by the exterior airbox domain
+:width: 92%
+```
 
 ## 6. Backend support
 

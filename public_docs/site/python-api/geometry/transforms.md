@@ -109,7 +109,22 @@ Focused repository tests covering this contract include: test_region_shape_trans
 (python-api-geometry-transforms-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Rigid `translation` vectors are edited in Control Room via `ObjectPlacementPanel` (`Model Explorer -> Objects -> <object> -> Placement`) or interactively in the 3D viewport using Ribbon **Move** (`W`), with `scene_revision` rebase reconciliation if a live Python script modifies unrelated objects. Rigid `rotation` and `scale` controls stay disabled in the UI (`PROBLEM_IR_03_RIGID_TRANSFORM_REASON`); `Rotate`, `Scale`, and composite transforms must be authored in Python (`not implemented` in Control Room).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `Translate` (rigid translation offset) | `Model Explorer -> Objects -> <object> -> Placement` (`ObjectPlacementPanel`) / Move `W` | `implemented` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| `Rotate`, `Scale`, and nested transform chains | Python DSL | `not implemented` | Disabled in UI (`PROBLEM_IR_03_RIGID_TRANSFORM_REASON`); author in Python |
+
+```{image} /_static/images/ui/inspector-geometry-and-csg.png
+:alt: Control Room Geometry Inspector showing the Geometry and Placement tab switcher above Primitive Geometry box dimensions
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/objects-and-materials`.
 
 (python-api-geometry-transforms-scientific-bibliography)=
 ## Scientific bibliography

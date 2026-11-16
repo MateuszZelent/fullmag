@@ -108,7 +108,22 @@ Focused repository tests covering this contract include: test_boolean_geometry_e
 (python-api-geometry-boolean-operations-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Python-authored Boolean CSG compositions (`Union`, `Intersection`, `Difference`) are surfaced read-only inside `GeometryObjectPanel` (`Model Explorer -> Objects -> <object> -> Geometry`) for inspection and placement. Interactive CSG creation buttons on the Ribbon remain gated behind `preview: true` and are excluded from the active toolbar, so authoring multi-body Boolean operations stays Python-only (`not implemented` in Control Room).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Script-authored CSG geometry inspection & translation | `Model Explorer -> Objects -> <object> -> Geometry` (`GeometryObjectPanel`) | `inspection-only` (translation editable in `ObjectPlacementPanel`) | Scene load / `fm.connect()` sync |
+| Multi-body Boolean CSG creation/editing (`Union`, `Difference`, `Intersection`) | Ribbon CSG controls (`preview: true`) | `not implemented` | Author in Python |
+
+```{image} /_static/images/ui/inspector-geometry-and-csg.png
+:alt: Control Room Geometry Inspector displaying the Primitive Geometry box editor and Geometry/Placement tabs while Ribbon CSG creation remains hidden
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/objects-and-materials`.
 
 (python-api-geometry-boolean-operations-scientific-bibliography)=
 ## Scientific bibliography

@@ -27,9 +27,10 @@ source_of_truth: readme.md
 <div class="fm-home-intro">
   <p class="fm-home-eyebrow">Documentation organized by ownership</p>
   <h2>Frontend, backend, and Python API are separate documentation families.</h2>
-  <p>The documentation tree follows the layer that owns a fact. Control Room behavior is documented under Frontend; numerical realization, physics, and runtime contracts under Backend; public authoring commands and parameters under Python API.</p>
+  <p>The documentation tree follows the layer that owns a fact. Control Room behavior is documented under Frontend; numerical realization, physics, and runtime contracts under Backend; public authoring commands and parameters under Python API. Install the pure-Python DSL from <a href="https://pypi.org/project/fullmag/">PyPI (<code>pip install fullmag</code>)</a> and run solves inside the Docker Compose DEV runtime.</p>
   <div class="fm-home-actions">
     <a class="fm-home-action fm-home-action--primary" href="getting-started/index.html">Getting started</a>
+    <a class="fm-home-action" href="getting-started/interactive-python.html">Live Python (REPL)</a>
     <a class="fm-home-action" href="frontend/index.html">Frontend</a>
     <a class="fm-home-action" href="backend/index.html">Backend</a>
     <a class="fm-home-action" href="python-api/index.html">Python API</a>
@@ -37,6 +38,14 @@ source_of_truth: readme.md
     <a class="fm-home-action" href="changelog/index.html">Changelog</a>
   </div>
 </div>
+
+```{figure} /_static/images/ui/control-room-workspace-overview.png
+:alt: FullMag Control Room Workspace Overview
+:class: fm-ui-figure
+:width: 100%
+
+The FullMag Control Room unified workspace for authoring FDM and FEM models, monitoring live Python sessions, visualizing 2D/3D vector fields, and analyzing spectral and time-domain results.
+```
 
 ```{toctree}
 :hidden:
@@ -91,8 +100,9 @@ fallbacks, and digest are backend evidence.
 
 ## Citation
 
-Until a versioned release with a persistent identifier is available, cite the repository and exact
-commit used for the reported result.
+Cite the published `fullmag` release version (from
+[PyPI](https://pypi.org/project/fullmag/)) and exact repository commit used for the reported result
+until an archival persistent DOI identifier is assigned.
 
 ## Bibliography
 

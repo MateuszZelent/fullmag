@@ -110,16 +110,36 @@ No physical model is introduced.
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
+Status: Field snapshot scheduling (`Autosave`) and 2D/offline snapshot inspection are `partial`; unsupported raw serialization options remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
+| Snapshot field & component scheduling | `Model Explorer -> Stages -> <stage> -> Autosave` (`AutosaveStageInspector`) | `partial` | Submit autosave draft; output resources are revised after execution |
+| Interactive 2D slice, multi-layer overlays, & tiled multislice view | `Field Map (2D)` (`FieldMapModule`, `PlanarFieldLayerList`, `PlanarMultisliceGrid`) | `implemented` (`inspection-only`) | Orthogonal `XY`/`XZ`/`YZ` cuts, streamlines, contours, line-profile CSV export |
+| Hysteresis & saved SolutionSet frame playback | `Field Map (2D)` (`PlanarSnapshotNavigator`) & `Results Navigator` (`SavedResultsBrowser`) | `inspection-only` | Deterministic frame stepping and side-by-side comparison across materialized snapshots |
 | Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `not implemented` | Python-only until implemented |
 
+```{image} /_static/images/ui/planar-2d-field-map-overview.png
+:alt: 2D Planar Field Map showing slice plane selector, vector glyphs, color scale, and live probe readout
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/planar-2d-multislice-and-layers.png
+:alt: 2D Planar Field Map displaying tiled multislice grid panels and ordered multi-layer overlay list
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/results-saved-navigator-comparison.png
+:alt: Saved Results Navigator inspecting materialized snapshots and comparing SolutionSet runs
+:align: center
+:width: 100%
+```
+
 not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
+See [Control Room capability register](/frontend/capability-register), [2D Planar Field Map](/frontend/visualization/planar-2d-and-monitors), and [Charts & Playback](/frontend/visualization/charts-and-playback).
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`, `FieldMapModule`, `PlanarMultisliceGrid`, and `SavedResultsBrowser`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |

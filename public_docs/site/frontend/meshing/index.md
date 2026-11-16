@@ -22,6 +22,20 @@ Meshing controls are split by selected semantic owner rather than placed in one 
 The following pages document each panel, its exact transaction boundary, and its mapping to backend
 resources and Python.
 
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM object geometry framed inside the exterior airbox wireframe with orientation cube and HSL legend
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Airbox Mesh Overview inspector showing readiness badges, topology revision match, carrier part_airbox, element size targets, and growth rate
+:align: center
+:width: 100%
+```
+
+Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
+
 ```{toctree}
 :maxdepth: 2
 

@@ -24,7 +24,27 @@ cpw-antenna
 ```
 ## Control Room crosswalk
 
-Supported drives are configured from the object or stage authoring flow, not from a category-level screen. Use `Model Explorer -> Objects -> <object> -> Physics` or the applicable stage editor where the child page identifies a live control. `TODO: frontend support` applies to excitation fields without a matching inspector control. See {doc}`/frontend/capability-register`.
+Control Room splits excitation and current authoring across dedicated Semantic Inspectors governed by
+active-lane capabilities:
+
+- **Antennas & RF Waveforms (`Model Explorer -> Objects -> <antenna>`)**: `AntennaObjectPanel` and its `antenna/*` sub-panels (`AntennaPortComposer`, `AntennaFieldSolveAuthoring`, `AntennaConductorAuthoring`, `AntennaExternalLeadInspectionPanel`, `AntennaFieldBasisPreview`) configure conductors, ports, piecewise or analytical waveforms (`sinc`, `sinusoidal`), and solved magnetic field-basis overlays, while `RegionalFieldDrivePanel` handles spatially localized field drives with `SincPulsePreview`.
+- **Current & Spin Transport / Spin Torques**: `TransportAuthoringInspector` authors `current_transport` and `spin_transport` records and validation requests (`transport-authoring-validation.v1`), while `SpinAuthoringInspector` configures Slonczewski, Zhang–Li, prescribed SOT, and Oersted sources.
+
+`TODO: frontend support` applies to excitation parameters or specialized solver closures without a
+matching inspector control; child pages identify exact boundaries. See {doc}`/frontend/capability-register`
+and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
+
+```{image} /_static/images/ui/inspector-antenna-rf-and-waveforms.png
+:alt: Antenna and RF Waveform inspector showing conductor placement, port composition, and waveform settings
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Current transport, spin transport, and SOT/STT spin-torque inspectors in Control Room
+:align: center
+:width: 100%
+```
 
 ## API and source scope
 

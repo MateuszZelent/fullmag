@@ -26,7 +26,20 @@ auxiliary-geometry
 ```
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Geometry` for supported primitive and transform fields. Boolean, imported-CAD, auxiliary, and other fields without a matching control are `TODO: frontend support`; do not infer an editor from the Python page alone. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Objects -> <object> -> Geometry / Placement` (`GeometryObjectPanel`,
+`ObjectPlacementPanel`) for unit-aware primitive shape parameters (`box`, `cylinder`, `sphere`,
+`microstrip`, `cpw`, `thin_film`) and rigid translation (`translation`, or interactive **Move** `W` on
+the Ribbon). Multi-object region boxes are edited in `ObjectRegionsPanel` / `ObjectRegionGeometryPanel`.
+Rigid `rotation` and `scale` remain disabled (`PROBLEM_IR_03_RIGID_TRANSFORM_REASON`), Ribbon CSG
+builders remain `preview: true`, and boolean, imported-CAD, auxiliary, or expression-defined shapes
+are inspected read-only while authoring remains Python-only (`TODO: frontend support`). See
+{doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/objects-and-materials`.
+
+```{image} /_static/images/ui/inspector-geometry-and-csg.png
+:alt: Control Room Geometry Inspector showing Primitive Geometry box Size x/y/z inputs in SI metres and the Geometry/Placement tab switcher
+:align: center
+:width: 100%
+```
 
 ## API and source scope
 

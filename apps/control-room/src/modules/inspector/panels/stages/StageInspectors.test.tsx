@@ -282,6 +282,41 @@ function render(
   );
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function expectFormFieldUnit(
+  markup: string,
+  label: string,
+  unit: string,
+  disabled = false,
+): void {
+  const labelPattern = new RegExp(`<label\\b[^>]*>${escapeRegExp(label)}<\\/label>`);
+  const disabledPattern = disabled ? `(?=[^>]*\\bdisabled="")` : "";
+  const inputPattern = new RegExp(
+    `<input\\b(?=[^>]*\\baria-label="${escapeRegExp(label)}")${disabledPattern}[^>]*>`,
+  );
+  const unitPattern = new RegExp(
+    `<span\\b(?=[^>]*\\bclass="[^"]*fm-inspector-form-field__unit[^"]*")[^>]*>${escapeRegExp(unit)}<\\/span>`,
+  );
+  const labelElement = markup.match(labelPattern)?.[0];
+  const inputElement = markup.match(inputPattern)?.[0];
+  const unitElement = markup.match(unitPattern)?.[0];
+  if (!labelElement || !inputElement || !unitElement) {
+    throw new Error(`Expected the ${label} field, its input, and its ${unit} unit.`);
+  }
+  const fieldId = inputElement.match(/\bid="([^"]+)"/)?.[1];
+  const unitId = unitElement.match(/\bid="([^"]+)"/)?.[1];
+  if (!fieldId || !unitId) {
+    throw new Error(`Expected ${label} and its ${unit} unit to have linked IDs.`);
+  }
+  expect(labelElement).toContain(`for="${fieldId}"`);
+  const describedBy = inputElement.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
+  expect(describedBy).toContain(unitId);
+  if (disabled) expect(inputElement).toContain('disabled=""');
+}
+
 function renderMounted(
   children: ReactNode,
   defaultValue = defaultAccordionValue,
@@ -306,36 +341,6 @@ function renderMounted(
     act(() => root.unmount());
     dom.restore();
   }
-}
-
-function expectFieldUnitAssociation(
-  markup: string,
-  label: string,
-  unit: string,
-  disabled = false,
-): void {
-  const labelAttributes = [...markup.matchAll(/<label\b([^>]*)>([^<]*)<\/label>/g)]
-    .find((match) => match[2] === label)?.[1];
-  const fieldId = labelAttributes?.match(/\bfor="([^"]+)"/)?.[1];
-  expect(fieldId, label + " label targets its input").toBeDefined();
-
-  const inputAttributes = [...markup.matchAll(/<input\b([^>]*)>/g)]
-    .find((match) => match[1]?.match(/\bid="([^"]+)"/)?.[1] === fieldId)?.[1];
-  expect(inputAttributes, label + " input is rendered").toBeDefined();
-  if (disabled) expect(inputAttributes).toMatch(/\sdisabled=""/);
-
-  const describedBy =
-    inputAttributes?.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
-  const unitAttributes = [...markup.matchAll(/<span\b([^>]*)>([^<]*)<\/span>/g)]
-    .find(
-      (match) =>
-        match[1]?.includes("fm-inspector-form-field__unit") &&
-        match[2] === unit,
-    )?.[1];
-  const unitId = unitAttributes?.match(/\bid="([^"]+)"/)?.[1];
-
-  expect(unitId, label + " " + unit + " unit has an id").toBeDefined();
-  expect(describedBy, label + " input describes its unit").toContain(unitId);
 }
 
 function escapeMountedMarkup(markup: string): string {
@@ -569,7 +574,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expectFieldUnitAssociation(tableHtml, "t_sampling", "s", true);
+    expectFormFieldUnit(tableHtml, "t_sampling", "s", true);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -601,7 +606,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expectFieldUnitAssociation(autosaveHtml, "Every", "s", true);
+    expectFormFieldUnit(autosaveHtml, "Every", "s", true);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -613,9 +618,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expectFieldUnitAssociation(antennaHtml, "Cutoff fc", "Hz");
+    expectFormFieldUnit(antennaHtml, "Cutoff fc", "Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expectFieldUnitAssociation(antennaHtml, "Center t0", "s");
+    expectFormFieldUnit(antennaHtml, "Center t0", "s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 

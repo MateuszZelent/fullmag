@@ -248,11 +248,11 @@ study.stages.add_relax(
 )
 ```
 
-Ten dokładny blok przeszedł podczas przeglądu test wykonania kontraktu authoringu z zastąpioną
-wyłącznie kosztowną materializacją siatki; konstrukcja receptury i etapu zakończyła się bez wyjątku.
-Integracyjnym wzorcem repozytoryjnym jest
-`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; przykład izoluje
-z tego scenariusza stage-first kontrakt receptury obiektowej i dokładnych warstw filmu.
+This exact block passed an authoring-contract execution check during review with only the
+expensive mesh materialization mocked; recipe and stage construction completed without exception.
+The repository integration pattern is
+`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; this example isolates
+that scenario's stage-first per-object recipe and exact film-layer contract.
 
 ## Control Room object-mesh editor
 

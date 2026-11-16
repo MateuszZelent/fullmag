@@ -31,7 +31,19 @@ inter-region-couplings
 ```
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` for interaction controls exposed by `PhysicsInteractionPanel`. Interaction-specific fields absent from that panel are explicitly marked `not implemented`; the child API page remains authoritative. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Objects -> <object> -> Physics` (`PhysicsInteractionPanel`) for core micromagnetic terms (exchange, uniaxial/cubic anisotropy, external Zeeman bias, DMI, and demagnetization), `CouplingInspectorPanel` for inter-region couplings, `FrozenSpinsInspectorPanel` for pinned-spin constraints, and `SpinAuthoringInspector` / `TransportAuthoringInspector` / `SpinInterfaceInspectorPanel` for Slonczewski, Zhang–Li, prescribed SOT, Oersted, and spin-diffusion terms. All panels share `PhysicsInspectorOverview` and gate controls dynamically against active-lane capabilities (`useActiveLaneCapabilities`). Interaction-specific fields absent from the UI panels remain Python-only (`not implemented`); child API pages remain authoritative. See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
+
+```{image} /_static/images/ui/inspector-physics-couplings-frozen-spins.png
+:alt: Control Room Frozen Spins constraint inspector displaying frz_edge_pin, Left Edge Pinning, Enabled toggle, and In region selection on obj_yig_film
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Spin Transport and SOT/STT torque inspectors
+:align: center
+:width: 100%
+```
 
 ## API and source scope
 
