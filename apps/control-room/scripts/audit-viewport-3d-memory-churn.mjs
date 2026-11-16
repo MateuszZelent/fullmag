@@ -2343,6 +2343,38 @@ function fdmViewportReadFixture(path) {
   // Their panels key on status and reason, so these required-field sentinels are
   // never presented as measured CPU/GPU or solver values.
   switch (path) {
+    case "/v2/sessions/current/model/readiness": {
+      const reason = "Static viewport fixture has no executable simulation study.";
+      return {
+        blockers: [reason],
+        capabilities: {
+          move: { available: false, reason },
+          rotate: { available: false, reason },
+          scale: { available: false, reason },
+        },
+        checks: [{ id: "study", label: "Study", state: "blocked", reason, target_resource: "model/study" }],
+        ready_to_export: false,
+        ready_to_run: false,
+        scene_revision: 1,
+      };
+    }
+    case "/v2/sessions/current/visualization/mode-compositions/active":
+      return {
+        artifact_revision: "",
+        composition_id: "active",
+        layers: [],
+        lifecycle: {
+          artifact_revision: 0,
+          mesh_revision: 0,
+          run_id: null,
+          session_id: "fdm-memory-churn-fixture",
+        },
+        phase_clock: { master_rate_hz: 1, synchronized: true },
+        revision: 0,
+        run_id: "",
+        schema_version: "mode-composition.v1",
+        stage_id: "",
+      };
     case "/v2/sessions/current/diagnostics/performance":
       return {
         attempt_id: null,

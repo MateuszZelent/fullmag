@@ -49,3 +49,5 @@
 - Końcowa kontrola zrzutów z CI ujawniła brakujące odpowiedzi diagnostyczne w fixture: błąd zasobu nie był błędem konsoli/HTTP i zasłaniał nawigację. QA otrzymuje osobną kontrolę powiadomień o błędach, a fixture poprawne odpowiedzi zgodne z typami API; nie ukrywamy komunikatu ani nie zmieniamy zachowania produkcyjnego.
 
 - CI dla `ac8d83db8fc29542eb874c4fe00e55a737ef9160`: Control Room i cały browser-fixture-smoke zielone; 14 próbek, minimum kontrastu 5.1701:1, w obu motywach wysokość 104 px i cztery widoczne wartości, 16 metryk dostępnych w panelu o wysokości 180 px. Powtórna bramka po uzupełnieniu fixture wymaga również braku powiadomień o błędach i zapisuje rozwinięty panel o wysokości 300 px.
+
+- Bramka powiadomień w CI dla `91e4dd7b97fd13eef15a12979c1ebb520f39316c` poprawnie odrzuciła dwa wcześniejsze braki fixture, przed rozpoczęciem zakładek: `model/readiness` oraz `visualization/mode-compositions/active`. Uzupełniono je zgodnie z istniejącym audytem FEM: brak wykonywalnego study i pusta kompozycja, bez deklarowania wykonania solvera.
