@@ -232,6 +232,32 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 
 1. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376 (1999).
 
+## Control Room crosswalk
+
+Status: Time-evolution stage authoring, live scalar time-series charts, and interactive stage re-execution are `partial`; custom stopping predicates (`fm.run_until`), low-level integrator hooks, or specialized stage closures remain not implemented in the form editor.
+
+| Python/API surface | Control Room path | Status | Transaction |
+| --- | --- | --- | --- |
+| Stage duration, timestep / integrator policy, & `StageInitialStateSelector` | `Model Explorer -> Stages -> Add stage -> Run` (`RunStageInspector`, `StudyStageDraftEditor`) | `partial` | `executeStageAfterApply` (`scene_revision`-pinned draft commit + stage Compute) |
+| Live magnetization, energy & torque traces | `Live Charts` (`LiveChartsModule`, `LiveChartControls`) | `inspection-only` | Binary FMTB stream + WebSocket `scalar.sample` follow window & CSV export |
+| Per-stage texture overrides (`StageTextureAssignmentsEditor`) | `Model Explorer -> Stages -> <stage> -> Initial State / Textures` | `partial` | Staged draft mutation on `scene_revision` |
+| Python-only constraints or programmatic callbacks | `Model Explorer -> Stages -> <stage>` | `not implemented` | Authored via Python script or live `fm.run()` / `fm.run_until()` |
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Control Room Run Stage Inspector and stage re-run transaction controls
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/charts-live-time-series.png
+:alt: Live Charts time-series view plotting magnetization components and energy during a time-evolution run
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/studies-and-stages`.
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/stages/RunStageInspector.tsx`, `apps/control-room/src/modules/inspector/panels/studyStageApplyAndRun.ts`, and `apps/control-room/src/modules/live-charts/LiveChartsView.tsx`.
+
 (python-api-studies-time-evolution-source-code-index)=
 <!-- (source-code-index)= -->
 ## 13. Source-code index

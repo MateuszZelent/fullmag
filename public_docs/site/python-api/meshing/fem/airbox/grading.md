@@ -142,8 +142,12 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.*
 ```
 
-The **Airbox Mesh Parameters** inspector: hmin/hmax, growth rate, grading type.
-Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) configures `airbox_hmin`, `airbox_hmax`, `airbox_growth_rate`, `airbox_grading` (`auto`, `geometric`, `linear`), `airbox_curvature_factor`, and `airbox_narrow_region_resolution`. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector Airbox Mesh Parameters showing hmin, hmax, growth rate, and grading fields
+:width: 92%
+```
 
 ## 6. Backend support
 

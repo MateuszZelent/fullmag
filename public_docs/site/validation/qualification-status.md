@@ -52,15 +52,15 @@ Operationally this is exercised through dedicated commands (for example
 `just verify-frozen-spins-qualification` and scope/gate companions) rather than by inference from
 the relaxation matrix.
 
-## Frozen-spins kwalifikacja — układ jednolitego wpisu (kod + Python + bibliografia)
+## Frozen-spins qualification — unified entry (code + Python + bibliography)
 
-### 1) Wprowadzenie
+### 1) Introduction
 
 `frozen_spins` is a typed stage-aware constraint contract, not a solver-side “shortcut”.
 The public gate path is strict: payload-level validation happens before planning, and unsupported
 combinations fail closed.
 
-### 2) Implementacja bezpośrednio z kodu (100%)
+### 2) Direct source-level implementation
 
 - `FrozenSpins` is defined in `packages/fullmag-py/src/fullmag/model/constraints.py` and validates:
   `id`, `selector`, `name`, `enabled`, `reference`, `membership`, `activation`, `stage_ids`, `empty_selection`,
@@ -69,7 +69,7 @@ combinations fail closed.
 - `Ferromagnet.freeze_spins(...)` (same file: `structure.py`) builds `FrozenSpins` via `in_object_selection(...)`.
 - The stage-aware study/solver contract keeps this intent in `ProblemIR` and resolves only in planner/runtime.
 
-### 3) Implementacja w Pythonie (bezpośredni wzorzec)
+### 3) Python authoring pattern
 
 ```python
 import fullmag as fm
@@ -122,16 +122,16 @@ frozen_region = film_region.freeze_spins(
 study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
-### 4) Funkcje i argumenty (z kodu źródłowego)
+### 4) Functions and arguments (from source code)
 
-| Funkcja | Argumenty i znaczenia |
+| Function | Arguments and meanings |
 |---|---|
 | `FrozenSpins.__init__(*, id, selector, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | `frozen_spins` contract; selection and stage activation are normalized through `_reference_ir(...)` and `_activation_ir(...)`. |
 | `ObjectRegion.freeze_spins(..., id=None, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Region-scoped freeze helper; id defaults to `<region_id>_frozen`, selector is `in_region_selection`. |
 | `Ferromagnet.freeze_spins(..., id, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Object-scoped freeze helper; requires explicit `object_id`, selector is `in_object_selection`. |
 | `TimeEvolution.constraints` | Sequence of `FrozenSpins` objects transported from study to problem contract. |
 
-### 5) Referencje do kodu
+### 5) Code references
 
 - `packages/fullmag-py/src/fullmag/model/constraints.py:137` (`class FrozenSpins`, `__init__`)
 - `packages/fullmag-py/src/fullmag/model/structure.py:516` (`ObjectRegion.freeze_spins`)
@@ -139,7 +139,7 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 - `packages/fullmag-py/src/fullmag/model/problem.py` (`Problem` aggregate and constraint lowering)
 - `packages/fullmag-py/src/fullmag/model/study.py` (`TimeEvolution` transport and constraints handling)
 
-### 6) Bibliografia
+### 6) Bibliography
 
 - Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Open Source FullMag codebase, frozen-spins constraint implementation and qualification scopes (current repository state).

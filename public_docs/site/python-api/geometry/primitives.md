@@ -125,7 +125,22 @@ Focused repository tests covering this contract include: test_waveguide_geometri
 (python-api-geometry-primitives-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Standard primitive shapes (`box`, `cylinder`, `sphere`, `microstrip`, `cpw`, `thin_film`) are authored and inspected in Control Room via `GeometryObjectPanel` (`Model Explorer -> Objects -> <object> -> Geometry`) using unit-aware `QuantityField` SI inputs (`m`, `mm`, `um`, `nm`). Exotic primitive subclasses or parametric expressions without exposed UI fields remain Python-only (`not implemented` in the inspector).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Supported primitive dimensions (`box`, `cylinder`, `sphere`, `microstrip`, `cpw`, `thin_film`) | `Model Explorer -> Objects -> <object> -> Geometry` (`GeometryObjectPanel`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` (invalidates stale mesh) |
+| Unsupported subclasses or scripted dimensions | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-geometry-and-csg.png
+:alt: Control Room Geometry Inspector showing Primitive Geometry kind box and Size x/y/z inputs in SI metres
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/objects-and-materials`.
 
 (python-api-geometry-primitives-scientific-bibliography)=
 ## Scientific bibliography

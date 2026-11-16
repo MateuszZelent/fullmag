@@ -72,7 +72,12 @@ Use the detailed pages above for exact constructor fields, ProblemIR destination
 boundaries, and validation requirements.
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Material` for supported scalar material fields. Spatial fields, elastic laws, magnetostriction, and other parameters not exposed by `ObjectMaterialPanel` are `TODO: frontend support`. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Objects -> <object> -> Material` (`ObjectMaterialPanel`), `ObjectAbsorbingBoundaryPanel` for absorbing boundary damping profiles, and `ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel` for per-region magnetic overrides. Spatial parameter fields, elastic laws, magnetostriction, and any parameters not exposed by those panels are `TODO: frontend support`. See {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
+
+```{image} /_static/images/ui/inspector-material-and-regions.png
+:alt: Control Room Object Regions inspector listing realized regions (Pinning Annulus and Skyrmion Core on obj_yig_film) where per-region material overrides are scoped
+:width: 92%
+```
 
 ## API and source scope
 

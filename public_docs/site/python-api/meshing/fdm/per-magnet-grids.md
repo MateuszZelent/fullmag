@@ -114,11 +114,7 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Study -> Discretization -> FDM per-magnet grids`.
-The route is partial and keyed by canonical geometry names. Apply the global
-study draft, then inspect the resolved grid resource. `not implemented: frontend support`
-for a dedicated typed editor when only advanced JSON is available. See
-[Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySection` in `ObjectMeshPolicyPanel.tsx`) and `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh` (`ObjectRegionMeshPanel.tsx`). Under FDM, Control Room displays per-object structured grid spacing, origin, shape, fingerprint, and region cell membership as `inspection-only` resources; authoring per-magnet `FDMGrid` mappings remains Python-only (`not implemented` in the browser). See {doc}`/frontend/meshing/fdm-grid-view`, {doc}`/frontend/meshing/region-mesh`, and [Control Room capability register](/frontend/capability-register).
 
 ## 6. Backend and frontend support
 
@@ -126,7 +122,7 @@ for a dedicated typed editor when only advanced JSON is available. See
 |---|---|---|
 | FDM CPU/GPU | planner-gated | Native grids are representable; multilayer coupling needs capability evidence. |
 | FEM CPU/GPU | not applicable | This is an FDM grid contract. |
-| Control Room | partial | Global/per-magnet draft support is not the full low-level surface. |
+| Control Room | inspection-only | Per-object grid and region membership views are read-only; authoring per-magnet grids is not implemented. |
 
 (python-api-meshing-fdm-per-magnet-grids-validation)=
 <!-- (validation)= -->

@@ -101,10 +101,12 @@ The backend consumes the realized Cartesian or finite-element asset, including t
 
 ## 5. How to set it in Control Room
 
-Route: `Model Explorer -> Study -> Discretization -> FDM default cell`. Enter
-`dx`, `dy`, and `dz` in metres and apply the study draft. The effective grid
-and dependent grid resources are refreshed. Per-magnet overrides are a
-separate partial route. See [Control Room capability register](/frontend/capability-register).
+Route: `Model Explorer -> Objects -> <object> -> Mesh` (`FdmObjectMeshPolicySection` in `ObjectMeshPolicyPanel.tsx`, backed by `resolveFdmObjectMeshInspectorModel` in `fdmMeshInspectorModel.ts`). Under the FDM lane, Control Room exposes grid origin, spacing, integer shape, active cell count, participation, and grid fingerprint as a **read-only** resource while `FdmCuboidLayer` renders structured cells and region masks (`FMRM` / `FMBM`) in the 3D viewport. FEM mesh-build controls are withheld, and authoring `dx`, `dy`, and `dz` remains Python-only (`not implemented` in the browser). See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register).
+
+```{image} /_static/images/ui/viewport-3d-interactive.png
+:alt: 3D Viewport rendering FDM structured grid cells, vector glyphs, and domain frame
+:width: 92%
+```
 
 ## 6. Backend and frontend support
 
@@ -112,7 +114,7 @@ separate partial route. See [Control Room capability register](/frontend/capabil
 |---|---|---|
 | FDM CPU/GPU | authoring implemented | Planner and runtime still gate execution. |
 | FEM CPU/GPU | not applicable | FEM uses element-size policies. |
-| Control Room | partial | Default cell fields are exposed; low-level aliases are not guaranteed. |
+| Control Room | inspection-only | `FdmObjectMeshPolicySection` and `FdmCuboidLayer` display realized grid metadata and cells; interactive grid editing is not implemented. |
 
 (python-api-meshing-fdm-grid-validation)=
 <!-- (validation)= -->

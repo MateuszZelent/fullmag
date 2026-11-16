@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { checkFooterReadability } from "./lib/viewport-layout-browser-qa.mjs";
 import { createServer } from "node:net";
 import path from "node:path";
 
@@ -539,7 +540,18 @@ try {
   if (errors.length > 0) {
     throw new Error(`Browser console/network errors:\n${errors.join("\n")}`);
   }
+  // Footer UI has its own bounded checks; it does not depend on a solver run
+  // or field materialization in a separate interactive development session.
+  const footerReadability = await checkFooterReadability(page, {
+    assertCanvas: () => assertCanvasHasFidelity(page),
+    timeout: 30_000,
+  });
+  for (const capture of footerReadability.captures) {
+    await writeFile(path.join(auditArtifactsDirectory, `footer-${capture.theme}${capture.variant === "overview" ? "-overview" : ""}.png`), Buffer.from(capture.png_base64, "base64"));
+  }
+  if (errors.length > 0) throw new Error(`Footer browser errors: ${errors.join("\n")}`);
   await writeAuditArtifact({
+    footerReadability,
     after,
     afterUnmount,
     afterUnmountRuntime,
@@ -584,6 +596,13 @@ try {
     `gpuUploaded=${formatBytes(gpuAfterStress.bufferBytesUploaded)}`,
   );
 } catch (error) {
+  if (error.footerReadability) {
+    await mkdir(auditArtifactsDirectory, { recursive: true });
+    await writeFile(path.join(auditArtifactsDirectory, "footer-partial.json"), `${JSON.stringify(error.footerReadability, null, 2)}\n`);
+    for (const capture of error.footerReadability.captures) {
+      await writeFile(path.join(auditArtifactsDirectory, `footer-${capture.theme}${capture.variant === "overview" ? "-overview" : ""}.png`), Buffer.from(capture.png_base64, "base64"));
+    }
+  }
   await reportAuditFailure(page, fixture, {
     errors,
     fieldRequests,
@@ -2130,6 +2149,13 @@ async function installFdmFixtureApi(page, fixture, requests) {
       await fulfillJson(route, fdmStatusFixture(fixture));
       return;
     }
+    if (request.method() === "GET") {
+      const readFixture = fdmViewportReadFixture(path);
+      if (readFixture !== undefined) {
+        await fulfillJson(route, readFixture);
+        return;
+      }
+    }
     if (
       path === "/v2/sessions/current/visualization/client-acks" &&
       request.method() === "POST"
@@ -2310,6 +2336,210 @@ async function installFdmFixtureApi(page, fixture, requests) {
 
     await fulfillEmpty(route, 204);
   });
+}
+
+function fdmViewportReadFixture(path) {
+  // Resource schemas require numeric fields even when telemetry is unavailable.
+  // Their panels key on status and reason, so these required-field sentinels are
+  // never presented as measured CPU/GPU or solver values.
+  switch (path) {
+    case "/v2/sessions/current/model/readiness": {
+      const reason = "Static viewport fixture has no executable simulation study.";
+      return {
+        blockers: [reason],
+        capabilities: {
+          move: { available: false, reason },
+          rotate: { available: false, reason },
+          scale: { available: false, reason },
+        },
+        checks: [{ id: "study", label: "Study", state: "blocked", reason, target_resource: "model/study" }],
+        ready_to_export: false,
+        ready_to_run: false,
+        scene_revision: 1,
+      };
+    }
+    case "/v2/sessions/current/visualization/mode-compositions/active":
+      return {
+        artifact_revision: "",
+        composition_id: "active",
+        layers: [],
+        lifecycle: {
+          artifact_revision: 0,
+          mesh_revision: 0,
+          run_id: null,
+          session_id: "fdm-memory-churn-fixture",
+        },
+        phase_clock: { master_rate_hz: 1, synchronized: true },
+        revision: 0,
+        run_id: "",
+        schema_version: "mode-composition.v1",
+        stage_id: "",
+      };
+    case "/v2/sessions/current/diagnostics/performance":
+      return {
+        attempt_id: null,
+        collection_overhead_ns: null,
+        elapsed_monotonic_ns: 0,
+        first_step_index: null,
+        gpu_scope: "whole_device",
+        gpu_unavailable_reason: "GPU sampling is not part of the static FDM viewport fixture.",
+        latest_evaluate_host_wall_ns: null,
+        latest_rejected_attempts: null,
+        latest_step_wall_ns: null,
+        ownership_epoch: null,
+        points: [],
+        reason: "No solver run is executed by the static FDM viewport fixture.",
+        revision: "fdm-memory-churn-fixture:0",
+        rows_dropped: 0,
+        run_id: null,
+        sample_sequence: 0,
+        state: "unavailable",
+        step_id: null,
+        step_index: null,
+        task_id: null,
+        unique_step_callback_records: 0,
+      };
+    case "/v2/sessions/current/diagnostics/engine-log":
+      return {
+        entries: [{
+          level: "info",
+          message: "Static FDM viewport fixture loaded; no solver run or mesh build was performed.",
+          source: "fixture",
+          timestamp_unix_ms: Date.now(),
+        }],
+        revision: 1,
+        total: 1,
+      };
+    case "/v2/sessions/current/diagnostics/cpu":
+      return {
+        load_average_1m: null,
+        load_average_5m: null,
+        load_average_15m: null,
+        logical_cpus: 0,
+        memory_total_mb: 0,
+        memory_used_mb: 0,
+        model_name: null,
+        process_cpu_percent: 0,
+        process_rss_mb: 0,
+        process_threads: 0,
+        reason: "Host CPU sampling is not part of the static FDM viewport fixture.",
+        sample_time_unix_ms: 0,
+        status: "unavailable",
+        utilization_cpu_percent: 0,
+      };
+    case "/v2/sessions/current/diagnostics/gpu":
+      return {
+        devices: [],
+        reason: "Host GPU sampling is not part of the static FDM viewport fixture.",
+        sample_time_unix_ms: 0,
+        status: "unavailable",
+      };
+    case "/v2/sessions/current/diagnostics/solver-profile":
+      return {
+        aggregates: {
+          average_demag_ns: 0,
+          average_exchange_ns: 0,
+          average_total_ns: 0,
+          max_total_ns: 0,
+          sample_count: 0,
+        },
+        artifact_refs: [],
+        config: { enabled: false },
+        latest_samples: [],
+        revision: 1,
+        state: "idle",
+      };
+    case "/v2/sessions/current/simulation/solver/status":
+      return {
+        algorithm: null,
+        can_accept_commands: true,
+        converged: null,
+        dt_seconds: null,
+        dt_suggested_seconds: null,
+        error_estimate: null,
+        integrator: null,
+        is_busy: false,
+        last_error: null,
+        last_step_updated_at_unix_ms: null,
+        max_error: null,
+        max_rhs_norm_per_s: null,
+        max_torque_Apm: null,
+        max_torque_T: null,
+        pseudo_time_seconds: null,
+        rejected_attempts: null,
+        relaxation_algorithm: null,
+        revision: 1,
+        run_id: null,
+        runtime_state: "idle",
+        runtime_status_code: "idle",
+        runtime_status_kind: "idle",
+        session_status: "ready",
+        sim_time_seconds: null,
+        stage_kind: null,
+        step_index: null,
+        warnings: [],
+      };
+    case "/v2/sessions/current/simulation/commands":
+      return {
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands: [],
+        completed_count: 0,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: 1,
+        running_count: 0,
+        runtime_controls: [{ enabled: true, kind: "solve", reason: null }],
+      };
+    case "/v2/sessions/current/meshing/builds/current":
+      return {
+        active_build: null,
+        effective_airbox_target: null,
+        effective_per_object_targets: null,
+        geometry_realization_revision: 0,
+        last_build_error: null,
+        last_build_summary: null,
+        mesh_pipeline_status: [],
+        policy_diff: [],
+        provenance: null,
+        published_resources: null,
+        resolved_policy: null,
+        revision: 1,
+        shared_domain_build_report: null,
+        source_scene_revision: 1,
+      };
+    case "/v2/sessions/current/meshing/builds/latest-successful":
+      return {
+        effective_airbox_target: null,
+        effective_per_object_targets: null,
+        geometry_realization_revision: 0,
+        last_build_error: null,
+        last_success: null,
+        revision: 1,
+        source_scene_revision: 1,
+      };
+    case "/v2/sessions/current/meshing/builds":
+      return { history: [], revision: 1 };
+    case "/v2/sessions/current/model/geometry/diagnostics":
+      return {
+        backend_target: "fdm",
+        diagnostics: [{
+          blocks: [],
+          code: "FIXTURE_NO_GEOMETRY_ISSUES_ASSERTED",
+          geometry_path: null,
+          id: "fdm-memory-churn-fixture",
+          message: "Fixture only: no geometry issues are asserted by this static viewport audit.",
+          object_id: null,
+          severity: "info",
+        }],
+        scene_revision: 1,
+        status: "fixture",
+      };
+    default:
+      return undefined;
+  }
 }
 
 async function setGlobalQuantity(

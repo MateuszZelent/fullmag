@@ -110,7 +110,13 @@ Focused repository tests covering this contract include: test_random_initializer
 (python-api-magnets-and-textures-initial-magnetization-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+- **Supported initial-magnetization editing in Control Room:** `Model Explorer -> Objects -> <object> -> Magnetization` renders `ObjectMagneticTexturePanel`, which authors object-level initial magnetization using the 16 `MAGNETIZATION_TEXTURE_PRESETS` and commits draft changes through `commitMagneticTextureApply`.
+- **Python-only surfaces:** Analytical `SpatialParameterField` callbacks, custom spatial expressions, region-specific overrides not exposed in `ObjectMagneticTexturePanel`, and textures outside the supported preset family remain Python-only (`not implemented`); see {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
+
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel configuring initial magnetization presets on an object
+:width: 92%
+```
 
 (python-api-magnets-and-textures-initial-magnetization-scientific-bibliography)=
 ## Scientific bibliography

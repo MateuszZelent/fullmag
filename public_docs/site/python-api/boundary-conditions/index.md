@@ -22,7 +22,19 @@ mechanical-boundary-conditions
 ```
 ## Control Room crosswalk
 
-The category has no standalone editor. Configure supported boundary data through the relevant object or stage editor; the terminal child pages are authoritative for exact fields. `TODO: frontend support` applies to boundary-condition parameters without a matching editor control. See {doc}`/frontend/capability-register` for the current capability register.
+Boundary and constraint policies map across three Control Room surfaces depending on ownership:
+
+- **Periodic & Floquet lattice conditions**: Configured via Python (`periodic-boundary-conditions`, `floquet-boundary-conditions`) and surfaced read-only in active lane / study inspection (`TODO: frontend support` for direct lattice-vector authoring).
+- **Absorbing damping boundaries (`ObjectAbsorbingBoundaryPanel`)**: Outer face damping ramps (`faces`, `frame`, `profile`) are editable under `Model Explorer -> Objects -> <object> -> Material / Boundaries`.
+- **Frozen-spin magnetization constraints (`FrozenSpinsInspectorPanel`, `Constraint` selection route)**: Object- and region-scoped `FrozenSpins` policies, selection predicates (`SelectionExpressionBuilder`), capture/initial reference modes, stage activation bindings, and `FrozenSpinsOverlay` previews are authored directly under `Model Explorer -> Physics / Constraints` (see Python API definitions in {doc}`../problem/problem` and {doc}`../studies/time-evolution`).
+
+`TODO: frontend support` applies to any mechanical or specialized boundary-condition parameter without a matching editor control; terminal child pages remain authoritative for exact fields. See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
+
+```{image} /_static/images/ui/inspector-physics-couplings-frozen-spins.png
+:alt: Control Room Frozen Spins constraint inspector displaying frz_edge_pin, Left Edge Pinning, Enabled toggle, and In region selection for reg_pinning_ring on obj_yig_film
+:align: center
+:width: 100%
+```
 
 ## Physics and source scope
 

@@ -61,7 +61,7 @@ export function DiagnosticRecorderFooterPanel({
           onClick={handleOpenClick}
         >
           <Maximize2 size={14} aria-hidden="true" />
-          Open
+          Open recorder
         </Button>
         <Button
           size="sm"
@@ -70,7 +70,7 @@ export function DiagnosticRecorderFooterPanel({
           onClick={handleExportClick}
         >
           <Download size={14} aria-hidden="true" />
-          Export
+          Export JSON
         </Button>
       </div>
     </div>
@@ -89,7 +89,7 @@ function Metric({
   return (
     <div className="fm-footer-recorder__metric" data-tone={tone}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong title={value}>{value}</strong>
     </div>
   );
 }

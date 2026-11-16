@@ -9,31 +9,35 @@ owner: fullmag-public-docs
 (public-docs-frontend-root)=
 # Frontend
 
-The Frontend branch documents the browser Control Room as a client of the canonical FullMag
-resources and commands. It does not redefine solver physics or claim that a displayed preview is the
-solver mesh.
+FullMag's user interface is the **Control Room** (`apps/control-room`), a modular Next.js 16 and
+React 19 browser workspace that unifies FDM and FEM micromagnetic authoring, live solver control,
+and multi-dimensional post-processing. It acts as a client of canonical FullMag resources and
+commands without redefining solver physics or claiming that viewport rendering substitutes for
+mesh certification or solver qualification.
+
+```{image} /_static/images/ui/control-room-workspace-overview.png
+:alt: FullMag Control Room v2 workspace overview showing Start/Session tabs, Contextual Ribbon, Explorer, 3D Viewport, Semantic Inspector, and Footer Dock
+:align: center
+:width: 100%
+```
 
 Use this branch for:
 
-- Explorer and Inspector navigation;
-- draft editing, Apply/Revert transactions, and stale-resource semantics;
-- FEM object, airbox, and region mesh panels;
-- FDM read-only structured-grid inspection;
-- mesh build commands, progress resources, quality reports, and viewport feedback;
-- Python round-trip and authored-versus-effective values.
+- Start Screen hub (`/home`), multi-instance tabs (`/session/<slug>`, `?port=`, `/instance/<port>`), Catppuccin Mocha/Latte themes, Ribbon tabs, and five-tab Explorer (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`);
+- Semantic Inspector panels, isolated draft editing (`staged`, `liveViewport`, `immediate`), Apply/Reset transactions, and stale-resource semantics;
+- FEM object, airbox, and region mesh policies alongside read-only FDM structured-grid inspection;
+- 3D WebGL viewport (surface projections, clipping, studio lighting/PNG capture, eigenmode overlays), 2D planar field map, and interactive charts/playback;
+- client state, command palette (`Ctrl+Shift+P`), binary HTTP codecs, live Python presence, and explicit capability boundaries (`capability-register`).
 
-Backend algorithms are documented under {doc}`../backend/index`; Python constructors and parameters
-under {doc}`../python-api/index`.
-
-The frontend support boundary for every Python/API entry is tracked in
-{doc}`capability-register`. Each API page must link its exact Control Room path
-there, or record a `TODO: frontend support` item when the corresponding UI
-transaction does not exist.
+Backend algorithms live under {doc}`../backend/index`; Python constructors and parameters under
+{doc}`../python-api/index`. Screenshots illustrate the interface; they are not runtime or physics
+qualification evidence.
 
 ```{toctree}
 :maxdepth: 3
 
 control-room/index
+inspectors/index
 capability-register
 meshing/index
 visualization/index
