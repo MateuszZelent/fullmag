@@ -7530,6 +7530,17 @@ class MeshScaffoldTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.classify_reparametrize: list[bool] = []
                 self.create_calls = 0
+                self.merged = False
+
+            def getElements(self, dim: int, tag: int = -1):
+                test_case.assertEqual(dim, 2)
+                if not self.merged:
+                    return [], [], []
+                faces = np.array([[1,3,2],[1,2,4],[2,3,4],[3,1,4]])
+                return [2], [np.arange(1,5)], [faces.reshape(-1)]
+
+            def getNodes(self):
+                return np.arange(1,5), np.array([[0.,0.,0.],[1.,0.,0.],[0.,1.,0.],[0.,0.,1.]]).reshape(-1), []
 
             def classifySurfaces(
                 self,
@@ -7592,9 +7603,11 @@ class MeshScaffoldTests(unittest.TestCase):
 
             def merge(self, path: str) -> None:
                 self.merged.append(path)
+                self.model.mesh.merged = True
 
             def clear(self) -> None:
                 self.clear_calls += 1
+                self.model.mesh.merged = False
 
         fake_gmsh = _FakeGmsh()
 

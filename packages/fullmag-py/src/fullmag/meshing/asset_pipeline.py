@@ -28,6 +28,7 @@ from fullmag.model.geometry import (
     Union,
 )
 
+from ._gmsh_stl_shells import StlTopologyError
 from .gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -267,6 +268,20 @@ def _validate_shared_mesh_assembly_policy(
             "canonical conforming defaults or omit assembly_policy"
         )
     return effective
+
+
+def _reject_anonymous_import_fallback(geometries: Sequence[Geometry], error: Exception) -> None:
+    """Imported components must retain their exact source-surface owners."""
+    if len(geometries) <= 1:
+        return
+    for geometry in geometries:
+        while isinstance(geometry, Translate):
+            geometry = geometry.geometry
+        if isinstance(geometry, ImportedGeometry):
+            raise StlTopologyError(
+                'Cannot fall back to concatenated STL: exact imported '
+                'source-component ownership would be lost'
+            ) from error
 
 
 def _is_stl_imported_geometry(geometry: Geometry) -> bool:
@@ -3591,8 +3606,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 # Decide between native OCC-conformal pipeline or single-pass STL pipeline
                 from ._gmsh_occ import generate_shared_domain_mesh_via_occ
 
-                is_stl_multi = len(geometries) > 1 and any(isinstance(g, ImportedGeometry) for g in geometries)
-
                 try:
                     if conformal_occ_direct:
                         build_mode = "conformal_occ"
@@ -3720,11 +3733,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"Conformal OCC mesh: geometry→volume mapping established for "
                             f"{len(result.component_volume_tags)} components"
                         )
-                    elif is_stl_multi:
-                        build_mode = "component_aware"
-                        raise RuntimeError(
-                            "Multi-component STL meshing is routed to concatenated STL fallback for numerical stability"
-                        )
                     elif preemptive_imported_stl_fallback:
                         build_mode = "concatenated_stl_fallback"
                         raise RuntimeError(
@@ -3752,6 +3760,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"{len(result.component_volume_tags)} components"
                         )
                 except Exception as primary_exc:
+                    if isinstance(primary_exc, StlTopologyError):
+                        raise
                     if conformal_object_regions:
                         raise
                     initial_primary_error = primary_exc
@@ -3779,10 +3789,13 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             primary_exc = None  # successfully recovered!
                         except Exception as stl_exc:
+                            if isinstance(stl_exc, StlTopologyError):
+                                raise
                             component_fallback_error = stl_exc
                             primary_exc = stl_exc
 
                     if primary_exc is not None:
+                        _reject_anonymous_import_fallback(geometries, primary_exc)
                         fallback_failure_context = (
                             initial_primary_error,
                             component_fallback_error,
