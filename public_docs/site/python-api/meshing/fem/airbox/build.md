@@ -141,11 +141,17 @@ Model Explorer
     └── Mesh Build          → selection kind: airbox.mesh.build
 ```
 
-The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) runs the build;
-the Quality/History tabs show the realized report. In the object panel,
-**Build Mesh** executes `mesh.build-selected`. Full build lifecycle description:
-{doc}`../../../../frontend/meshing/build-lifecycle`; reports and quality:
-{doc}`../../../../frontend/meshing/quality-and-reports`.
+The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) and **Airbox Mesh Parameters** (`AirboxMeshParametersPanel`, via **Apply & Build Shared-Domain Mesh** / `mesh.build-shared-domain`) run the shared-domain build; the Quality/History tabs (`MeshQualityStatisticsView`) show the realized report. In the object panel (`ObjectMeshPolicyPanel`), **Build Mesh** executes `mesh.build-selected`. Full build lifecycle description: {doc}`../../../../frontend/meshing/index`; reports and quality: {doc}`../../../../frontend/meshing/quality-and-reports`.
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport showing realized shared-domain FEM tetrahedral mesh and exterior airbox
+:width: 92%
+```
+
+```{image} /_static/images/ui/explorer-jobs-and-diagnostics-tabs.png
+:alt: Explorer Jobs and Diagnostics tabs monitoring shared-domain mesh build progress and status
+:width: 92%
+```
 
 ## 6. Backend support
 

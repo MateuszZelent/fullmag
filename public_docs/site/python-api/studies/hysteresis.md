@@ -141,16 +141,29 @@ introduced here.
 
 ## Control Room crosswalk
 
-Status: Stage authoring and inspection are partial; the stage editor exposes only its advertised fields.
+Status: Stage authoring, $M(B)$ loop plotting, and snapshot replay are `partial`; the stage editor exposes core sweep bounds and settle controls, while nested `SettleTree` pipelines remain Python-authored (`not implemented`).
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
+| Sweep field bounds, steps, & settle tolerance (`HysteresisStageDraftFields`) | `Model Explorer -> Stages -> Add stage -> Hysteresis` (`HysteresisStageInspector`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Interactive $M(B)$ hysteresis curve & snapshot scrub | `Analysis Plots` (`HysteresisChart`) linked with `PlanarSnapshotNavigator` (2D) & `HysteresisReplayGlyphLayer` (3D) | `inspection-only` | Clicking any point updates `Selection` (`stageId`, `snapshotId`, `field_value_mT`, `branch_id`) for synchronized 2D/3D replay |
+| Arbitrary `SettlePipeline` / `SettleTree` schedules | `Model Explorer -> Stages -> <stage>` | `not implemented` | Python-only until implemented; stage renders read-only metadata in UI |
 
-not implemented: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+```{image} /_static/images/ui/charts-hysteresis-loop-playback.png
+:alt: Control Room hysteresis loop plot synchronized with field-sweep snapshot playback in 2D and 3D views
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Control Room Study and Stage Inspectors for editing and re-running hysteresis stages
+:align: center
+:width: 100%
+```
+
+not implemented: frontend support for study parameters and arbitrary nested settle pipelines not rendered by `HysteresisStageDraftFields`.
+See [Control Room capability register](/frontend/capability-register) and [Study Inspectors](/frontend/inspectors/studies-and-stages).
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx`, `apps/control-room/src/modules/inspector/panels/stages/HysteresisStageInspector.tsx`, and `apps/control-room/src/modules/analysis-plots/AnalysisPlotsView.tsx`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |

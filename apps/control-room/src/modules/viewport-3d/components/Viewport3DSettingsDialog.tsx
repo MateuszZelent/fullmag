@@ -167,5 +167,5 @@ function Choice({ id, label, value, options, disabled = false, onChange }: { id:
 }
 
 function Range({ id, label, value, min, max, step, disabled = false, onChange }: { id: string; label: string; value: number; min: number; max: number; step: number; disabled?: boolean; onChange: (value: number) => void }) {
-  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label} <output htmlFor={id}>{Number(value.toFixed(3))}</output></label><input id={id} type="range" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /></div>;
+  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label} <output htmlFor={id}>{Number(value.toFixed(3))}</output></label><input id={id} type="range" aria-valuetext={String(Number(value.toFixed(3)))} value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /></div>;
 }

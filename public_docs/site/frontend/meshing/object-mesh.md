@@ -35,6 +35,20 @@ advertised by `mesh.exact_layer_count`; unsupported `swept_hex` remains disabled
 
 **Apply Object Policy** writes the policy and invalidates current mesh resources. **Build Mesh**
 executes `mesh.build-selected`; if the draft is dirty, the panel applies it first.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Airbox Mesh Overview inspector displaying FEM readiness badges, topology revision match, carrier part_airbox, and element size targets
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM object geometry enclosed by the exterior airbox wireframe
+:align: center
+:width: 100%
+```
+
+Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
 ## Control Room crosswalk
 
 This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.

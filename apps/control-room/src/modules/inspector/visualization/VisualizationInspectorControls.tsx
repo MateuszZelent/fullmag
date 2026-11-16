@@ -140,11 +140,11 @@ function VisualizationRenderModeIcon({
   active: boolean;
   mode: RenderModeOption;
 }) {
-  if (mode === "vectors") return <ArrowUpRight size={20} strokeWidth={1.5} />;
-  if (mode === "off") return <EyeOff size={20} strokeWidth={1.5} />;
+  if (mode === "vectors") return <ArrowUpRight aria-hidden="true" size={20} strokeWidth={1.5} />;
+  if (mode === "off") return <EyeOff aria-hidden="true" size={20} strokeWidth={1.5} />;
   if (mode === "points") {
     return (
-      <svg fill="none" height="20" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
+      <svg aria-hidden="true" fill="none" height="20" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
         <circle cx="12" cy="12" fill="currentColor" r="1.5" />
         <circle cx="7" cy="9" fill="currentColor" r="1.5" />
         <circle cx="17" cy="9" fill="currentColor" r="1.5" />
@@ -154,7 +154,7 @@ function VisualizationRenderModeIcon({
     );
   }
   return (
-    <svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
+    <svg aria-hidden="true" fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="20">
       <path
         d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
         fill={active && mode !== "wireframe" ? "currentColor" : "none"}

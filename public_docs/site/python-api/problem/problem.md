@@ -54,23 +54,23 @@ closed rather than silently rewrite intent.
 
 ## Standard entry: Frozen-spins (source-first, argument-complete)
 
-### Wprowadzenie
+### Introduction
 
-`Problem.magnetization_constraints` przechowuje instancje `FrozenSpins` jako część intencji
-kontrakcyjnej problemu. Kontrakt pozostaje typowany aż do warstwy planera i nie jest
-redukowany do masek backendowych wcześniej.
+`Problem.magnetization_constraints` stores `FrozenSpins` instances as part of the problem's
+contractual intent. The contract stays typed through to the planner layer and is never collapsed into
+backend masks prematurely.
 
-### Bezpośredni dowód z kodu
+### Direct source-level evidence
 
-- `class FrozenSpins` (`packages/fullmag-py/src/fullmag/model/constraints.py`) waliduje wejście w
-  `__init__` i normalizuje `reference`/`activation`.
-- `ObjectRegion.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) buduje
-  `FrozenSpins` dla regionu (`in_region_selection`).
-- `Ferromagnet.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) buduje
-  `FrozenSpins` dla obiektu (`in_object_selection`), wymaga `object_id`.
-- `Problem` (`packages/fullmag-py/src/fullmag/model/problem.py`) serializuje constrainty do IR.
+- `class FrozenSpins` (`packages/fullmag-py/src/fullmag/model/constraints.py`) validates inputs in
+  `__init__` and normalizes `reference`/`activation`.
+- `ObjectRegion.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) constructs
+  `FrozenSpins` for a region (`in_region_selection`).
+- `Ferromagnet.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) constructs
+  `FrozenSpins` for an object (`in_object_selection`), requiring `object_id`.
+- `Problem` (`packages/fullmag-py/src/fullmag/model/problem.py`) serializes constraints into IR.
 
-### Implementacja w Pythonie (source-first)
+### Python authoring pattern (source-first)
 
 ```python
 from fullmag.model.constraints import FrozenSpins
@@ -87,16 +87,16 @@ constraint = FrozenSpins(
 )
 ```
 
-### Funkcje i argumenty (z podpisów)
+### Functions and arguments (from signatures)
 
-| Funkcja | Argumenty |
+| Function | Arguments |
 |---|---|
-| `FrozenSpins.__init__(*, id, selector, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | W pełnym kontrakcie źródłowym z walidacją polityk i domyślnymi wartościami. |
-| `ObjectRegion.freeze_spins(*, id=None, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Wrapper regionowy: domyślny `id` to `<region_id>_frozen`, selector to `in_region_selection`. |
-| `Ferromagnet.freeze_spins(*, id, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Wrapper obiektowy: selector to `in_object_selection`, twardy wymóg `object_id`. |
-| `Problem(..., magnetization_constraints=(...))` | Przenosi constraints do pola problem-level i potem do IR (`ProblemIR`). |
+| `FrozenSpins.__init__(*, id, selector, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Full source contract with policy validation and defaults. |
+| `ObjectRegion.freeze_spins(*, id=None, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Region helper: default `id` is `<region_id>_frozen`; selector is `in_region_selection`. |
+| `Ferromagnet.freeze_spins(*, id, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Object helper: selector is `in_object_selection`; requires explicit `object_id`. |
+| `Problem(..., magnetization_constraints=(...))` | Carries constraints into the problem-level field and into IR (`ProblemIR`). |
 
-### Referencje kodowe
+### Code references
 
 - `packages/fullmag-py/src/fullmag/model/constraints.py:137`
 - `packages/fullmag-py/src/fullmag/model/constraints.py:148`
@@ -104,7 +104,7 @@ constraint = FrozenSpins(
 - `packages/fullmag-py/src/fullmag/model/structure.py:769`
 - `packages/fullmag-py/src/fullmag/model/problem.py`
 
-### Bibliografia
+### Bibliography
 
 - Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
@@ -147,51 +147,50 @@ constraint = FrozenSpins(
 | `Problem.pbc` | `FdmPbc \| tuple[bool,bool,bool] \| None` | `None` | $1$ | requested periodic axes and demag policy | `backend_policy.pbc` |
 
 
-### Kolekcje anten i tożsamość pomocniczych obiektów
+### Antenna collections and auxiliary-object identity
 
-Kontenery i identyfikatory są bezwymiarowe; fizyczne parametry zagnieżdżonych
-obiektów zachowują własne jednostki SI (m, A, T, Hz, s). Poniższa tabela nie
-zmienia ich normalizacji i nie deklaruje wykonania solvera na wszystkich lanes.
+Containers and identifiers are dimensionless; physical parameters of nested objects retain their own
+SI units ($\mathrm{m}$, $\mathrm{A}$, $\mathrm{T}$, $\mathrm{Hz}$, $\mathrm{s}$). The table below
+does not alter their normalization and does not imply solver execution on all lanes.
 
-| Python | Typ | Domyślnie | SI | Walidacja konstrukcji | Znaczenie | Wsparcie | ProblemIR |
+| Python | Type | Default | SI | Construction validation | Meaning | Support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `Problem.auxiliary_geometry_object_ids` | `Mapping[str, str]` | `{}` | $1$ | niepuste nazwy i ID; klucze należą do auxiliary_geometry_roles; unikalność object_ids względem magnesów | niezmienna tożsamość pomocniczej encji, niezależna od nazwy | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `physics_objects[].object_id` |
-| `Problem.antenna_port_modes` | `Sequence[AntennaPortMode]` | `()` | $1$ | elementy AntennaPortMode; unikalne id w kolekcji | deklaracje baz prądowych portów, bez automatycznego solve | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_port_modes` |
-| `Problem.antenna_field_solve_stages` | `Sequence[AntennaFieldSolveStage]` | `()` | $1$ | elementy AntennaFieldSolveStage; unikalne id w kolekcji | deklaracje rozwiązania pola, oddzielone od jawnej akcji etapu | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_field_solve_stages` |
-| `Problem.antenna_target_projections` | `Sequence[AntennaTargetProjection]` | `()` | $1$ | elementy AntennaTargetProjection; unikalne id w kolekcji | żądane rzuty bazy na wybrany cel | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_target_projections` |
-| `Problem.solved_antenna_drives` | `Sequence[SolvedAntennaDrive]` | `()` | $1$ | elementy SolvedAntennaDrive; unikalne id w kolekcji | czasowa konsumpcja uprzednio rozwiązanej bazy | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `solved_antenna_drives` |
-| `Problem.antenna_spectrum_requests` | `Sequence[AntennaSpectrumRequest]` | `()` | $1$ | elementy AntennaSpectrumRequest; unikalne id w kolekcji | żądania widma źródła, nie odpowiedź magnetyzacji | authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities | `antenna_spectrum_requests` |
+| `Problem.auxiliary_geometry_object_ids` | `Mapping[str, str]` | `{}` | $1$ | non-empty names and IDs; keys belong to auxiliary_geometry_roles; unique object_ids across magnets | immutable auxiliary-entity identity, independent of display name | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `physics_objects[].object_id` |
+| `Problem.antenna_port_modes` | `Sequence[AntennaPortMode]` | `()` | $1$ | AntennaPortMode entries; unique id within collection | port current-basis declarations without automatic solve | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_port_modes` |
+| `Problem.antenna_field_solve_stages` | `Sequence[AntennaFieldSolveStage]` | `()` | $1$ | AntennaFieldSolveStage entries; unique id within collection | field-solve declarations separated from explicit stage action | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_field_solve_stages` |
+| `Problem.antenna_target_projections` | `Sequence[AntennaTargetProjection]` | `()` | $1$ | AntennaTargetProjection entries; unique id within collection | requested basis projections onto a selected target | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_target_projections` |
+| `Problem.solved_antenna_drives` | `Sequence[SolvedAntennaDrive]` | `()` | $1$ | SolvedAntennaDrive entries; unique id within collection | time-domain consumption of a previously solved basis | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `solved_antenna_drives` |
+| `Problem.antenna_spectrum_requests` | `Sequence[AntennaSpectrumRequest]` | `()` | $1$ | AntennaSpectrumRequest entries; unique id within collection | source-spectrum requests rather than magnetization response | shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities | `antenna_spectrum_requests` |
 
-`Problem.__post_init__` odmawia złego typu elementu i duplikatów id.
-To nie jest pełny preflight wzajemnych referencji port/solve/projection/drive:
-tę granicę musi sprawdzić IR/planner/runtime przed wykonaniem. Nie wolno
-promować samego poprawnego typu kolekcji do rozwiązanej lub dostępnej bazy.
+`Problem.__post_init__` rejects wrong element types and duplicate `id` values. This is not a full
+preflight of cross-references between port, solve, projection, and drive declarations: the
+IR/planner/runtime boundary must verify that before execution. A valid collection type alone must
+never be treated as a solved or available basis.
 
-`auxiliary_geometry_object_ids` mapuje nazwę do niezmiennego object_id;
-klucze muszą występować w `auxiliary_geometry_roles`. Dla braku wpisu
-serializer zachowuje compatibility fallback object_id=name. W rekordzie
-`physics_objects[]` nazwa pozostaje osobnym polem, geometry_id odwołuje się
-do geometrii, a type pochodzi z jawnej roli. Typ lub nazwa anteny nie
-uruchamia transportu, solve, projekcji ani LLG. Sam słownik ID nie tworzy
-rekordu physics_object: rekord powstaje dla zadeklarowanej roli.
+`auxiliary_geometry_object_ids` maps a display name to an immutable `object_id`; keys must appear
+in `auxiliary_geometry_roles`. When omitted, the serializer preserves the `object_id = name`
+compatibility fallback. In each `physics_objects[]` entry, `name` stays a separate field,
+`geometry_id` references the geometry, and `type` comes from the explicit role. Antenna type or
+name never triggers current transport, field solve, projection, or LLG dynamics. An ID dictionary
+alone does not create a `physics_objects` record: a record is emitted only for a declared role.
 
-Pięć kolekcji serializuje się przez `value.to_ir()` do pól tej samej nazwy.
-Rejestracja deklaracji solve nie jest akcją etapu: dedicated stage-first
-workflow musi ją jawnie wybrać. Widmo źródła nie jest dowodem wzbudzonego
-wektora falowego odpowiedzi; ta wymaga osobnej analizy magnetyzacji.
+The five collections serialize via `value.to_ir()` to identically named IR fields. Registering a
+field-solve declaration is not a stage action: a dedicated stage-first workflow must invoke it
+explicitly. A source spectrum is not evidence of an excited magnetization wavevector response; that
+requires a separate magnetization analysis.
 
-### Macierz granicy authoringu
+### Authoring boundary matrix
 
-| Solver | Device | Kontrakt aggregate | Kwalifikacja wykonania |
+| Solver | Device | Aggregate contract | Execution qualification |
 |---|---|---|---|
-| FDM | CPU | wspólny typowany graph i lowering | osobna kwalifikacja projekcji/importu i LLG |
-| FDM | GPU | wspólny typowany graph i lowering | osobna CUDA qualification; bez fallbacku CPU |
-| FEM | CPU | wspólny typowany graph i lowering | osobne native solve, projection i time evolution |
-| FEM | GPU | wspólny typowany graph i lowering | CPU precompute nie oznacza GPU solve; konsumpcja device ma własne bramki |
+| FDM | CPU | shared typed graph and lowering | separate projection/import and LLG qualification |
+| FDM | GPU | shared typed graph and lowering | separate CUDA qualification; no CPU fallback |
+| FEM | CPU | shared typed graph and lowering | separate native solve, projection, and time evolution |
+| FEM | GPU | shared typed graph and lowering | CPU precompute is not GPU solve; device consumption has separate gates |
 
-Źródło: `packages/fullmag-py/src/fullmag/model/problem.py`, `class Problem`
-(walidacja `__post_init__`, lowering `to_ir`). Fizykę i realizacje pola opisuje
-[referencja anten CPW](/python-api/current-and-excitations/cpw-antenna), nie ten aggregate API.
+Source: `packages/fullmag-py/src/fullmag/model/problem.py`, `class Problem` (`__post_init__`
+validation and `to_ir` lowering). Field physics and realizations are documented in the
+[CPW antenna reference](/python-api/current-and-excitations/cpw-antenna), not in this aggregate API page.
 
 ### Canonical stage-first authoring
 
@@ -216,11 +215,10 @@ study.stages.add_run(stage_id="run", until=1e-12)
 (python-api-problem-problem-problem-ir)=
 ## ProblemIR
 
-Poniższy wycinek pochodzi z lowering przykładu study przez repozytoryjny loader,
-bez uruchamiania solvera. Żadna kolekcja anten nie jest zadeklarowana, więc
-każda pozostaje pusta; nie pojawia się automatyczny solve ani RF drive.
-Pole `physics_objects` jest pomijane, gdy nie zadeklarowano pomocniczych ról.
-To fragment, nie cały snapshot problemu.
+The excerpt below comes from lowering the example `study` through the repository loader without
+running a solver. Because no antenna collection is declared, each collection stays empty and no
+automatic field solve or RF drive appears. The `physics_objects` field is omitted when no auxiliary
+roles are declared. This is an excerpt rather than a complete problem snapshot.
 
 ```json
 {
@@ -280,16 +278,24 @@ No independent physical equation is introduced.
 
 ## Control Room crosswalk
 
-Status: The Control Room authors a study and lowers it to ProblemIR; direct Problem/IR editing is not exposed.
+Status: Control Room authors a study, objects, couplings, and `FrozenSpins` constraints and lowers them to `ProblemIR`; direct standalone `Problem`/`ProblemIR` editing is not exposed.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `No standalone Control Room route` | `not implemented` | No supported frontend transaction |
-| Parameters without a named UI field | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
+| `Problem.magnetization_constraints` (`FrozenSpins`) | `Model Explorer -> Physics / Constraints -> Frozen Spins` (`FrozenSpinsInspectorPanel`, `SelectionExpressionBuilder`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision`; `FrozenSpinsOverlay` viewport preview |
+| `Problem.couplings` & `Problem.field_drives` | `Model Explorer -> Physics -> Couplings / Drives` (`CouplingInspectorPanel`, `RegionalFieldDrivePanel`) | `partial` | `runAuthoringMutationWithHistory` via `MODEL_COUPLINGS_RESOURCE_KEY` / scene deltas |
+| `Problem.antenna_*` / `solved_antenna_drives` | `Model Explorer -> Physics Objects -> <antenna>` (`AntennaObjectPanel`, `AntennaFieldSolveAuthoring`) | `partial` | `runAuthoringMutationWithHistory` with pre-solved basis overlays |
+| Standalone `Problem` aggregate constructor / raw IR parameters without UI fields | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
 
-frontend support is not implemented for standalone Problem/ProblemIR authoring.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
+```{image} /_static/images/ui/inspector-physics-couplings-frozen-spins.png
+:alt: Control Room Frozen Spins constraint inspector showing frz_edge_pin, Left Edge Pinning, and In region selection for reg_pinning_ring on obj_yig_film
+:align: center
+:width: 100%
+```
+
+not implemented: frontend support for standalone Problem/ProblemIR authoring or aggregate parameters without matching inspector panels.
+See [Control Room capability register](/frontend/capability-register) and [Physics, Couplings & Frozen Spins Inspectors](/frontend/inspectors/physics-antennas-and-transport).
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`, `FrozenSpinsInspectorPanel`, and `CouplingInspectorPanel`.
 
 ## Source-code index
 

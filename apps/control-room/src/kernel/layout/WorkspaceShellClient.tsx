@@ -400,7 +400,7 @@ function RuntimeDegradedBanner({
           stage and cause. A task&apos;s completion status is shown separately from API availability.
         </span>
         {hasWorkspaceDiagnostics ? (
-          <div className="flex flex-wrap gap-2" aria-label="Runtime failure diagnostics">
+          <div role="group" className="flex flex-wrap gap-2" aria-label="Runtime failure diagnostics">
             <Button
               size="sm"
               type="button"

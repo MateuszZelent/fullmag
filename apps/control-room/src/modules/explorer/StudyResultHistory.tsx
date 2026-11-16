@@ -89,7 +89,7 @@ function StudyResultScalarHistory({ result }: { result: StudyStageResult }) {
         : expanded && window ? (
           <>
             <p>{window.coverage === "terminal_sample" ? "Terminal sample" : `${window.total_rows} solver samples`}</p>
-            <div className="max-h-48 overflow-auto">
+            <div aria-label="Archived scalar values" className="max-h-48 overflow-auto" role="region" tabIndex={0}>
               <table aria-label="Archived scalar values">
                 <thead><tr>{window.columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
                 <tbody>{window.rows.map((row, index) => (

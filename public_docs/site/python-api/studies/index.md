@@ -24,7 +24,20 @@ frequency-response
 ```
 ## Control Room crosswalk
 
-Use `Model Explorer -> Stages -> Add stage` for the study types supported by `StudyStageDraftEditor`. Fields absent from the corresponding stage editor are `TODO: frontend support`; child pages must identify them explicitly. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Study` (`StudyInspectorPanel`) to configure requested backend, device, precision,
+and execution mode, and `Model Explorer -> Stages -> Add stage` (`StudyStageDraftEditor`) to author
+and interactively re-run supported stage types (`relax`, `run`, `hysteresis`, `eigenmodes`,
+`frequency_response`). Each stage routes through `StudyStageInspectorRouter`, supports initial-state
+handoff (`StageInitialStateSelector`) and revision-pinned Apply-and-Compute (`executeStageAfterApply`),
+and plots live time series, hysteresis loops, or spectra in `LiveChartsView` and `AnalysisPlotsView`.
+Fields absent from the corresponding stage editor remain `TODO: frontend support`; child pages identify
+them explicitly. See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/studies-and-stages`.
+
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Study and Stage Inspectors showing solver execution profile, ordered stage pipeline, and interactive stage re-run controls
+:align: center
+:width: 100%
+```
 
 ## API and source scope
 

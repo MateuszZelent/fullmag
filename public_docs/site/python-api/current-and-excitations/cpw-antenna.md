@@ -112,7 +112,22 @@ Focused repository tests covering this contract include: test_flat_antenna_objec
 (python-api-current-and-excitations-cpw-antenna-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+CPW geometry, signal/ground gap ratios, port modes, solved electromagnetic field bases, and temporal drives are exposed in Control Room through `AntennaObjectPanel` and its `antenna/*` sub-panels (`AntennaCompositionSummaryPanel`, `AntennaGeometryPanel`, `AntennaConductorAuthoring`, `AntennaPortComposer`, `AntennaFieldSolveAuthoring`, `AntennaExternalLeadInspectionPanel`, and `AntennaFieldBasisPreview`). Advanced Python-authored geometry expressions or solver policy overrides without named inspector fields remain Python-only (`not implemented` in the UI). No unsupported UI or runtime capability is implied.
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| CPW conductor layout, port modes, solve stage, & RF waveforms | `Model Explorer -> Physics Objects -> <antenna>` (`AntennaObjectPanel`, `AntennaPortComposer`, `AntennaFieldSolveAuthoring`) | `partial` | `runAuthoringMutationWithHistory` (`scene_revision` checked) and 3D basis overlay preview |
+| Unsupported low-level geometry expressions or backend solver hints | Python DSL | `not implemented` | Authored directly in Python |
+
+```{image} /_static/images/ui/inspector-antenna-rf-and-waveforms.png
+:alt: Antenna Inspector displaying CPW/RF waveform parameters, conductor placement, and port composition
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-cpw-antenna-scientific-bibliography)=
 ## Scientific bibliography

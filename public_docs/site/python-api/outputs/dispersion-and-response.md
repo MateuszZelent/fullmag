@@ -143,16 +143,31 @@ Definitions belong to {doc}`../../numerical-methods/frequency-domain/index` and
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
+Status: Spectral dispersion and driven response inspection are `implemented` as `inspection-only` result views, while stage output selectors (`Outputs`) are `partial` and unsupported raw output serialization formats remain not implemented in the form editor.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Outputs` | `partial` | Submit stage draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `not implemented` | Python-only until implemented |
+| Dispersion & response output specs (`SaveDispersion`, `SaveResponse`) | `Model Explorer -> Stages -> <stage> -> Outputs` (`StudyStageDraftEditor`) | `partial` | Submit stage draft; output resources are revised after execution |
+| Dispersion curves, tracked branches, & $S(k,f)$ heatmaps | `Analysis Plots` (`EigenDispersionInspectorPanel`, `DynamicStructureFactorView`, `SpinWaveGammaView`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/spin-wave/*` and `SolutionSet` (decimated heatmaps disclose bounding explicitly) |
+| Driven FMR curves & resonance peak tables | `Analysis Plots` (`FmrResponseSweepInspectorPanel`, `FmrPeakInspector`, `FrequencyResponseChart`) | `inspection-only` | Readback from `/v2/sessions/current/analysis/frequency-response/*` and interactive peak selection |
+| Saved multi-run dispersion / spectrum comparison | `Results Navigator` (`SavedResultsBrowser`) | `inspection-only` | Offline comparison across materialized `SolutionSet` revisions |
+| Output formatting flags without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Spin-wave dispersion, Dynamic Structure Factor S(k,f) heatmap, and FMR spectrum inside Control Room Analysis Plots
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/results-saved-navigator-comparison.png
+:alt: Saved Results Navigator comparing historical SolutionSet runs and spectral overlays
+:align: center
+:width: 100%
+```
 
 not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: [`apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts#L1074) (`buildEigenDispersionChartModel`, `buildFrequencyResponseChartModel`).
+See [Control Room capability register](/frontend/capability-register), [Planar Monitors & Frequency-Domain Inspectors](/frontend/inspectors/analysis-and-frequency-domain), and [Charts & Playback](/frontend/visualization/charts-and-playback).
+Frontend source owners: [`apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/shared/domain/analysis/frequencyDomainChartModels.ts#L1074) (`buildEigenDispersionChartModel`, `buildFrequencyResponseChartModel`), `EigenDispersionInspectorPanel`, `DynamicStructureFactorView`, and `SavedResultsBrowser`.
 
 ## 13. Source-code index
 

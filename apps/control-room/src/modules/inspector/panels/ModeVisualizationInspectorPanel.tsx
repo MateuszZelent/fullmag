@@ -138,6 +138,7 @@ export function ModeVisualizationPhaseControl({
           <div className="fm-mode-phase-control__value">
             <input
               aria-label="Mode visualization phase slider"
+              aria-valuetext={`${committedPhaseValue} rad`}
               className="fm-mode-phase-control__slider"
               disabled={disabled}
               max={PHASE_MAX_RAD}

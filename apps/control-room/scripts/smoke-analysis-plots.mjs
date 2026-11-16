@@ -568,7 +568,7 @@ async function verifyAnalysisInspectorSummary(page, datasetRef) {
       throw new Error(`Analysis Inspector is missing ${required}: ${text}`);
     }
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (text.includes(forbidden)) {
       throw new Error(`Analysis Inspector still exposes Live Chart control ${forbidden}.`);
     }
@@ -763,7 +763,7 @@ function validateProof(proof, expectedDatasetRef) {
   if (!proof.cursor || /cursor\s+—/i.test(proof.cursor)) {
     failures.push(`analysis cursor selection is missing: ${proof.cursor}`);
   }
-  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates"]) {
+  for (const forbidden of ["Chart controls", "Following", "Resume live chart updates", "Pause live chart updates"]) {
     if (proof.inspectorText.includes(forbidden)) {
       failures.push(`Analysis Inspector exposes Live Chart control ${forbidden}.`);
     }

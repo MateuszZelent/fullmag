@@ -39,6 +39,7 @@ import {
   type InteractionSpec,
 } from "@/shared/domain/physics/interactions";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 import {
   Dialog,
   DialogContent,
@@ -840,19 +841,21 @@ function PhysicsInteractionChecklistRow({
     ? draft.present && draft.enabled
     : objectActive || Boolean(studyDraft?.present && studyDraft.enabled);
   const disabled = isDeferredInteraction(option.id) || !operation.enabled;
+  const checkbox = (
+    <input
+      className="fm-inspector-checkbox"
+      checked={checked}
+      disabled={disabled}
+      type="checkbox"
+      onChange={(event) => onToggle(option.id, event.target.checked)}
+    />
+  );
 
   return (
-    <label
-      className="fm-inspector-checkbox-row"
-      title={operation.enabled ? undefined : operation.reason}
-    >
-      <input
-        className="fm-inspector-checkbox"
-        checked={checked}
-        disabled={disabled}
-        type="checkbox"
-        onChange={(event) => onToggle(option.id, event.target.checked)}
-      />
+    <label className="fm-inspector-checkbox-row">
+      {operation.enabled || !operation.reason ? checkbox : (
+        <DisabledReason reason={operation.reason}>{checkbox}</DisabledReason>
+      )}
       <span>{option.label}</span>
       <span className="fm-inspector-checkbox-row__meta">
         {operation.enabled ? statusLabel(option.availability) : operation.state}

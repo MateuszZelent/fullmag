@@ -109,7 +109,7 @@ export function PlanarCropViewSection({
               setDrafts((current) => ({ ...current, [field]: value }));
             }}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
                 event.preventDefault();
                 commit(field, event.currentTarget.value);
               } else if (event.key === "Escape") {

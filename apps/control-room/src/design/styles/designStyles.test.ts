@@ -12,6 +12,7 @@ const locallyScopedCssVars = new Set([
   "--fm-refresh-progress",
   "--pct",
   "--radix-accordion-content-height",
+  "--radix-popover-content-available-height",
   "--radix-select-content-available-height",
   "--radix-select-trigger-width",
 ]);

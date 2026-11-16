@@ -182,6 +182,15 @@ export function FooterTelemetry({
       userSolvePhase,
     },
   );
+  const metricGroups = telemetry.metrics.reduce<
+    { id: FooterTelemetryGroup; metrics: [FooterTelemetryMetric, ...FooterTelemetryMetric[]] }[]
+  >((groups, metric) => {
+    const id = metricGroup(metric.id);
+    const current = groups.at(-1);
+    if (current?.id === id) current.metrics.push(metric);
+    else groups.push({ id, metrics: [metric] });
+    return groups;
+  }, []);
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -208,11 +217,11 @@ export function FooterTelemetry({
           data-state={telemetry.statusState}
           aria-hidden="true"
         />
-        <span className="text-fm-xs font-medium text-fm-primary whitespace-nowrap truncate">
+        <span className="text-fm-xs font-medium text-fm-primary whitespace-nowrap truncate" title={telemetry.statusDetail}>
           {telemetry.statusTitle}
         </span>
         <span className="text-fm-muted text-fm-2xs select-none flex-shrink-0" aria-hidden="true">·</span>
-        <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
+        <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate" title={telemetry.onlineDetail}>
           {telemetry.onlineTitle}
         </span>
         {telemetry.antennaProgress ? (
@@ -236,11 +245,29 @@ export function FooterTelemetry({
         ) : null}
       </div>
 
-      <div className="fm-footer-telemetry__metrics"><div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
-        {telemetry.metrics.map((metric) => (
-          <TelemetryMetric key={metric.id} group={metricGroup(metric.id)} {...metric} />
-        ))}
-      </div></div>
+      <div className="fm-footer-telemetry__metrics">
+        <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+          {metricGroups.map(({ id, metrics }) => (
+            <div
+              className="fm-footer-telemetry__group"
+              data-group={id}
+              key={`${id}-${metrics[0].id}`}
+              role="group"
+              aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
+            >
+              <h3 className="fm-footer-telemetry__group-title">
+                <span className="fm-footer-telemetry__group-marker" aria-hidden="true" />
+                {FOOTER_TELEMETRY_GROUP_LABELS[id]}
+              </h3>
+              <div className="fm-footer-telemetry__group-metrics">
+                {metrics.map((metric) => (
+                  <TelemetryMetric key={metric.id} group={id} {...metric} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1421,7 +1448,13 @@ function FrequencyDomainProgressStrip({
     <div className="fm-footer-telemetry__freq-strip">
       <span className="fm-footer-telemetry__freq-strip-title">{progress.title}</span>
       {chips.length > 0 ? (
-        <span className="fm-footer-telemetry__freq-strip-chip">{chips[0]}</span>
+        <span
+          className="fm-footer-telemetry__freq-strip-chip"
+          aria-label={chips[0]}
+          title={chips[0]}
+        >
+          {chips[0]}
+        </span>
       ) : null}
       <div
         aria-label={progress.title}
@@ -1653,7 +1686,16 @@ export function resolvePrimaryTelemetryObjectId(
   return objects.find((object) => !hasEmptyObjectMagneticModel(object))?.id ?? null;
 }
 
-function metricGroup(id: string): "runtime" | "solver" | "magnetization" | "energy" {
+type FooterTelemetryGroup = "runtime" | "solver" | "magnetization" | "energy";
+
+const FOOTER_TELEMETRY_GROUP_LABELS: Record<FooterTelemetryGroup, string> = {
+  runtime: "Runtime",
+  solver: "Solver",
+  magnetization: "Magnetization",
+  energy: "Energy",
+};
+
+function metricGroup(id: string): FooterTelemetryGroup {
   if (id.startsWith("energy-")) return "energy";
   if (id === "avg-mx" || id === "avg-my" || id === "avg-mz" || id === "avg-m") return "magnetization";
   if (id === "step" || id === "dt" || id === "active-solver" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
@@ -1679,26 +1721,25 @@ function TelemetryMetric({
 }) {
   const tooltip = `${label}: ${value}${unit ? ` ${unit}` : ""}\n${detail}\n${subdetail}`;
   return (
-    <div
-      className="fm-footer-telemetry__metric"
-      data-group={group}
-      title={tooltip}
-    >
-      <div className="fm-footer-telemetry__metric-label">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <div className="fm-footer-telemetry__metric-value">
-        <span>{value}</span>
-        {unit ? (
-          <span className="fm-footer-telemetry__metric-unit">{unit}</span>
-        ) : null}
-      </div>
+    <details className="fm-footer-telemetry__metric" data-group={group} title={tooltip}>
+      <summary
+        className="fm-footer-telemetry__metric-summary"
+        aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. Details`}
+      >
+        <span className="fm-footer-telemetry__metric-label">
+          {icon}
+          <span>{label}</span>
+        </span>
+        <span className="fm-footer-telemetry__metric-value">
+          <span>{value}</span>
+          {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
+        </span>
+      </summary>
       <div className="fm-footer-telemetry__metric-detail">
         <span>{detail}</span>
         <span>{subdetail}</span>
       </div>
-    </div>
+    </details>
   );
 }
 

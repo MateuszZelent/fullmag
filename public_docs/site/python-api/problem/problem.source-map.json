@@ -362,9 +362,9 @@
         "type": "Mapping[str, str]",
         "default": "{}",
         "si_unit": "1",
-        "validation": "niepuste nazwy i ID; klucze należą do auxiliary_geometry_roles; unikalność object_ids względem magnesów",
-        "meaning": "niezmienna tożsamość pomocniczej encji, niezależna od nazwy",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "non-empty names and IDs; keys belong to auxiliary_geometry_roles; unique object_ids across magnets",
+        "meaning": "immutable auxiliary-entity identity, independent of display name",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "physics_objects[].object_id"
       },
       {
@@ -372,9 +372,9 @@
         "type": "Sequence[AntennaPortMode]",
         "default": "()",
         "si_unit": "1",
-        "validation": "elementy AntennaPortMode; unikalne id w kolekcji",
-        "meaning": "deklaracje baz prądowych portów, bez automatycznego solve",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "AntennaPortMode entries; unique id within collection",
+        "meaning": "port current-basis declarations without automatic solve",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "antenna_port_modes"
       },
       {
@@ -382,9 +382,9 @@
         "type": "Sequence[AntennaFieldSolveStage]",
         "default": "()",
         "si_unit": "1",
-        "validation": "elementy AntennaFieldSolveStage; unikalne id w kolekcji",
-        "meaning": "deklaracje rozwiązania pola, oddzielone od jawnej akcji etapu",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "AntennaFieldSolveStage entries; unique id within collection",
+        "meaning": "field-solve declarations separated from explicit stage action",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "antenna_field_solve_stages"
       },
       {
@@ -392,9 +392,9 @@
         "type": "Sequence[AntennaTargetProjection]",
         "default": "()",
         "si_unit": "1",
-        "validation": "elementy AntennaTargetProjection; unikalne id w kolekcji",
-        "meaning": "żądane rzuty bazy na wybrany cel",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "AntennaTargetProjection entries; unique id within collection",
+        "meaning": "requested basis projections onto a selected target",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "antenna_target_projections"
       },
       {
@@ -402,9 +402,9 @@
         "type": "Sequence[SolvedAntennaDrive]",
         "default": "()",
         "si_unit": "1",
-        "validation": "elementy SolvedAntennaDrive; unikalne id w kolekcji",
-        "meaning": "czasowa konsumpcja uprzednio rozwiązanej bazy",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "SolvedAntennaDrive entries; unique id within collection",
+        "meaning": "time-domain consumption of a previously solved basis",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "solved_antenna_drives"
       },
       {
@@ -412,9 +412,9 @@
         "type": "Sequence[AntennaSpectrumRequest]",
         "default": "()",
         "si_unit": "1",
-        "validation": "elementy AntennaSpectrumRequest; unikalne id w kolekcji",
-        "meaning": "żądania widma źródła, nie odpowiedź magnetyzacji",
-        "backend_support": "authoring wspólny FDM/FEM CPU/GPU; wykonanie według jawnych capabilities",
+        "validation": "AntennaSpectrumRequest entries; unique id within collection",
+        "meaning": "source-spectrum requests rather than magnetization response",
+        "backend_support": "shared FDM/FEM CPU/GPU authoring; execution follows explicit capabilities",
         "problem_ir": "antenna_spectrum_requests"
       }
     ]

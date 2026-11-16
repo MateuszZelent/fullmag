@@ -170,6 +170,22 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
     [applyLiveCamera, cameraGestureRef, commitCameraChange, getCurrentCamera, invalidate, onCameraInteractionStart, rotationMode, tracker],
   );
 
+  // Commands (ribbon / palette) request a view direction through the store so
+  // keyboard users reach the same snap path as a ViewCube face click.
+  const handledViewDirectionRevisionRef = useRef(
+    viewport3dStore.getSnapshot().viewDirectionRequest?.revision ?? 0,
+  );
+  useEffect(
+    () =>
+      viewport3dStore.subscribe(() => {
+        const request = viewport3dStore.getSnapshot().viewDirectionRequest;
+        if (!request || request.revision === handledViewDirectionRevisionRef.current) return;
+        handledViewDirectionRevisionRef.current = request.revision;
+        snapToDirection(request.direction);
+      }),
+    [snapToDirection],
+  );
+
   const onOrbit = useCallback(
     (deltaX: number) => {
       const currentCamera = getCurrentCamera();

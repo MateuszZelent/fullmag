@@ -143,7 +143,13 @@ Focused repository tests covering this contract include: test_material_construct
 (python-api-materials-material-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+- **Supported scalar material editing in Control Room:** `Model Explorer -> Objects -> <object> -> Material` renders `ObjectMaterialPanel` and `ObjectAbsorbingBoundaryPanel` for supported scalar magnetic constants and absorbing-layer parameters, while `ObjectRegionsPanel` and `ObjectRegionMagneticParametersPanel` override scalar magnetic parameters per labeled region.
+- **Python-only surfaces:** Spatial parameter fields, elastic/magnetoelastic tensors, nonlinear/non-scalar couplings, and parameters without a named UI field remain Python-only (`not implemented`); see {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
+
+```{image} /_static/images/ui/inspector-material-and-regions.png
+:alt: Control Room Object Regions inspector showing Pinning Annulus and Skyrmion Core regions on obj_yig_film for scoped material overrides
+:width: 92%
+```
 
 (python-api-materials-material-scientific-bibliography)=
 ## Scientific bibliography

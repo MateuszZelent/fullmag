@@ -179,6 +179,11 @@ export function PlanarStatusBar({
             min={0}
             step={1}
             value={[step]}
+            valueText={(value) => {
+              const at = geometry ? resolvedSectionCoordinate(geometry, stepFraction(value)) : null;
+              const where = `${axis} = ${formatSectionLength(at ?? Number.NaN)}`;
+              return layerCount !== null ? `${layerNoun} ${value} of ${layerCount - 1}, ${where}` : where;
+            }}
             onValueChange={(values) => {
               const value = values[0];
               if (value !== undefined) setDraft({ key: draftKey, value });
@@ -216,9 +221,9 @@ export function PlanarStatusBar({
       <output aria-label="Cursor position" className="fm-planar-statusbar__cursor">
         {cursor ? formatCursor(cursor) : "—"}
       </output>
-      <span aria-label="Zoom" className="fm-planar-statusbar__zoom">
+      <output aria-label="Zoom" className="fm-planar-statusbar__zoom">
         {`${Math.round(zoom * 100)}%`}
-      </span>
+      </output>
       {crop ? (
         <span className="fm-planar-statusbar__crop" data-planar-crop="">
           <Crop aria-hidden="true" size={12} />

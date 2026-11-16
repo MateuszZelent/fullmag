@@ -112,7 +112,22 @@ Focused repository tests covering this contract include: test_flat_antenna_objec
 (python-api-current-and-excitations-microstrip-antenna-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Microstrip trace geometry, current distribution presets, port excitations, pre-solved basis overlays, and driven RF waveforms are authored in Control Room via `AntennaObjectPanel` and the `antenna/*` inspector sub-panels (`AntennaGeometryPanel`, `AntennaConductorAuthoring`, `AntennaPortComposer`, `AntennaFieldSolveAuthoring`, `AntennaFieldBasisPreview`). Specialized analytical distributions or backend-specific solver flags not exposed by those panels stay Python-only (`not implemented` in the UI).
+
+### Control Room crosswalk
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Microstrip trace parameters, ports, & drive waveforms | `Model Explorer -> Physics Objects -> <antenna>` (`AntennaObjectPanel`, `AntennaConductorAuthoring`, `AntennaPortComposer`) | `partial` | `runAuthoringMutationWithHistory` (`scene_revision` checked) and 3D field-basis inspection |
+| Parameters without a named UI field | Python DSL | `not implemented` | Python-only until implemented |
+
+```{image} /_static/images/ui/inspector-antenna-rf-and-waveforms.png
+:alt: Antenna Inspector showing microstrip/inductive antenna parameters, ports, and RF waveform settings
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-current-and-excitations-microstrip-antenna-scientific-bibliography)=
 ## Scientific bibliography

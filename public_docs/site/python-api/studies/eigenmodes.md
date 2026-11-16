@@ -240,12 +240,29 @@ unsupported combinations (`plan_fem_eigen`) without silent fallback.
 
 ### Control Room crosswalk
 
+Status: Eigenmode stage creation, dispersion inspection, and 3D spatial mode playback are `partial`; low-level `FemEigenSolverPolicy` matrix-free/Schur solver tuning and arbitrary $k$-path builders without matching fields remain `not implemented` in the stage draft form.
+
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `not implemented` | Python-only until implemented |
+| Stage mode count, shift/target, & basic $k$-sampling | `Model Explorer -> Stages -> Add stage -> Eigenmodes` (`EigenmodesStageInspector`, `StudyStageDraftEditor`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Tracked $\omega(k)$ dispersion plot & branch table | `Analysis Plots` (`EigenDispersionInspectorPanel`, `FrequencyDomainDispersionChart`, `FrequencyDomainBranchTable`) | `inspection-only` | Selecting a dispersion point or branch synchronizes explorer, inspector, and 3D target |
+| Spatial eigenmode profile, phase slider ($0\text{–}2\pi$), & complex projection | `3D Viewport` + `ModeVisualizationInspectorPanel` (`real`, `imag`, `magnitude`, `phase_rotated_real`) | `inspection-only` | UI visualization commands (`analysis.eigen.set-mode-3d-phase`); visual playback rate does not alter physical eigenfrequencies |
+| Advanced `FemEigenSolverPolicy` / Bloch parameters without UI fields | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `not implemented` | Python-only until implemented |
 
-See {doc}`/frontend/capability-register` for the support matrix and not implemented policy.
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Control Room eigenmode dispersion plot and branch table alongside inspection readouts
+:align: center
+:width: 100%
+```
+
+```{image} /_static/images/ui/viewport-3d-eigenmode-spatial-profile.png
+:alt: 3D spatial eigenmode profile rendered via ModeVisualizationInspectorPanel with phase projection controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register`, {doc}`/frontend/inspectors/studies-and-stages`, and {doc}`/frontend/inspectors/analysis-and-frequency-domain`.
+Frontend source owners: `EigenmodesStageInspector`, `EigenDispersionInspectorPanel`, `ModeVisualizationInspectorPanel`, and `StudyStageDraftEditor`.
 
 ### Source-code index
 

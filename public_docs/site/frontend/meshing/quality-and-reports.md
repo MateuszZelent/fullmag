@@ -25,6 +25,14 @@ The frontend normalizes and presents:
 Histogram hover is linked to the viewport by semantic scope, allowing the user to locate elements in
 a problematic size or quality bin. The current build and latest-successful build remain distinct so
 a failed rebuild does not erase the last successfully built mesh; success alone does not establish numerical qualification.
+
+```{image} /_static/images/ui/explorer-jobs-and-diagnostics-tabs.png
+:alt: Explorer Diagnostics tab opened alongside the Jobs tab showing Problem, Health, Capabilities, Solver, Mesh, Frequency Domain, and Performance nodes
+:align: center
+:width: 100%
+```
+
+Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
 ## Control Room crosswalk
 
 This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.

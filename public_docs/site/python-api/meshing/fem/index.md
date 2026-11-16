@@ -139,16 +139,26 @@ scenario-dependent.
 
 ## Control Room crosswalk
 
-Status: Frontend support is not implemented unless a named source-backed panel is added.
+Status: FEM object mesh policy, airbox mesh parameters, per-region mesh sizing, and mesh quality/history inspection are supported (`partial` relative to raw Python/Gmsh overrides); unlisted FEM options remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `See the capability register; no page-specific route is established` | `not implemented` | No supported frontend transaction |
-| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `not implemented` | Python-only until implemented |
+| `study.universe.mesh(...)` / Airbox sizing and grading | `Model Explorer -> Universe / Airbox -> Mesh` | `supported` | Apply airbox mesh draft and trigger mesh build in Airbox Mesh Parameters ({doc}`/frontend/meshing/airbox-mesh`) |
+| `Object.mesh(...)` / `ObjectRegion.mesh(...)` | `Model Explorer -> Objects -> <object> -> Mesh` / `Regions` | `supported` | Apply `ObjectMeshPolicyPanel` or `ObjectRegionMeshPanel` draft and mark dependent mesh stale ({doc}`/frontend/meshing/object-mesh`, {doc}`/frontend/meshing/region-mesh`) |
+| Unlisted Gmsh / sizing-field options | `See the capability register; Python-only fields remain read-only or omitted` | `not implemented` | Python-only until implemented |
 
-frontend support is not implemented for this API surface and its parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
+See {doc}`/frontend/meshing/index`, {doc}`/frontend/meshing/quality-and-reports`, and [Control Room capability register](/frontend/capability-register) for panel details and build-evidence inspection.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx (ObjectMeshPolicyPanel)` and `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx (ObjectRegionMeshPanel)`.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel configuring FEM object mesh sizing and airbox parameters
+:width: 92%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM tetrahedral mesh and surrounding airbox shell
+:width: 92%
+```
 
 ## Source-code index
 
