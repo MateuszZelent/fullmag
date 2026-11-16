@@ -89,8 +89,10 @@ body.mesh(maximum_element_size=MAGNETIC_MESH_M, order=1)
 
 study.demag(realization="poisson_robin")
 study.b_ext(0.0, 0.0, 0.0)
+# PG-BB with demag requires rtol <= 1e-12 for strict Armijo resolution.
+# Contract: docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md.
 study.fem_demag_solver(
-    solver="CG", preconditioner="AMG", rtol=1e-10, max_iterations=1000,
+    solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=1000,
 )
 # The shared STL mesher resolves nested shells into walls and cavity/exterior
 # air. Do not inject a separately generated mesh: Build Mesh and Compute must
