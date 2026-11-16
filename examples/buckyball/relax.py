@@ -10,7 +10,7 @@ extent defines the outer size; STL coordinates have no intrinsic units.
 The initial state is saturated along +x, without a preparatory field stage.
 This finds a local energy minimum, not a guaranteed ground state. Repeat with
 other initial states and finer meshes before drawing physical conclusions.
-The coarse mesh has a nominal 32 nm magnetic sizing target. Its realized node
+The coarse mesh has a nominal 64 nm magnetic sizing target. Its realized node
 and element counts must be checked before GPU admission. This target exceeds
 the exchange length (~8.9 nm), so
 the saved state is preliminary and requires mesh convergence before FMR claims.
@@ -34,7 +34,8 @@ STL_MAX_EXTENT = 5.361742973327637
 STL_SCALE = OUTER_SIZE_M / STL_MAX_EXTENT
 MS_A_PER_M = 400e3
 AEX_J_PER_M = 8e-12
-MAGNETIC_MESH_M = 32e-9
+MAGNETIC_MESH_M = 64e-9
+AIR_MIN_MESH_M = 128e-9
 AIR_MESH_M = 500e-9
 MAX_STEPS = 100_000
 TORQUE_TOL_T = 1e-6
@@ -54,8 +55,8 @@ study.wait_for_solve(False)
 # This path is the private user-data bind of this task's Compose group.
 RUN_DIR = Path("/user-data/buckyball-zero-field-20261115")
 study.storage(
-    output_dir=str(RUN_DIR / "relax_32nm.zarr"),
-    temp_dir=str(RUN_DIR / "scratch_32nm"),
+    output_dir=str(RUN_DIR / "relax_64nm.zarr"),
+    temp_dir=str(RUN_DIR / "scratch_64nm"),
     data_format="zarr",
     cleanup="never",
     existing_output="error",
@@ -69,7 +70,7 @@ study.universe(
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    minimum_element_size=MAGNETIC_MESH_M,
+    minimum_element_size=AIR_MIN_MESH_M,
     maximum_element_size=AIR_MESH_M,
     maximum_element_growth_rate=1.5,
     grading="geometric",
