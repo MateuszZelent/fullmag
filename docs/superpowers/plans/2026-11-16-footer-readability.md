@@ -33,7 +33,7 @@
 
 ### Etap 2: Browser QA i integracja
 
-- [ ] Zautomatyzować regresję light/dark, siedmiu zakładek, kontrastu i małych paneli; zapisać rzeczywiste zrzuty.
+- [x] Zautomatyzować regresję light/dark, siedmiu zakładek, kontrastu i małych paneli; zapisać rzeczywiste zrzuty.
 - [x] Typecheck, lint, testy, architecture hygiene i React review.
 - [ ] Review diff, commit, push, PR, wymagane CI i merge.
 - [ ] Fast-forward głównego mastera; zapisać status integracji oraz pozostawiony podgląd w rejestrze.
@@ -45,3 +45,7 @@
 - Zarządzane testy po tej poprawce: 9782/9782, typecheck i scoped lint bez błędów. Architecture hygiene bez błędów; review zmian prezentacji bez wymaganych poprawek.
 - Kontrola przeglądarkowa footera jest podpięta do istniejącego audytu CI memory-churn z pełnym fixture FDM. Sprawdza wszystkie zakładki/motywy, kontrast >= 4.5, widoczne liczby przy wysokości <= 110 px, klawiaturę i przewijanie; zapisuje PNG oraz weryfikuje canvas.
 - Szerszy lokalny audyt viewportu zatrzymał się wcześniej na przezroczystym eksporcie nieopublikowanego pola m w osobnej sesji QA. Ten zakres pozostaje NOT VERIFIED; nie obniżono progów ani kontroli audytu viewportu.
+
+- Końcowa kontrola zrzutów z CI ujawniła brakujące odpowiedzi diagnostyczne w fixture: błąd zasobu nie był błędem konsoli/HTTP i zasłaniał nawigację. QA otrzymuje osobną kontrolę powiadomień o błędach, a fixture poprawne odpowiedzi zgodne z typami API; nie ukrywamy komunikatu ani nie zmieniamy zachowania produkcyjnego.
+
+- CI dla `ac8d83db8fc29542eb874c4fe00e55a737ef9160`: Control Room i cały browser-fixture-smoke zielone; 14 próbek, minimum kontrastu 5.1701:1, w obu motywach wysokość 104 px i cztery widoczne wartości, 16 metryk dostępnych w panelu o wysokości 180 px. Powtórna bramka po uzupełnieniu fixture wymaga również braku powiadomień o błędach i zapisuje rozwinięty panel o wysokości 300 px.

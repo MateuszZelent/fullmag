@@ -32,6 +32,24 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
   const samples = [];
   const compactLayouts = [];
   const captures = [];
+  let notificationErrors = [];
+  await page.evaluate(() => {
+    const errors = [];
+    const collect = () => {
+      for (const node of document.querySelectorAll('.fm-notifications__toast[data-kind="error"]')) {
+        const text = node.textContent?.trim();
+        if (text && !errors.includes(text) && errors.length < 10) errors.push(text);
+      }
+    };
+    const observer = new MutationObserver(collect);
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    window.__FM_FOOTER_ERROR_PROBE__ = { errors, observer };
+    collect();
+  });
+  const assertNoResourceFailures = async () => {
+    notificationErrors = await page.evaluate(() => [...window.__FM_FOOTER_ERROR_PROBE__.errors]);
+    if (notificationErrors.length) throw new Error(`Footer resource failures: ${JSON.stringify(notificationErrors)}`);
+  };
   let lowPanel = null;
   let floatingBounds = null;
   let originalDividerY = null;
@@ -45,6 +63,12 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
     await page.mouse.move(x, targetY, { steps: 4 });
     await page.mouse.up();
     await waitForLayoutFrame(page);
+  };
+  const captureFooter = async (theme, variant) => {
+    await assertNoResourceFailures();
+    const image = await footer.screenshot({ type: "png", animations: "disabled", timeout });
+    if (image.length > NARROW_PNG_LIMIT_BYTES) throw new Error("Footer screenshot exceeded bounded output size");
+    captures.push({ theme, variant, png_base64: image.toString("base64"), sha256: createHash("sha256").update(image).digest("hex") });
   };
   const labels = ["Logs", "Telemetry", "Diagnostics", "Engine", "Operations", "Problems", "Quick Chart"];
   const menuAction = async (name) => {
@@ -113,16 +137,22 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
         if (sample.selected !== label || sample.panels !== 1 || sample.checked_panel_texts === 0 || sample.failures.length) {
           throw new Error(`Footer ${theme.mode}/${label}: ${JSON.stringify(sample)}`);
         }
+        await assertNoResourceFailures();
         samples.push({ theme: theme.mode, tab: label, ...sample });
       }
       await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
       await waitForLayoutFrame(page);
+      const overviewFooter = await footer.boundingBox();
+      const overviewDivider = await divider.boundingBox();
+      if (!overviewDivider) throw new Error("Cannot capture the expanded footer overview");
+      originalDividerY = overviewDivider.y + overviewDivider.height / 2;
+      await dragDivider(originalDividerY + overviewFooter.height - 300);
+      await captureFooter(theme.mode, "overview");
       const initialFooter = await footer.boundingBox();
       if (initialFooter.height > 110) {
         const box = await divider.boundingBox();
         if (!box) throw new Error("Cannot test the footer at its minimum dock height");
-        originalDividerY = box.y + box.height / 2;
-        await dragDivider(originalDividerY + initialFooter.height - 104);
+        await dragDivider(box.y + box.height / 2 + initialFooter.height - 104);
       }
       const compact = await footer.evaluate((root) => {
         const chrome = root.querySelector('.fm-footer__bar');
@@ -137,9 +167,7 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
       });
       if (compact.height > 110 || !compact.navigation_in_header || compact.visible_values < 1) throw new Error(`Compact footer hid all values: ${JSON.stringify(compact)}`);
       compactLayouts.push({ theme: theme.mode, ...compact });
-      const image = await footer.screenshot({ type: "png", animations: "disabled", timeout });
-      if (image.length > NARROW_PNG_LIMIT_BYTES) throw new Error("Footer screenshot exceeded bounded output size");
-      captures.push({ theme: theme.mode, png_base64: image.toString("base64"), sha256: createHash("sha256").update(image).digest("hex") });
+      await captureFooter(theme.mode, "compact");
       if (originalDividerY !== null) {
         await dragDivider(originalDividerY);
         originalDividerY = null;
@@ -192,10 +220,15 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
       await lastMetric.locator(".fm-footer-telemetry__metric-detail").waitFor({ state: "hidden", timeout });
       lowPanel.keyboard_details = "open/close verified";
     } else throw new Error("Telemetry fixture omitted the metrics container");
+    await assertNoResourceFailures();
   } catch (error) {
-    error.footerReadability = { samples, captures, compact_layouts: compactLayouts, low_panel: lowPanel };
+    error.footerReadability = { samples, captures, compact_layouts: compactLayouts, low_panel: lowPanel, notification_errors: notificationErrors };
     throw error;
   } finally {
+    await page.evaluate(() => {
+      window.__FM_FOOTER_ERROR_PROBE__?.observer.disconnect();
+      delete window.__FM_FOOTER_ERROR_PROBE__;
+    });
     if (await frame.getAttribute("data-panel-mode") === "floating" && originalMode === "docked") {
       if (floatingBounds) {
         const current = await frame.boundingBox();
