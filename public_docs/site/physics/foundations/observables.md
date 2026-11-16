@@ -30,15 +30,25 @@ E_{\mathrm{total}}(t_n)=\sum_{k\in\mathcal K}E_k(t_n),
 \qquad Q_n=Q[\mathbf m(t_n),\mathcal G,\mathcal M,\mathcal P],
 ```
 
-For a volume-weighted scalar reduction,
+For a volume-weighted scalar reduction over active magnetic locations $i \in \Omega_m$,
 
 ```{math}
 :label: eq-observables-volume-reduction
 Q_{\mathrm{scalar}}=\sum_{i=1}^{N}w_i q_i.
 ```
 
-The reduction weights are resolved by the selected discretisation. A request for a field that is
+The reduction weights $w_i$ are resolved by the selected discretisation and exclude nonmagnetic
+airbox elements ($w_i = 0$ on $\Omega_a \setminus \Omega_m$). A request for a field that is
 not enabled or materialisable is an error; it is never represented as a zero field.
+
+```{figure} /_static/diagrams/observables-materialization-pipeline.svg
+:alt: Four-stage observables pipeline showing (a) accepted-step sampling discarding rejected adaptive RK trials, (b) fail-closed planner legality gate checking interaction prerequisites and backend capability, (c) native FDM/FEM field support and volume-weighted scalar reductions excluding the FEM airbox, and (d) provenance-preserving Zarr, HDF5, and CSV artifacts.
+:width: 100%
+:name: fig-observables-materialization-pipeline
+:class: fm-physics-figure
+
+Observables legality, accepted-step sampling, and support-scoped materialisation: **(a)** adaptive RK steppers emit scalar rows and field snapshots strictly on accepted steps while discarding rejected trials; **(b)** `validate_executable_outputs` enforces enabling-interaction prerequisites and lane capabilities fail-closed (never emitting silent `0.0`); **(c)** field observables keep native FDM/FEM support while scalar reductions `QuantityRegistry::evaluate_by_name` sum only over $\Omega_m$ ($w_i = 0$ in the FEM airbox); **(d)** `OutputStorage` writes Zarr/HDF5/CSV outputs with full execution provenance (Vansteenkiste et al. 2014, [arXiv:1406.7635](https://arxiv.org/abs/1406.7635); Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
+```
 
 (observables-symbols-and-si-units)=
 ## Symbols and SI units
@@ -159,9 +169,10 @@ timestep evolution without explicit `SaveScalar` declarations.
 (observables-scientific-bibliography)=
 ## Scientific bibliography
 
-1. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. A. Vansteenkiste, J. Leliaert, M. Dvornik, F. Garcia-Sanchez, and B. Van Waeyenberge, "The design and verification of MuMax3," *AIP Advances* **4**(10), 107133 (2014). [doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186) · [Open Access (CC-BY PDF)](https://pubs.aip.org/aip/adv/article-pdf/doi/10.1063/1.4899186/12878560/107133_1_online.pdf) · [arXiv:1406.7635](https://arxiv.org/abs/1406.7635).
+2. J. Leliaert, M. Dvornik, J. Mulkers, J. De Clercq, M. V. Milošević, and B. Van Waeyenberge, "Fast micromagnetic simulations on GPU—recent advances made with mumax3," *Journal of Physics D: Applied Physics* **51**(12), 123002 (2018). [doi:10.1088/1361-6463/aaab1c](https://doi.org/10.1088/1361-6463/aaab1c) (CC-BY).
+3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+4. J. Leliaert and J. Mulkers, "Tomorrow's micromagnetic simulations," *Journal of Applied Physics* **125**(18) (2019). [doi:10.1063/1.5093730](https://doi.org/10.1063/1.5093730) · [Open Access (Ghent Biblio PDF)](https://biblio.ugent.be/publication/8617712/file/8619141.pdf).
 
 (observables-assumptions-and-validity)=
 ## Assumptions and validity
@@ -239,7 +250,8 @@ reduction phase, precision, and executed-device identity separately from setup a
 ## Implementation mapping
 
 Python declares sampling, the planner validates legality, the quantity registry evaluates named
-quantities, and backend state I/O copies the resolved fields.
+quantities, and backend state I/O copies the resolved fields. No standalone Control Room equation
+editor exists; use the Study and Results panels documented in {doc}`/frontend/capability-register`.
 
 (observables-validation)=
 ## Validation
@@ -257,19 +269,6 @@ does not imply that every solver/device lane currently materialises it. Spatial 
 FDM and FEM supports is outside this observable contract.
 
 (observables-source-code-index)=
-
-## Control Room crosswalk
-
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Responsibility | Repository path | Stable symbol |
