@@ -101,7 +101,7 @@ closed; FEM carries it through the weak residual.
 :alt: Three-panel DMI comparison highlighting panel (b) for isotropic B20 bulk DMI with Moriya vector parallel to bond r_ij, 1D Bloch helix, 2D Bloch skyrmion, and Fullmag's all-axis periodic FDM requirement versus open/periodic FEM support, alongside interfacial DMI in panel (a) and rotated interfacial DMI in panel (c).
 :width: 100%
 :name: fig-bulk-dmi-variants-comparison
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Panel (b) summarizes isotropic $T/O$ bulk DMI ($\mathbf D_{ij} \parallel \hat{\mathbf r}_{ij}$, Bloch helix and Bloch skyrmion, 3D periodic FDM planner gate vs FEM weak residual) in contrast to interfacial (a) and rotated interfacial (c) variants (Dzyaloshinsky 1958; Moriya 1960; Bogdanov & Yablonskii 1989; Bogdanov & Rößler 2001).
 ```

@@ -106,7 +106,7 @@ natural boundary physics. Adding a separate identical DMI boundary term would do
 :alt: Two-panel diagram showing (a) the numerically solved Rohart-Thiaville chiral boundary canting profile m_z(x) under 2A d_nu m + D[(n_hat x nu) x m] = 0 across an open nanostrip, and (b) FDM fixed +z_hat interface normal with ghost boundary correction versus FEM general normalized interface normal n_hat carrying the natural boundary term weakly.
 :width: 100%
 :name: fig-interfacial-dmi-boundary-canting
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Chiral edge canting profile solved from $2A\partial_{\boldsymbol\nu}\mathbf m + D[(\hat{\mathbf n}\times\boldsymbol\nu)\times\mathbf m]=\mathbf 0$ and comparison of FDM fixed $+\hat{\mathbf z}$ normal closure versus FEM general normalized interface normal $\hat{\mathbf n}$ (Rohart & Thiaville 2013).
 ```

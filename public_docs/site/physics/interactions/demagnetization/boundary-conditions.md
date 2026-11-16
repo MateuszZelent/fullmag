@@ -100,7 +100,7 @@ an operator contribution, not an additional post-processing energy term.
 :alt: Two-panel FEM Poisson airbox diagram: (a) conforming geometrically graded tetrahedral domain Omega_m subset Omega_a with outer marker Gamma_a and comparison of Robin versus Dirichlet closures; (b) analytical sphere dipole potential u(r)/(M_s a) for open 1/r^2 decay compared with Dirichlet u=0 truncation error and first-order Robin closures for c=1 and c=2 at R_box = 2.4 a.
 :width: 100%
 :name: fig-demag-boundary-airbox-closures
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Shared-domain conforming mesh topology ($\Omega_m \subset \Omega_a$) with outer marker $\Gamma_a$ and analytical potential decay comparing open $1/r^2$ asymptotics against Dirichlet ($u=0$) and first-order Robin ($\partial_n u + \beta u = 0$, $\beta=c/R_\star$) closures (Fredkin & Koehler 1990; Abert *et al.* 2013).
 ```

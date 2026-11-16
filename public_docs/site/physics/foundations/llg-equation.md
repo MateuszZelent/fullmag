@@ -106,7 +106,7 @@ Under a stationary external field and zero direct current torque ($\boldsymbol{\
 :alt: Three-panel numerically computed diagram of LLG dynamics on the unit sphere S^2: (a) 3D helical precession trajectory (s_prec = 1) vs geodesic overdamped trajectory (s_prec = 0) and tangent precession/damping torque vectors; (b) monotonic free-energy decay and Larmor oscillation curves; and (c) discrete Runge-Kutta radial drift and renormalization back onto S^2.
 :width: 100%
 :name: fig-llg-precession-damping-sphere
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Numerically integrated LLG dynamics ($\alpha = 0.28$, $\mathbf{H}_{\mathrm{eff}} \parallel +\hat{\mathbf{z}}$): **(a)** 3D orthographic projection on $\mathbb{S}^2$ comparing physical helical damped precession ($s_{\mathrm{prec}} = 1$) with pure-damping geodesic relaxation ($s_{\mathrm{prec}} = 0$, `llg_overdamped`) and tangent torque vectors in $T_{\mathbf{m}}\mathbb{S}^2$; **(b)** monotonic normalized energy dissipation $E(t)/E_0$, axial relaxation $m_z(t)$, and Larmor oscillation envelope $m_x(t)^2$; **(c)** $\mathcal{O}(\Delta t^{p+1})$ explicit RK radial drift and renormalization back onto $\mathbb{S}^2$ (`normalize_aos_field`, `norm_tolerance`, `max_spin_rotation`; see Landau & Lifshitz 1935, Gilbert 2004, and Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
 ```

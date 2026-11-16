@@ -19,7 +19,7 @@ reproducible example.
 :alt: Fullmag architecture pipeline from fm.study and scene objects with immutable object_id, regions, SI materials, and explicit physics modules through ProblemIR requested intent and the fail-closed planner to four separate execution lanes (FDM CPU, FDM GPU, FEM CPU, FEM GPU) and materialized binary/scalar Zarr outputs.
 :width: 100%
 :name: fig-fullmag-object-interaction-architecture
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Canonical Fullmag object, physics-module, `ProblemIR`, and four-lane execution architecture. Scene objects carry immutable `object_id`, user `name`, presentational `type`, geometry AST, `ObjectRegion` partitions, and SI `Material` records; explicit physics modules register field terms ($\mathcal{K}_{\mathrm{field}} \to \mathbf{H}_k$), direct torques ($\boldsymbol{\tau}_{\mathrm{direct}}$), coupled PDEs, and inter-region couplings ($\Gamma_{ab}$). `ProblemIR` preserves **requested intent**, while `fullmag-plan` resolves execution fail-closed across the four separate lanes (**FDM CPU**, **FDM GPU**, **FEM CPU**, **FEM GPU**) and materialized Zarr/binary observables (see Abert 2019, [CC-BY PDF](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf)).
 ```

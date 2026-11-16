@@ -85,7 +85,7 @@ determine chirality. None may be silently changed during normalization.
 :alt: Three-panel comparison of Fullmag's three Dzyaloshinskii-Moriya interaction operators: interfacial DMI with Moriya vector perpendicular to bond and interface normal stabilizing a Néel cycloid and Néel skyrmion, isotropic bulk DMI with Moriya vector parallel to bond stabilizing a Bloch helix and Bloch skyrmion, and rotated interfacial DMI stabilizing an in-plane Göbel 2019 bimeron.
 :width: 100%
 :name: fig-dmi-three-variants-chirality
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Moriya symmetry vectors, energy/field conventions, and numerically evaluated chiral spin textures across Fullmag's three non-aliasing DMI variants (Dzyaloshinsky 1958; Moriya 1960; Fert, Cros & Sampaio 2013; Rohart & Thiaville 2013; Göbel et al. 2019).
 ```

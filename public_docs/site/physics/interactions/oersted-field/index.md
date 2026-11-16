@@ -27,7 +27,7 @@ semantics, planner resolution, executable backend lanes, and scientific qualific
 :alt: Two-panel diagram comparing Fullmag's two Oersted-field families: Panel (a) shows OerstedCylinder right-hand-rule geometry and the exact piecewise radial profile H_oe(rho) peaking at rho = R; Panel (b) traces OerstedField(source=...) from CurrentTransport and circuit closure through Biot-Savart (OE-F1) and H(curl) vector potential (OE-F2) realizations with lane-specific capability boundaries.
 :width: 100%
 :name: fig-oersted-cylinder-and-biot-savart
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Analytic cylindrical wire versus solved-current Oersted field realizations in Fullmag. Panel (a)
 shows the `OerstedCylinder` infinite-conductor geometry and exact piecewise radial profile

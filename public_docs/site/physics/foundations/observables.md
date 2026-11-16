@@ -45,7 +45,7 @@ not enabled or materialisable is an error; it is never represented as a zero fie
 :alt: Four-stage observables pipeline showing (a) accepted-step sampling discarding rejected adaptive RK trials, (b) fail-closed planner legality gate checking interaction prerequisites and backend capability, (c) native FDM/FEM field support and volume-weighted scalar reductions excluding the FEM airbox, and (d) provenance-preserving Zarr, HDF5, and CSV artifacts.
 :width: 100%
 :name: fig-observables-materialization-pipeline
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Observables legality, accepted-step sampling, and support-scoped materialisation: **(a)** adaptive RK steppers emit scalar rows and field snapshots strictly on accepted steps while discarding rejected trials; **(b)** `validate_executable_outputs` enforces enabling-interaction prerequisites and lane capabilities fail-closed (never emitting silent `0.0`); **(c)** field observables keep native FDM/FEM support while scalar reductions `QuantityRegistry::evaluate_by_name` sum only over $\Omega_m$ ($w_i = 0$ in the FEM airbox); **(d)** `OutputStorage` writes Zarr/HDF5/CSV outputs with full execution provenance (Vansteenkiste et al. 2014, [arXiv:1406.7635](https://arxiv.org/abs/1406.7635); Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
 ```

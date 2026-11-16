@@ -110,7 +110,7 @@ evaluated with the Fredkin–Koehler recovered field.
 :alt: Two-panel diagram of Fullmag's Fredkin-Koehler FEM-BEM demagnetization method on a closed body-only mesh Omega_m without an airbox: (a) seven-stage dataflow from magnetic RHS assembly, gauge pin b_{1,0}=0, Neumann solve u_1, surface trace gamma u_1 on Gamma_m, dense solid-angle BEM operator B, Dirichlet data g_2 = B gamma u_1, harmonic Laplace solve u_2, to combined field H_d = -grad(u_1 + u_2) and energy E_d; (b) analytical sphere potential splitting u = u_1 + u_2, solid-angle geometry omega_T(x_i), and FEM CPU/GPU lane contract.
 :width: 100%
 :name: fig-demag-fem-bem-fredkin-koehler-pipeline
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Fullmag's two-solve Fredkin–Koehler algorithm on a body-only tetrahedral domain $\Omega_m$ without an airbox: sequential sparse solves and dense boundary map $\mathcal{B}$ in panel (a), with exact potential splitting ($u = u_1 + u_2$), solid-angle diagonal $\mathcal{B}_{ii} = \sum_{T\ni x_i}\omega_T/(4\pi) - 1$, and strict FEM CPU/GPU boundaries in panel (b) (Fredkin & Koehler 1990; Hertel *et al.* 2019; Abert *et al.* 2013).
 ```

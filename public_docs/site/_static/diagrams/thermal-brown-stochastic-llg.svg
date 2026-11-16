@@ -70,7 +70,7 @@
   <path d="M 118 458 L 92 458 L 92 404" fill="none" stroke="#b8392b" stroke-width="1.6" marker-end="url(#arrow-red)"/>
   <rect x="42" y="520" width="618" height="114" rx="6" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.2"/>
   <text x="58" y="541" class="sec-head">Current Executable Integrator &amp; Backend Lane Boundaries</text>
-  <text x="58" y="562" class="body">• <tspan font-weight="700" fill="#1d5fa7">FDM CPU &amp; GPU:</tspan> Fixed-step Heun only; ABM3 &amp; adaptive_timestep rejected; use H<tspan baseline-shift="sub" font-size="74%">eff</tspan> (no H<tspan baseline-shift="sub" font-size="74%">therm</tspan> export).</text>
+  <text x="58" y="562" class="body">• <tspan font-weight="700" fill="#1d5fa7">FDM CPU &amp; GPU:</tspan> Fixed-step Heun recommended (ABM3 &amp; adaptive rejected; other fixed RK lack SDE qual.); use H<tspan baseline-shift="sub" font-size="74%">eff</tspan>.</text>
   <text x="58" y="582" class="body">• <tspan font-weight="700" fill="#147d75">FEM CPU:</tspan> Reference sampler (mt19937_64) implements retry raw-draw reuse &amp; disables FSAL.</text>
   <text x="58" y="602" class="body">• <tspan font-weight="700" fill="#b8392b">FEM GPU:</tspan> Strictly UNSUPPORTED in planning (CAP-THERM-GPU-001 pending; kernel source alone != lane).</text>
   <text x="58" y="622" class="small">Type note: ThermalNoise.seed annotation says int|None; harden constructor with strict positive-int check.</text>

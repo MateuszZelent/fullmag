@@ -41,7 +41,7 @@ w_{\mathrm b}=D\,\mathbf m\cdot(\nabla\times\mathbf m).
 :alt: Three-panel DMI comparison across interfacial DMI, isotropic bulk DMI, and rotated interfacial DMI, summarizing the chiral textures, signs, and planner gates validated across Fullmag lanes.
 :width: 100%
 :name: fig-dmi-validation-variants-overview
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Overview of Fullmag's three DMI variants and their target chiral textures—1D Néel cycloid and 2D Néel skyrmion (a), 1D Bloch helix and 2D Bloch skyrmion (b), and Göbel 2019 in-plane bimeron (c)—used to structure sign-reversal, derivative, and benchmark validation gates (Rohart & Thiaville 2013; Cortés-Ortuño et al. 2018; Göbel et al. 2019).
 ```

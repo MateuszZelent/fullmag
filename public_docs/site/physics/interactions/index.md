@@ -15,7 +15,7 @@ FullMag documents each interaction once as a canonical physical contract, with s
 :alt: Taxonomy of all 12 Fullmag physical interactions grouped into local energy densities, differential operators with natural boundary conditions, nonlocal magnetostatic and Oersted operators, stochastic thermal Brown field, and direct non-conservative spin torques entering the explicit LLG right-hand side.
 :width: 100%
 :name: fig-interactions-taxonomy-energy-vs-torque
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Taxonomy of Fullmag's 12 physical interactions grouped by variational role, operator locality, natural boundary laws, and how each module enters the LLG equation: conservative field contributions ($\mathcal{K}_{\mathrm{field}} \to \mathbf{H}_{\mathrm{eff}}$ in $\mathrm{A\,m^{-1}}$), stochastic Brown fluctuations ($\mathbf{H}_{\mathrm{th}}$), or direct current-driven spin torques ($\boldsymbol{\tau}_{\mathrm{direct}}$ in $\mathrm{s^{-1}}$; reviewed in Abert 2019, [CC-BY PDF](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) / [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
 ```

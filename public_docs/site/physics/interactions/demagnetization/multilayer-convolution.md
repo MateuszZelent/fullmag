@@ -121,7 +121,7 @@ operator, not automatically the residency of the complete time integrator.
 :alt: Two-panel diagram showing (a) Newell 27-point cell-averaged convolution on 2N zero-padded FFT grids and (b) Lepadatu (2019) multilayer cross-layer convolution skipping vacuum gaps with volume-adjoint push P and pull P* transfers between native per-magnet grids and a common computational FFT supercell, contrasted with periodic image truncation.
 :width: 100%
 :name: fig-demag-multilayer-newell-and-stack
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Multilayer cross-layer FFT convolution in panel (b) (bottom left): native grids retain physical origins $\mathbf o_d$ and cell sizes $\mathbf h_d$, vacuum spacer gaps remain unmeshed via shifted pair kernels $\boldsymbol\delta_{d,s} = \mathbf o_d - \mathbf o_s$, and volume-adjoint transfers $(P, P^*)$ conserve work across unequal grids (Lepadatu 2019; Newell *et al.* 1993).
 ```

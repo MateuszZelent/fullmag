@@ -73,7 +73,7 @@ field nor rDMI energy.
 :alt: Three-panel DMI comparison highlighting panel (c) for rotated interfacial DMI stabilizing an in-plane Göbel 2019 bimeron with opposite-sign m_z meron cores in a +x_hat background, distinct from conventional interfacial DMI in panel (a) and isotropic bulk DMI in panel (b).
 :width: 100%
 :name: fig-rotated-dmi-variants-comparison
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Panel (c) shows the rotated Lifshitz invariant $D(L_{zx}^x + L_{xy}^y)$ and numerically evaluated Göbel *et al.* (2019) in-plane bimeron in contrast to conventional interfacial (a) and bulk (b) DMI variants.
 ```

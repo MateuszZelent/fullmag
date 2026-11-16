@@ -84,9 +84,11 @@ The DMI boundary condition introduces a characteristic length
 \ell_{\mathrm{DMI}} = \frac{2A}{|D|}
 ```
 
-that determines the spatial extent of the boundary twist. When the sample dimension is much
-larger than $\ell_{\mathrm{DMI}}$, the boundary modification is confined to a surface layer.
-When the sample is comparable to $\ell_{\mathrm{DMI}}$, the DMI boundary condition
+that sets the inverse boundary rotation slope ($|\partial_\nu\theta|^{-1}$), while the inward edge-canting
+tail in an exchange–anisotropy film decays over the exchange recovery length
+$\Delta = \sqrt{A/K_{\mathrm{eff}}}$. When the sample dimension is much larger than $\Delta$, the
+boundary modification is confined to an edge layer of thickness $\mathcal O(\Delta)$. When the
+sample width is comparable to $\Delta$ and $\ell_{\mathrm{DMI}}$, the DMI boundary condition
 significantly modifies the bulk magnetization profile.
 
 ## Impact on skyrmion confinement
@@ -100,9 +102,9 @@ centres.
 :alt: Two-panel diagram showing (a) the numerically solved Rohart-Thiaville edge canting profile m_z(x) across an open nanostrip under 2A d_nu m + D[(n_hat x nu) x m] = 0, and (b) FDM fixed +z_hat interface normal with ghost boundary correction versus FEM general normalized interface normal n_hat carrying the natural boundary integral weakly, plus isotropic bulk DMI boundary law contrast.
 :width: 100%
 :name: fig-dmi-boundary-canting-and-normals
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
-Solved chiral boundary canting profile $m_z(x)$ across an open nanostrip (a) and discrete realization of interface normals and natural boundary laws across FDM and FEM (b) (Rohart & Thiaville 2013; Leonov et al. 2016; Mulkers et al. 2018).
+Solved chiral boundary canting profile $m_z(x)$ across an open nanostrip showing the inward exponential decay length $\Delta = \sqrt{A/K_{\mathrm{eff}}}$ and inverse boundary slope $\ell_{\mathrm{DMI}} = 2A/|D|$ (a), and discrete realization of interface normals and natural boundary laws across FDM and FEM (b) (Rohart & Thiaville 2013; Leonov et al. 2016; Mulkers et al. 2018).
 ```
 
 ## Symbols and SI units

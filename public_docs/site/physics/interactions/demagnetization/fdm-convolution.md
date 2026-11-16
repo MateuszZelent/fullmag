@@ -106,7 +106,7 @@ embedding and are not the same policy.
 :alt: Two-panel diagram of FDM demagnetization convolution: (a) Newell double-volume cell-averaged 27-point stencil (+8, -4, +2, -1) with 2N zero-padded FFT buffer layout avoiding wraparound; (b) Lepadatu (2019) multilayer cross-layer convolution skipping vacuum gaps with volume-adjoint transfers P and P* versus 2D periodic image-count convergence of uniform-mode demagnetization factors and k=0 mode rules.
 :width: 100%
 :name: fig-demag-fdm-newell-and-multilayer
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Newell 27-point cell-averaged tensor construction and $2N$ zero-padded open-boundary FFT convolution in panel (a), contrasted with Lepadatu (2019) vacuum-skipping multilayer stacking and finite periodic image-count convergence in panel (b) (Newell *et al.* 1993; Lepadatu 2019; Vansteenkiste *et al.* 2014).
 ```

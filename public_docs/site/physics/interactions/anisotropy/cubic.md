@@ -106,7 +106,7 @@ not require a demagnetization solve or an interaction boundary condition.
 :alt: Two-panel anisotropy diagram highlighting panel (b) for Fullmag's cubic anisotropy polynomial w_c = Kc1 Sigma + Kc2 alpha_1^2 alpha_2^2 alpha_3^2 + Kc3 Sigma^2, showing 3D energy surfaces and (1-10)-plane cross-sections for Kc1 > 0 (<100> easy) and Kc1 < 0 (<111> easy), alongside uniaxial landscapes in panel (a).
 :width: 100%
 :name: fig-cubic-anisotropy-landscape
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles for Fullmag's cubic polynomial with $K_{c1}>0$ ($\langle 100\rangle$ easy) and $K_{c1}<0$ ($\langle 111\rangle$ easy), highlighting FEM's strict orthonormal crystal-frame rule (Kittel 1949; Collings et al. 2023).
 ```

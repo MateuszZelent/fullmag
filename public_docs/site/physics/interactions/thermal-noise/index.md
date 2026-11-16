@@ -23,13 +23,14 @@ semantics, planner resolution, executable backend lanes, and scientific qualific
 :alt: Two-panel diagram of Brown thermal noise in Fullmag: Panel (a) shows the discrete stochastic field formula with bare gamma_{mu0}, accepted-interval raw-draw reuse across rejected adaptive RK retries, FSAL invalidation, and lane constraints; Panel (b) plots the exact Boltzmann equilibrium density P(theta) proportional to sin(theta) exp(xi cos(theta)) against ensemble 95% confidence intervals and contrasts statistical validation against invalid bitwise CPU/GPU comparison.
 :width: 100%
 :name: fig-thermal-brown-stochastic-llg
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Discrete Brown stochastic field contract and Boltzmann equilibrium validation. Panel (a) shows the
 fluctuation-dissipation standard deviation $\sigma_i^n$ using Fullmag's bare gyromagnetic ratio
 $\gamma_{\mu 0}$ (so $1/(1+\alpha^2)$ is applied once by LLG), the accepted-interval raw Gaussian
 draw reuse and $\Delta t^{-1/2}$ rescaling contract across rejected steps (Leliaert *et al.* 2017;
-implemented in FEM CPU), FSAL invalidation, and fixed-step Heun limits on FDM. Panel (b) plots the
+implemented in FEM CPU), FSAL invalidation, and recommended fixed-step Heun versus rejected `ABM3`
+and adaptive stepping on FDM. Panel (b) plots the
 analytical single-spin Boltzmann density $P_{\mathrm{eq}}(\theta)\propto\sin\theta\exp(\xi\cos\theta)$
 for $\xi=2.0$ alongside ensemble 95% confidence intervals (Brown 1963; Leliaert *et al.* 2017),
 highlighting why cross-device qualification requires statistical moments rather than bitwise sample
@@ -106,8 +107,8 @@ boundaries. A deterministic ODE convergence test does not qualify an SDE impleme
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable | sampling law not yet full equilibrium qualification | fixed-step Heun only; `ABM3` and `adaptive_timestep` rejected; use `H_eff` |
-| FDM | GPU | same canonical IR | partial | executed-device variance and replay evidence required | fixed-step Heun only; cuRAND/precision/runtime identity are part of provenance |
+| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable | sampling law not yet full equilibrium qualification | fixed-step Heun recommended (fixed-step `rk4`/`rk23`/`rk45` accepted without SDE qualification; `ABM3` and `adaptive_timestep` rejected); use `H_eff` |
+| FDM | GPU | same canonical IR | partial | executed-device variance and replay evidence required | fixed-step Heun recommended (`ABM3` and `adaptive_timestep` rejected; other fixed-step RK methods lack SDE qualification); cuRAND/precision/runtime identity are part of provenance |
 | FEM | CPU | same canonical IR | partial/reference executable | nodal-volume and accepted-step statistics required | `mt19937_64` raw-draw reuse across retries; FSAL disabled |
 | FEM | GPU | authoring accepted | unsupported in strict public planning | none | rejected pending `CAP-THERM-GPU-001`; kernel source alone is not an executable lane |
 

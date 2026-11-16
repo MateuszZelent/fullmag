@@ -91,7 +91,7 @@
   <rect x="702.00" y="95.00" width="30.00" height="22.00" fill="#6f3cc4" rx="5.0"/>
   <text x="717.00" y="110.50" class="badge" text-anchor="middle">(b)</text>
   <text x="742.00" y="110.50" class="panel-title">Chiral DMI Boundary  (2A ∂<tspan baseline-shift="sub" font-size="72%">ν</tspan>m + D[(n̂×ν)×m] = 0)</text>
-  <text x="702.00" y="130.00" class="small">Boundary twist over length ℓ<tspan baseline-shift="sub" font-size="72%">DMI</tspan> = 2A/|D|; natural weak residual in FEM</text>
+  <text x="702.00" y="130.00" class="small">Inverse edge slope ℓ<tspan baseline-shift="sub" font-size="72%">DMI</tspan> = 2A/|D|; tail decay Δ = √(A/K<tspan baseline-shift="sub" font-size="72%">eff</tspan>); natural FEM weak residual</text>
   <rect x="716.00" y="148.00" width="330.00" height="88.00" fill="#f6e8df" rx="4.0" stroke="#6f3cc4" stroke-width="1.80"/>
   <rect x="716.00" y="236.00" width="330.00" height="20.00" fill="#e4eff5" rx="2.0" stroke="#4d8098" stroke-width="1.20"/>
   <text x="881.00" y="250.00" class="tiny" text-anchor="middle" style="fill:#4d8098">Heavy metal (interface normal  n̂ = +ẑ)</text>

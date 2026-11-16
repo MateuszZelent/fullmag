@@ -106,7 +106,7 @@ normalization are owned by the dynamics contract.
 :alt: Two-panel anisotropy diagram highlighting panel (a) for Fullmag's uniaxial energy density -Ku1 q^2 - Ku2 q^4 across easy-axis, easy-plane, and easy-cone regimes, together with the constant energy offset against K_u1 sin^2(theta) forms and identical effective field H_u, alongside cubic landscapes in panel (b).
 :width: 100%
 :name: fig-uniaxial-anisotropy-landscape
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Panel (a) shows Fullmag's uniaxial anisotropy regimes (easy axis, easy plane, and easy cone) and the constant energy offset against $\sin^2\theta$ conventions while keeping $\mathbf H_{\mathrm u}$ unchanged (Stoner & Wohlfarth 1948; Collings et al. 2023).
 ```

@@ -85,7 +85,7 @@ not, by itself, make a prescribed-SOT simulation equivalent to M1 or M2.
 :alt: Three-lane architecture comparison between PrescribedSpinOrbitTorque, M1 one-way drift-diffusion, and M2 reciprocal Onsager block, plus a double-counting guard for overlapping RegionRef targets.
 :width: 100%
 :name: fig-sot-models-comparison-local-m1-m2
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Architectural and physical comparison across Fullmag's three spin-orbit torque routes: (a) local algebraic `PrescribedSpinOrbitTorque`, (b) one-way `CurrentTransport` $\to$ `SpinDriftDiffusion` $\to$ `DriftDiffusionSpinTorque` (M1), and (c) bidirectional coupled `(V, mu_s)` Onsager block (M2). Adding both a prescribed and a solved torque module to the same `RegionRef` sums both RHS terms rather than overriding one with the other.
 ```
@@ -515,7 +515,7 @@ source current reverses.
 :alt: Unit-sphere geometry of damping-like and field-like spin-orbit torques in the tangent plane T_m S^2, single Gilbert-to-explicit RHS mixing diagram, and comparison between SignedScalarDrive and VectorCurrentDrive on an HM/FM bilayer.
 :width: 100%
 :name: fig-sot-unit-sphere-torques-and-drives
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Geometric and algebraic structure of `PrescribedSpinOrbitTorque` (`prescribed_sot.fullmag.v1`). **(a)** Unit magnetization $\mathbf m \in S^2$, tangent plane $T_{\mathbf m} S^2$, orthogonal Gilbert torques $\mathbf T_{\mathrm{DL}}^G$ and $\mathbf T_{\mathrm{FL}}^G$, and the single $(1+\alpha^2)^{-1}$ Gilbert-to-explicit RHS mixing evaluated by all backends using physical inputs $\xi_{\mathrm{DL}}$ and $\xi_{\mathrm{FL}}$. **(b)** Heavy-metal/ferromagnet stack convention showing explicit free-layer thickness $t_F$, `SignedScalarDrive`, and current-reversal invariance of $\hat{\boldsymbol\sigma} = \operatorname{norm}(\hat{\mathbf n}_{NF}\times\hat{\mathbf t})$ under `VectorCurrentDrive`.
 ```
@@ -608,7 +608,7 @@ presented as a transferable Pt/Co constant.
 :alt: Type-z PMA deterministic switching with assist field B_x versus field-free Type-y in-plane switching, alongside a computed curve of effective damping-like efficiency xi_DL(t_HM) versus bulk spin Hall angle theta_SH.
 :width: 100%
 :name: fig-sot-switching-and-calibration-regimes
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Physical switching regimes and stack-calibration gap grounded in primary SOT literature (Liu et al. 2012; Garello et al. 2013; Nguyen, Ralph & Buhrman 2016; Manchon et al. 2019). **(a)** Type-$z$ perpendicular switching requires an in-plane symmetry-breaking field $B_x \parallel \hat{\mathbf t}$ (computed macrospin LLG+SOT hysteresis loops), whereas Type-$y$ ($\mathbf m_{\mathrm{eq}} \parallel \pm\hat{\boldsymbol\sigma}$) switches field-free via collinear anti-damping. **(b)** Spin-diffusion scaling $\xi_{\mathrm{DL}}(t_{\mathrm{HM}}) = T_{\mathrm{int}}\theta_{\mathrm{SH}}[1-\operatorname{sech}(t_{\mathrm{HM}}/\lambda_{\mathrm{sf}})]$ illustrating why calibrated effective $\xi_{\mathrm{DL}}$ differs from bare bulk $\theta_{\mathrm{SH}}$ due to finite spin-diffusion length and interface backflow.
 ```

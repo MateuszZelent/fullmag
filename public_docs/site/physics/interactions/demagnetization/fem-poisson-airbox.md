@@ -144,7 +144,7 @@ double-count the boundary contribution already represented by the Robin-conditio
 :alt: Two-panel diagram of FEM Poisson airbox demagnetization: (a) conforming shared-domain tetrahedral topology Omega_m subset Omega_a with geometrically graded airbox layers, outer boundary marker Gamma_a, and Robin versus Dirichlet weak-form closures; (b) numerically computed normalized potential u(r)/(M_s a) for a uniformly magnetized sphere in a finite airbox R_box = 2.4 a comparing exact 1/r^2 open decay with Dirichlet u=0 and first-order Robin closures.
 :width: 100%
 :name: fig-demag-fem-poisson-airbox-closures
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Conforming graded shared-domain airbox mesh ($\Omega_m \subset \Omega_a$) with outer marker $\Gamma_a$ in panel (a) and analytical truncation behavior of Dirichlet ($u=0$) versus first-order Robin ($\partial_n u + \beta u = 0$, $\beta = c/R_\star$) closures in panel (b) (Fredkin & Koehler 1990; Exl & Schrefl 2014; Abert *et al.* 2013).
 ```

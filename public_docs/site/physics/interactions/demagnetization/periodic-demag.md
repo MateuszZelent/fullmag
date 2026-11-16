@@ -45,7 +45,7 @@ E_{\mathrm d}=-\frac{\mu_0}{2}\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm d}
 :alt: Two-panel diagram highlighting periodic image truncation and k=0 uniform-mode convergence in panel (b) right side: numerically computed uniform-mode demagnetization factors N_zz(I) approaching 1.00 and N_xx(I) approaching 0.00 for a 20 x 20 x 2 nm thin film as periodic image half-count I increases from 0 to 32, alongside FFT padding rules and rejection of periodic_airbox_k0 in FDM.
 :width: 100%
 :name: fig-demag-periodic-image-truncation
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Periodic demagnetization conventions (panel (b), right): finite FDM `truncated_images` convergence of the uniform ($k=0$) thin-film demagnetization factors $N_{zz}(I)\to 1$ and $N_{xx}(I)\to 0$ with image half-count $I_x=I_y$, contrasted with open $2N$ vs. periodic $N$ FFT padding and FEM `periodic_airbox_k0` requirements (Lebecki *et al.* 2008; Newell *et al.* 1993).
 ```

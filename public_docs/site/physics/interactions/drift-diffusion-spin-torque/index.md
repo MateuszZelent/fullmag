@@ -30,7 +30,7 @@ spin is transmitted or reflected while absorbed transverse spin torques the ferr
 :alt: HM and FM stack with charge current, electric field, spin Hall current, spin accumulation, interface normal, magnetization, and torque.
 :width: 100%
 :name: fig-spin-hall-hm-fm
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Fullmag convention map. The first index of $Q_{ia}$ is flow direction and the second is spin
 polarization. Here the normal points from HM to FM.
@@ -178,7 +178,7 @@ must be complete and non-overlapping.
 :alt: Finite-volume spin-channel splitting and face flux Q_i, MixingConductanceSpinInterface transmission versus full transverse absorption, and volumetric FM spin reaction triad R_sf, R_J, and R_phi with computed 1D spatial decay profiles.
 :width: 100%
 :name: fig-drift-diffusion-reactions-and-interface
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Finite-volume transport operators and interface/volumetric torque extraction in Fullmag (`SpinDriftDiffusion` $\to$ `DriftDiffusionSpinTorque`). **(a)** Spin-channel potential splitting $V \pm \boldsymbol\mu_s/2$ and the three additive face-flux contributions in $\mathbf Q_i$. **(b)** `MixingConductanceSpinInterface` separating longitudinal transmission and backflow ($G_\uparrow, G_\downarrow$) from full transverse absorption ($G_r, G_i$). **(c)** Volumetric spin-reaction triad inside the ferromagnet showing torque-free spin-flip relaxation $\mathbf R_{\mathrm{sf}}$ versus precessional $\mathbf R_J$ and dephasing $\mathbf R_\phi$ (with 1D steady spatial decay computed for $\lambda_{\mathrm{sf}} = 5\,\mathrm{nm}$, $\lambda_J = 1.0\,\mathrm{nm}$, $\lambda_\phi = 1.4\,\mathrm{nm}$).
 ```

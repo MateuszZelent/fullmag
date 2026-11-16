@@ -23,7 +23,7 @@ authored semantics, planner resolution, executable backend lanes, and scientific
 :alt: Two-panel diagram showing Zeeman field conversion B_ext / mu_0, Larmor precession and Gilbert relaxation on the unit sphere, the Zeeman energy density -M_s B_ext cos(theta), and the Fullmag separation between uniform Zeeman, StaticFieldMap, and RF antenna drives.
 :width: 100%
 :name: fig-zeeman-energy-and-precession
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Uniform Zeeman prescription and Fullmag field-source boundaries. Panel (a) shows the one-time
 conversion $\mathbf H_{\mathrm{ext}}=\mathbf B_{\mathrm{ext}}/\mu_0$, conservative Larmor

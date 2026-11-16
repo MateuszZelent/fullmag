@@ -43,7 +43,7 @@ the intended membership relation:
 :alt: Three-panel diagram showing (a) CSG Box minus Cylinder with an ObjectRegion core override, object vs world coordinate frames, and spatial MaterialParameterField profile; (b) FDM Cartesian grid discretization with active masks and region indices; and (c) FEM single shared conforming domain with outer airbox Omega_a, hole boundary markers, and local core mesh grading.
 :width: 100%
 :name: fig-geometry-regions-materials-realization
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 From authored CSG and region overrides to discrete backend supports: **(a)** nested `Box - Cylinder` geometry, priority-resolved `ObjectRegion` (`frame="object"` vs. `frame="world"`), boundary `material_transition`, and spatial `MaterialParameterField`; **(b)** FDM structured Cartesian cells with active mask $\mathcal{A}$ and region indices $r_i$; **(c)** FEM single shared conforming mesh $\Omega_m \subset \Omega_a$ with element/face markers and local region size grading (never overlapping independent submeshes; see Geuzaine & Remacle 2009, [HAL OA PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf), and Körber et al. 2021, [arXiv:2104.06943](https://arxiv.org/abs/2104.06943)).
 ```

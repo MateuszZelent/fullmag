@@ -56,7 +56,7 @@ operator is not the same as a surface energy.
 :alt: Two-panel diagram comparing (a) cell-to-cell harmonic, scaled-harmonic, explicit, and disabled region exchange A_ab across adjacent ObjectRegion cells (executable on FDM GPU CUDA and FDM CPU AoS reference, unsupported on FEM), against (b) surface RKKY and interlayer exchange energy -J_1(m_a.m_b) - J_2(m_a.m_b)^2 across FM, AFM, 90-degree, and canted regimes (authored_only IR rejected in strict runtime on all lanes).
 :width: 100%
 :name: fig-inter-region-couplings-exchange-rkky
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Cell-link region exchange $A_{ab}$ across adjacent `ObjectRegion` cells (a) versus opposing-surface bilinear/biquadratic RKKY coupling $\sigma_{\mathrm{surf}}(\Delta\theta)$ (b), separating FDM-executable region exchange from `authored_only` surface couplings (Grünberg et al. 1986; Parkin et al. 1990; Bruno 1995; Suess et al. 2023).
 ```

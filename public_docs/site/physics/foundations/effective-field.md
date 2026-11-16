@@ -41,7 +41,7 @@ direct torque terms remain RHS quantities and are not reinterpreted as fields.
 :alt: Three-panel diagram comparing (a) conservative variational derivation from micromagnetic energy functional E_k[m] to H_k and H_eff, (b) non-conservative direct spin torques T_G converted once into tau_direct without pseudo-field injection, and (c) geometric composition on the tangent plane T_m S^2 yielding the total explicit LLG right-hand side.
 :width: 100%
 :name: fig-effective-field-and-direct-torque-composition
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Variational effective-field composition versus additive direct spin-torque assembly: **(a)** conservative energy functionals $E_k[\mathbf{m}]$ yield field contributions $\mathbf{H}_k$ summed into $\mathbf{H}_{\mathrm{eff}}$ (`compute_effective_fields_for_magnetization` on FEM CPU; `gpu_rk_accumulate_effective_field` on FEM GPU); **(b)** current-driven spin torques enter solely via a single Gilbert-to-explicit transform $\boldsymbol{\tau}_{\mathrm{direct}} = (\mathbf{T}_G + \alpha\,\mathbf{m}\times\mathbf{T}_G)/(1+\alpha^2)$; **(c)** both vectors compose additively in the tangent plane $T_{\mathbf{m}}\mathbb{S}^2$ (`llg_rhs_aos` / `fullmag_cuda_llg_rhs_fused`) so $\mathbf{m}\cdot\partial_t\mathbf{m}=0$ (Brown 1963; Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
 ```

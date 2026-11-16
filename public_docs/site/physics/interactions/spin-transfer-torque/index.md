@@ -102,7 +102,7 @@ Fullmag LLG convention. Documentation must not switch to electron-flow language 
 :alt: Comparison of Slonczewski CPP/MTJ trilayer torque with computed angular asymmetry curves epsilon_DL(theta) versus Zhang-Li CIP domain-wall translation, plus the single Gilbert-to-explicit conversion invariant.
 :width: 100%
 :name: fig-stt-slonczewski-vs-zhang-li
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Side-by-side physics and Fullmag formula comparison for local spin-transfer torques. **(a)** `SlonczewskiSTT` CPP/MTJ trilayer geometry (`slonczewski.fullmag.v2`) and computed angular asymmetry $\epsilon_{\mathrm{DL}}(\theta)$ at $P = 0.40$ for $\Lambda \in \{1.0, 1.5, 2.0\}$. **(b)** `ZhangLiSTT` CIP domain-wall profile $\mathbf m(x)$ separating conventional charge current $\mathbf J_c$ from electron drift, showing adiabatic wall drag and non-adiabatic out-of-plane canting. The bottom guard states Fullmag's single Gilbert-to-explicit RHS conversion invariant.
 ```

@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import re
 import tempfile
+from typing import Iterator
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -19,11 +20,14 @@ DIAGRAMS_DIR = SITE_ROOT / "_static" / "diagrams"
 EXCLUDED_DIRS = {"_build", "internal", "generated"}
 EXCLUDED_FILENAMES = {"README.md", "PAGE_TEMPLATE.md"}
 
-CODE_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(?!\{)([^`]*)$")
+CODE_FENCE_OPEN_RE = re.compile(r"^\s*(?:(`{3,})(?!\{)[^`]*|(~{3,})(?!\{).*)$")
 ANY_DIRECTIVE_OPEN_RE = re.compile(r"^(\s*)(`{3,}|~{3,}|:{3,})\{([A-Za-z0-9_:-]+)\}\s*(.*?)\s*$")
 RAW_DIRECTIVES = {"code", "code-block", "sourcecode", "eval-rst", "raw", "mermaid"}
 OPTION_LINE_RE = re.compile(r"^:([A-Za-z0-9_-]+):(?:\s*(.*))?$")
-MARKDOWN_SVG_REF_RE = re.compile(r"""(?:!\[[^\]]*\]\(|(?:src|href)=["'])([^"')\s>]+\.svg)(?:[#?][^"')\s>]*)?""", re.IGNORECASE)
+MARKDOWN_SVG_REF_RE = re.compile(
+    r"""(?:!\[[^\]]*\]\(|(?:src|href)=["'])([^"')\s>]+\.svg)(?:[#?][^"')\s>]*)?""",
+    re.IGNORECASE,
+)
 EXTERNAL_URL_RE = re.compile(r"^(?:https?:|javascript:|//)", re.IGNORECASE)
 
 
@@ -44,18 +48,18 @@ def _local_name(tag: str) -> str:
     return tag
 
 
-def _is_excluded_doc(path: Path) -> bool:
-    rel_parts = path.relative_to(SITE_ROOT).parts
+def _is_excluded_doc(path: Path, site_root: Path = SITE_ROOT) -> bool:
+    rel_parts = path.relative_to(site_root).parts
     if any(part in EXCLUDED_DIRS for part in rel_parts):
         return True
     return path.name in EXCLUDED_FILENAMES
 
 
-def _iter_site_markdown_files(base_dir: Path) -> list[Path]:
+def _iter_site_markdown_files(base_dir: Path, site_root: Path = SITE_ROOT) -> list[Path]:
     return sorted(
         path
         for path in base_dir.rglob("*.md")
-        if path.is_file() and not _is_excluded_doc(path)
+        if path.is_file() and not _is_excluded_doc(path, site_root=site_root)
     )
 
 
@@ -90,9 +94,8 @@ def _is_closing_fence(line: str, fence_char: str, fence_len: int) -> bool:
     return bool(re.match(rf"^\s*{re.escape(fence_char)}{{{fence_len},}}\s*$", line))
 
 
-def _extract_directives(md_file: Path) -> list[DirectiveRecord]:
-    lines = md_file.read_text(encoding="utf-8").splitlines()
-    directives: list[DirectiveRecord] = []
+def _iter_non_code_lines(lines: list[str]) -> Iterator[tuple[int, str]]:
+    """Yield (0-based index, line) strictly outside fenced code blocks and raw directives."""
     fence_stack: list[tuple[str, int]] = []
     idx = 0
     while idx < len(lines):
@@ -101,52 +104,28 @@ def _extract_directives(md_file: Path) -> list[DirectiveRecord]:
         # Close the innermost open directive container before interpreting a bare fence as code.
         if fence_stack and _is_closing_fence(line, *fence_stack[-1]):
             fence_stack.pop()
+            yield idx, line
             idx += 1
             continue
 
         dir_match = ANY_DIRECTIVE_OPEN_RE.match(line)
         if dir_match:
-            base_indent, fence, kind, target = (
-                dir_match.group(1),
-                dir_match.group(2),
-                dir_match.group(3),
-                dir_match.group(4).strip(),
-            )
+            fence, kind = dir_match.group(2), dir_match.group(3)
             fence_char, fence_len = fence[0], len(fence)
-            if kind in ("figure", "image"):
-                start_line = idx + 1
-                idx += 1
-                body_lines: list[str] = []
-                while idx < len(lines) and not _is_closing_fence(lines[idx], fence_char, fence_len):
-                    body_lines.append(lines[idx])
-                    idx += 1
-                directives.append(
-                    DirectiveRecord(
-                        source_file=md_file,
-                        line_number=start_line,
-                        kind=kind,
-                        target=target,
-                        options=_parse_directive_options(body_lines, base_indent=base_indent),
-                    )
-                )
-                idx += 1
-                continue
-
             if kind in RAW_DIRECTIVES:
                 idx += 1
                 while idx < len(lines) and not _is_closing_fence(lines[idx], fence_char, fence_len):
                     idx += 1
                 idx += 1
                 continue
-
             fence_stack.append((fence_char, fence_len))
+            yield idx, line
             idx += 1
             continue
 
-        # Skip fenced non-directive code examples so sample snippets are ignored.
         code_match = CODE_FENCE_OPEN_RE.match(line)
         if code_match:
-            fence = code_match.group(1)
+            fence = code_match.group(1) or code_match.group(2)
             fence_char, fence_len = fence[0], len(fence)
             idx += 1
             while idx < len(lines) and not _is_closing_fence(lines[idx], fence_char, fence_len):
@@ -154,36 +133,74 @@ def _extract_directives(md_file: Path) -> list[DirectiveRecord]:
             idx += 1
             continue
 
+        yield idx, line
         idx += 1
+
+
+def _extract_directives(md_file: Path) -> list[DirectiveRecord]:
+    lines = md_file.read_text(encoding="utf-8").splitlines()
+    directives: list[DirectiveRecord] = []
+    stream = _iter_non_code_lines(lines)
+    for idx, line in stream:
+        dir_match = ANY_DIRECTIVE_OPEN_RE.match(line)
+        if not dir_match:
+            continue
+        base_indent, fence, kind, target = (
+            dir_match.group(1),
+            dir_match.group(2),
+            dir_match.group(3),
+            dir_match.group(4).strip(),
+        )
+        if kind not in ("figure", "image"):
+            continue
+        fence_char, fence_len = fence[0], len(fence)
+        start_line = idx + 1
+        body_lines: list[str] = []
+        for _, body_line in stream:
+            if _is_closing_fence(body_line, fence_char, fence_len):
+                break
+            body_lines.append(body_line)
+        directives.append(
+            DirectiveRecord(
+                source_file=md_file,
+                line_number=start_line,
+                kind=kind,
+                target=target,
+                options=_parse_directive_options(body_lines, base_indent=base_indent),
+            )
+        )
     return directives
 
 
-def _resolve_site_target(source_file: Path, raw_target: str) -> Path | None:
+def _resolve_site_target(
+    source_file: Path, raw_target: str, site_root: Path = SITE_ROOT
+) -> Path | None:
     target = raw_target.strip().split("#", 1)[0].split("?", 1)[0]
     if not target or EXTERNAL_URL_RE.match(target):
         return None
     if target.startswith("/"):
-        candidate = (SITE_ROOT / target.lstrip("/")).resolve()
+        candidate = (site_root / target.lstrip("/")).resolve()
     else:
         candidate = (source_file.parent / target).resolve()
-    site_root_resolved = SITE_ROOT.resolve()
+    site_root_resolved = site_root.resolve()
     if not candidate.is_relative_to(site_root_resolved):
         return None
     return candidate
 
 
-def _collect_referenced_svg_paths() -> set[Path]:
+def _collect_referenced_svg_paths(site_root: Path = SITE_ROOT) -> set[Path]:
     referenced: set[Path] = set()
-    for md_file in _iter_site_markdown_files(SITE_ROOT):
+    for md_file in _iter_site_markdown_files(site_root, site_root=site_root):
         for directive in _extract_directives(md_file):
-            resolved = _resolve_site_target(md_file, directive.target)
+            resolved = _resolve_site_target(md_file, directive.target, site_root=site_root)
             if resolved is not None and resolved.suffix.lower() == ".svg":
                 referenced.add(resolved)
-        text = md_file.read_text(encoding="utf-8")
-        for match in MARKDOWN_SVG_REF_RE.finditer(text):
-            resolved = _resolve_site_target(md_file, match.group(1))
-            if resolved is not None:
-                referenced.add(resolved)
+        lines = md_file.read_text(encoding="utf-8").splitlines()
+        for _, line in _iter_non_code_lines(lines):
+            for match in MARKDOWN_SVG_REF_RE.finditer(line):
+                resolved = _resolve_site_target(md_file, match.group(1), site_root=site_root)
+                if resolved is not None:
+                    referenced.add(resolved)
     return referenced
 
 
@@ -268,6 +285,20 @@ class PublicDocsPhysicsDiagramsTests(unittest.TestCase):
                     alt_text,
                     f"{rel_md}:{record.line_number} {{{record.kind}}} is missing non-empty :alt:",
                 )
+                if record.kind == "figure":
+                    class_tokens = record.options.get("class", "").split()
+                    self.assertNotIn(
+                        "fm-physics-figure",
+                        class_tokens,
+                        f"{rel_md}:{record.line_number} {{figure}} must use :figclass: fm-physics-figure instead of :class:",
+                    )
+                    if resolved.suffix.lower() == ".svg":
+                        figclass_tokens = record.options.get("figclass", "").split()
+                        self.assertIn(
+                            "fm-physics-figure",
+                            figclass_tokens,
+                            f"{rel_md}:{record.line_number} SVG {{figure}} must declare :figclass: fm-physics-figure",
+                        )
                 if "name" in record.options:
                     self.assertTrue(
                         record.options["name"].strip(),
@@ -310,6 +341,7 @@ a = b
 ```{figure} /_static/diagrams/real.svg
 :alt: Real diagram
 :name: fig-real
+:figclass: fm-physics-figure
 
 Caption.
 ```
@@ -339,7 +371,39 @@ Caption.
         ])
         self.assertEqual(extracted[0].options["alt"], "Real diagram")
         self.assertEqual(extracted[0].options["name"], "fig-real")
+        self.assertEqual(extracted[0].options["figclass"], "fm-physics-figure")
         self.assertEqual(extracted[1].options["alt"], "Nested diagram")
+
+    def test_orphan_check_ignores_markdown_svg_references_inside_fenced_code_blocks(self) -> None:
+        page_text = """# Page
+
+```markdown
+![Example](/_static/diagrams/example-only.svg)
+<img src="/_static/diagrams/html-example-only.svg" alt="Example">
+```
+
+```{code-block} markdown
+![Code block example](/_static/diagrams/raw-example-only.svg)
+```
+
+![Live](/_static/diagrams/live-used.svg)
+"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            site_root = Path(tmp_dir)
+            diagrams = site_root / "_static" / "diagrams"
+            diagrams.mkdir(parents=True)
+            for name in (
+                "example-only.svg",
+                "html-example-only.svg",
+                "raw-example-only.svg",
+                "live-used.svg",
+            ):
+                (diagrams / name).write_text("<svg/>", encoding="utf-8")
+            (site_root / "page.md").write_text(page_text, encoding="utf-8")
+
+            referenced = _collect_referenced_svg_paths(site_root=site_root)
+
+        self.assertEqual(referenced, {(diagrams / "live-used.svg").resolve()})
 
 
 if __name__ == "__main__":

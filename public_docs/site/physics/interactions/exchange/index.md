@@ -102,7 +102,7 @@ A(\nabla\mathbf m)\mathbf n
 :alt: Three-panel diagram comparing continuum exchange stiffness and natural Neumann boundary condition, the FDM six-neighbor stencil with inactive-neighbor clamping and FP64 T0/T1 sub-cell corrections, and the FEM P1 H1 weak form with lumped and consistent mass projections.
 :width: 100%
 :name: fig-exchange-fdm-stencil-vs-fem-weak
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Continuum bulk exchange stiffness, six-neighbor FDM discretization with inactive-cell Neumann clamping and FP64 T0/T1 corrections, and conforming $H^1(\Omega_m)$ FEM stiffness assembly with lumped and consistent mass projections (Abert 2019; Vansteenkiste et al. 2014).
 ```

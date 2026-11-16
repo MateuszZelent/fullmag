@@ -23,7 +23,7 @@ semantics, planner resolution, executable backend lanes, and scientific qualific
 :alt: Two-panel diagram of magnetoelastic coupling in Fullmag: Panel (a) maps the symmetric 3x3 strain tensor to the 6-component engineering-Voigt vector (epsilon_11, epsilon_22, epsilon_33, gamma_23, gamma_13, gamma_12), highlighting the factor of 2 in engineering shear gamma_ij = 2 epsilon_ij and the resulting B_1/B_2 energy density and field; Panel (b) maps the Fullmag mechanics object graph and separates the executable FEM prescribed-strain subset from fail-closed FDM and coupled-mechanics roadmaps.
 :width: 100%
 :name: fig-magnetoelastic-voigt-strain-coupling
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Engineering-Voigt strain convention and Fullmag magnetoelastic object-graph boundaries. Panel (a)
 shows the tensor-to-Voigt mapping where normal strains couple through $B_1$ and engineering shear

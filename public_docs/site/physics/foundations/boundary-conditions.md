@@ -39,9 +39,9 @@ resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different disc
 :alt: Four-panel boundary-condition overview showing (a) free-surface Neumann A d_n m = 0 via FEM natural weak integral and FDM clamped ghost cells, (b) chiral DMI boundary condition 2A d_nu m + D[(n_hat x nu) x m] = 0 with numerically computed edge canting profile, (c) periodic boundary conditions via FDM wrapped neighbor indices vs FEM reduced P^T A P system, and (d) FEM Dirichlet vs Robin airbox demagnetization closures and mechanical boundary conditions.
 :width: 100%
 :name: fig-micromagnetic-boundary-conditions-overview
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
-Summary of Fullmag boundary-condition contracts: **(a)** free-surface Neumann ($A\partial_n\mathbf{m}=\mathbf{0}$) in FEM natural weak form and FDM ghost clamping; **(b)** Rohart–Thiaville chiral DMI boundary canting over characteristic length $\ell_{\mathrm{DMI}} = 2A/|D|$ ([arXiv:1310.0666](https://arxiv.org/abs/1310.0666)); **(c)** periodic BCs via wrapped `neighbor_index` (FDM) vs. reduced $P^T A P$ DOF elimination (FEM); **(d)** outer airbox $\Gamma_a$ closures (Dirichlet $u=0$ vs. asymptotic Robin $\partial_n u + \beta u = 0$, cf. Fredkin & Koehler 1990) and mechanical displacement constraints.
+Summary of Fullmag boundary-condition contracts: **(a)** free-surface Neumann ($A\partial_n\mathbf{m}=\mathbf{0}$) in FEM natural weak form and FDM ghost clamping; **(b)** Rohart–Thiaville chiral DMI boundary canting with inverse boundary slope $\ell_{\mathrm{DMI}} = 2A/|D|$ and edge-canting decay length $\Delta = \sqrt{A/K_{\mathrm{eff}}}$ ([arXiv:1310.0666](https://arxiv.org/abs/1310.0666)); **(c)** periodic BCs via wrapped `neighbor_index` (FDM) vs. reduced $P^T A P$ DOF elimination (FEM); **(d)** outer airbox $\Gamma_a$ closures (Dirichlet $u=0$ vs. asymptotic Robin $\partial_n u + \beta u = 0$, cf. Fredkin & Koehler 1990) and mechanical displacement constraints.
 ```
 
 Boundary conditions define how the magnetization and auxiliary fields (scalar potential,

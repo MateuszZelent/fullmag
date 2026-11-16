@@ -85,7 +85,7 @@ The two forms are a valuable implementation cross-check when evaluated consisten
 :alt: Four-panel comparison of Fullmag demagnetization solver families and continuum magnetic charge sources rho_m = -div M and sigma_m = M . n: (a) FDM open-boundary 2N zero-padded FFT convolution, (b) FEM Poisson with shared finite airbox Omega_m subset Omega_a and Dirichlet or Robin outer closure on Gamma_a, (c) FEM-BEM Fredkin-Koehler two-solve boundary-integral method on closed body-only mesh Omega_m without an airbox, and (d) periodic replicated images in FDM truncated_images versus FEM reduced periodic_airbox_k0.
 :width: 100%
 :name: fig-demag-solver-families-comparison
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Continuum magnetostatic charge sources ($\rho_m = -\nabla\cdot\mathbf{M}$, $\sigma_m = \mathbf{M}\cdot\mathbf{n}$) and Fullmag's four discrete demagnetization operator families across **FDM CPU**, **FDM GPU**, **FEM CPU**, and **FEM GPU** (Brown 1963; Newell *et al.* 1993; Fredkin & Koehler 1990; Lepadatu 2019).
 ```

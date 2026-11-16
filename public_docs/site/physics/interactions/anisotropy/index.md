@@ -73,7 +73,7 @@ $K_{c3}$ must always be interpreted together with this equation.
 :alt: Two-panel diagram showing (a) uniaxial polar excess energy curves for easy axis, easy plane, and easy cone regimes plus the constant energy offset between Fullmag's -K_u1 cos^2(theta) and K_u1 sin^2(theta) conventions, and (b) 3D cubic energy landscapes and (1-10)-plane cross-sections for Kc1 > 0 (<100> easy) and Kc1 < 0 (<111> easy).
 :width: 100%
 :name: fig-anisotropy-uniaxial-and-cubic-landscapes
-:class: fm-physics-figure
+:figclass: fm-physics-figure
 
 Uniaxial energy regimes and scalar convention offset against $\sin^2\theta$ forms (a), paired with 3D cubic energy surfaces and $(1\bar{1}0)$-plane profiles for $K_{c1}>0$ and $K_{c1}<0$ (b) (Stoner & Wohlfarth 1948; Kittel 1949; Collings et al. 2023).
 ```
