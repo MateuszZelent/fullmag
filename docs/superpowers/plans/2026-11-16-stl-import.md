@@ -127,3 +127,35 @@ wykonań testów (28 unikalnych), w tym 10 authoring_open_tests, receipt
 Runtime tej ostatniej poprawki wymaga publikacji nowego pakietu. Kontener
 widzi RTX 4080 SUPER 16376 MiB, ok. 11688 MiB wolne; hostowe NVML zablokowane
 przez OS nie jest dowodem braku GPU kontenera. Native Solve nadal nie wykonano.
+
+Checkpoint runtime czystego commita: `9da7cf5b1fd5b23cb54e2515c57c296841aa9891`
+wdrożony przez restart-idle `e403c7206cb14ea5b74628274fd59181`; pakiet clean,
+snapshot `b198fe0948aaf7dc0605511fe3b617df10884d5866d07c74375675d6b0ea32f0`.
+Real Open `stl_project_open_cbe8e7f0b42047938554cb0bfab42881.response.json`
+zwraca już projekcję aktywacyjną (FEM/GPU/double), zachowując SHA archiwum/STL.
+Aktywowano authoring session `session-18e868ca3caf225300004a65`, scene revision 1,
+bez Solve. Zasób FMMT/2: 15947904 bajty, 181138 węzłów, 362516 trójkątów,
+zero komórek solvera; największy wymiar 5 µm. Dowód i pełne odpowiedzi na E.
+
+Pierwszy browser canvas-only PASS nie dowodził geometrii: dataset miał count 0.
+Wykryto błędne pole rewizji w nowym hooku (`scene_revision` zamiast `revision`).
+Regresja rzeczywistego hooka z wire SceneResource: RED receipt
+`verification/frontend-stl-checks/attempts/dfdecb636fb749249f4e42c855cc5b2c/receipt.json`;
+po poprawce GREEN typecheck/API hygiene/9782 testy w 941 plikach/lint, receipt
+`verification/frontend-stl-checks/attempts/75a1fc9521524633b58d715537eb8306/receipt.json`.
+Pełny browser PASS po poprawce: `e9cf64faca894ebfb787c80d4e6199d0`; obiekt
+`buckyball`, count 1, kind `imported-surface`, WebGL2 context_lost=false,
+drawing buffer 617x527, zero page/console/HTTP/transport errors, Home round-trip.
+Dowód zapisany również na E jako `stl_browser_e9cf64faca894ebfb787c80d4e6199d0.json`.
+Wcześniejszy failed browser z pojedynczym ECONNRESET/502 proxy QA zachowany;
+po potwierdzeniu HTTP 200 visualization/state i zakończeniu równoległej bramki
+nowa próba przeszła bez osłabiania asercji. Browser używa SwiftShader; jest to
+dowód renderowania, osobny od urządzenia obliczeń CUDA.
+
+Realny upload przez endpoint formularza UI: 18125884 bajty STL / 24167934
+bajty JSON, HTTP 200, SHA256 identyczny i 362516 trójkątów. Dowód na E:
+`stl_ui_upload_8675cc6f977343d4bfdb8fba3896d3c0.response.json`. Nie dodano
+drugiego obiektu. Build Mesh z oryginalnego źródła przy 32 nm przyjęty jako
+jedna komenda `fm-8f0d7aca-f39d-47e4-8ff7-272fac5581a0`, intent
+`1cf93cae233d4f2f9c0bf46b1a10bf6a`. Nadal pracuje; nie ponawiano go i nie
+uruchomiono solvera. Liczby nowej siatki, GPU relaxation i save/readback są otwarte.

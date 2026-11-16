@@ -2660,7 +2660,7 @@ export function useViewport3DUniverse(enabled = true) {
 export function useViewport3DImportedSurfaces(scene: SceneResource | null, enabled = true) {
   const { api, resources } = useKernel();
   const identity = useViewport3DSessionIdentity();
-  const revision = scene?.scene_revision ?? null;
+  const revision = scene?.revision ?? null;
   const objects = useMemo(() => (scene?.objects ?? []).filter(object =>
     isImportedStlGeometry(object.geometry)), [scene?.objects]);
   const unscopedKey = `${MODEL_OBJECT_SOURCE_SURFACE_PATH}#source-surfaces:scene=${revision}`;

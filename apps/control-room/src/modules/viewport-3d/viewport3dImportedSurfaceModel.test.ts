@@ -1,7 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildImportedSurfacePreview, isImportedStlGeometry, loadImportedSurfaceSources, type ImportedSurfaceSource } from "./viewport3dImportedSurfaceModel";
 import { buildViewport3DPrimitiveRenderModel } from "./viewport3dPrimitiveModel";
 import { createPrimitiveObjectGeometry } from "./layers/PrimitiveObjectLayerModel";
+import type { SceneResource } from "@/kernel/api/apiTypes";
+import { useViewport3DImportedSurfaces } from "./viewport3dResources";
+
+const importedSurfaceHookHarness = vi.hoisted(() => {
+  const captured = { options: null as unknown };
+  const identity = {
+    sessionId: "viewport-session",
+    sessionEpoch: "session-epoch",
+    requestScopeEpoch: "request-scope-epoch",
+  };
+  const api = {
+    model: {
+      sourceSurface: vi.fn(async () => {
+        throw new Error("STL source request reached the resource hook.");
+      }),
+    },
+  };
+  const resources = { invalidate: vi.fn() };
+  const useResource = vi.fn((options: unknown) => {
+    captured.options = options;
+    return null;
+  });
+  return { api, captured, identity, resources, useResource };
+});
+
+vi.mock("@/kernel/KernelContext", () => ({
+  useKernel: () => ({
+    api: importedSurfaceHookHarness.api,
+    resources: importedSurfaceHookHarness.resources,
+  }),
+}));
+vi.mock("@/kernel/resources/useResource", () => ({
+  useResource: importedSurfaceHookHarness.useResource,
+}));
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionResourceIdentity: () => importedSurfaceHookHarness.identity,
+}));
+
+interface CapturedImportedSurfaceResourceOptions {
+  enabled: boolean;
+  resourceKey: string;
+  load: (args: { sessionScopeKey: string; signal: AbortSignal }) => Promise<unknown>;
+}
 
 function source(): ImportedSurfaceSource {
   return {
@@ -77,4 +122,43 @@ it("propagates cancellation instead of publishing a partially loaded old session
   const controller = new AbortController();
   controller.abort();
   await expect(loadImportedSurfaceSources(["healthy"], async () => source(), controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+});
+
+describe("viewport imported surface resource hook", () => {
+  beforeEach(() => {
+    importedSurfaceHookHarness.captured.options = null;
+    importedSurfaceHookHarness.useResource.mockClear();
+    importedSurfaceHookHarness.resources.invalidate.mockClear();
+    importedSurfaceHookHarness.api.model.sourceSurface
+      .mockReset()
+      .mockRejectedValue(new Error("STL source request reached the resource hook."));
+  });
+
+  it("loads imported STL sources for the canonical scene revision from the API wire resource", async () => {
+    const scene = {
+      revision: 7,
+      objects: [{
+        id: "body",
+        name: "Body",
+        geometry: { geometry_kind: "ImportedGeometry", geometry_params: { source: "body.stl" } },
+      }],
+    } satisfies SceneResource;
+    function Probe() {
+      useViewport3DImportedSurfaces(scene);
+      return null;
+    }
+
+    renderToStaticMarkup(createElement(Probe));
+
+    expect(importedSurfaceHookHarness.useResource).toHaveBeenCalledTimes(1);
+    const options = importedSurfaceHookHarness.captured.options as CapturedImportedSurfaceResourceOptions;
+    expect(options.enabled).toBe(true);
+    expect(options.resourceKey).toContain("source-surfaces:scene=7");
+
+    await options.load({ sessionScopeKey: "session-request-scope", signal: new AbortController().signal });
+    expect(importedSurfaceHookHarness.api.model.sourceSurface).toHaveBeenCalledWith(
+      "body",
+      expect.objectContaining({ sessionScopeKey: "session-request-scope" }),
+    );
+  });
 });
