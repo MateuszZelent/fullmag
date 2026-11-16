@@ -773,8 +773,8 @@ solver, mesh, and workload scope.
 
 ## Citation and authors
 
-Cite the published PyPI package version ([`fullmag`](https://pypi.org/project/fullmag/)) and the
-exact repository commit used for the reported result until an archival DOI identifier is assigned:
+Until a versioned release with a persistent identifier is available, cite the repository and the
+exact commit used for the reported result (together with the installed [`fullmag`](https://pypi.org/project/fullmag/) PyPI package version when applicable):
 
 > M. Zelent, M. Gołebiewski, U. Makartsou, and P. Pirro, *FullMag: a computational framework for reproducible finite-difference and finite-element micromagnetics*, research software, 2026. Repository: [github.com/MateuszZelent/fullmag](https://github.com/MateuszZelent/fullmag). Documentation: [fullmag.mzelent.pl](https://fullmag.mzelent.pl/).
 
