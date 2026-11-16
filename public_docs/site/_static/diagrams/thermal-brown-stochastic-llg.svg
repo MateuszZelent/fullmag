@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 690" role="img" aria-labelledby="title desc">
+  <title id="title">Brown thermal noise: discrete Langevin field amplitude, retry draw reuse, and Boltzmann validation</title>
+  <desc id="desc">Panel (a) shows the discrete stochastic Brown field H_{th,i}^n = sigma_i^n xi_i^n with bare gamma_{mu0} in the denominator (single Gilbert factor 1/(1+alpha^2) applied by LLG), along with the adaptive RK rejected-step raw-draw reuse contract and lane-specific integrator limits. Panel (b) plots the Boltzmann equilibrium distribution P(theta) proportional to sin(theta) exp(xi cos(theta)) with 95% statistical confidence intervals, contrasting ensemble statistical parity against invalid bitwise trajectory equality across CPU and GPU.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arrow-steel" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arrow-axis" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#3b4252"/></marker>
+    <style>
+      .title-main { font: 700 20px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .title-sub { font: 400 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .panel-badge { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #17467a; }
+      .panel-title { font: 700 15px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .sec-head { font: 700 12.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .body { font: 400 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .body-bold { font: 600 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .small { font: 400 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #667085; }
+      .small-bold { font: 600 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .math { font: italic 13.8px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .math-sm { font: italic 12.2px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .code { font: 600 11.2px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #1e2430; }
+      .code-sm { font: 400 10.6px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #4c566a; }
+    </style>
+  </defs>
+  <rect x="8" y="8" width="1344" height="674" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
+  <text x="28" y="37" class="title-main">Thermal Brown Noise: Stochastic Field Contract and Statistical Qualification</text>
+  <text x="28" y="57" class="title-sub">Discrete Langevin amplitude with bare γ_μ0, rejected-step draw reuse, and Boltzmann equilibrium validation</text>
+  <line x1="26" y1="68" x2="1334" y2="68" stroke="#d7dce5" stroke-width="1"/>
+  <rect x="26" y="82" width="650" height="566" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="38" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="52" y="107.5" text-anchor="middle" class="panel-badge">(a)</text>
+  <text x="74" y="108" class="panel-title">Discrete Brown Field, Single-Gilbert Guard &amp; Retry Contract</text>
+  <line x1="38" y1="121" x2="664" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="42" y="134" width="618" height="134" rx="6" fill="#fdf3e4" stroke="#b86b11" stroke-width="1.2"/>
+  <text x="58" y="156" class="sec-head" fill="#b86b11">Fluctuation-Dissipation Amplitude (No Double Gilbert Reduction)</text>
+  <text x="58" y="180" class="math">H<tspan baseline-shift="sub" font-size="74%">th,i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> = σ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan>,   ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> ~ N(0, I<tspan baseline-shift="sub" font-size="74%">3</tspan>),   ⟨H<tspan baseline-shift="sub" font-size="74%">th,i,a</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> H<tspan baseline-shift="sub" font-size="74%">th,j,b</tspan><tspan baseline-shift="super" font-size="74%">m</tspan>⟩ = (σ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan>)<tspan baseline-shift="super" font-size="74%">2</tspan> δ<tspan baseline-shift="sub" font-size="74%">ij</tspan> δ<tspan baseline-shift="sub" font-size="74%">ab</tspan> δ<tspan baseline-shift="sub" font-size="74%">nm</tspan></text>
+  <text x="58" y="208" class="math">σ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> = √[ 2 α<tspan baseline-shift="sub" font-size="74%">i</tspan> k<tspan baseline-shift="sub" font-size="74%">B</tspan> T / ( γ<tspan baseline-shift="sub" font-size="74%">μ0</tspan> μ<tspan baseline-shift="sub" font-size="74%">0</tspan> M<tspan baseline-shift="sub" font-size="74%">s,i</tspan> V<tspan baseline-shift="sub" font-size="74%">i</tspan> Δt<tspan baseline-shift="sub" font-size="74%">n</tspan> ) ]</text>
+  <rect x="392" y="188" width="256" height="32" rx="5" fill="#ffffff" stroke="#b8392b" stroke-width="1.0"/>
+  <text x="520" y="208" text-anchor="middle" class="small-bold" fill="#b8392b">Bare γ<tspan baseline-shift="sub" font-size="74%">μ0</tspan>: 1/(1+α<tspan baseline-shift="super" font-size="74%">2</tspan>) applied ONCE in LLG</text>
+  <text x="58" y="238" class="small">• FDM volume: V<tspan baseline-shift="sub" font-size="74%">i</tspan> = ΔxΔyΔz.  FEM volume: nodal / lumped-mass measure (zeroed outside Ω<tspan baseline-shift="sub" font-size="74%">m</tspan>).</text>
+  <text x="58" y="256" class="small">• No standalone E<tspan baseline-shift="sub" font-size="74%">th</tspan> energy term; seed &gt; 0 fixed deterministic, seed=None requests OS entropy, seed=0 rejected.</text>
+  <rect x="42" y="282" width="618" height="226" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="58" y="304" class="sec-head">Accepted-Interval Raw-Draw Reuse &amp; FSAL Gate</text>
+  <rect x="58" y="320" width="174" height="80" rx="6" fill="#e7f0fa" stroke="#1d5fa7" stroke-width="1.2"/>
+  <text x="145" y="340" text-anchor="middle" class="small-bold" fill="#1d5fa7">1. Interval n Start</text>
+  <text x="145" y="358" text-anchor="middle" class="small">Draw ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> ~ N(0, I<tspan baseline-shift="sub" font-size="74%">3</tspan>) once</text>
+  <text x="145" y="375" text-anchor="middle" class="small">for accepted step index n</text>
+  <text x="145" y="391" text-anchor="middle" class="code-sm">raw_draw_valid = true</text>
+  <line x1="232" y1="360" x2="262" y2="360" stroke="#3b4252" stroke-width="1.8" marker-end="url(#arrow-axis)"/>
+  <rect x="266" y="320" width="180" height="80" rx="6" fill="#e4f5f3" stroke="#147d75" stroke-width="1.2"/>
+  <text x="356" y="340" text-anchor="middle" class="small-bold" fill="#147d75">2. Evaluate Stages</text>
+  <text x="356" y="358" text-anchor="middle" class="small">H<tspan baseline-shift="sub" font-size="74%">th,i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan> = σ<tspan baseline-shift="sub" font-size="74%">i</tspan>(Δt<tspan baseline-shift="sub" font-size="74%">trial</tspan>) ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan></text>
+  <text x="356" y="375" text-anchor="middle" class="small">Hold H<tspan baseline-shift="sub" font-size="74%">th</tspan> fixed across</text>
+  <text x="356" y="391" text-anchor="middle" class="small">all RK stages of attempt</text>
+  <line x1="446" y1="360" x2="476" y2="360" stroke="#147d75" stroke-width="1.8" marker-end="url(#arrow-teal)"/>
+  <rect x="480" y="320" width="164" height="80" rx="6" fill="#f2ecfc" stroke="#6f3cc4" stroke-width="1.2"/>
+  <text x="562" y="340" text-anchor="middle" class="small-bold" fill="#6f3cc4">3. Accept Step n</text>
+  <text x="562" y="358" text-anchor="middle" class="small">Advance step_count += 1</text>
+  <text x="562" y="375" text-anchor="middle" class="small-bold" fill="#b8392b">Invalidate FSAL reuse</text>
+  <text x="562" y="391" text-anchor="middle" class="small">Draw fresh ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n+1</tspan> next</text>
+  <rect x="118" y="424" width="442" height="68" rx="6" fill="#fbeae8" stroke="#b8392b" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text x="339" y="445" text-anchor="middle" class="small-bold" fill="#b8392b">Rejected Adaptive Trial (err &gt; tol) → Shrink Δt<tspan baseline-shift="sub" font-size="74%">retry</tspan> &lt; Δt<tspan baseline-shift="sub" font-size="74%">trial</tspan></text>
+  <text x="339" y="464" text-anchor="middle" class="small">REUSE same raw Gaussian draw ξ<tspan baseline-shift="sub" font-size="74%">i</tspan><tspan baseline-shift="super" font-size="74%">n</tspan>; rescale ONLY σ<tspan baseline-shift="sub" font-size="74%">i</tspan>(Δt<tspan baseline-shift="sub" font-size="74%">retry</tspan>) ∝ Δt<tspan baseline-shift="sub" font-size="74%">retry</tspan><tspan baseline-shift="super" font-size="74%">−1/2</tspan>.</text>
+  <text x="339" y="481" text-anchor="middle" class="small">Never redraw fresh noise on rejected trials (biases step-size acceptance).</text>
+  <line x1="356" y1="400" x2="356" y2="422" stroke="#b8392b" stroke-width="1.6" marker-end="url(#arrow-red)"/>
+  <path d="M 118 458 L 92 458 L 92 404" fill="none" stroke="#b8392b" stroke-width="1.6" marker-end="url(#arrow-red)"/>
+  <rect x="42" y="520" width="618" height="114" rx="6" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.2"/>
+  <text x="58" y="541" class="sec-head">Current Executable Integrator &amp; Backend Lane Boundaries</text>
+  <text x="58" y="562" class="body">• <tspan font-weight="700" fill="#1d5fa7">FDM CPU &amp; GPU:</tspan> Fixed-step Heun only; ABM3 &amp; adaptive_timestep rejected; use H<tspan baseline-shift="sub" font-size="74%">eff</tspan> (no H<tspan baseline-shift="sub" font-size="74%">therm</tspan> export).</text>
+  <text x="58" y="582" class="body">• <tspan font-weight="700" fill="#147d75">FEM CPU:</tspan> Reference sampler (mt19937_64) implements retry raw-draw reuse &amp; disables FSAL.</text>
+  <text x="58" y="602" class="body">• <tspan font-weight="700" fill="#b8392b">FEM GPU:</tspan> Strictly UNSUPPORTED in planning (CAP-THERM-GPU-001 pending; kernel source alone != lane).</text>
+  <text x="58" y="622" class="small">Type note: ThermalNoise.seed annotation says int|None; harden constructor with strict positive-int check.</text>
+  <rect x="690" y="82" width="644" height="566" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="702" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="716" y="107.5" text-anchor="middle" class="panel-badge">(b)</text>
+  <text x="738" y="108" class="panel-title">Statistical Qualification: Boltzmann Equilibrium &amp; Ensemble CIs</text>
+  <line x1="702" y1="121" x2="1322" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="706" y="134" width="612" height="344" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="722" y="156" class="sec-head">Macrospin Equilibrium Density P(θ) vs Polar Angle θ (ξ = M<tspan baseline-shift="sub" font-size="74%">s</tspan>VB<tspan baseline-shift="sub" font-size="74%">ext</tspan>/k<tspan baseline-shift="sub" font-size="74%">B</tspan>T = 2.0)</text>
+  <text x="722" y="174" class="small">P<tspan baseline-shift="sub" font-size="74%">eq</tspan>(θ) = [ξ / (2 sinh ξ)] sin θ exp(ξ cos θ)  (Leliaert et al. 2017; Brown 1963)</text>
+  <rect x="772.0" y="198.0" width="520.0" height="224.0" fill="#fafbfd" stroke="#e5e9f0" stroke-width="1"/>
+  <line x1="772.0" y1="422.0" x2="1292.0" y2="422.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="764.0" y="426.0" text-anchor="end" class="small">0.0</text>
+  <line x1="772.0" y1="347.3" x2="1292.0" y2="347.3" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="764.0" y="351.3" text-anchor="end" class="small">0.3</text>
+  <line x1="772.0" y1="272.7" x2="1292.0" y2="272.7" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="764.0" y="276.7" text-anchor="end" class="small">0.6</text>
+  <line x1="772.0" y1="198.0" x2="1292.0" y2="198.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="764.0" y="202.0" text-anchor="end" class="small">0.9</text>
+  <text x="772.0" y="438.0" text-anchor="middle" class="small">0</text>
+  <line x1="902.0" y1="198.0" x2="902.0" y2="422.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="902.0" y="438.0" text-anchor="middle" class="small">π/4</text>
+  <line x1="1032.0" y1="198.0" x2="1032.0" y2="422.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="1032.0" y="438.0" text-anchor="middle" class="small">π/2</text>
+  <line x1="1162.0" y1="198.0" x2="1162.0" y2="422.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="1162.0" y="438.0" text-anchor="middle" class="small">3π/4</text>
+  <text x="1292.0" y="438.0" text-anchor="middle" class="small">π</text>
+  <line x1="772.0" y1="422.0" x2="1292.0" y2="422.0" stroke="#3b4252" stroke-width="1.4"/>
+  <line x1="772.0" y1="198.0" x2="772.0" y2="422.0" stroke="#3b4252" stroke-width="1.4"/>
+  <polyline points="772.0,422.0 776.3,418.7 780.7,415.5 785.0,412.2 789.3,409.0 793.7,405.8 798.0,402.5 802.3,399.3 806.7,396.1 811.0,392.9 815.3,389.8 819.7,386.7 824.0,383.5 828.3,380.5 832.7,377.4 837.0,374.4 841.3,371.4 845.7,368.4 850.0,365.5 854.3,362.6 858.7,359.8 863.0,357.0 867.3,354.2 871.7,351.5 876.0,348.9 880.3,346.2 884.7,343.7 889.0,341.2 893.3,338.7 897.7,336.3 902.0,334.0 906.3,331.7 910.7,329.5 915.0,327.4 919.3,325.3 923.7,323.3 928.0,321.3 932.3,319.4 936.7,317.6 941.0,315.9 945.3,314.2 949.7,312.6 954.0,311.1 958.3,309.7 962.7,308.3 967.0,307.0 971.3,305.8 975.7,304.7 980.0,303.6 984.3,302.7 988.7,301.8 993.0,301.0 997.3,300.3 1001.7,299.6 1006.0,299.1 1010.3,298.6 1014.7,298.2 1019.0,297.9 1023.3,297.7 1027.7,297.6 1032.0,297.6 1036.3,297.6 1040.7,297.7 1045.0,297.9 1049.3,298.2 1053.7,298.6 1058.0,299.1 1062.3,299.6 1066.7,300.3 1071.0,301.0 1075.3,301.8 1079.7,302.7 1084.0,303.6 1088.3,304.7 1092.7,305.8 1097.0,307.0 1101.3,308.3 1105.7,309.7 1110.0,311.1 1114.3,312.6 1118.7,314.2 1123.0,315.9 1127.3,317.6 1131.7,319.4 1136.0,321.3 1140.3,323.3 1144.7,325.3 1149.0,327.4 1153.3,329.5 1157.7,331.7 1162.0,334.0 1166.3,336.3 1170.7,338.7 1175.0,341.2 1179.3,343.7 1183.7,346.2 1188.0,348.9 1192.3,351.5 1196.7,354.2 1201.0,357.0 1205.3,359.8 1209.7,362.6 1214.0,365.5 1218.3,368.4 1222.7,371.4 1227.0,374.4 1231.3,377.4 1235.7,380.5 1240.0,383.5 1244.3,386.7 1248.7,389.8 1253.0,392.9 1257.3,396.1 1261.7,399.3 1266.0,402.5 1270.3,405.8 1274.7,409.0 1279.0,412.2 1283.3,415.5 1287.7,418.7 1292.0,422.0" fill="none" stroke="#6e7b91" stroke-width="1.7" stroke-dasharray="5 3"/>
+  <polyline points="772.0,422.0 776.3,408.7 780.7,395.5 785.0,382.5 789.3,369.6 793.7,356.9 798.0,344.6 802.3,332.6 806.7,321.1 811.0,310.0 815.3,299.4 819.7,289.4 824.0,279.9 828.3,271.1 832.7,262.9 837.0,255.4 841.3,248.5 845.7,242.3 850.0,236.9 854.3,232.1 858.7,228.1 863.0,224.7 867.3,222.0 871.7,220.0 876.0,218.6 880.3,217.8 884.7,217.7 889.0,218.1 893.3,219.0 897.7,220.5 902.0,222.4 906.3,224.8 910.7,227.6 915.0,230.7 919.3,234.2 923.7,238.0 928.0,242.1 932.3,246.4 936.7,250.9 941.0,255.6 945.3,260.5 949.7,265.4 954.0,270.4 958.3,275.5 962.7,280.6 967.0,285.7 971.3,290.8 975.7,295.9 980.0,300.9 984.3,305.9 988.7,310.8 993.0,315.6 997.3,320.3 1001.7,324.9 1006.0,329.3 1010.3,333.7 1014.7,337.9 1019.0,342.0 1023.3,345.9 1027.7,349.7 1032.0,353.4 1036.3,356.9 1040.7,360.3 1045.0,363.5 1049.3,366.6 1053.7,369.6 1058.0,372.4 1062.3,375.1 1066.7,377.7 1071.0,380.2 1075.3,382.5 1079.7,384.7 1084.0,386.8 1088.3,388.8 1092.7,390.7 1097.0,392.5 1101.3,394.2 1105.7,395.8 1110.0,397.3 1114.3,398.8 1118.7,400.1 1123.0,401.4 1127.3,402.6 1131.7,403.8 1136.0,404.9 1140.3,405.9 1144.7,406.9 1149.0,407.8 1153.3,408.6 1157.7,409.4 1162.0,410.2 1166.3,410.9 1170.7,411.6 1175.0,412.3 1179.3,412.9 1183.7,413.5 1188.0,414.0 1192.3,414.5 1196.7,415.0 1201.0,415.5 1205.3,415.9 1209.7,416.4 1214.0,416.8 1218.3,417.1 1222.7,417.5 1227.0,417.9 1231.3,418.2 1235.7,418.5 1240.0,418.8 1244.3,419.1 1248.7,419.4 1253.0,419.7 1257.3,420.0 1261.7,420.2 1266.0,420.5 1270.3,420.8 1274.7,421.0 1279.0,421.3 1283.3,421.5 1287.7,421.8 1292.0,422.0" fill="none" stroke="#1d5fa7" stroke-width="2.8"/>
+  <line x1="793.7" y1="365.0" x2="793.7" y2="350.2" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="790.2" y1="365.0" x2="797.2" y2="365.0" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="790.2" y1="350.2" x2="797.2" y2="350.2" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="793.7" cy="357.6" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="837.0" y1="276.1" x2="837.0" y2="254.2" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="833.5" y1="276.1" x2="840.5" y2="276.1" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="833.5" y1="254.2" x2="840.5" y2="254.2" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="837.0" cy="265.1" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="880.3" y1="240.4" x2="880.3" y2="216.7" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="876.8" y1="240.4" x2="883.8" y2="240.4" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="876.8" y1="216.7" x2="883.8" y2="216.7" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="880.3" cy="228.5" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="923.7" y1="241.6" x2="923.7" y2="217.9" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="920.2" y1="241.6" x2="927.2" y2="241.6" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="920.2" y1="217.9" x2="927.2" y2="217.9" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="923.7" cy="229.7" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="967.0" y1="288.1" x2="967.0" y2="266.9" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="963.5" y1="288.1" x2="970.5" y2="288.1" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="963.5" y1="266.9" x2="970.5" y2="266.9" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="967.0" cy="277.5" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1010.3" y1="342.4" x2="1010.3" y2="325.3" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1006.8" y1="342.4" x2="1013.8" y2="342.4" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1006.8" y1="325.3" x2="1013.8" y2="325.3" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1010.3" cy="333.8" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1053.7" y1="373.3" x2="1053.7" y2="359.5" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1050.2" y1="373.3" x2="1057.2" y2="373.3" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1050.2" y1="359.5" x2="1057.2" y2="359.5" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1053.7" cy="366.4" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1097.0" y1="400.0" x2="1097.0" y2="390.3" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1093.5" y1="400.0" x2="1100.5" y2="400.0" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1093.5" y1="390.3" x2="1100.5" y2="390.3" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1097.0" cy="395.1" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1140.3" y1="410.7" x2="1140.3" y2="403.4" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1136.8" y1="410.7" x2="1143.8" y2="410.7" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1136.8" y1="403.4" x2="1143.8" y2="403.4" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1140.3" cy="407.0" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1183.7" y1="415.2" x2="1183.7" y2="409.3" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1180.2" y1="415.2" x2="1187.2" y2="415.2" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1180.2" y1="409.3" x2="1187.2" y2="409.3" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1183.7" cy="412.3" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1227.0" y1="420.2" x2="1227.0" y2="416.6" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1223.5" y1="420.2" x2="1230.5" y2="420.2" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1223.5" y1="416.6" x2="1230.5" y2="416.6" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1227.0" cy="418.4" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <line x1="1270.3" y1="422.0" x2="1270.3" y2="421.3" stroke="#b8392b" stroke-width="1.6"/>
+  <line x1="1266.8" y1="422.0" x2="1273.8" y2="422.0" stroke="#b8392b" stroke-width="1.4"/>
+  <line x1="1266.8" y1="421.3" x2="1273.8" y2="421.3" stroke="#b8392b" stroke-width="1.4"/>
+  <circle cx="1270.3" cy="421.8" r="3.6" fill="#b8392b" stroke="#ffffff" stroke-width="0.9"/>
+  <rect x="1030" y="206" width="250" height="74" rx="5" fill="#ffffff" stroke="#d7dce5" stroke-width="0.9"/>
+  <line x1="1042" y1="224" x2="1072" y2="224" stroke="#1d5fa7" stroke-width="2.6"/>
+  <text x="1080" y="228" class="small">Exact Boltzmann P<tspan baseline-shift="sub" font-size="74%">eq</tspan>(θ)</text>
+  <circle cx="1057" cy="245" r="3.5" fill="#b8392b"/>
+  <text x="1080" y="249" class="small">Ensemble + 95% CI (N = 4000)</text>
+  <line x1="1042" y1="266" x2="1072" y2="266" stroke="#6e7b91" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="1080" y="270" class="small">T → ∞ limit: (1/2) sin θ</text>
+  <text x="720" y="310.0" class="math-sm">P(θ)</text>
+  <text x="1032.0" y="458.0" text-anchor="middle" class="small">Polar angle θ relative to applied field [rad]</text>
+  <rect x="706" y="492" width="298" height="142" rx="6" fill="#fbeae8" stroke="#b8392b" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text x="720" y="514" class="sec-head" fill="#b8392b">Invalid Cross-Device Check</text>
+  <text x="720" y="536" class="body-bold">Bitwise sample equality: m<tspan baseline-shift="sub" font-size="74%">CPU</tspan>(t) == m<tspan baseline-shift="sub" font-size="74%">GPU</tspan>(t)</text>
+  <text x="720" y="556" class="small">• Host mt19937_64 and device cuRAND /</text>
+  <text x="728" y="572" class="small">counter streams are distinct generators.</text>
+  <text x="720" y="592" class="small">• Same seed replays ONE fixed lane;</text>
+  <text x="728" y="608" class="small">never expect cross-lane bitwise identity.</text>
+  <text x="720" y="624" class="small">• Deterministic ODE checks miss SDE bugs.</text>
+  <rect x="1020" y="492" width="298" height="142" rx="6" fill="#e4f5f3" stroke="#147d75" stroke-width="1.2"/>
+  <text x="1034" y="514" class="sec-head" fill="#147d75">Required Statistical Validation</text>
+  <text x="1034" y="536" class="body-bold">Ensemble CIs &amp; Variance Scaling</text>
+  <text x="1034" y="556" class="small">• Zero mean ⟨H<tspan baseline-shift="sub" font-size="74%">th</tspan>⟩ ≈ 0; zero cross-covariance.</text>
+  <text x="1034" y="576" class="small">• Var(H<tspan baseline-shift="sub" font-size="74%">th</tspan>) ∝ T · α / (γ<tspan baseline-shift="sub" font-size="74%">μ0</tspan> μ<tspan baseline-shift="sub" font-size="74%">0</tspan> M<tspan baseline-shift="sub" font-size="74%">s</tspan> V Δt).</text>
+  <text x="1034" y="596" class="small">• Equilibrium P(θ) within CIs across Δt</text>
+  <text x="1042" y="612" class="small">refinement and CPU/GPU comparison.</text>
+  <text x="28" y="672" class="small">ThermalNoise applies bare γ_μ0 in σ and requires physical-time LLG stages (not deterministic relaxation).</text>
+</svg>
