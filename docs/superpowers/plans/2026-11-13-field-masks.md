@@ -401,7 +401,17 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 - [ ] **Step 3: Compare** `m` at 10, 50, 100 ps: max\|Δm\| over active cells and over YIG layers 0..8 under the antenna. Starting threshold 1e-2; report the numbers either way; above it, hypotheses only.
 - [ ] **Step 4:** Record the evidence in the physics note and the matrix (facts only); rerun the source-map validator; commit `docs: record FDM evidence for hand-written masks`.
 
-### Task 12: L2 — single function `f(x, y, z, t)` (Mateusz's form)
+### Task 12: L2 — single function `f(x, y, z, t)` (Mateusz's form) — DONE in Python 2026-11-16 (`7dfd6eb8a`)
+
+As built (design §8, `mask-function-v1` §7): `fm.space_time(f, **values)` returns ordinary
+`(mask, time)` pairs and `antenna.add_space_time(f, **values)` adds them; the split is
+`packages/fullmag-py/src/fullmag/model/space_time.py`. Tests: `test_space_time.py` (10; the sum of
+the terms equals the function at 5 points × 5 times to 1e-12 relative); probe case `space_time`
+(a travelling wave plans to the maps and time programs of `two_terms`, error 0); scene round trip
+keeps the terms (`mask_field_drives` IR equal). Not built from the steps below: the Rust
+`separate`, the API endpoint and the Control Room dialog (the panel edits the terms). The steps
+are kept as the first design.
+
 
 **Files:**
 - Create: `crates/fullmag-expr/src/separate.rs`, `crates/fullmag-expr/tests/separate_tests.rs`

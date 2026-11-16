@@ -148,6 +148,25 @@ Gaussian $\exp[-(x-v\tau)^2/s^2]$) is rejected.
 | $\mathbf h_{i,c}$ | stored basis of term $i$ at cell $c$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf L_{ijk}$ | lattice point $(i,j,k)$ of an array mask | $\mathrm{m}$ |
 | $\mathbf A_{ijk}$ | array-mask value at lattice point $(i,j,k)$ | $\mathrm{T}$ |
+| $\mathbf H_c$ | effective field at FDM cell $c$ | $\mathrm{A\,m^{-1}}$ |
+| $M_{s,c}$ | saturation magnetization of FDM cell $c$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf m_c$ | unit magnetization of FDM cell $c$ | $1$ |
+| $\mathbf o$ | lower corner of the array-mask lattice | $\mathrm{m}$ |
+| $\Delta$ | spacing of the array-mask lattice | $\mathrm{m}$ |
+| $\mathbf r_n$ | position of FEM node $n$ | $\mathrm{m}$ |
+| $\varphi_n$ | P1 shape function of FEM node $n$ | $1$ |
+| $\mathbf h_i^h$ | nodal interpolant of the basis of term $i$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf h_{i,n}$ | stored basis of term $i$ at FEM node $n$ | $\mathrm{A\,m^{-1}}$ |
+| $w_n$ | lumped nodal weight of FEM node $n$ | $\mathrm{m^3}$ |
+| $M_{s,n}$ | saturation magnetization at FEM node $n$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf m_n$ | unit magnetization at FEM node $n$ | $1$ |
+| $a$ | part of a function argument that depends on position only | $1$ |
+| $b$ | part of a function argument that depends on the drive clock only | $1$ |
+| $B$ | amplitude of the travelling-wave example | $\mathrm{T}$ |
+| $k$ | wave number of the travelling-wave example | $\mathrm{m^{-1}}$ |
+| $\omega$ | angular frequency of the travelling-wave example | $\mathrm{s^{-1}}$ |
+| $v$ | velocity of the moving-Gaussian example | $\mathrm{m\,s^{-1}}$ |
+| $s$ | width of the moving-Gaussian example | $\mathrm{m}$ |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity limits
@@ -339,9 +358,12 @@ also through the Control Room and the API.
   and arguments) so the Control Room can change the arguments and rebuild them;
   the call is exported only when calling it again rebuilds the same terms, and an
   Update removes it (`docs/specs/mask-function-v1.md` section 6).
-- Failures are explicit and happen before a solver is allocated: the codes of
-  `docs/specs/mask-function-v1.md` sections 3 and 5. An unsupported lane is an
-  error; there is no fallback to another lane and no run without the mask.
+- Validation errors are explicit and happen before a solver is allocated: the
+  codes of `docs/specs/mask-function-v1.md` sections 3 and 5.
+- Unsupported combinations are errors: multilayer FDM, the Rust FEM reference
+  reduction of a statically periodic plan, a time-dependent term in a
+  relaxation stage, and more than 8 mask terms in one stage on a GPU lane.
+  There is no fallback to another lane and no run without the mask.
 
 (discrete-realization)=
 ## 8. Discrete realization
@@ -581,6 +603,41 @@ Evidence: `~/git/simulations/fullmag/field_masks/{runtime_smoke,staged}`. Item 3
 (source-code-index)=
 ## 13. Source-code index
 
-The index and the adjacent source map are filled when the symbols of section 9
-exist (plan Tasks 2 to 6) and are validated with
+| Source | Symbol | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/mask_function.py` | `_transpile` | Translate a restricted Python mask or time function to field_expr.v1 equations. |
+| `packages/fullmag-py/src/fullmag/model/mask_field_drive.py` | `class MaskAntenna` | Hold target, support shape, frame, clock and terms; apply parameter updates; serialize the drive. |
+| `packages/fullmag-py/src/fullmag/model/space_time.py` | `space_time` | Split one function of position and time into mask and time functions. |
+| `packages/fullmag-py/src/fullmag/model/vector_mask.py` | `class VectorMask` | Hold and serialize an array mask filled by ordinary Python. |
+| `packages/fullmag-py/src/fullmag/antennas.py` | `gaussian_k_source` | Return the terms of the ready Gaussian wave-vector source and record the call. |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `class _MaskAntennaRenderer` | Write a mask antenna of a scene as script functions, calls and stage actions. |
+| `crates/fullmag-ir/src/mask_field_drive.rs` | `MaskFieldDriveIR` | Define the drive, its terms and its target in ProblemIR. |
+| `crates/fullmag-ir/src/mask_field_drive.rs` | `validate_mask_field_drives` | Validate drives against the problem: ids, targets, shapes, functions, arrays and stage use. |
+| `crates/fullmag-ir/src/mask_field_drive.rs` | `with_updated_parameters` | Replace parameter values of one term for an Update stage action. |
+| `crates/fullmag-expr/src/function.rs` | `compile_function` | Parse and compile a function of field_expr.v1 with parameters, locals and outputs. |
+| `crates/fullmag-expr/src/bytecode.rs` | `eval_time_program` | Evaluate a fullmag_time_expr.v1 program at one time. |
+| `crates/fullmag-plan/src/mask_field.rs` | `shape_support` | Select the cells or nodes of the target that lie inside the support shape. |
+| `crates/fullmag-plan/src/mask_field.rs` | `frame_origin` | Resolve the origin of mask coordinates for the local and the world frame. |
+| `crates/fullmag-plan/src/mask_field.rs` | `resolve_drive_terms` | Evaluate every term on the support and store one basis and one time program per term. |
+| `crates/fullmag-plan/src/mask_field.rs` | `value_at` | Give the array-mask value of the lattice cell that contains a point. |
+| `crates/fullmag-plan/src/mask_field.rs` | `resolve_fem_mask_field_terms` | Resolve the support nodes of a FEM plan, check periodic node pairs and store the nodal bases. |
+| `crates/fullmag-runner/src/mask_time.rs` | `mask_term_local_time` | Convert the stage time to the clock of a term for its time origin. |
+| `crates/fullmag-runner/src/mask_time.rs` | `check_mask_time_programs` | Check every time program on the stage horizon before stepping. |
+| `crates/fullmag-engine/src/fdm/shared/terms.rs` | `multiplier_at` | Evaluate the time factor of a drive term at a Runge-Kutta stage time on FDM CPU. |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `resolved_drive_field_for_count` | Publish the summed drive field H_drive on FDM CPU. |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `regional_drive_energy` | Sum the Zeeman energy of the prescribed drives on FDM CPU. |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `check_native_host_multipliers` | Compare the native interpreter with the Rust interpreter before host-evaluated factors are used on FDM CUDA. |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` | `apply_regional_drive_energy` | Report the drive energy of an FDM CUDA step. |
+| `native/include/fullmag_time_expression.h` | `fullmag_time_expression_eval` | Evaluate a fullmag_time_expr.v1 program in host C and C++ code. |
+| `native/include/fullmag_fem.h` | `fullmag_fem_time_expression_eval_v1` | Expose the native interpreter to the runner for the parity check. |
+| `backends/fem/cpu/mfem/interactions/zeeman_time_dependence.cpp` | `evaluate_time_dependence` | Evaluate the time factor of a FEM drive, including host expressions. |
+| `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `regional_field_drive_energy` | Sum the drive energy with lumped nodal weights on FEM CPU. |
+| `backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu` | `gpu_regional_field_drive_upload` | Upload nodal bases and assign host-expression slots on FEM GPU. |
+| `crates/fullmag-runner/src/native_fem.rs` | `check_native_fem_time_programs` | Check FEM time programs on the stage horizon and against the native interpreter. |
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `materialize_pipeline_add_mask_field_drive` | Apply the stage action that adds a mask drive. |
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `update_mask_field_drive` | Apply the stage action that updates parameter values of an active mask drive. |
+| `crates/fullmag-application/src/script_stage_materialization.rs` | `remove_field_drive` | Apply the stage action that removes a drive. |
+
+The adjacent source map `0922-masks-for-field-excitation.source-map.json` lists the same
+symbols per equation and is validated with
 `.agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py`.
