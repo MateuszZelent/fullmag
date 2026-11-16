@@ -127,6 +127,7 @@ constraint = FrozenSpins(
 | `Problem.auxiliary_geometry_roles` | mapping | `{}` | $1$ | role mapping; unknown geometry rejected | `geometry.entries[].type` |
 | `Problem.current_modules` | sequence | `()` | mixed | current and Oersted source modules | `current_modules` |
 | `Problem.field_drives` | sequence | `()` | mixed | regional/time-dependent field drives | `field_drives` |
+| `Problem.mask_field_drives` | sequence | `()` | mixed | hand-written mask antennas (`mask_field_drive.v1`) | `mask_field_drives` |
 | `Problem.couplings` | sequence | `()` | mixed | explicit coupling graph | `couplings` |
 | `Problem.monitors` | sequence | `()` | mixed | planar monitor definitions | `planar_monitors` |
 | `Problem.excitation_analysis` | analysis or `None` | `None` | mixed | optional excitation analysis | `excitation_analysis` |

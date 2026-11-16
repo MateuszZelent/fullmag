@@ -178,6 +178,16 @@
         "problem_ir": "field_drives"
       },
       {
+        "python": "Problem.mask_field_drives",
+        "type": "sequence",
+        "default": "()",
+        "si_unit": "mixed",
+        "validation": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "meaning": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "backend_support": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "problem_ir": "mask_field_drives"
+      },
+      {
         "python": "Problem.couplings",
         "type": "sequence",
         "default": "()",
