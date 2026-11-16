@@ -1,0 +1,251 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 774" role="img" aria-labelledby="title desc">
+  <title id="title">FEM Poisson shared-domain graded airbox mesh and Dirichlet vs Robin boundary closures</title>
+  <desc id="desc">Two-panel figure: (a) conforming shared-domain mesh Omega_m subset Omega_a with geometrically graded airbox layers and outer Gamma_a boundary marker; (b) numerically computed magnetostatic potential decay u(r) for a magnetized sphere in a finite airbox R_box = 2.4 a comparing exact 1/r^2 open decay against Dirichlet (u = 0) and first-order Robin (d_n u + beta u = 0) truncation error.</desc>
+  <defs>
+    <style>
+      .title-main { font: 700 22px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
+      .subtitle-main { font: 400 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
+      .panel-badge-txt { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #ffffff; }
+      .panel-title { font: 700 16px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
+      .sec-head { font: 700 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
+      .body-txt { font: 400 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #344054; }
+      .body-bold { font: 600 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2433; }
+      .small-txt { font: 400 11.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
+      .small-bold { font: 600 11.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #344054; }
+      .mono { font: 600 11.5px 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; fill: #1e2433; }
+      .mono-sm { font: 500 10.8px 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono', monospace; fill: #344054; }
+      .math { font: italic 14.5px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-b { font: italic 700 14.5px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 13px 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; fill: #344054; }
+      .axis-txt { font: 500 11.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #526077; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#526077"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#b8392b"/></marker>
+    <marker id="arr-h" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-dl" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#b86b11"/></marker>
+    <marker id="arr-fl" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#147d75"/></marker>
+    <marker id="arr-bem" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-jc" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#6e7b91"/></marker>
+    <pattern id="air-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="12" stroke="#cbd4e4" stroke-width="1.2"/>
+    </pattern>
+  </defs>
+  <rect x="1" y="1" width="1358" height="772" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.6"/>
+  <text x="28" y="34" class="title-main">FEM Poisson Airbox: Conforming Shared Domain and Outer Boundary Closures</text>
+  <text x="28" y="57" class="subtitle-main">Shared tetrahedral topology (Ω<tspan baseline-shift="sub" font-size="9.5">m</tspan> ⊂ Ω<tspan baseline-shift="sub" font-size="9.5">a</tspan>), outer marker selection Γ<tspan baseline-shift="sub" font-size="9.5">a</tspan>, and analytical truncation comparison of Dirichlet vs Robin closures</text>
+  <rect x="24.0" y="68.0" width="636.0" height="684.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
+  <rect x="38.0" y="80.0" width="32" height="22" rx="11" fill="#1d5fa7"/>
+  <text x="54.0" y="95.5" text-anchor="middle" class="panel-badge-txt">(a)</text>
+  <text x="80.0" y="96.5" class="panel-title">Conforming Graded Airbox Mesh &amp; Boundary Operator</text>
+  <line x1="38.0" y1="112.0" x2="646.0" y2="112.0" stroke="#e2e6ef" stroke-width="1"/>
+  <rect x="142" y="156" width="420" height="296" fill="#eef2f8" stroke="#1d5fa7" stroke-width="2.8"/>
+  <rect x="208" y="202" width="288" height="204" fill="#f2f5fa" stroke="#8896ad" stroke-width="1.1"/>
+  <rect x="256" y="236" width="192" height="136" fill="#f6f8fc" stroke="#8896ad" stroke-width="1.1"/>
+  <rect x="290" y="260" width="124" height="88" fill="#f6e8df" stroke="#b8392b" stroke-width="2.2"/>
+  <line x1="142.0" y1="156.0" x2="208.0" y2="202.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="142.0" y1="156.0" x2="280.0" y2="202.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="247.0" y1="156.0" x2="280.0" y2="202.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="156.0" x2="280.0" y2="202.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="156.0" x2="352.0" y2="202.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="156.0" x2="424.0" y2="202.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="457.0" y1="156.0" x2="424.0" y2="202.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="562.0" y1="156.0" x2="424.0" y2="202.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="562.0" y1="156.0" x2="496.0" y2="202.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="562.0" y1="156.0" x2="496.0" y2="270.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="562.0" y1="254.7" x2="496.0" y2="270.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="562.0" y1="353.3" x2="496.0" y2="270.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="562.0" y1="353.3" x2="496.0" y2="338.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="562.0" y1="353.3" x2="496.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="562.0" y1="452.0" x2="496.0" y2="406.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="457.0" y1="452.0" x2="496.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="457.0" y1="452.0" x2="424.0" y2="406.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="457.0" y1="452.0" x2="352.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="452.0" x2="352.0" y2="406.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="247.0" y1="452.0" x2="352.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="247.0" y1="452.0" x2="280.0" y2="406.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="247.0" y1="452.0" x2="208.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="142.0" y1="452.0" x2="208.0" y2="406.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="142.0" y1="353.3" x2="208.0" y2="406.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="142.0" y1="353.3" x2="208.0" y2="338.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="142.0" y1="353.3" x2="208.0" y2="270.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="142.0" y1="254.7" x2="208.0" y2="270.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="142.0" y1="156.0" x2="208.0" y2="270.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="208.0" y1="202.0" x2="256.0" y2="236.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="208.0" y1="202.0" x2="304.0" y2="236.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="280.0" y1="202.0" x2="304.0" y2="236.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="202.0" x2="304.0" y2="236.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="202.0" x2="352.0" y2="236.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="202.0" x2="400.0" y2="236.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="424.0" y1="202.0" x2="400.0" y2="236.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="496.0" y1="202.0" x2="400.0" y2="236.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="496.0" y1="202.0" x2="448.0" y2="236.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="496.0" y1="202.0" x2="448.0" y2="281.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="496.0" y1="270.0" x2="448.0" y2="281.3" stroke="#98a6be" stroke-width="1"/>
+  <line x1="496.0" y1="338.0" x2="448.0" y2="281.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="496.0" y1="338.0" x2="448.0" y2="326.7" stroke="#98a6be" stroke-width="1"/>
+  <line x1="496.0" y1="338.0" x2="448.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="496.0" y1="406.0" x2="448.0" y2="372.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="424.0" y1="406.0" x2="448.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="424.0" y1="406.0" x2="400.0" y2="372.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="424.0" y1="406.0" x2="352.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="406.0" x2="352.0" y2="372.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="280.0" y1="406.0" x2="352.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="280.0" y1="406.0" x2="304.0" y2="372.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="280.0" y1="406.0" x2="256.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="208.0" y1="406.0" x2="256.0" y2="372.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="208.0" y1="338.0" x2="256.0" y2="372.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="208.0" y1="338.0" x2="256.0" y2="326.7" stroke="#98a6be" stroke-width="1"/>
+  <line x1="208.0" y1="338.0" x2="256.0" y2="281.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="208.0" y1="270.0" x2="256.0" y2="281.3" stroke="#98a6be" stroke-width="1"/>
+  <line x1="208.0" y1="202.0" x2="256.0" y2="281.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="256.0" y1="236.0" x2="290.0" y2="260.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="256.0" y1="236.0" x2="321.0" y2="260.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="304.0" y1="236.0" x2="321.0" y2="260.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="236.0" x2="321.0" y2="260.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="236.0" x2="352.0" y2="260.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="352.0" y1="236.0" x2="383.0" y2="260.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="400.0" y1="236.0" x2="383.0" y2="260.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="448.0" y1="236.0" x2="383.0" y2="260.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="448.0" y1="236.0" x2="414.0" y2="260.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="448.0" y1="236.0" x2="414.0" y2="289.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="448.0" y1="281.3" x2="414.0" y2="289.3" stroke="#98a6be" stroke-width="1"/>
+  <line x1="448.0" y1="326.7" x2="414.0" y2="289.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="448.0" y1="326.7" x2="414.0" y2="318.7" stroke="#98a6be" stroke-width="1"/>
+  <line x1="448.0" y1="326.7" x2="414.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="448.0" y1="372.0" x2="414.0" y2="348.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="400.0" y1="372.0" x2="414.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="400.0" y1="372.0" x2="383.0" y2="348.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="400.0" y1="372.0" x2="352.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="352.0" y1="372.0" x2="352.0" y2="348.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="304.0" y1="372.0" x2="352.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="304.0" y1="372.0" x2="321.0" y2="348.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="304.0" y1="372.0" x2="290.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="256.0" y1="372.0" x2="290.0" y2="348.0" stroke="#98a6be" stroke-width="1"/>
+  <line x1="256.0" y1="326.7" x2="290.0" y2="348.0" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="256.0" y1="326.7" x2="290.0" y2="318.7" stroke="#98a6be" stroke-width="1"/>
+  <line x1="256.0" y1="326.7" x2="290.0" y2="289.3" stroke="#aebad0" stroke-width="0.9"/>
+  <line x1="256.0" y1="281.3" x2="290.0" y2="289.3" stroke="#98a6be" stroke-width="1"/>
+  <line x1="256.0" y1="236.0" x2="290.0" y2="289.3" stroke="#aebad0" stroke-width="0.9"/>
+  <rect x="290.0" y="260.0" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="290.0" y1="260.0" x2="321.0" y2="289.3" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="290.0" y="289.3" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="290.0" y1="289.3" x2="321.0" y2="318.7" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="290.0" y="318.7" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="290.0" y1="318.7" x2="321.0" y2="348.0" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="321.0" y="260.0" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="321.0" y1="260.0" x2="352.0" y2="289.3" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="321.0" y="289.3" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="321.0" y1="289.3" x2="352.0" y2="318.7" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="321.0" y="318.7" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="321.0" y1="318.7" x2="352.0" y2="348.0" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="352.0" y="260.0" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="352.0" y1="260.0" x2="383.0" y2="289.3" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="352.0" y="289.3" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="352.0" y1="289.3" x2="383.0" y2="318.7" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="352.0" y="318.7" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="352.0" y1="318.7" x2="383.0" y2="348.0" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="383.0" y="260.0" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="383.0" y1="260.0" x2="414.0" y2="289.3" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="383.0" y="289.3" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="383.0" y1="289.3" x2="414.0" y2="318.7" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="383.0" y="318.7" width="31.0" height="29.3" fill="none" stroke="#b97a56" stroke-width="0.8"/>
+  <line x1="383.0" y1="318.7" x2="414.0" y2="348.0" stroke="#b97a56" stroke-width="0.7"/>
+  <rect x="290" y="260" width="124" height="88" fill="none" stroke="#b8392b" stroke-width="2.4"/>
+  <rect x="142" y="156" width="420" height="296" fill="none" stroke="#1d5fa7" stroke-width="3.2"/>
+  <rect x="298" y="288" width="108" height="32" rx="4" fill="#ffffff" fill-opacity="0.95" stroke="#b8392b" stroke-width="1"/>
+  <text x="352" y="308" text-anchor="middle" class="small-bold" fill="#b8392b">Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan>: M = M<tspan baseline-shift="sub" font-size="10.5">s</tspan> m</text>
+  <text x="352" y="132" text-anchor="middle" class="sec-head" fill="#1d5fa7">Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan> = ∂Ω<tspan baseline-shift="sub" font-size="10.5">a</tspan>  (poisson_boundary_marker)</text>
+  <line x1="352" y1="141" x2="352" y2="155" stroke="#1d5fa7" stroke-width="1.8"/>
+  <line x1="562" y1="304" x2="604" y2="304" stroke="#1d5fa7" stroke-width="2.4" marker-end="url(#arr-h)"/>
+  <text x="612" y="308" class="math-b" fill="#1d5fa7">n</text>
+  <text x="44" y="270" class="small-bold" fill="#6e7b91">Geometric</text>
+  <text x="44" y="290" class="small-bold" fill="#6e7b91">grading:</text>
+  <text x="44" y="313" class="small-txt">h<tspan baseline-shift="sub" font-size="10.5">body</tspan> → h<tspan baseline-shift="sub" font-size="10.5">air</tspan></text>
+  <text x="44" y="337" class="small-txt">(M = 0 in air)</text>
+  <text x="352" y="478" text-anchor="middle" class="small-txt">Shared vertices on ∂Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan> (interface faces are NOT outer Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan> markers)</text>
+  <rect x="44" y="502" width="290" height="160" rx="6" fill="#e6f5f3" stroke="#147d75" stroke-width="1.4"/>
+  <text x="189" y="524" text-anchor="middle" class="sec-head" fill="#147d75">Robin Closure (Default)</text>
+  <text x="189" y="549" text-anchor="middle" class="math" fill="#1e2433">∂<tspan baseline-shift="sub" font-size="10.5">n</tspan>u + βu = 0 on Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan></text>
+  <text x="189" y="575" text-anchor="middle" class="math-sm">A<tspan baseline-shift="sub" font-size="10.5">R</tspan> = K + β B<tspan baseline-shift="sub" font-size="10.5">Γa</tspan>,  β = c / R<tspan baseline-shift="sub" font-size="10.5">★</tspan></text>
+  <text x="189" y="601" text-anchor="middle" class="small-txt">Boundary mass on selected marker;</text>
+  <text x="189" y="621" text-anchor="middle" class="small-txt">periodic seam markers excluded.</text>
+  <text x="189" y="647" text-anchor="middle" class="small-bold" fill="#147d75">Do NOT double-count surface energy!</text>
+  <rect x="350" y="502" width="290" height="160" rx="6" fill="#fceceb" stroke="#b8392b" stroke-width="1.4"/>
+  <text x="495" y="524" text-anchor="middle" class="sec-head" fill="#b8392b">Dirichlet Closure</text>
+  <text x="495" y="549" text-anchor="middle" class="math" fill="#1e2433">u = 0 on Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan> (essential)</text>
+  <text x="495" y="575" text-anchor="middle" class="math-sm">K<tspan baseline-shift="sub" font-size="10.5">0</tspan>û = b  (no B<tspan baseline-shift="sub" font-size="10.5">Γa</tspan> term)</text>
+  <text x="495" y="601" text-anchor="middle" class="small-txt">Eliminates essential true DOFs</text>
+  <text x="495" y="621" text-anchor="middle" class="small-txt">on Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan>; fails closed if empty.</text>
+  <text x="495" y="647" text-anchor="middle" class="small-bold" fill="#b8392b">Underestimates |H<tspan baseline-shift="sub" font-size="10.5">d</tspan>| at finite R<tspan baseline-shift="sub" font-size="10.5">box</tspan></text>
+  <rect x="44" y="680" width="596" height="44" rx="5" fill="#f6f8fc" stroke="#dce0e8" stroke-width="1.1"/>
+  <text x="342" y="706" text-anchor="middle" class="small-bold" fill="#1e2433">Energy reduction (both): E<tspan baseline-shift="sub" font-size="10.5">d</tspan> = −(μ<tspan baseline-shift="sub" font-size="10.5">0</tspan>/2)∫<tspan baseline-shift="sub" font-size="10.5">Ωm</tspan> M·H<tspan baseline-shift="sub" font-size="10.5">d</tspan> dV (airbox LLG nodes zeroed)</text>
+  <rect x="676.0" y="68.0" width="660.0" height="684.0" rx="8" fill="#ffffff" stroke="#dce0e8" stroke-width="1.4"/>
+  <rect x="690.0" y="80.0" width="32" height="22" rx="11" fill="#147d75"/>
+  <text x="706.0" y="95.5" text-anchor="middle" class="panel-badge-txt">(b)</text>
+  <text x="732.0" y="96.5" class="panel-title">Analytical Potential Decay u(r) &amp; Airbox Truncation Error</text>
+  <line x1="690.0" y1="112.0" x2="1322.0" y2="112.0" stroke="#e2e6ef" stroke-width="1"/>
+  <rect x="758" y="134" width="182.7" height="346" fill="#f6e8df" fill-opacity="0.55"/>
+  <rect x="940.7" y="134" width="255.7" height="346" fill="#eef2f8" fill-opacity="0.55"/>
+  <rect x="1196.4" y="134" width="109.6" height="346" fill="#f8f9fb"/>
+  <line x1="758" y1="480.0" x2="1306" y2="480.0" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="747" y="484.0" text-anchor="end" class="axis-txt">0.0</text>
+  <line x1="758" y1="397.6" x2="1306" y2="397.6" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="747" y="401.6" text-anchor="end" class="axis-txt">0.1</text>
+  <line x1="758" y1="315.2" x2="1306" y2="315.2" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="747" y="319.2" text-anchor="end" class="axis-txt">0.2</text>
+  <line x1="758" y1="232.9" x2="1306" y2="232.9" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="747" y="236.9" text-anchor="end" class="axis-txt">0.3</text>
+  <line x1="758" y1="150.5" x2="1306" y2="150.5" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="747" y="154.5" text-anchor="end" class="axis-txt">0.4</text>
+  <line x1="758.0" y1="134" x2="758.0" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="760.0" y="499" text-anchor="start" class="axis-txt">0.0</text>
+  <line x1="849.3" y1="134" x2="849.3" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="849.3" y="499" text-anchor="middle" class="axis-txt">0.5</text>
+  <line x1="940.7" y1="134" x2="940.7" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="940.7" y="499" text-anchor="middle" class="axis-txt">1.0</text>
+  <line x1="1032.0" y1="134" x2="1032.0" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="1032.0" y="499" text-anchor="middle" class="axis-txt">1.5</text>
+  <line x1="1123.3" y1="134" x2="1123.3" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="1123.3" y="499" text-anchor="middle" class="axis-txt">2.0</text>
+  <line x1="1196.4" y1="134" x2="1196.4" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="1196.4" y="499" text-anchor="middle" class="axis-txt">2.4 (Γ<tspan baseline-shift="sub" font-size="8.5">a</tspan>)</text>
+  <line x1="1306.0" y1="134" x2="1306.0" y2="480" stroke="#e3e7ef" stroke-width="1"/>
+  <text x="1306.0" y="499" text-anchor="middle" class="axis-txt">3.0</text>
+  <line x1="940.7" y1="134" x2="940.7" y2="480" stroke="#b97a56" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <line x1="1196.4" y1="134" x2="1196.4" y2="480" stroke="#1d5fa7" stroke-width="2" stroke-dasharray="6 3"/>
+  <rect x="758" y="134" width="548" height="346" fill="none" stroke="#6e7b91" stroke-width="1.4"/>
+  <polyline points="758.00,480.00 761.04,475.42 764.09,470.85 767.13,466.27 770.18,461.69 773.22,457.12 776.27,452.54 779.31,447.96 782.36,443.39 785.40,438.81 788.44,434.23 791.49,429.66 794.53,425.08 797.58,420.50 800.62,415.93 803.67,411.35 806.71,406.77 809.76,402.20 812.80,397.62 815.84,393.04 818.89,388.47 821.93,383.89 824.98,379.31 828.02,374.74 831.07,370.16 834.11,365.58 837.16,361.01 840.20,356.43 843.24,351.85 846.29,347.28 849.33,342.70 852.38,338.12 855.42,333.54 858.47,328.97 861.51,324.39 864.56,319.81 867.60,315.24 870.64,310.66 873.69,306.08 876.73,301.51 879.78,296.93 882.82,292.35 885.87,287.78 888.91,283.20 891.96,278.62 895.00,274.05 898.04,269.47 901.09,264.89 904.13,260.32 907.18,255.74 910.22,251.16 913.27,246.59 916.31,242.01 919.36,237.43 922.40,232.86 925.44,228.28 928.49,223.70 931.53,219.13 934.58,214.55 937.62,209.97 940.67,205.40 943.71,214.33 946.76,222.83 949.80,230.93 952.84,238.65 955.89,246.02 958.93,253.06 961.98,259.78 965.02,266.21 968.07,272.36 971.11,278.25 974.16,283.89 977.20,289.30 980.24,294.49 983.29,299.47 986.33,304.25 989.38,308.85 992.42,313.27 995.47,317.51 998.51,321.60 1001.56,325.54 1004.60,329.33 1007.64,332.98 1010.69,336.50 1013.73,339.90 1016.78,343.17 1019.82,346.34 1022.87,349.39 1025.91,352.34 1028.96,355.20 1032.00,357.95 1035.04,360.62 1038.09,363.20 1041.13,365.70 1044.18,368.12 1047.22,370.46 1050.27,372.73 1053.31,374.93 1056.36,377.07 1059.40,379.14 1062.44,381.14 1065.49,383.09 1068.53,384.98 1071.58,386.82 1074.62,388.60 1077.67,390.33 1080.71,392.02 1083.76,393.65 1086.80,395.25 1089.84,396.79 1092.89,398.30 1095.93,399.77 1098.98,401.19 1102.02,402.58 1105.07,403.93 1108.11,405.25 1111.16,406.53 1114.20,407.78 1117.24,409.00 1120.29,410.19 1123.33,411.35 1126.38,412.48 1129.42,413.58 1132.47,414.66 1135.51,415.71 1138.56,416.73 1141.60,417.73 1144.64,418.71 1147.69,419.66 1150.73,420.59 1153.78,421.50 1156.82,422.39 1159.87,423.26 1162.91,424.11 1165.96,424.94 1169.00,425.76 1172.04,426.55 1175.09,427.33 1178.13,428.09 1181.18,428.83 1184.22,429.56 1187.27,430.28 1190.31,430.97 1193.36,431.66 1196.40,432.33 1199.44,432.98 1202.49,433.62 1205.53,434.25 1208.58,434.87 1211.62,435.47 1214.67,436.06 1217.71,436.64 1220.76,437.21 1223.80,437.77 1226.84,438.32 1229.89,438.85 1232.93,439.38 1235.98,439.89 1239.02,440.40 1242.07,440.90 1245.11,441.38 1248.16,441.86 1251.20,442.33 1254.24,442.79 1257.29,443.24 1260.33,443.69 1263.38,444.13 1266.42,444.55 1269.47,444.97 1272.51,445.39 1275.56,445.79 1278.60,446.19 1281.64,446.58 1284.69,446.97 1287.73,447.35 1290.78,447.72 1293.82,448.09 1296.87,448.45 1299.91,448.80 1302.96,449.15 1306.00,449.49" fill="none" stroke="#1e2433" stroke-width="3"/>
+  <polyline points="758.00,480.00 760.92,475.61 763.85,471.21 766.77,466.82 769.69,462.43 772.61,458.03 775.54,453.64 778.46,449.24 781.38,444.85 784.30,440.46 787.23,436.06 790.15,431.67 793.07,427.28 795.99,422.88 798.92,418.49 801.84,414.10 804.76,409.70 807.69,405.31 810.61,400.91 813.53,396.52 816.45,392.13 819.38,387.73 822.30,383.34 825.22,378.95 828.14,374.55 831.07,370.16 833.99,365.77 836.91,361.37 839.83,356.98 842.76,352.58 845.68,348.19 848.60,343.80 851.53,339.40 854.45,335.01 857.37,330.62 860.29,326.22 863.22,321.83 866.14,317.43 869.06,313.04 871.98,308.65 874.91,304.25 877.83,299.86 880.75,295.47 883.67,291.07 886.60,286.68 889.52,282.29 892.44,277.89 895.37,273.50 898.29,269.10 901.21,264.71 904.13,260.32 907.06,255.92 909.98,251.53 912.90,247.14 915.82,242.74 918.75,238.35 921.67,233.96 924.59,229.56 927.51,225.17 930.44,220.77 933.36,216.38 936.28,211.99 939.21,207.59 942.13,209.74 945.05,218.12 947.97,226.11 950.90,233.75 953.82,241.05 956.74,248.02 959.66,254.70 962.59,261.09 965.51,267.21 968.43,273.08 971.35,278.71 974.28,284.11 977.20,289.30 980.12,294.29 983.05,299.08 985.97,303.69 988.89,308.13 991.81,312.40 994.74,316.51 997.66,320.47 1000.58,324.29 1003.50,327.98 1006.43,331.53 1009.35,334.97 1012.27,338.28 1015.19,341.48 1018.12,344.58 1021.04,347.57 1023.96,350.47 1026.89,353.27 1029.81,355.98 1032.73,358.60 1035.65,361.14 1038.58,363.61 1041.50,366.00 1044.42,368.31 1047.34,370.56 1050.27,372.73 1053.19,374.85 1056.11,376.90 1059.03,378.89 1061.96,380.83 1064.88,382.71 1067.80,384.53 1070.73,386.31 1073.65,388.04 1076.57,389.72 1079.49,391.35 1082.42,392.94 1085.34,394.49 1088.26,395.99 1091.18,397.46 1094.11,398.89 1097.03,400.28 1099.95,401.64 1102.87,402.96 1105.80,404.25 1108.72,405.51 1111.64,406.74 1114.57,407.93 1117.49,409.10 1120.41,410.24 1123.33,411.35 1126.26,412.43 1129.18,413.49 1132.10,414.53 1135.02,415.54 1137.95,416.53 1140.87,417.49 1143.79,418.44 1146.71,419.36 1149.64,420.26 1152.56,421.14 1155.48,422.01 1158.41,422.85 1161.33,423.67 1164.25,424.48 1167.17,425.27 1170.10,426.05 1173.02,426.80 1175.94,427.54 1178.86,428.27 1181.79,428.98 1184.71,429.68 1187.63,430.36 1190.55,431.03 1193.48,431.68 1196.40,432.33" fill="none" stroke="#147d75" stroke-width="2.4" stroke-dasharray="8 5"/>
+  <polyline points="758.00,480.00 760.92,475.45 763.85,470.89 766.77,466.34 769.69,461.79 772.61,457.24 775.54,452.68 778.46,448.13 781.38,443.58 784.30,439.03 787.23,434.47 790.15,429.92 793.07,425.37 795.99,420.82 798.92,416.26 801.84,411.71 804.76,407.16 807.69,402.61 810.61,398.05 813.53,393.50 816.45,388.95 819.38,384.40 822.30,379.84 825.22,375.29 828.14,370.74 831.07,366.19 833.99,361.63 836.91,357.08 839.83,352.53 842.76,347.98 845.68,343.42 848.60,338.87 851.53,334.32 854.45,329.77 857.37,325.21 860.29,320.66 863.22,316.11 866.14,311.56 869.06,307.00 871.98,302.45 874.91,297.90 877.83,293.34 880.75,288.79 883.67,284.24 886.60,279.69 889.52,275.13 892.44,270.58 895.37,266.03 898.29,261.48 901.21,256.92 904.13,252.37 907.06,247.82 909.98,243.27 912.90,238.71 915.82,234.16 918.75,229.61 921.67,225.06 924.59,220.50 927.51,215.95 930.44,211.40 933.36,206.85 936.28,202.29 939.21,197.74 942.13,199.73 945.05,207.95 947.97,215.78 950.90,223.26 953.82,230.40 956.74,237.22 959.66,243.73 962.59,249.96 965.51,255.93 968.43,261.64 971.35,267.11 974.28,272.35 977.20,277.38 980.12,282.21 983.05,286.84 985.97,291.29 988.89,295.57 991.81,299.68 994.74,303.64 997.66,307.44 1000.58,311.10 1003.50,314.63 1006.43,318.03 1009.35,321.30 1012.27,324.46 1015.19,327.50 1018.12,330.44 1021.04,333.27 1023.96,336.01 1026.89,338.65 1029.81,341.20 1032.73,343.66 1035.65,346.05 1038.58,348.35 1041.50,350.58 1044.42,352.74 1047.34,354.82 1050.27,356.84 1053.19,358.80 1056.11,360.69 1059.03,362.52 1061.96,364.30 1064.88,366.02 1067.80,367.69 1070.73,369.31 1073.65,370.87 1076.57,372.39 1079.49,373.87 1082.42,375.30 1085.34,376.69 1088.26,378.04 1091.18,379.35 1094.11,380.62 1097.03,381.85 1099.95,383.05 1102.87,384.21 1105.80,385.34 1108.72,386.44 1111.64,387.51 1114.57,388.54 1117.49,389.55 1120.41,390.53 1123.33,391.48 1126.26,392.41 1129.18,393.31 1132.10,394.19 1135.02,395.04 1137.95,395.87 1140.87,396.68 1143.79,397.46 1146.71,398.22 1149.64,398.97 1152.56,399.69 1155.48,400.39 1158.41,401.08 1161.33,401.74 1164.25,402.39 1167.17,403.02 1170.10,403.64 1173.02,404.24 1175.94,404.82 1178.86,405.39 1181.79,405.94 1184.71,406.48 1187.63,407.00 1190.55,407.51 1193.48,408.01 1196.40,408.49" fill="none" stroke="#b86b11" stroke-width="2.6"/>
+  <polyline points="758.00,480.00 760.92,475.92 763.85,471.85 766.77,467.77 769.69,463.70 772.61,459.62 775.54,455.55 778.46,451.47 781.38,447.39 784.30,443.32 787.23,439.24 790.15,435.17 793.07,431.09 795.99,427.01 798.92,422.94 801.84,418.86 804.76,414.79 807.69,410.71 810.61,406.64 813.53,402.56 816.45,398.48 819.38,394.41 822.30,390.33 825.22,386.26 828.14,382.18 831.07,378.10 833.99,374.03 836.91,369.95 839.83,365.88 842.76,361.80 845.68,357.73 848.60,353.65 851.53,349.57 854.45,345.50 857.37,341.42 860.29,337.35 863.22,333.27 866.14,329.19 869.06,325.12 871.98,321.04 874.91,316.97 877.83,312.89 880.75,308.82 883.67,304.74 886.60,300.66 889.52,296.59 892.44,292.51 895.37,288.44 898.29,284.36 901.21,280.28 904.13,276.21 907.06,272.13 909.98,268.06 912.90,263.98 915.82,259.91 918.75,255.83 921.67,251.75 924.59,247.68 927.51,243.60 930.44,239.53 933.36,235.45 936.28,231.37 939.21,227.30 942.13,229.76 945.05,238.46 947.97,246.77 950.90,254.73 953.82,262.34 956.74,269.63 959.66,276.63 962.59,283.34 965.51,289.78 968.43,295.96 971.35,301.91 974.28,307.63 977.20,313.14 980.12,318.44 983.05,323.55 985.97,328.48 988.89,333.23 991.81,337.82 994.74,342.25 997.66,346.53 1000.58,350.67 1003.50,354.68 1006.43,358.55 1009.35,362.30 1012.27,365.93 1015.19,369.45 1018.12,372.87 1021.04,376.18 1023.96,379.39 1026.89,382.51 1029.81,385.54 1032.73,388.48 1035.65,391.34 1038.58,394.12 1041.50,396.82 1044.42,399.46 1047.34,402.02 1050.27,404.52 1053.19,406.95 1056.11,409.32 1059.03,411.63 1061.96,413.88 1064.88,416.08 1067.80,418.22 1070.73,420.32 1073.65,422.36 1076.57,424.36 1079.49,426.31 1082.42,428.22 1085.34,430.08 1088.26,431.91 1091.18,433.69 1094.11,435.44 1097.03,437.15 1099.95,438.83 1102.87,440.47 1105.80,442.07 1108.72,443.65 1111.64,445.19 1114.57,446.71 1117.49,448.19 1120.41,449.65 1123.33,451.08 1126.26,452.48 1129.18,453.86 1132.10,455.21 1135.02,456.54 1137.95,457.85 1140.87,459.13 1143.79,460.39 1146.71,461.63 1149.64,462.85 1152.56,464.05 1155.48,465.23 1158.41,466.39 1161.33,467.53 1164.25,468.66 1167.17,469.77 1170.10,470.86 1173.02,471.93 1175.94,472.99 1178.86,474.04 1181.79,475.07 1184.71,476.08 1187.63,477.08 1190.55,478.07 1193.48,479.04 1196.40,480.00" fill="none" stroke="#b8392b" stroke-width="2.6"/>
+  <circle cx="1196.4" cy="432.3" r="4.5" fill="#1e2433" stroke="#ffffff" stroke-width="1.2"/>
+  <circle cx="1196.4" cy="408.5" r="4.5" fill="#b86b11" stroke="#ffffff" stroke-width="1.2"/>
+  <circle cx="1196.4" cy="480.0" r="4.5" fill="#b8392b" stroke="#ffffff" stroke-width="1.2"/>
+  <rect x="803.3" y="138" width="92" height="25" rx="4" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="849.3" y="155" text-anchor="middle" class="small-bold" fill="#b8392b">Sphere Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
+  <rect x="1010.5" y="138" width="116" height="25" rx="4" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="1068.5" y="155" text-anchor="middle" class="small-bold" fill="#1d5fa7">Airbox Ω<tspan baseline-shift="sub" font-size="10.5">a</tspan>\ Ω<tspan baseline-shift="sub" font-size="10.5">m</tspan></text>
+  <rect x="1207.2" y="138" width="88" height="25" rx="4" fill="#ffffff" fill-opacity="0.92"/>
+  <text x="1251.2" y="155" text-anchor="middle" class="small-txt">Outside Ω<tspan baseline-shift="sub" font-size="10.5">a</tspan></text>
+  <rect x="1014" y="168" width="282" height="142" rx="5" fill="#ffffff" fill-opacity="0.97" stroke="#dce0e8" stroke-width="1.2"/>
+  <text x="1155.0" y="188" text-anchor="middle" class="small-bold">Legend (R<tspan baseline-shift="sub" font-size="10.5">box</tspan> = 2.4 a, sphere dipole)</text>
+  <line x1="1026" y1="211" x2="1056" y2="211" stroke="#1e2433" stroke-width="2.8"/>
+  <text x="1064" y="215" class="small-txt">Exact open exterior: u ∝ 1/r<tspan baseline-shift="super" font-size="10.5">2</tspan> (r ≥ a)</text>
+  <line x1="1026" y1="236" x2="1056" y2="236" stroke="#147d75" stroke-width="2.8" stroke-dasharray="6 4"/>
+  <text x="1064" y="240" class="small-txt">Robin c=2 (β=2/R★): exact l=1 dipole</text>
+  <line x1="1026" y1="261" x2="1056" y2="261" stroke="#b86b11" stroke-width="2.8"/>
+  <text x="1064" y="265" class="small-txt">Robin c=1 (β=1/R★): +½(a/R)<tspan baseline-shift="super" font-size="10.5">3</tspan> overshoot</text>
+  <line x1="1026" y1="286" x2="1056" y2="286" stroke="#b8392b" stroke-width="2.8"/>
+  <text x="1064" y="290" class="small-txt">Dirichlet (u=0): −(a/R)<tspan baseline-shift="super" font-size="10.5">3</tspan> truncation error</text>
+  <text x="1032.0" y="520" text-anchor="middle" class="small-bold">Normalized radial coordinate r / a  (along magnetization axis)</text>
+  <text x="704" y="307.0" text-anchor="middle" class="small-bold" transform="rotate(-90 704 307.0)">Normalized scalar potential u(r) / (M<tspan baseline-shift="sub" font-size="8.5">s</tspan> a)</text>
+  <rect x="698" y="538" width="618" height="190" rx="6" fill="#f6f8fc" stroke="#dce0e8" stroke-width="1.2"/>
+  <text x="716" y="563" class="sec-head">Quantitative Truncation Scaling &amp; Convergence Contract</text>
+  <text x="716" y="590" class="body-txt">• Dirichlet error in internal H<tspan baseline-shift="sub" font-size="10.5">d</tspan>: −(a/R<tspan baseline-shift="sub" font-size="10.5">box</tspan>)<tspan baseline-shift="super" font-size="10.5">3</tspan> (≈ −7.2% at R<tspan baseline-shift="sub" font-size="10.5">box</tspan>=2.4a; −0.8% at 5a).</text>
+  <text x="716" y="617" class="body-txt">• Robin (c=1): +½(a/R<tspan baseline-shift="sub" font-size="10.5">box</tspan>)<tspan baseline-shift="super" font-size="10.5">3</tspan> error; Robin (c=2): cancels l=1 sphere dipole, leaving</text>
+  <text x="716" y="644" class="body-txt">  O((a/R<tspan baseline-shift="sub" font-size="10.5">box</tspan>)<tspan baseline-shift="super" font-size="10.5">5</tspan>) higher-multipole &amp; non-spherical box residual on cubic Γ<tspan baseline-shift="sub" font-size="10.5">a</tspan>.</text>
+  <text x="716" y="674" class="small-bold" fill="#1d5fa7">• Low Krylov rtol checks algebraic error only — vary R<tspan baseline-shift="sub" font-size="10.5">box</tspan>, air h<tspan baseline-shift="sub" font-size="10.5">max</tspan>, and body h<tspan baseline-shift="sub" font-size="10.5">max</tspan>.</text>
+  <text x="716" y="702" class="small-txt">  Runtime records resolved marker, R<tspan baseline-shift="sub" font-size="10.5">★</tspan>, c, effective β = c/R<tspan baseline-shift="sub" font-size="10.5">★</tspan>, and excluded periodic seams.</text>
+</svg>

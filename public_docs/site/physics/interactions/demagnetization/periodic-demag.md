@@ -41,6 +41,15 @@ A_pu_p=b_p.
 E_{\mathrm d}=-\frac{\mu_0}{2}\int_{\Omega_m}\mathbf M\cdot\mathbf H_{\mathrm d}\,\mathrm dV.
 ```
 
+```{figure} /_static/diagrams/demag-fdm-newell-and-multilayer.svg
+:alt: Two-panel diagram highlighting periodic image truncation and k=0 uniform-mode convergence in panel (b) right side: numerically computed uniform-mode demagnetization factors N_zz(I) approaching 1.00 and N_xx(I) approaching 0.00 for a 20 x 20 x 2 nm thin film as periodic image half-count I increases from 0 to 32, alongside FFT padding rules and rejection of periodic_airbox_k0 in FDM.
+:width: 100%
+:name: fig-demag-periodic-image-truncation
+:class: fm-physics-figure
+
+Periodic demagnetization conventions (panel (b), right): finite FDM `truncated_images` convergence of the uniform ($k=0$) thin-film demagnetization factors $N_{zz}(I)\to 1$ and $N_{xx}(I)\to 0$ with image half-count $I_x=I_y$, contrasted with open $2N$ vs. periodic $N$ FFT padding and FEM `periodic_airbox_k0` requirements (Lebecki *et al.* 2008; Newell *et al.* 1993).
+```
+
 (demag-periodic-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -201,23 +210,21 @@ must be reported independently of historical artifact validation.
 (demag-periodic-scientific-bibliography)=
 ## Scientific bibliography
 
-- FullMag internal references: `docs/physics/0800-fem-static-pbc-demag.md` and
-  `docs/physics/0823-native-fem-cpu-pbc-reduced-warm-start.md`.
-
-(demag-periodic-source-code-index)=
+1. K. M. Lebecki, M. J. Donahue, and M. Gutowski, “Periodic boundary conditions for
+   demagnetization interactions in micromagnetic simulations,” *Journal of Physics D: Applied
+   Physics* **41**(17), 175005 (2008),
+   [doi:10.1088/0022-3727/41/17/175005](https://doi.org/10.1088/0022-3727/41/17/175005), Open
+   Access repository PDF:
+   [KOPS Uni Konstanz](https://kops.uni-konstanz.de/server/api/core/bitstreams/f715126e-8c47-4ab2-869c-c67af14c3efd/content).
+2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for
+   nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555
+   (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
 
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability.
 
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
+(demag-periodic-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |
