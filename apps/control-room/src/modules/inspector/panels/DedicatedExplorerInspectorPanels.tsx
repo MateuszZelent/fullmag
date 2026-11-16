@@ -12,6 +12,7 @@ import {
   ObjectRegionMagneticParametersPanel,
   ObjectRegionTexturePanel,
 } from "./ObjectRegionsPanel";
+import { MaskAntennaListSection, MaskAntennaPanel } from "./MaskAntennaPanel";
 import { RegionalFieldDrivePanel } from "./RegionalFieldDrivePanel";
 import { StudyInspectorPanel } from "./StudyInspectorPanel";
 import { StudyStageInspectorRouter } from "./StudyStageInspectorRouter";
@@ -84,14 +85,20 @@ export function FieldDrivesInspectorPanel(props: InspectorPanelProps) {
   return (
     <DedicatedInspectorRouteFrame owner="physics.field-drives" selection={props.selection}>
       <RegionalFieldDrivePanel {...props} sectionScope="list" />
+      <MaskAntennaListSection />
     </DedicatedInspectorRouteFrame>
   );
 }
 
 export function FieldDriveInspectorPanel(props: InspectorPanelProps) {
+  // A hand-written mask antenna is a field drive with its own panel.
+  const ref = props.selection.ref;
+  const isMaskAntenna = ref?.type === "physics-field-drive" && ref.fieldDriveKind === "mask";
   return (
     <DedicatedInspectorRouteFrame owner="physics.field-drive" selection={props.selection}>
-      <RegionalFieldDrivePanel {...props} sectionScope="item" />
+      {isMaskAntenna
+        ? <MaskAntennaPanel {...props} />
+        : <RegionalFieldDrivePanel {...props} sectionScope="item" />}
     </DedicatedInspectorRouteFrame>
   );
 }

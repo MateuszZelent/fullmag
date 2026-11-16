@@ -11703,6 +11703,13 @@
               "$ref": "#/components/schemas/RegionalFieldDriveResource"
             },
             "type": "array"
+          },
+          "mask_drives": {
+            "description": "Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).",
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -20985,6 +20992,461 @@
             ]
           }
         ]
+      },
+      "MaskFieldDriveCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveListResource": {
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "drives"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveReplaceRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveResource": {
+        "additionalProperties": false,
+        "description": "A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081).",
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/MaskFrameResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/MaskShapeResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "target",
+          "shape",
+          "position_m",
+          "frame",
+          "terms",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
+      "MaskFrameResource": {
+        "description": "Frame of a mask antenna's position and of its mask coordinates.",
+        "enum": [
+          "world",
+          "local"
+        ],
+        "type": "string"
+      },
+      "MaskFunctionLocalResource": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "description": "`field_expr.v1` text.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionParameterResource": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "description": "Authored text of the value, for display only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionResource": {
+        "additionalProperties": false,
+        "description": "A mask function of `x, y, z` (three outputs, tesla) or a time function of\n`t` (one output), as `field_expr.v1` equations.",
+        "properties": {
+          "expression_version": {
+            "type": "string"
+          },
+          "locals": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionLocalResource"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionParameterResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expression_version",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "MaskLibraryCallResource": {
+        "additionalProperties": false,
+        "description": "The ready-antenna call (`fullmag.antennas`) that produced a term.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "call_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "function": {
+            "type": "string"
+          },
+          "output_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "function",
+          "arguments",
+          "call_index",
+          "output_index"
+        ],
+        "type": "object"
+      },
+      "MaskShapeResource": {
+        "description": "Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes).",
+        "oneOf": [
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "box"
+                ],
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "size",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "height": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "height",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskSourceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "function": {
+                "$ref": "#/components/schemas/MaskFunctionResource"
+              },
+              "kind": {
+                "enum": [
+                  "function"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "function",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An array mask written by a loop: float32 3-vectors in tesla.",
+            "properties": {
+              "cell_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "data": {
+                "type": "string"
+              },
+              "encoding": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "sampled"
+                ],
+                "type": "string"
+              },
+              "origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "encoding",
+              "data",
+              "sha256",
+              "size",
+              "cell_m",
+              "origin_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskTermResource": {
+        "additionalProperties": false,
+        "properties": {
+          "mask": {
+            "$ref": "#/components/schemas/MaskSourceResource"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskLibraryCallResource"
+              }
+            ]
+          },
+          "time": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskFunctionResource",
+                "description": "Absent: a static term."
+              }
+            ]
+          }
+        },
+        "required": [
+          "mask"
+        ],
+        "type": "object"
       },
       "MaterialParameterFieldDataListResource": {
         "properties": {
@@ -33059,6 +33521,113 @@
           "window_step_count",
           "window_wall_time_ns",
           "source_revision"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaArgumentResource": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "Absent: the argument is required, or its default follows another argument.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "doc": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "description": "SI unit of the value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "unit",
+          "doc"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaListResource": {
+        "additionalProperties": false,
+        "properties": {
+          "antennas": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "antennas"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaResource": {
+        "additionalProperties": false,
+        "description": "A ready antenna of `fullmag.antennas`: a function that returns mask terms.",
+        "properties": {
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaArgumentResource"
+            },
+            "type": "array"
+          },
+          "function": {
+            "description": "Qualified name, the `function` of a term's origin.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "summary",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "function": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsResource": {
+        "description": "The terms one ready-antenna call returns, each with its origin.",
+        "properties": {
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "terms"
         ],
         "type": "object"
       },
@@ -69467,6 +70036,174 @@
         ]
       }
     },
+    "/v2/sessions/current/model/mask-field-drives": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaskFieldDriveListResource"
+                }
+              }
+            },
+            "description": "Hand-written mask antennas"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate field drive"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/mask-field-drives/{drive_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted a mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "put": {
+        "operationId": "model_put_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Replaced a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/material-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_material_fields",
@@ -70592,6 +71329,69 @@
           },
           "404": {
             "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_ready_antennas",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaListResource"
+                }
+              }
+            },
+            "description": "Ready antennas of fullmag.antennas"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas/terms": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_ready_antennas_terms",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyAntennaTermsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaTermsResource"
+                }
+              }
+            },
+            "description": "Mask terms returned by one ready-antenna call"
+          },
+          "400": {
+            "description": "Unknown antenna or invalid arguments"
           }
         },
         "tags": [

@@ -549,6 +549,10 @@ export interface ModelTreeFieldDriveSnapshot {
   label: string;
   targetKind: string;
   waveformKind: string;
+  /** Hand-written mask antenna (`mask_field_drive.v1`); absent for a regional drive. */
+  driveKind?: "mask";
+  targetObjectId?: string;
+  targetRegionId?: string;
 }
 
 export interface ModelTreeSnapshot {

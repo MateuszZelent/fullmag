@@ -157,6 +157,10 @@ import {
   MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_FIELD_DRIVE_PATH,
   MODEL_FIELD_DRIVES_PATH,
+  MODEL_MASK_FIELD_DRIVE_PATH,
+  MODEL_MASK_FIELD_DRIVES_PATH,
+  MODEL_READY_ANTENNA_TERMS_PATH,
+  MODEL_READY_ANTENNAS_PATH,
   MODEL_SPIN_TRANSPORT_PATH,
   MODEL_SPIN_TRANSPORTS_PATH,
   MODEL_SPIN_INTERFACES_PATH,
@@ -333,6 +337,12 @@ import type {
   FieldDriveDeleteRequest,
   FieldDriveListResource,
   FieldDriveReplaceRequest,
+  MaskFieldDriveCreateRequest,
+  MaskFieldDriveListResource,
+  MaskFieldDriveReplaceRequest,
+  ReadyAntennaListResource,
+  ReadyAntennaTermsRequest,
+  ReadyAntennaTermsResource,
   SpinWaveGammaResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
@@ -3105,6 +3115,53 @@ export class ControlRoomApi {
         request,
         options,
         { path: { drive_id: driveId } },
+      ),
+    maskFieldDrives: (options?: RequestOptions) =>
+      this.requestJson<MaskFieldDriveListResource>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        options,
+      ),
+    createMaskFieldDrive: (
+      request: MaskFieldDriveCreateRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, MaskFieldDriveCreateRequest>(
+        MODEL_MASK_FIELD_DRIVES_PATH,
+        request,
+        options,
+      ),
+    replaceMaskFieldDrive: (
+      driveId: string,
+      request: MaskFieldDriveReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<AuthoringTransactionResponse, MaskFieldDriveReplaceRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    deleteMaskFieldDrive: (
+      driveId: string,
+      request: FieldDriveDeleteRequest,
+      options?: RequestOptions,
+    ) =>
+      this.deleteJsonWithBody<AuthoringTransactionResponse, FieldDriveDeleteRequest>(
+        MODEL_MASK_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    readyAntennas: (options?: RequestOptions) =>
+      this.requestJson<ReadyAntennaListResource>(MODEL_READY_ANTENNAS_PATH, options),
+    readyAntennaTerms: (
+      request: ReadyAntennaTermsRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<ReadyAntennaTermsResource, ReadyAntennaTermsRequest>(
+        MODEL_READY_ANTENNA_TERMS_PATH,
+        request,
+        options,
       ),
     createObjectRegion: (
       objectId: string,

@@ -16,6 +16,7 @@ import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -2010,6 +2011,7 @@ describe("ribbon structure", () => {
       "physics-global:zeeman",
       "physics-global:rotated_interfacial_dmi",
       "physics-global:add-field-drive",
+      "physics-global:add-mask-antenna",
     ]);
     expect(items.slice(0, 4).every(
       (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
@@ -2023,6 +2025,10 @@ describe("ribbon structure", () => {
     expect(items[4]).toMatchObject({
       commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
       label: "Field Drive",
+    });
+    expect(items[5]).toMatchObject({
+      commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
+      label: "Mask Antenna",
     });
     expect(items.some((node) => node.id.includes("current_transport"))).toBe(false);
   });
