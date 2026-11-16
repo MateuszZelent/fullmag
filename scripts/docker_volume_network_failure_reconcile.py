@@ -430,7 +430,16 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
         raise BuildControlError("Development attempt inventory is not UTF-8") from error
     require(all(len(item) == 2 for item in attempts), "Development attempt inventory is malformed")
     retained_history = None
-    if getattr(args, "recreation_attempt", None):
+    if getattr(args, "retained_prestart", False):
+        from docker_volume_retained_network_history import validate_retained_history
+        retained_history = validate_retained_history(
+            control, failed_attempt=args.attempt, original=original, publications=absent, attempts=attempts,
+            current_sha256=args.retained_current_sha256, verified_sha256=args.retained_verified_sha256,
+            recreation_attempt=args.recreation_attempt, recreation_sha256=args.recreation_sha256,
+            stop_attempt=args.stop_attempt, stop_sha256=args.stop_sha256,
+            native_config_sha256=args.native_config_sha256,
+        )
+    elif getattr(args, "recreation_attempt", None):
         from docker_volume_recreated_network_history import validate_recreated_history
         retained_history = validate_recreated_history(
             control, recreation_attempt=args.recreation_attempt,
@@ -480,7 +489,8 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
         **absent_evidence,
         "container_inventory": inventory,
         "development_attempts": attempts,
-        "admission_scope": ("recreated-failure-only-group-local" if retained_history
+        "admission_scope": ("retained-prestart-failure-only-group-local" if getattr(args, "retained_prestart", False)
+                            else "recreated-failure-only-group-local" if retained_history
                             else "initial-failure-only-group-local"),
         **({"retained_history": retained_history} if retained_history else {}),
     }
@@ -610,8 +620,8 @@ def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
     )
 
 
-def _retained_record_checks(control, records):
-    require(isinstance(records, dict) and 2 <= len(records) <= 32,
+def _retained_record_checks(control, records, *, maximum=32):
+    require(isinstance(records, dict) and 2 <= len(records) <= maximum,
             "Retained history record inventory is malformed")
     require(all(path in records and isinstance(records[path], str)
                 for path in ("development/current.json", "development/verified.json")),
@@ -639,8 +649,21 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
                 recover_absent_helper: bool = False, operation_lock_identity: str | None = None,
                 prepared_documents: dict[str, bytes] | None = None,
                 recovery: dict[str, object] | None = None,
-                retained_records: dict[str, str | None] | None = None) -> str:
-    history_checks = _retained_record_checks(control, retained_records) if retained_records is not None else ""
+                retained_records: dict[str, str | None] | None = None,
+                retained_attempts: list[tuple[str, str]] | None = None) -> str:
+    history_checks = (_retained_record_checks(control, retained_records, maximum=64 if retained_attempts is not None else 32)
+                      if retained_records is not None else "")
+    if retained_attempts is not None:
+        # Fence the directory census as well as every retained record. The live
+        # owner keeps operation.lock held throughout this failure-only CAS.
+        inventory_raw = "".join(name + "\t" + kind + "\n" for name, kind in sorted(retained_attempts)).encode()
+        inventory_sha = digest(inventory_raw)
+        inventory_script = _attempt_inventory_script(control)
+        history_checks += ("test \"$( ( " + inventory_script
+                           + " ) | sha256sum | cut -d' ' -f1)\" = '" + inventory_sha + "'; ")
+        active_sha = digest((attempt + "\n").encode())
+        history_checks += ("test \"$(sha256sum '" + control.path('active')
+                           + "' | cut -d' ' -f1)\" = '" + active_sha + "'; ")
     root = control.path("development/attempts/" + attempt)
     current = control.path("development/current.json")
     verified = control.path("development/verified.json")
@@ -811,6 +834,19 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     require(isinstance(args.engine_id, str) and args.engine_id and len(args.engine_id) <= 256
             and "\x00" not in args.engine_id,
             "engine-id is not a bounded Docker engine identity")
+    retained = bool(getattr(args, "retained_prestart", False))
+    retained_pin_names = ("retained_current_sha256", "retained_verified_sha256", "stop_sha256", "native_config_sha256")
+    if retained:
+        for name in retained_pin_names:
+            _require_sha(getattr(args, name, None), name.replace("_", "-"))
+        require(TOKEN.fullmatch(getattr(args, "stop_attempt", "") or "") is not None,
+                "Retained prestart requires a pinned managed stop attempt")
+        if args.apply:
+            _require_sha(getattr(args, "expected_plan_sha256", None), "expected-plan-sha256")
+        require(bool(getattr(args, "recreation_attempt", None)), "Retained prestart requires recreation pins")
+    else:
+        require(not any(getattr(args, name, None) for name in (*retained_pin_names, "stop_attempt", "expected_plan_sha256")),
+                "Retained history pins require explicit retained-prestart mode")
     recreated = getattr(args, "recreation_attempt", None)
     recreated_sha = getattr(args, "recreation_sha256", None)
     require(bool(recreated) == bool(recreated_sha), "Recreated recovery requires paired receipt pins")
@@ -842,6 +878,9 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     second = _observe(control, identity, args, **observation_options)
     require(canonical(second) == canonical(first),
             "Full Docker/control observation changed during the stability window")
+    plan_sha = digest(canonical({"schema": SCHEMA, "observation": second})) if retained else None
+    if retained and args.apply:
+        require(args.expected_plan_sha256 == plan_sha, "Retained preview plan SHA-256 differs; apply refused")
     root = "development/attempts/" + args.attempt
     original_raw = read_raw(control, root + "/receipt.json")
     require(digest(original_raw) == args.receipt_sha256, "Original receipt changed after stable observation")
@@ -876,6 +915,8 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         "apply": bool(args.apply),
         "helper_state": second.get("helper_state", "running"),
     }
+    if retained:
+        summary.update(plan_sha256=plan_sha, retained_history=second["retained_history"])
     if not args.apply:
         return summary
 
@@ -907,6 +948,7 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         prepared_documents=prepared_documents,
         **({"recovery": recovery} if recovery else {}),
         **({"retained_records": second["retained_history"]["retained_records"]} if recreated else {}),
+        **({"retained_attempts": second["development_attempts"]} if retained else {}),
     )), data=_prepared_input(prepared_documents), timeout=90)
     require(committed.returncode == 0,
             "Failure publication outcome is unknown; preserve exact attempt and inspect its receipts")
@@ -947,8 +989,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicitly recover an absent original helper under the existing operation lock")
     parser.add_argument("--resume-prepared-sha256")
     parser.add_argument("--recovery-id")
-    parser.add_argument("--recreation-attempt", help="Exact successful fresh-state recreation operation")
+    parser.add_argument("--recreation-attempt", help="Exact successful recreation operation (fresh-state unless retained-prestart is selected)")
     parser.add_argument("--recreation-sha256", help="SHA-256 of its raw terminal receipt")
+    parser.add_argument("--retained-prestart", action="store_true", help="authenticate retained current/verified and a completed stop/removal")
+    parser.add_argument("--retained-current-sha256")
+    parser.add_argument("--retained-verified-sha256")
+    parser.add_argument("--stop-attempt", help="Exact successful managed stop-only iteration")
+    parser.add_argument("--stop-sha256")
+    parser.add_argument("--native-config-sha256")
+    parser.add_argument("--expected-plan-sha256", help="Mandatory exact retained preview plan digest for apply")
     parser.add_argument("--apply", action="store_true", help="publish failure-only terminal after full re-observation")
     args = parser.parse_args(argv)
     try:

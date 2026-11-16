@@ -326,6 +326,46 @@ Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
 `verified`, nie uruchamia usług i nie usuwa danych. Domyślnie oryginalny helper
 zwalnia swój marker `active` po odebraniu terminalnego wyniku.
 
+Dla jawnie zachowanej historii istnieje oddzielny wariant `--retained-prestart`.
+Nie zmienia on warunków powyższego trybu initial-only ani wariantu recreated.
+Dopuszcza wyłącznie sekwencję: udany `verified` → managed stop-only `iteration`
+z drain → `recreate-services` bez fresh-state usuwający te same zatrzymane
+usługi → potwierdzony błąd `current` przed publikacją Compose → bieżący błąd
+puli sieci przed utworzeniem usług. Wymaga nadal żywego oryginalnego helpera;
+nie łączy się z absent-helper ani wznowieniem częściowej publikacji.
+
+Preview uruchom bezpośrednio z wybranej, sprawdzonej wersji skryptu:
+
+```text
+python3 -B scripts/docker_volume_network_failure_reconcile.py \
+  --source-root <source> --attempt <unknown-attempt> \
+  --receipt-sha256 <raw-unknown-sha256> --compose-sha256 <raw-compose-sha256> \
+  --engine-id <engine-id> --retained-prestart \
+  --retained-current-sha256 <raw-current-sha256> \
+  --retained-verified-sha256 <raw-verified-sha256> \
+  --stop-attempt <iteration-attempt> --stop-sha256 <raw-stop-terminal-sha256> \
+  --recreation-attempt <recreation-attempt> --recreation-sha256 <raw-recreation-terminal-sha256> \
+  --native-config-sha256 <raw-retained-docker-all-sha256>
+```
+
+Dwie obserwacje wiążą pełny census kontenerów i prób development, surowe
+receipty/terminale, snapshoty stop/removal, OWNER, proces, trwały pin ready,
+konfigurację i provenance z poprzednim `verified`. Napis `drained` sam nie
+wystarcza: walidacja natywnego kontraktu sprawdza protokół, tożsamości,
+generacje, pule i statusy obydwu dzieci schedulera. `retained_history` zwraca
+manifest ścieżka → SHA-256 oraz `manifest_sha256`; żądanie ani dane techniczne
+nie są zapisywane w hostowym storage.
+
+Po ocenie preview apply wymaga tych samych pinów oraz
+`--apply --expected-plan-sha256 <plan_sha256-z-preview>`. Hash planu obejmuje
+całą stabilną obserwację, w tym manifest. Przed publikacją następuje ponowny
+census, a transakcja CAS ponownie sprawdza rekordy, listę prób i dokładne bajty
+`active`. Publikuje wyłącznie archiwum i dowód bieżącej próby oraz jej
+receipt/terminal; `current`, `verified`, OWNER, proces, konfiguracja, provenance
+i starsza historia pozostają byte-exact. Oryginalny helper zwalnia wyłącznie
+własny marker. Częściowa publikacja jest odrzucana i wymaga osobnego
+rozstrzygnięcia. Ten wariant nie uruchamia API, usług ani Solve.
+
 Jeżeli oryginalny helper został utracony, istnieje osobny, jawnie wybierany tryb
 `recover_absent_helper`. Najpierw wykonaj preview z argumentami `false true`:
 
