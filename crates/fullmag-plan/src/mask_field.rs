@@ -319,12 +319,15 @@ fn decode_sampled_mask(
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(data.as_bytes())
         .map_err(|error| invalid(format!("data is not base64: {error}")))?;
-    let mut raw = Vec::new();
-    flate2::read::ZlibDecoder::new(compressed.as_slice())
-        .read_to_end(&mut raw)
-        .map_err(|error| invalid(format!("data is not zlib: {error}")))?;
     let size = size.map(|value| value as usize);
     let expected = size[0] * size[1] * size[2] * 3 * 4;
+    // Read at most one byte more than the lattice needs: a small payload that
+    // inflates to gigabytes is rejected without being expanded.
+    let mut raw = Vec::new();
+    flate2::read::ZlibDecoder::new(compressed.as_slice())
+        .take(expected as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|error| invalid(format!("data is not zlib: {error}")))?;
     if raw.len() != expected {
         return Err(invalid(format!(
             "{} bytes for a {}x{}x{} lattice of 3-vectors (expected {expected})",

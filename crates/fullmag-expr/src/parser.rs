@@ -227,6 +227,13 @@ pub(crate) fn parse_equation(source: &str, scope: &Scope<'_>) -> Result<Node, Ex
             ),
         ));
     }
+    if let Some(position) = source.find(['\n', '\r']) {
+        return Err(ExprError::new(
+            "expr_syntax",
+            position,
+            "an equation is one line; it contains a line break".to_string(),
+        ));
+    }
     let tokens = tokenize(source)?;
     let mut parser = Parser {
         tokens: &tokens,

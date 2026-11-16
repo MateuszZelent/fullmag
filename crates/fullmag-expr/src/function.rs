@@ -9,6 +9,20 @@ use crate::{ExprError, FunctionError, FunctionKind, FunctionSource};
 /// Limits of one function (`docs/specs/mask-function-v1.md`, section 3).
 pub const MAX_FUNCTION_PARAMETERS: usize = 64;
 pub const MAX_FUNCTION_LOCALS: usize = 64;
+/// Limits of an equation with its locals substituted. `canonical_outputs` and the
+/// time-program emitter walk that tree, so its size and depth stay bounded even
+/// when a chain of locals doubles at every step.
+pub const MAX_INLINED_NODES: usize = 65_536;
+pub const MAX_INLINED_DEPTH: usize = 512;
+
+/// Python keywords: a script exporter writes parameter and local names as Python
+/// names, so they must not be keywords.
+const PYTHON_KEYWORDS: [&str; 35] = [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield",
+];
 
 /// A validated function: parameters folded into numbers, locals and outputs parsed.
 #[derive(Debug, Clone)]
@@ -51,6 +65,50 @@ pub fn validate_name(name: &str) -> Result<(), ExprError> {
             0,
             format!("'{name}' is reserved"),
         ));
+    }
+    if PYTHON_KEYWORDS.contains(&name) {
+        return Err(ExprError::new(
+            "expr_name_invalid",
+            0,
+            format!("'{name}' is a Python keyword"),
+        ));
+    }
+    Ok(())
+}
+
+/// Node count and depth of `node` with locals substituted (`locals[i]` holds the
+/// extent of local `i`). Saturates instead of overflowing.
+fn inlined_extent(node: &Node, locals: &[(usize, usize)]) -> (usize, usize) {
+    match node {
+        Node::Number(_) | Node::Variable(_) => (1, 1),
+        Node::Local(index) => locals[*index],
+        Node::Negate(operand) | Node::Call1(_, operand) => {
+            let (size, depth) = inlined_extent(operand, locals);
+            (size.saturating_add(1), depth.saturating_add(1))
+        }
+        Node::Binary(_, left, right) | Node::Call2(_, left, right) => {
+            let (left_size, left_depth) = inlined_extent(left, locals);
+            let (right_size, right_depth) = inlined_extent(right, locals);
+            (
+                left_size.saturating_add(right_size).saturating_add(1),
+                left_depth.max(right_depth).saturating_add(1),
+            )
+        }
+    }
+}
+
+fn check_inlined_extent(path: String, extent: (usize, usize)) -> Result<(), FunctionError> {
+    let (size, depth) = extent;
+    if size > MAX_INLINED_NODES || depth > MAX_INLINED_DEPTH {
+        return Err(FunctionError {
+            code: "expr_too_large",
+            path,
+            position: 0,
+            message: format!(
+                "with its local equations substituted the equation has more than \
+                 {MAX_INLINED_NODES} nodes or is nested deeper than {MAX_INLINED_DEPTH} levels"
+            ),
+        });
     }
     Ok(())
 }
@@ -139,6 +197,19 @@ pub fn compile_function(
         let node = parse_equation(expression, &scope)
             .map_err(|error| function_error(format!("outputs[{index}]"), error))?;
         outputs.push(node);
+    }
+
+    let mut local_extents: Vec<(usize, usize)> = Vec::with_capacity(locals.len());
+    for (index, node) in locals.iter().enumerate() {
+        let extent = inlined_extent(node, &local_extents);
+        check_inlined_extent(format!("locals[{index}]"), extent)?;
+        local_extents.push(extent);
+    }
+    for (index, node) in outputs.iter().enumerate() {
+        check_inlined_extent(
+            format!("outputs[{index}]"),
+            inlined_extent(node, &local_extents),
+        )?;
     }
 
     let mut local_is_variable = Vec::with_capacity(locals.len());

@@ -5278,6 +5278,10 @@ int fullmag_fem_backend_step(
     }
 
     handle->last_error.clear();
+    // A non-finite time factor met outside a step (observables) does not poison
+    // the step; one met inside the step is reported even when the step also
+    // failed for another reason (an adaptive controller hitting dt_min on NaN).
+    handle->context.zeeman.host_expression_error.clear();
     handle->context.relaxation.accepted_energy_proof = {};
     const int status =
         fullmag::fem::run_backend_step(
@@ -5285,9 +5289,10 @@ int fullmag_fem_backend_step(
             dt_seconds,
             *out_stats,
             handle->last_error);
-    if (status == FULLMAG_FEM_OK && !handle->context.zeeman.host_expression_error.empty()) {
+    if (!handle->context.zeeman.host_expression_error.empty()) {
         // A host-expression drive (mask term) produced a non-finite time factor.
         fullmag_fem_set_handle_error(handle, handle->context.zeeman.host_expression_error);
+        handle->context.zeeman.host_expression_error.clear();
         return FULLMAG_FEM_ERR_INVALID;
     }
     if (status == FULLMAG_FEM_OK) {

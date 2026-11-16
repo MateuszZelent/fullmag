@@ -77,13 +77,17 @@ name   := [A-Za-z_][A-Za-z0-9_]*
 - Whitespace between tokens is ignored.
 - Variables: `x`, `y`, `z` in a mask function; `t` in a time function.
 - Reserved names: `x y z t pi` and the function names. A parameter or a local
-  may not use a reserved name. Parameter and local names are unique within one
-  function.
+  may not use a reserved name or a Python keyword (`lambda`, `class`, …), since
+  an exported script writes these names as Python names. Parameter and local
+  names are unique within one function.
+- An equation is one line: a line break is an `expr_syntax` error.
 - Functions and arity: one argument — `sin cos tan asin acos atan sinh cosh tanh
   exp log sqrt abs`; two arguments — `atan2 min max`.
 - A local may refer to parameters and to locals defined before it.
 - Limits: 4096 characters and 512 syntax nodes per equation; 64 parameters and
-  64 locals per function.
+  64 locals per function. With its locals substituted, an equation has at most
+  65 536 nodes and 512 levels of nesting (a chain of locals that doubles at each
+  step is rejected before it is expanded).
 - Arithmetic is IEEE-754 binary64. `x^y` is `pow(x, y)`.
 - The Python transpiler writes `**` as `^`, keeps parentheses, and writes numeric
   literals with `repr`.
@@ -97,7 +101,7 @@ Error codes (`FunctionError.code`):
 | `expr_arity` | wrong number of function arguments, or wrong number of outputs |
 | `expr_too_large` | a limit of this section is exceeded |
 | `mask_function_wrong_variable` | `t` in a mask function, or `x`, `y`, `z` in a time function |
-| `expr_name_invalid` | a parameter or local uses a reserved or duplicate name |
+| `expr_name_invalid` | a parameter or local uses a reserved name, a Python keyword or a duplicate name |
 
 Every error carries the path (`parameters[i]`, `locals[i]`, `outputs[c]`) and the
 zero-based character position inside that equation.

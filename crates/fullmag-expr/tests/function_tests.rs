@@ -238,3 +238,49 @@ fn eval_never_panics_on_non_finite_values() {
     assert!(value[1].is_infinite());
     assert!(value[2].is_nan());
 }
+
+#[test]
+fn python_keywords_are_not_names() {
+    let error = owned(&[("lambda", 1.0)], &[], &["lambda * t"])
+        .compile(FunctionKind::Time)
+        .unwrap_err();
+    assert_eq!(
+        (error.code, error.path.as_str()),
+        ("expr_name_invalid", "parameters[0]")
+    );
+    let error = owned(&[], &[("class", "t")], &["class"])
+        .compile(FunctionKind::Time)
+        .unwrap_err();
+    assert_eq!(
+        (error.code, error.path.as_str()),
+        ("expr_name_invalid", "locals[0]")
+    );
+}
+
+#[test]
+fn an_equation_with_a_line_break_is_rejected() {
+    let error = owned(&[], &[("k", "2 *\n t")], &["k"])
+        .compile(FunctionKind::Time)
+        .unwrap_err();
+    assert_eq!(
+        (error.code, error.path.as_str()),
+        ("expr_syntax", "locals[0]")
+    );
+}
+
+#[test]
+fn doubling_locals_are_rejected_before_they_are_expanded() {
+    let names: Vec<String> = (0..41).map(|index| format!("a{index}")).collect();
+    let mut locals = vec![(names[0].clone(), "1".to_string())];
+    for index in 1..names.len() {
+        locals.push((names[index].clone(), format!("{0} + {0}", names[index - 1])));
+    }
+    let source = Owned {
+        parameters: Vec::new(),
+        locals,
+        outputs: vec![format!("t + {}", names[40])],
+    };
+    let error = source.compile(FunctionKind::Time).unwrap_err();
+    assert_eq!(error.code, "expr_too_large");
+    assert!(error.path.starts_with("locals["), "{}", error.path);
+}
