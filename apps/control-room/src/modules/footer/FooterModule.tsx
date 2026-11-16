@@ -70,6 +70,7 @@ export default function FooterModule(props: ModuleProps) {
 
 function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
+  const tabList = useRef<HTMLDivElement>(null);
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
     isEqual: footerTelemetryStatusEquals,
   });
@@ -105,9 +106,15 @@ function FooterModuleContent({ kernel }: ModuleProps) {
     });
   }, [kernel.bus, kernel.layout]);
 
+  useEffect(() => {
+    const selected = tabList.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (selected && tabList.current) revealFooterTab(tabList.current, selected);
+  }, [activeTab]);
+
   return (
     <Tabs
       value={activeTab}
+      activationMode="manual"
       onValueChange={(value) =>
         kernel.layout.setBottomPanelTab(
           value as typeof activeTab,
@@ -116,32 +123,41 @@ function FooterModuleContent({ kernel }: ModuleProps) {
       className="fm-footer"
     >
       <PanelChrome className="fm-footer__bar">
-        <TabsList className="fm-footer__tabs" aria-label="Bottom diagnostics">
-          <TabsTrigger value="logs" className="fm-footer__tab">
+        <TabsList
+          ref={tabList}
+          className="fm-footer__tabs"
+          aria-label="Bottom diagnostics"
+          onFocus={(event) => {
+            if (event.target instanceof HTMLElement && event.target.getAttribute("role") === "tab") {
+              revealFooterTab(event.currentTarget, event.target);
+            }
+          }}
+        >
+          <TabsTrigger value="logs" className="fm-footer__tab" title="Command history and HTTP / WebSocket traffic">
             <Activity size={14} aria-hidden="true" />
             Logs
           </TabsTrigger>
-          <TabsTrigger value="telemetry" className="fm-footer__tab">
+          <TabsTrigger value="telemetry" className="fm-footer__tab" title="Live simulation metrics and antenna progress">
             <Gauge size={14} aria-hidden="true" />
             Telemetry
           </TabsTrigger>
-          <TabsTrigger value="diagnostics" className="fm-footer__tab">
+          <TabsTrigger value="diagnostics" className="fm-footer__tab" title="Performance recorder and diagnostic export">
             <Cpu size={14} aria-hidden="true" />
             Diagnostics
           </TabsTrigger>
-          <TabsTrigger value="engine" className="fm-footer__tab">
+          <TabsTrigger value="engine" className="fm-footer__tab" title="Runtime logs, solver profile and hardware">
             <FileText size={14} aria-hidden="true" />
             Engine
           </TabsTrigger>
-          <TabsTrigger value="operations" className="fm-footer__tab">
+          <TabsTrigger value="operations" className="fm-footer__tab" title="Published commands and mesh builds">
             <ListChecks size={14} aria-hidden="true" />
             Operations
           </TabsTrigger>
-          <TabsTrigger value="problems" className="fm-footer__tab">
+          <TabsTrigger value="problems" className="fm-footer__tab" title="Errors, warnings and preparation issues">
             <CircleAlert size={14} aria-hidden="true" />
             Problems
           </TabsTrigger>
-          <TabsTrigger value="quick-chart" className="fm-footer__tab">
+          <TabsTrigger value="quick-chart" className="fm-footer__tab" title="Pinned scientific chart">
             <Activity size={14} aria-hidden="true" />
             Quick Chart
           </TabsTrigger>
@@ -217,13 +233,22 @@ function FooterModuleContent({ kernel }: ModuleProps) {
 
       <TabsContent value="quick-chart" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "quick-chart" ? (
-          <div className={FOOTER_PANEL_CLASS_NAME}>
+          <div className="fm-footer__chart-panel">
             <QuickChartResourceView />
           </div>
         ) : null}
       </TabsContent>
     </Tabs>
   );
+}
+
+// Scroll only this dock's tab strip. This also supports browsers without
+// scrollIntoView's container option, which would move ancestor panels or the page.
+function revealFooterTab(list: HTMLElement, tab: HTMLElement) {
+  const bounds = list.getBoundingClientRect();
+  const target = tab.getBoundingClientRect();
+  if (target.left < bounds.left) list.scrollLeft += target.left - bounds.left;
+  else if (target.right > bounds.right) list.scrollLeft += target.right - bounds.right;
 }
 
 function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
@@ -246,6 +271,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
   return (
     <>
       <div role="group" className="fm-footer__filters shrink-0" aria-label="Log filters">
+        <span className="fm-footer__filter-label">Direction</span>
         <FilterButton
           active={direction === "all"}
           onClick={() => setFooterDirectionFilter("all")}
@@ -256,15 +282,16 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
           active={direction === "rx"}
           onClick={() => setFooterDirectionFilter("rx")}
         >
-          RX
+          Received
         </FilterButton>
         <FilterButton
           active={direction === "tx"}
           onClick={() => setFooterDirectionFilter("tx")}
         >
-          TX
+          Sent
         </FilterButton>
         <span className="fm-footer__filter-sep" aria-hidden="true" />
+        <span className="fm-footer__filter-label">Channel</span>
         <FilterButton
           active={channel === "transport"}
           onClick={() => setFooterChannelFilter("transport")}
@@ -281,13 +308,13 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
           active={channel === "websocket"}
           onClick={() => setFooterChannelFilter("websocket")}
         >
-          WS
+          WebSocket
         </FilterButton>
         <FilterButton
           active={channel === "performance"}
           onClick={() => setFooterChannelFilter("performance")}
         >
-          Perf
+          Performance
         </FilterButton>
         <Button
           type="button"

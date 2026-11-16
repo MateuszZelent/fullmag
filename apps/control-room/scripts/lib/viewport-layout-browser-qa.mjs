@@ -21,6 +21,151 @@ const THEME_PALETTES = Object.freeze([
   { mode: "light", palette: "Latte" },
 ]);
 
+/** Exercise the bottom dock through its actual tabs and panel controls. */
+async function checkFooterReadability(page, { assertCanvas, timeout }) {
+  const footer = page.locator(".fm-footer");
+  const tabs = footer.getByRole("tablist", { name: "Bottom diagnostics", exact: true });
+  const frame = page.locator('[data-panel-frame="panel-bottom"]');
+  await tabs.waitFor({ state: "visible", timeout });
+  const originalTab = await tabs.locator('[aria-selected="true"]').innerText();
+  const originalMode = await frame.getAttribute("data-panel-mode");
+  const samples = [];
+  const captures = [];
+  let lowPanel = null;
+  let floatingBounds = null;
+  const labels = ["Logs", "Telemetry", "Diagnostics", "Engine", "Operations", "Problems", "Quick Chart"];
+  const menuAction = async (name) => {
+    await frame.getByRole("button", { name: "Diagnostics panel menu", exact: true }).click();
+    await page.getByRole("menuitem", { name, exact: true }).click();
+  };
+  try {
+    if (await tabs.getByRole("tab").count() !== labels.length) throw new Error("Footer omitted a diagnostic tab");
+    for (const theme of THEME_PALETTES) {
+      await switchThemeThroughUi(page, theme.mode, timeout);
+      for (const label of labels) {
+        await tabs.getByRole("tab", { name: label, exact: true }).click();
+        await waitForLayoutFrame(page);
+        const sample = await footer.evaluate((root) => {
+          const selected = root.querySelector('.fm-footer__tabs [aria-selected="true"]');
+          const panels = [...root.querySelectorAll(':scope > [role="tabpanel"]')].filter((panel) => !panel.hidden);
+          const rgb = (value) => {
+            const srgb = value.match(/^color\(srgb ([^/]+?)(?:\s*\/\s*([\d.]+))?\)$/);
+            if (srgb) return [...srgb[1].trim().split(/\s+/).map((channel) => Number(channel) * 255), Number(srgb[2] ?? 1)];
+            const match = value.match(/^rgba?\(([^)]+)\)$/);
+            if (!match) throw new Error(`Unsupported computed color in footer QA: ${value}`);
+            return match[1].split(/[ ,/]+/).map(Number);
+          };
+          const luminance = (color) => color.slice(0, 3).reduce((sum, channel, index) => {
+            const c = channel / 255;
+            return sum + (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4) * [0.2126, 0.7152, 0.0722][index];
+          }, 0);
+          const leaves = [...root.querySelectorAll('button, th, td, span, strong, summary, h3, p, [role="status"]')].filter((node) => {
+            if (!node.textContent?.trim() || node.querySelector('button, th, td, span, strong, h3, p, [role="status"]')) return false;
+            if (node.closest('[disabled], [aria-disabled="true"]')) return false;
+            const style = getComputedStyle(node);
+            const box = node.getBoundingClientRect();
+            if (style.visibility !== "visible" || style.display === "none" || Number(style.opacity) !== 1 || box.width <= 0 || box.height <= 0) return false;
+            let left = box.left, right = box.right, top = box.top, bottom = box.bottom;
+            for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+              const style = getComputedStyle(ancestor), clip = ancestor.getBoundingClientRect();
+              if (/auto|scroll|hidden|clip/.test(style.overflowX)) { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+              if (/auto|scroll|hidden|clip/.test(style.overflowY)) { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+              if (ancestor === root) break;
+            }
+            return right > left && bottom > top;
+          });
+          if (leaves.length > 2000) throw new Error("Footer contrast sample exceeded its bounded DOM budget");
+          const ratios = leaves.map((node) => {
+            const foreground = rgb(getComputedStyle(node).color);
+            let background = [0, 0, 0, 0];
+            for (let ancestor = node; ancestor && background[3] < 1; ancestor = ancestor.parentElement) {
+              const color = rgb(getComputedStyle(ancestor).backgroundColor);
+              const alpha = color[3] ?? 1;
+              const nextAlpha = background[3] + alpha * (1 - background[3]);
+              if (nextAlpha > 0) {
+                background = [0, 1, 2].map((i) => (background[i] * background[3] + color[i] * alpha * (1 - background[3])) / nextAlpha).concat(nextAlpha);
+              }
+            }
+            const a = luminance(foreground), b = luminance(background);
+            return { text: node.textContent.trim().slice(0, 80), ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) };
+          });
+          return {
+            selected: selected?.textContent.trim(), panels: panels.length,
+            checked_texts: ratios.length,
+            checked_panel_texts: leaves.filter((node) => panels[0]?.contains(node)).length,
+            lowest_contrast: ratios.reduce((min, row) => Math.min(min, row.ratio), 100),
+            failures: ratios.filter((row) => row.ratio < 4.5),
+          };
+        });
+        if (sample.selected !== label || sample.panels !== 1 || sample.checked_panel_texts === 0 || sample.failures.length) {
+          throw new Error(`Footer ${theme.mode}/${label}: ${JSON.stringify(sample)}`);
+        }
+        samples.push({ theme: theme.mode, tab: label, ...sample });
+      }
+      await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
+      const image = await footer.screenshot({ type: "png", animations: "disabled", timeout });
+      if (image.length > NARROW_PNG_LIMIT_BYTES) throw new Error("Footer screenshot exceeded bounded output size");
+      captures.push({ theme: theme.mode, png_base64: image.toString("base64"), sha256: createHash("sha256").update(image).digest("hex") });
+    }
+    if (originalMode !== "docked") throw new Error("Footer QA requires the standard docked starting layout");
+    await menuAction("Float panel");
+    floatingBounds = await frame.boundingBox();
+    const resize = frame.getByRole("button", { name: "Resize Diagnostics with arrow keys", exact: true });
+    await resize.focus();
+    // 40px keyboard steps, bounded by PanelFrame's own minimum dimensions.
+    for (let index = 0; index < 10; index++) await resize.press("Shift+ArrowUp");
+    for (let index = 0; index < 3; index++) await resize.press("Shift+ArrowLeft");
+    const first = tabs.getByRole("tab", { name: "Logs", exact: true });
+    await first.click();
+    await first.press("End");
+    if (await tabs.locator('[aria-selected="true"]').innerText() !== "Logs") throw new Error("Arrow navigation activated an expensive footer panel before confirmation");
+    await page.keyboard.press("Enter");
+    const last = tabs.getByRole("tab", { name: "Quick Chart", exact: true });
+    if (await last.getAttribute("aria-selected") !== "true") throw new Error("End/Enter failed to reach last footer tab");
+    await last.press("Home");
+    await page.keyboard.press("Enter");
+    await tabs.getByRole("tab", { name: "Telemetry", exact: true }).click();
+    const metrics = footer.locator(".fm-footer-telemetry__metrics-grid");
+    if (await metrics.count()) {
+      const lastMetric = metrics.locator(".fm-footer-telemetry__metric").last();
+      await lastMetric.scrollIntoViewIfNeeded();
+      lowPanel = await metrics.evaluate((node) => ({
+        display: getComputedStyle(node).display, height: node.clientHeight,
+        scroll_height: node.scrollHeight, scroll_top: node.scrollTop,
+        metrics: node.querySelectorAll('.fm-footer-telemetry__metric').length,
+      }));
+      if (lowPanel.display === "none" || lowPanel.height <= 0 || lowPanel.metrics === 0) throw new Error("Low footer hid its metrics");
+      const reachable = await lastMetric.evaluate((node) => {
+        const viewport = node.closest('.fm-footer-telemetry__metrics-grid').getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        const x = Math.max(viewport.left, box.left) + Math.min(viewport.width, box.width) / 2;
+        const top = Math.max(viewport.top, box.top), bottom = Math.min(viewport.bottom, box.bottom);
+        return bottom > top && node.contains(document.elementFromPoint(x, (top + bottom) / 2));
+      });
+      if (!reachable) throw new Error("Last metric is clipped or covered in a low footer");
+    } else throw new Error("Telemetry fixture omitted the metrics container");
+  } finally {
+    if (await frame.getAttribute("data-panel-mode") === "floating" && originalMode === "docked") {
+      if (floatingBounds) {
+        const current = await frame.boundingBox();
+        const resize = frame.getByRole("button", { name: "Resize Diagnostics with arrow keys", exact: true });
+        for (const [axis, positive, negative] of [["height", "ArrowDown", "ArrowUp"], ["width", "ArrowRight", "ArrowLeft"]]) {
+          const delta = Math.round(floatingBounds[axis] - current[axis]);
+          const key = delta > 0 ? positive : negative;
+          const steps = Math.round(Math.abs(delta) / 10);
+          if (steps > 100) throw new Error("Footer size restoration exceeded bounded keyboard budget");
+          for (let index = 0; index < Math.floor(steps / 4); index++) await resize.press(`Shift+${key}`);
+          for (let index = 0; index < steps % 4; index++) await resize.press(key);
+        }
+      }
+      await menuAction("Dock panel");
+    }
+    await tabs.getByRole("tab", { name: originalTab.trim(), exact: true }).click();
+  }
+  await assertCanvas("after footer tab and low-panel checks");
+  return { state: "passed", samples, captures, low_panel: lowPanel, keyboard: "End/Home + Enter verified" };
+}
+
 /**
  * Captures the real 3D canvas at two CSS sizes in both visible app themes.
  * The helper only resizes the current Playwright page and uses the app's
@@ -71,6 +216,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
   const restorationErrors = [];
   const captures = [];
   let initialDpr = null;
+  let footerReadability = null;
 
   try {
     await viewport.waitFor({ state: "visible", timeout });
@@ -88,6 +234,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
     initialDpr = await readDevicePixelRatio(page);
     assertExpectedDpr(initialDpr, expectedDpr, "initial browser context");
     await setDialogOpen(page, settingsDialog, false, timeout);
+    footerReadability = await checkFooterReadability(page, { assertCanvas, timeout });
 
     for (const theme of THEME_PALETTES) {
       await switchThemeThroughUi(page, theme.mode, timeout);
@@ -200,6 +347,7 @@ export async function runViewportLayoutBrowserQa(page, options = {}) {
     expected_device_pixel_ratio: expectedDpr ?? null,
     browser_device_pixel_ratio: initialDpr,
     captures,
+    footer_readability: footerReadability,
     restoration: {
       browser_viewport: "verified",
       original_theme: originalTheme,

@@ -3,7 +3,7 @@
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
-  min-height: 0;
+  min-height: 120px;
   overflow: hidden;
   background: var(--fm-bg-panel);
   color: var(--fm-text-primary);
@@ -15,13 +15,15 @@
   display: flex;
   align-items: center;
   gap: var(--fm-space-2);
-  height: 28px;
+  min-height: 32px;
+  flex-wrap: wrap;
   min-width: 0;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
   padding-inline: var(--fm-inspector-padding-inline);
+  padding-block: var(--fm-space-1);
 }
 
 .fm-footer-telemetry__strip-dot {
@@ -30,27 +32,20 @@
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--fm-text-muted);
-  transition:
-    background-color var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
+  transition: background-color var(--fm-transition-fast);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="running"] {
   background: var(--fm-success);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--fm-success) 12%, transparent),
-    0 0 8px color-mix(in srgb, var(--fm-success) 50%, transparent);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="paused"] {
   background: var(--fm-warning);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-warning) 12%, transparent);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="error"],
 .fm-footer-telemetry__strip-dot[data-state="failed"] {
   background: var(--fm-danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-danger) 12%, transparent);
 }
 
 /* ── Inline frequency progress strip ── */
@@ -77,10 +72,10 @@
 .fm-footer-telemetry__freq-strip-chip {
   overflow: hidden;
   max-width: 80px;
-  border: 1px solid color-mix(in srgb, var(--fm-accent) 22%, var(--fm-border-subtle));
+  border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-xs);
-  background: color-mix(in srgb, var(--fm-bg-canvas) 75%, var(--fm-accent));
-  color: var(--fm-text-secondary);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-primary);
   font-size: var(--fm-font-size-2xs);
   font-weight: 650;
   line-height: 1;
@@ -105,11 +100,7 @@
   inset-block: 0;
   left: 0;
   border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    var(--fm-accent),
-    color-mix(in srgb, var(--fm-success) 70%, var(--fm-accent))
-  );
+  background: var(--fm-accent);
 }
 
 .fm-footer-telemetry__freq-strip-track--indeterminate
@@ -119,7 +110,7 @@
 }
 
 .fm-footer-telemetry__freq-strip-percent {
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
   font-size: var(--fm-font-size-2xs);
   font-weight: 700;
   white-space: nowrap;
@@ -141,11 +132,7 @@
   }
 }
 
-/* ── Metrics container ──
-   Flexbox with wrap: each row sizes independently.
-   Cards in a sparse last row expand to fill the available width
-   instead of being locked to the column track width from full rows above
-   (which is the limitation of CSS Grid auto-fit). */
+/* ── Metrics instrument ── */
 
 .fm-footer-telemetry__metrics {
   container-type: size;
@@ -158,118 +145,113 @@
   box-sizing: border-box;
   height: 100%;
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: var(--fm-space-2);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--fm-space-3);
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--fm-space-2) var(--fm-space-3);
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
-/* ── Metric card ──
-   flex: 1 0 155px → basis 155px, grows to fill row, never shrinks below basis.
-   At 1000px container: 6 cards per row ≈ 160px each — comfortably fits
-   monospace "0.000000e+0" (≈117px at 15px font) plus padding and unit. */
-
-.fm-footer-telemetry__metric {
-  --fm-metric-color: var(--fm-accent); /* overridden per data-group */
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  flex: 1 0 200px;
+.fm-footer-telemetry__group {
+  --fm-metric-color: var(--fm-accent);
   min-width: 0;
-  min-height: 64px;
-  max-height: 144px;
-  overflow: hidden;
-  border: 1px solid var(--fm-border-subtle);
-  border-top: 2px solid color-mix(in srgb, var(--fm-metric-color) 55%, var(--fm-border-subtle));
-  border-radius: var(--fm-radius-md);
-  background: linear-gradient(
-    160deg,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 94%, var(--fm-metric-color)) 0%,
-    var(--fm-bg-panel-raised) 100%
-  );
-  padding: var(--fm-space-2) var(--fm-space-3);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
-    0 1px 2px color-mix(in srgb, #000 18%, transparent);
-  transition:
-    border-color var(--fm-transition-fast),
-    background var(--fm-transition-fast),
-    transform var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
 }
 
-.fm-footer-telemetry__metric:hover {
-  border-color: color-mix(in srgb, var(--fm-metric-color) 55%, var(--fm-border-default));
-  background: linear-gradient(
-    160deg,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 92%, var(--fm-metric-color)) 0%,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 97%, var(--fm-metric-color)) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--fm-metric-color) 22%, transparent),
-    var(--fm-shadow-md);
-}
-
-/* ── Card internals ── */
-
-.fm-footer-telemetry__metric-label {
+.fm-footer-telemetry__group-title {
   display: flex;
   align-items: center;
-  gap: var(--fm-space-1);
-  min-width: 0;
-  overflow: hidden;
-  /* Bumped from 2xs (10px) to xs (11px) for better readability */
+  gap: var(--fm-space-2);
+  margin: 0 0 var(--fm-space-1);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
   font-weight: 700;
-  text-transform: none;
-  letter-spacing: 0;
-  line-height: 1.2;
-  white-space: nowrap;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.fm-footer-telemetry__group-marker {
+  width: 12px;
+  height: 2px;
+  flex: 0 0 auto;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-metric-color);
+}
+
+.fm-footer-telemetry__group-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 188px), 1fr));
+  gap: var(--fm-space-1);
+  min-width: 0;
+}
+
+.fm-footer-telemetry__metric {
+  --fm-metric-color: var(--fm-accent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 62px;
+  border: 1px solid var(--fm-border-subtle);
+  border-inline-start: 2px solid var(--fm-metric-color);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-footer-telemetry__metric-label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-control);
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .fm-footer-telemetry__metric-label > span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .fm-footer-telemetry__metric-label svg {
   flex-shrink: 0;
   color: var(--fm-metric-color);
-  opacity: 0.9;
 }
 
 .fm-footer-telemetry__metric-value {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   min-width: 0;
   gap: var(--fm-space-1);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-lg);
-  font-weight: 600;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.015em;
-  line-height: 1.15;
-  margin-block: var(--fm-space-1);
-  white-space: nowrap;
-  overflow: visible;
-  flex-shrink: 0;
+  line-height: 1.35;
+}
+
+.fm-footer-telemetry__metric-value > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .fm-footer-telemetry__metric-unit {
-  color: var(--fm-text-tertiary);
+  color: var(--fm-text-secondary);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
   flex-shrink: 0;
   letter-spacing: 0;
 }
@@ -277,98 +259,48 @@
 .fm-footer-telemetry__metric-detail {
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
-  color: var(--fm-text-tertiary);
-  font-size: var(--fm-font-size-2xs);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .fm-footer-telemetry__metric-detail span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-/* ── Container-query responsive tiers ──
-   Thresholds are relative to the metrics container height (total footer - 28px strip).
-   68px total → 40px container · 140px total → 112px container · 200px total → 172px container  */
-
-/* Tier 0: container too small to be useful */
-@container footer-metrics (height <= 40px) {
-  .fm-footer-telemetry__metrics-grid {
-    display: none;
-  }
-}
-
-/* Tier 1: compact horizontal chips — label + value on one line, no detail */
-@container footer-metrics (40px < height <= 112px) {
-  .fm-footer-telemetry__metrics-grid {
-    gap: var(--fm-space-1);
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
-
-  .fm-footer-telemetry__metric {
-    flex: 1 0 260px;
-    flex-direction: row;
-    align-items: center;
-    min-height: 0;
-    max-height: none;
-    padding: 3px var(--fm-space-2);
-    gap: var(--fm-space-2);
-    border-radius: var(--fm-radius-sm);
-  }
-
-  .fm-footer-telemetry__metric-label {
-    font-size: var(--fm-font-size-control);
-  }
-
-  .fm-footer-telemetry__metric-value {
-    font-size: var(--fm-font-size-control);
-    flex: none;
-    margin-block: 0;
-  }
-
-  .fm-footer-telemetry__metric-detail {
-    display: none;
-  }
-}
-
-/* Tier 2: compact stacked cards — subdetail hidden, tighter padding */
-@container footer-metrics (112px < height <= 172px) {
-  .fm-footer-telemetry__metrics-grid {
-    gap: var(--fm-space-1);
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
-
-  .fm-footer-telemetry__metric {
-    flex: 1 0 190px;
-    min-height: 48px;
-    max-height: 96px;
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
-
-  .fm-footer-telemetry__metric-value {
-    font-size: var(--fm-font-size-sm);
-    margin-block: 2px;
-  }
-
-  .fm-footer-telemetry__metric-detail span + span {
-    display: none;
-  }
-}
-
-/* Group hues are semantic UI categories, defined per theme in theme.css. */
+/* Category color is limited to a thin marker; surfaces remain neutral. */
+.fm-footer-telemetry__group[data-group="runtime"],
 .fm-footer-telemetry__metric[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
+.fm-footer-telemetry__group[data-group="solver"],
 .fm-footer-telemetry__metric[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
+.fm-footer-telemetry__group[data-group="magnetization"],
 .fm-footer-telemetry__metric[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
+.fm-footer-telemetry__group[data-group="energy"],
 .fm-footer-telemetry__metric[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
 
-/* Compact tiers: reduce the 2px accent top border to 1px to keep chips tight */
-@container footer-metrics (height <= 112px) {
-  .fm-footer-telemetry__metric {
-    border-top-width: 1px;
+@container footer-metrics (width <= 480px) {
+  .fm-footer-telemetry__metrics-grid {
+    gap: var(--fm-space-2);
+    padding-inline: var(--fm-space-2);
+  }
+
+  .fm-footer-telemetry__group-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  }
+}
+
+@container footer-metrics (height <= 40px) {
+  .fm-footer-telemetry__metrics-grid {
+    gap: var(--fm-space-2);
+    padding-block: 0;
+  }
+
+  .fm-footer-telemetry__group-title {
+    margin-bottom: 0;
   }
 }
 
@@ -429,9 +361,6 @@
     transform: translateX(140%);
   }
 
-  .fm-footer-telemetry__metric {
-    transition-property: border-color, background, box-shadow;
-  }
 }
 
 .fm-footer-telemetry-tabs {
@@ -455,7 +384,7 @@
   min-height: 0;
   min-width: 0;
   margin: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .fm-footer-telemetry-tabs__content > .fm-footer-telemetry {
