@@ -331,8 +331,13 @@ Nie zmienia on warunków powyższego trybu initial-only ani wariantu recreated.
 Dopuszcza wyłącznie sekwencję: udany `verified` → managed stop-only `iteration`
 z drain → `recreate-services` bez fresh-state usuwający te same zatrzymane
 usługi → potwierdzony błąd `current` przed publikacją Compose → bieżący błąd
-puli sieci przed utworzeniem usług. Wymaga nadal żywego oryginalnego helpera;
-nie łączy się z absent-helper ani wznowieniem częściowej publikacji.
+puli sieci przed utworzeniem usług. Można go wykonać z żywym oryginalnym
+helperem albo jawnie połączyć z `--recover-absent-helper`, jeśli helper zniknął
+po zewnętrznym restarcie hosta/WSL. To jedyne połączenie absent-helper z
+odtworzeniem: zwykły wariant recreated i wznowienie przygotowanej, częściowej
+publikacji nadal nie dopuszczają tego trybu. Walidacja całej zachowanej historii
+oraz pinów natywnego OWNER, dzieci, konfiguracji i provenance pozostaje taka
+sama.
 
 Preview uruchom bezpośrednio z wybranej, sprawdzonej wersji skryptu:
 
@@ -383,6 +388,16 @@ tożsamość oraz przypięte receipty i marker. Pod jedną blokadą archiwizuje
 oryginał, publikuje dowód i trzy zgodne zapisy `failed-confirmed`, a dopiero
 wtedy usuwa dokładnie marker tej próby. Nie odtwarza starego helpera ani
 nie przypisuje sobie jego tożsamości.
+
+Dla zachowanej historii użyj zamiast powyższego uproszczonego wywołania
+bezpośredniego CLI z `--retained-prestart`, wszystkimi pinami historii,
+`--recover-absent-helper` i — przy apply — świeżym
+`--expected-plan-sha256` z preview tego samego zestawu argumentów.
+CAS ponownie sprawdza inode istniejącej blokady, `active`, receipt, Compose,
+manifest zachowanej historii i census prób. Zachowuje `current`, `verified`,
+OWNER, proces, konfigurację, provenance i pozostałą historię bajt w bajt;
+publikuje receipt i terminal, zanim usunie `active`. Nie uruchamia usług ani
+Solve.
 
 Nieznany wynik publikacji lub częściowy zapis wymaga odczytu zachowanych
 dowodów; nie ponawiaj mutacji w ciemno. Potwierdzone zamknięcie błędu pozwala

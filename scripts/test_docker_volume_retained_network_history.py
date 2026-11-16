@@ -167,60 +167,128 @@ class RetainedHistoryTests(unittest.TestCase):
 
 
 class RetainedPublicationTests(unittest.TestCase):
-    def test_real_shell_cas_preserves_records_and_refuses_record_inventory_and_active_drift(self):
+    def run_real_shell_cas(self, *, mode, drift):
         import fcntl
         from pathlib import Path
         import subprocess
         import tempfile
+        import os
         import docker_volume_network_failure_reconcile as reconcile
-        for drift in (None, 'owner', 'current', 'history', 'inventory', 'active', 'partial'):
-            with self.subTest(drift=drift), tempfile.TemporaryDirectory() as temp:
-                base = Path(temp).resolve()
-                control, documents, kwargs = fixture()
-                proof = RetainedHistoryTests().validate(documents, control, kwargs)
-                attempt = kwargs['failed_attempt']
-                control.path = lambda path: str(base / path)
-                root = base / 'development/attempts' / attempt
-                root.mkdir(parents=True)
-                (root / 'receipt.json').write_bytes(b'original')
-                (root / 'compose.json').write_bytes(b'compose')
-                for path, payload in documents.items():
-                    target = base / path
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(payload)
-                (base / 'active').write_text(attempt + '\n')
-                (base / 'operation.lock').touch()
-                with (base / 'operation.lock').open('rb') as lock:
+        absent_helper = mode == 'absent'
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            control, documents, kwargs = fixture()
+            proof = RetainedHistoryTests().validate(documents, control, kwargs)
+            attempt = kwargs['failed_attempt']
+            control.path = lambda path: str(base / path)
+            root = base / 'development/attempts' / attempt
+            root.mkdir(parents=True)
+            (root / 'receipt.json').write_bytes(b'original')
+            (root / 'compose.json').write_bytes(b'compose')
+            for path, payload in documents.items():
+                target = base / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+            (base / 'active').write_text(attempt + '\n')
+            operation_lock = base / 'operation.lock'
+            operation_lock.write_bytes(b'original-operation-lock\n')
+            operation_lock_identity = f"{operation_lock.stat().st_dev}:{operation_lock.stat().st_ino}"
+            prepared = {str(root / path): payload for path, payload in (
+                ('unknown-receipt.json', b'original'), ('reconciliation/network-failure-proof.json', b'proof'),
+                ('reconciliation/result.json', b'result'), ('reconciliation/prepared.json', b'prepared'))}
+            script = reconcile._cas_script(control, attempt, digest(b'original'), digest(b'compose'),
+                digest(b'proof'), digest(b'result'), digest(b'prepared'), recover_absent_helper=absent_helper,
+                operation_lock_identity=operation_lock_identity if absent_helper else None,
+                prepared_documents=prepared, retained_records=proof['retained_records'],
+                retained_attempts=kwargs['attempts'])
+            if drift in ('owner', 'current', 'history'):
+                path = {'owner': 'runtime-control/runtime-services/OWNER.json', 'current': 'development/current.json',
+                        'history': 'development/attempts/' + '1' * 32 + '/terminal.json'}[drift]
+                (base / path).write_bytes(b'changed')
+            elif drift == 'inventory':
+                (base / 'development/attempts' / ('f' * 32)).mkdir()
+            elif drift == 'active':
+                (base / 'active').write_text(attempt + '\n\n')
+            elif drift == 'partial':
+                (root / 'reconciliation').mkdir()
+                (root / 'reconciliation/prepared.json').write_bytes(b'partial')
+            elif drift == 'missing-lock':
+                operation_lock.unlink()
+            elif drift == 'replaced-lock':
+                operation_lock.rename(base / 'operation.lock.retained')
+                operation_lock.write_bytes(b'replacement-operation-lock\n')
+                self.assertNotEqual(
+                    operation_lock_identity,
+                    f"{operation_lock.stat().st_dev}:{operation_lock.stat().st_ino}",
+                )
+
+            shim = base / 'bin'
+            shim.mkdir()
+            rm = shim / 'rm'
+            order = base / 'terminal-before-active-removal'
+            rm.write_text(
+                "#!/bin/sh\n"
+                "for path do\n"
+                "  if test \"$path\" = \"$FULLMAG_TEST_ACTIVE_PATH\"; then\n"
+                "    test \"$(cat \"$FULLMAG_TEST_RECEIPT_PATH\")\" = result || exit 92\n"
+                "    test \"$(cat \"$FULLMAG_TEST_TERMINAL_PATH\")\" = result || exit 93\n"
+                "    : > \"$FULLMAG_TEST_ORDER_PATH\"\n"
+                "  fi\n"
+                "done\n"
+                "exec /bin/rm \"$@\"\n"
+            )
+            rm.chmod(0o755)
+            environment = os.environ.copy()
+            environment['PATH'] = str(shim) + os.pathsep + environment['PATH']
+            environment['FULLMAG_TEST_ACTIVE_PATH'] = str(base / 'active')
+            environment['FULLMAG_TEST_RECEIPT_PATH'] = str(root / 'receipt.json')
+            environment['FULLMAG_TEST_TERMINAL_PATH'] = str(root / 'terminal.json')
+            environment['FULLMAG_TEST_ORDER_PATH'] = str(order)
+
+            def execute():
+                return subprocess.run(['bash', '-euc', script], input=reconcile._prepared_input(prepared),
+                                      capture_output=True, env=environment)
+
+            if drift == 'busy-lock' or not absent_helper:
+                with operation_lock.open('rb') as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    prepared = {str(root / path): payload for path, payload in (
-                        ('unknown-receipt.json', b'original'), ('reconciliation/network-failure-proof.json', b'proof'),
-                        ('reconciliation/result.json', b'result'), ('reconciliation/prepared.json', b'prepared'))}
-                    script = reconcile._cas_script(control, attempt, digest(b'original'), digest(b'compose'),
-                        digest(b'proof'), digest(b'result'), digest(b'prepared'), prepared_documents=prepared,
-                        retained_records=proof['retained_records'], retained_attempts=kwargs['attempts'])
-                    if drift in ('owner', 'current', 'history'):
-                        path = {'owner': 'runtime-control/runtime-services/OWNER.json', 'current': 'development/current.json',
-                                'history': 'development/attempts/' + '1' * 32 + '/terminal.json'}[drift]
-                        (base / path).write_bytes(b'changed')
-                    elif drift == 'inventory':
-                        (base / 'development/attempts' / ('f' * 32)).mkdir()
-                    elif drift == 'active':
-                        (base / 'active').write_text(attempt + '\n\n')
-                    elif drift == 'partial':
-                        (root / 'reconciliation').mkdir()
-                        (root / 'reconciliation/prepared.json').write_bytes(b'partial')
-                    result = subprocess.run(['bash', '-euc', script], input=reconcile._prepared_input(prepared), capture_output=True)
-                if drift is None:
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual((root / 'terminal.json').read_bytes(), b'result')
-                    self.assertEqual((root / 'receipt.json').read_bytes(), b'result')
-                    for path, payload in documents.items():
-                        self.assertEqual((base / path).read_bytes(), payload)
+                    result = execute()
+            else:
+                result = execute()
+            if drift is None:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((root / 'terminal.json').read_bytes(), b'result')
+                self.assertEqual((root / 'receipt.json').read_bytes(), b'result')
+                self.assertEqual((root / 'unknown-receipt.json').read_bytes(), b'original')
+                for path, payload in documents.items():
+                    self.assertEqual((base / path).read_bytes(), payload)
+                self.assertEqual(operation_lock.read_bytes(), b'original-operation-lock\n')
+                if absent_helper:
+                    self.assertTrue(order.is_file())
+                    self.assertFalse((base / 'active').exists())
                 else:
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse((root / 'terminal.json').exists())
-                    self.assertEqual((root / 'receipt.json').read_bytes(), b'original')
-                self.assertTrue((base / 'active').exists())  # Only original helper releases its own marker.
+                    self.assertFalse(order.exists())
+                    self.assertEqual((base / 'active').read_text(), attempt + '\n')
+            else:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / 'terminal.json').exists())
+                self.assertEqual((root / 'receipt.json').read_bytes(), b'original')
+                self.assertTrue((base / 'active').exists())
+                self.assertFalse(order.exists())
+                if drift == 'missing-lock':
+                    self.assertFalse(operation_lock.exists())
+                elif drift == 'replaced-lock':
+                    self.assertEqual(operation_lock.read_bytes(), b'replacement-operation-lock\n')
+                elif drift == 'busy-lock':
+                    self.assertEqual(operation_lock.read_bytes(), b'original-operation-lock\n')
+
+    def test_real_shell_cas_preserves_live_and_absent_retained_recovery_contracts(self):
+        common_drifts = (None, 'owner', 'current', 'history', 'inventory', 'active', 'partial')
+        for mode in ('live', 'absent'):
+            drifts = common_drifts if mode == 'live' else (*common_drifts, 'missing-lock', 'busy-lock', 'replaced-lock')
+            for drift in drifts:
+                with self.subTest(mode=mode, drift=drift):
+                    self.run_real_shell_cas(mode=mode, drift=drift)
 
 
 class RetainedPreviewApplyTests(unittest.TestCase):
@@ -239,26 +307,80 @@ class RetainedPreviewApplyTests(unittest.TestCase):
         f.args.expected_plan_sha256 = digest(canonical(dict(schema=reconcile.SCHEMA, observation=f.observation)))
         return f
 
-    def test_apply_requires_plan_pin_before_any_docker_observation(self):
+    def absent_helper_transaction(self):
         import docker_volume_network_failure_reconcile as reconcile
         f = self.setup_transaction()
+        f.args.recover_absent_helper = True
+        f.observation.update(
+            helper_state='absent-confirmed', helper_id=None, helper_fingerprint=None,
+            helper_log_sha256=None, helper_absence_probe_sha256='d' * 64,
+            control_volume_fingerprint='e' * 64,
+            control_volume_mountpoint='/var/lib/docker/volumes/test-control/_data',
+            operation_lock_identity='123:456', container_inventory=[],
+            admission_scope='retained-prestart-failure-only-group-local',
+        )
+        f.args.expected_plan_sha256 = digest(canonical(dict(schema=reconcile.SCHEMA, observation=f.observation)))
+        return f
+
+    def test_apply_requires_plan_pin_before_any_docker_observation(self):
+        import docker_volume_network_failure_reconcile as reconcile
+        f = self.absent_helper_transaction()
         f.args.expected_plan_sha256 = None
         with patch.object(reconcile, '_identity_and_control') as identify, self.assertRaises(BuildControlError):
             reconcile.reconcile(f.args)
         identify.assert_not_called()
 
-    def test_changed_preview_hash_refuses_before_any_publication(self):
+    def test_retained_absent_helper_preview_pins_full_observation_without_writing(self):
         import docker_volume_network_failure_reconcile as reconcile
-        f = self.setup_transaction()
-        f.args.expected_plan_sha256 = '0' * 64
+        from pathlib import Path
+        f = self.absent_helper_transaction()
+        f.args.apply = False
+        with patch.object(reconcile, '_identity_and_control', return_value=(Path(f.args.source_root),
+                          dict(source_root=f.args.source_root, network_name='test-network'), f.control)), \
+             patch.object(reconcile, '_observe', return_value=f.observation) as observe, \
+             patch.object(reconcile, 'read_raw', return_value=f.original_raw), \
+             patch.object(reconcile.time, 'sleep'), \
+             patch.object(reconcile, '_cas_script') as cas, \
+             patch.object(reconcile, 'bounded_capture') as publish:
+            result = reconcile.reconcile(f.args)
+        self.assertEqual(result['state'], 'validated-only')
+        self.assertEqual(result['helper_state'], 'absent-confirmed')
+        self.assertEqual(result['plan_sha256'], f.args.expected_plan_sha256)
+        self.assertEqual(result['retained_history'], f.observation['retained_history'])
+        self.assertEqual(observe.call_count, 2)
+        cas.assert_not_called()
+        publish.assert_not_called()
+
+    def test_stale_live_helper_plan_refuses_retained_absent_apply(self):
+        import docker_volume_network_failure_reconcile as reconcile
+        live = self.setup_transaction()
+        stale_live_plan = live.args.expected_plan_sha256
+        f = self.absent_helper_transaction()
+        f.args.expected_plan_sha256 = stale_live_plan
         from pathlib import Path
         with patch.object(reconcile, '_identity_and_control', return_value=(Path(f.args.source_root),
                           dict(source_root=f.args.source_root, network_name='test-network'), f.control)), \
              patch.object(reconcile, '_observe', return_value=f.observation), \
-             patch.object(reconcile.time, 'sleep'), patch.object(reconcile, 'bounded_capture') as publish:
+             patch.object(reconcile.time, 'sleep'), \
+             patch.object(reconcile, '_cas_script') as cas, \
+             patch.object(reconcile, 'bounded_capture') as publish:
             with self.assertRaisesRegex(BuildControlError, 'plan SHA-256 differs'):
                 reconcile.reconcile(f.args)
+        cas.assert_not_called()
         publish.assert_not_called()
+
+    def test_retained_absent_helper_still_rejects_prepared_recovery(self):
+        import docker_volume_network_failure_reconcile as reconcile
+        from pathlib import Path
+        for name, value in (('resume_prepared_sha256', 'f' * 64), ('recovery_id', 'e' * 32)):
+            with self.subTest(name=name):
+                f = self.absent_helper_transaction()
+                setattr(f.args, name, value)
+                with patch.object(reconcile, '_identity_and_control', return_value=(Path(f.args.source_root),
+                                  dict(source_root=f.args.source_root, network_name='test-network'), f.control)), \
+                     patch.object(reconcile, '_observe') as observe, self.assertRaises(BuildControlError):
+                    reconcile.reconcile(f.args)
+                observe.assert_not_called()
 
     def test_retained_apply_keeps_both_pointers_and_passes_manifest_and_census_to_cas(self):
         import docker_volume_network_failure_reconcile as reconcile
@@ -290,6 +412,44 @@ class RetainedPreviewApplyTests(unittest.TestCase):
             result = reconcile.reconcile(f.args)
         self.assertEqual(result['state'], 'failed-confirmed')
         self.assertEqual(result['plan_sha256'], f.args.expected_plan_sha256)
+        self.assertEqual(cas.call_args.kwargs['retained_records'], f.observation['retained_history']['retained_records'])
+        self.assertEqual(cas.call_args.kwargs['retained_attempts'], f.observation['development_attempts'])
+
+    def test_retained_absent_helper_apply_passes_lock_inode_manifest_and_census_to_cas(self):
+        import docker_volume_network_failure_reconcile as reconcile
+        import subprocess
+        from pathlib import Path
+        f = self.absent_helper_transaction()
+        state = {'committed': False}
+        def read(control, path, optional=False):
+            if path in ('development/current.json', 'development/verified.json'):
+                return b'current' if path.endswith('current.json') else b'verified'
+            if path.endswith('/receipt.json'):
+                return f.result_raw if state['committed'] else f.original_raw
+            if path.endswith('/terminal.json'):
+                return f.result_raw if state['committed'] else None
+            if path == 'active':
+                return None if state['committed'] else (f.args.attempt + '\n').encode()
+            return None
+        def commit(*args, **kwargs):
+            state['committed'] = True
+            return subprocess.CompletedProcess([], 0, b'', b'')
+        with patch.object(reconcile, '_identity_and_control', return_value=(Path(f.args.source_root),
+                          dict(source_root=f.args.source_root, network_name='test-network'), f.control)), \
+             patch.object(reconcile, '_observe', return_value=f.observation) as observe, \
+             patch.object(reconcile.time, 'sleep'), patch.object(reconcile, 'read_raw', side_effect=read), \
+             patch.object(reconcile, '_failure_result', return_value=f.result_raw), \
+             patch.object(reconcile, '_cas_script', return_value='cas') as cas, \
+             patch.object(reconcile, '_probe_helper_absence', return_value='d' * 64), \
+             patch.object(reconcile, 'bounded_capture', side_effect=commit):
+            result = reconcile.reconcile(f.args)
+        self.assertEqual(result['state'], 'failed-confirmed')
+        self.assertEqual(result['plan_sha256'], f.args.expected_plan_sha256)
+        self.assertEqual(observe.call_count, 3)
+        self.assertEqual([call.kwargs for call in observe.call_args_list],
+                         [{}, {}, {'allowed_archive': None}])
+        self.assertTrue(cas.call_args.kwargs['recover_absent_helper'])
+        self.assertEqual(cas.call_args.kwargs['operation_lock_identity'], '123:456')
         self.assertEqual(cas.call_args.kwargs['retained_records'], f.observation['retained_history']['retained_records'])
         self.assertEqual(cas.call_args.kwargs['retained_attempts'], f.observation['development_attempts'])
 

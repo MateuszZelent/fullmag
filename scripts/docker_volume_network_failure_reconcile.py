@@ -853,9 +853,11 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     if recreated:
         require(isinstance(recreated, str) and TOKEN.fullmatch(recreated), "Invalid recreation attempt")
         _require_sha(recreated_sha, "recreation-sha256")
-        require(not any(getattr(args, key, None) for key in (
-            "recover_absent_helper", "resume_prepared_sha256", "recovery_id")),
-            "Recreated recovery cannot combine with absent-owner or prepared recovery")
+        require(not any(getattr(args, key, None) is not None for key in (
+            "resume_prepared_sha256", "recovery_id")),
+            "Recreated recovery cannot combine with prepared recovery")
+        require(not getattr(args, "recover_absent_helper", False) or retained,
+                "Absent-helper recovery for recreated history requires retained-prestart mode")
     selected, identity, control = _identity_and_control(args.source_root)
     require(identity["source_root"] == str(selected), "Selected checkout identity is not canonical")
 
