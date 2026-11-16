@@ -81,6 +81,15 @@ into the charge solution. M2 solves a reciprocal charge-spin problem in which
 the spin state can modify the charge response. Therefore `xi_dl=theta_sh` does
 not, by itself, make a prescribed-SOT simulation equivalent to M1 or M2.
 
+```{figure} /_static/diagrams/sot-models-comparison-local-m1-m2.svg
+:alt: Three-lane architecture comparison between PrescribedSpinOrbitTorque, M1 one-way drift-diffusion, and M2 reciprocal Onsager block, plus a double-counting guard for overlapping RegionRef targets.
+:width: 100%
+:name: fig-sot-models-comparison-local-m1-m2
+:class: fm-physics-figure
+
+Architectural and physical comparison across Fullmag's three spin-orbit torque routes: (a) local algebraic `PrescribedSpinOrbitTorque`, (b) one-way `CurrentTransport` $\to$ `SpinDriftDiffusion` $\to$ `DriftDiffusionSpinTorque` (M1), and (c) bidirectional coupled `(V, mu_s)` Onsager block (M2). Adding both a prescribed and a solved torque module to the same `RegionRef` sums both RHS terms rather than overriding one with the other.
+```
+
 ### Meaning of M1 and M2 in Fullmag
 
 These names describe coupling levels of the drift-diffusion model, not two
@@ -502,6 +511,15 @@ not be parallel within the canonical axis tolerance $10^{-12}$. The projection
 preserves current reversal; the polarization axis does not flip when only the
 source current reverses.
 
+```{figure} /_static/diagrams/sot-unit-sphere-torques-and-drives.svg
+:alt: Unit-sphere geometry of damping-like and field-like spin-orbit torques in the tangent plane T_m S^2, single Gilbert-to-explicit RHS mixing diagram, and comparison between SignedScalarDrive and VectorCurrentDrive on an HM/FM bilayer.
+:width: 100%
+:name: fig-sot-unit-sphere-torques-and-drives
+:class: fm-physics-figure
+
+Geometric and algebraic structure of `PrescribedSpinOrbitTorque` (`prescribed_sot.fullmag.v1`). **(a)** Unit magnetization $\mathbf m \in S^2$, tangent plane $T_{\mathbf m} S^2$, orthogonal Gilbert torques $\mathbf T_{\mathrm{DL}}^G$ and $\mathbf T_{\mathrm{FL}}^G$, and the single $(1+\alpha^2)^{-1}$ Gilbert-to-explicit RHS mixing evaluated by all backends using physical inputs $\xi_{\mathrm{DL}}$ and $\xi_{\mathrm{FL}}$. **(b)** Heavy-metal/ferromagnet stack convention showing explicit free-layer thickness $t_F$, `SignedScalarDrive`, and current-reversal invariance of $\hat{\boldsymbol\sigma} = \operatorname{norm}(\hat{\mathbf n}_{NF}\times\hat{\mathbf t})$ under `VectorCurrentDrive`.
+```
+
 (physics-spin-orbit-torque-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -585,6 +603,15 @@ Garello and co-workers measured both DL-like and FL-like components and found
 strong dependence on stack composition, magnetization angle, and annealing.
 Consequently, the example `xi_fl=-0.03` is explicitly illustrative; it is not
 presented as a transferable Pt/Co constant.
+
+```{figure} /_static/diagrams/sot-switching-and-calibration-regimes.svg
+:alt: Type-z PMA deterministic switching with assist field B_x versus field-free Type-y in-plane switching, alongside a computed curve of effective damping-like efficiency xi_DL(t_HM) versus bulk spin Hall angle theta_SH.
+:width: 100%
+:name: fig-sot-switching-and-calibration-regimes
+:class: fm-physics-figure
+
+Physical switching regimes and stack-calibration gap grounded in primary SOT literature (Liu et al. 2012; Garello et al. 2013; Nguyen, Ralph & Buhrman 2016; Manchon et al. 2019). **(a)** Type-$z$ perpendicular switching requires an in-plane symmetry-breaking field $B_x \parallel \hat{\mathbf t}$ (computed macrospin LLG+SOT hysteresis loops), whereas Type-$y$ ($\mathbf m_{\mathrm{eq}} \parallel \pm\hat{\boldsymbol\sigma}$) switches field-free via collinear anti-damping. **(b)** Spin-diffusion scaling $\xi_{\mathrm{DL}}(t_{\mathrm{HM}}) = T_{\mathrm{int}}\theta_{\mathrm{SH}}[1-\operatorname{sech}(t_{\mathrm{HM}}/\lambda_{\mathrm{sf}})]$ illustrating why calibrated effective $\xi_{\mathrm{DL}}$ differs from bare bulk $\theta_{\mathrm{SH}}$ due to finite spin-diffusion length and interface backflow.
+```
 
 Use this order when building a real case:
 
@@ -826,11 +853,15 @@ backend and device:
 (physics-spin-orbit-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-- L. Liu et al., "Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect," *Physical Review Letters* **109**, 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.109.096602).
-- K. Garello et al., "Symmetry and magnitude of spin-orbit torques in ferromagnetic heterostructures," *Nature Nanotechnology* **8**, 587-593 (2013), [doi:10.1038/nnano.2013.145](https://www.nature.com/articles/nnano.2013.145). Experimental basis for treating DL-like and FL-like torques as separately measured, stack-dependent quantities.
-- P. M. Haney et al., "Current induced torques and interfacial spin-orbit coupling: Semiclassical modeling," *Physical Review B* **87**, 174411 (2013), [doi:10.1103/PhysRevB.87.174411](https://journals.aps.org/prb/abstract/10.1103/PhysRevB.87.174411). Theoretical context for bulk, interfacial, Boltzmann, and drift-diffusion interpretations.
-- M.-H. Nguyen, D. C. Ralph, and R. A. Buhrman, "Spin Torque Study of the Spin Hall Conductivity and Spin Diffusion Length in Platinum Thin Films with Varying Resistivity," *Physical Review Letters* **116**, 126601 (2016), [doi:10.1103/PhysRevLett.116.126601](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.116.126601). Reports $\xi_{\mathrm{DL}}^j=0.12$ at the stated Pt thickness range and demonstrates thickness/resistivity dependence.
-- A. Manchon et al., "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**, 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.91.035004).
+1. I. M. Miron, K. Garello, G. Gaudin, P.-J. Zermatten, M. V. Costache, S. Auffret, S. Bandiera, B. Rodmacq, A. Schuhl, and P. Gambardella, "Perpendicular switching of a single ferromagnetic layer induced by in-plane current injection," *Nature* **476**(7359), 189–193 (2011), [doi:10.1038/nature10309](https://doi.org/10.1038/nature10309) ([HAL OA](https://cea.hal.science/cea-00903394)).
+2. L. Liu, O. J. Lee, T. J. Gudmundsen, D. C. Ralph, and R. A. Buhrman, "Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect," *Physical Review Letters* **109**(9), 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://doi.org/10.1103/PhysRevLett.109.096602) ([arXiv:1110.6846](https://arxiv.org/abs/1110.6846)).
+3. K. Garello, I. M. Miron, C. O. Avci, F. Freimuth, Y. Mokrousov, S. Blügel, S. Auffret, O. Boulle, G. Gaudin, and P. Gambardella, "Symmetry and magnitude of spin–orbit torques in ferromagnetic heterostructures," *Nature Nanotechnology* **8**(8), 587–593 (2013), [doi:10.1038/nnano.2013.145](https://doi.org/10.1038/nnano.2013.145) ([arXiv:1301.3573](https://arxiv.org/abs/1301.3573)). Experimental basis for treating DL-like and FL-like torques as separately measured, stack-dependent quantities.
+4. P. M. Haney, H.-W. Lee, K.-J. Lee, A. Manchon, and M. D. Stiles, "Current induced torques and interfacial spin-orbit coupling: Semiclassical modeling," *Physical Review B* **87**(17), 174411 (2013), [doi:10.1103/PhysRevB.87.174411](https://doi.org/10.1103/PhysRevB.87.174411) ([arXiv:1301.4513](https://arxiv.org/abs/1301.4513)). Theoretical context for bulk, interfacial, Boltzmann, and drift-diffusion interpretations.
+5. J. Sinova, S. O. Valenzuela, J. Wunderlich, C. H. Back, and T. Jungwirth, "Spin Hall effects," *Reviews of Modern Physics* **87**(4), 1213–1260 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213) ([arXiv:1411.3249](https://arxiv.org/abs/1411.3249)).
+6. M.-H. Nguyen, D. C. Ralph, and R. A. Buhrman, "Spin Torque Study of the Spin Hall Conductivity and Spin Diffusion Length in Platinum Thin Films with Varying Resistivity," *Physical Review Letters* **116**(12), 126601 (2016), [doi:10.1103/PhysRevLett.116.126601](https://doi.org/10.1103/PhysRevLett.116.126601) ([arXiv:1512.06931](https://arxiv.org/abs/1512.06931)). Reports $\xi_{\mathrm{DL}}^j=0.12$ at the stated Pt thickness range and demonstrates thickness/resistivity dependence.
+7. A. Manchon, J. Železný, I. M. Miron, T. Jungwirth, J. Sinova, A. Thiaville, K. Garello, and P. Gambardella, "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**(3), 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://doi.org/10.1103/RevModPhys.91.035004) ([arXiv:1801.09636](https://arxiv.org/abs/1801.09636)).
+8. Q. Shao et al., "Roadmap of Spin–Orbit Torques," *IEEE Transactions on Magnetics* **57**(7), 1–39 (2021), [doi:10.1109/TMAG.2021.3078583](https://doi.org/10.1109/TMAG.2021.3078583) ([arXiv:2104.11459](https://arxiv.org/abs/2104.11459), CC-BY).
+9. N. P. Jørstad, W. Goes, S. Selberherr, and V. A. Sverdlov, "Modeling spin-orbit torque driven magnetization dynamics in emerging magnetoresistive devices: a finite element method approach," *npj Spintronics* **4**(1) (2026), [doi:10.1038/s44306-026-00162-y](https://doi.org/10.1038/s44306-026-00162-y) ([Nature PDF](https://www.nature.com/articles/s44306-026-00162-y.pdf), CC-BY).
 
 (physics-spin-orbit-torque-source-code-index)=
 ## Source-code index
