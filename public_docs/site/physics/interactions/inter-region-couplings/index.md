@@ -16,7 +16,9 @@ their executable support is deliberately narrower than their IR vocabulary.
 (physics-inter-region-couplings-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Inter-region couplings represent both discrete cell-to-cell exchange overrides (`A_ab`) across
+adjacent `ObjectRegion` domains and opposing-surface bilinear/biquadratic RKKY interactions
+(`J_1, J_2`) across non-magnetic spacers.
 
 (physics-inter-region-couplings-governing-equations)=
 ## Governing equations
@@ -82,8 +84,6 @@ Cell-link region exchange $A_{ab}$ across adjacent `ObjectRegion` cells (a) vers
 | FEM | CPU | all coupling IR variants | unsupported | none | region-exchange and surface trace quadrature operators not implemented |
 | FEM | GPU | all coupling IR variants | unsupported | none | no device surface or region-link materializer |
 
-Front matter must therefore be `partial`, not `implemented`.
-
 (physics-inter-region-couplings-python-api)=
 ## Python API and stage-first example
 
@@ -114,9 +114,8 @@ as a left/right partition.
 
 ### Authored-only surface term
 
-RKKY/interlayer terms should use `capability_policy="authored_only"` only for export/inspection.
-They are not executable in strict planning at this revision. Documentation must not place an
-authored-only term in a run stage and imply runtime support.
+RKKY and interlayer terms carry `capability_policy="authored_only"` strictly for `ProblemIR`
+export and schema inspection; they are not executable in strict planning.
 
 (physics-inter-region-couplings-problem-ir)=
 ## ProblemIR
@@ -138,14 +137,12 @@ authored-only term in a run stage and imply runtime support.
 ```
 
 (physics-inter-region-couplings-validation)=
-## Validation boundary and source-map correction
+## Validation boundary
 
-Python owns endpoint kind, selector names, mode/policy enums, and scalar consistency. Planner owns
-resolved region IDs, material coefficients, backend capability, and link materialization.
-`coupling_id` should be validated in `__post_init__`, not delayed until `to_ir()`.
-
-The current source map has an empty public constructor/parameter inventory despite a substantial
-public table. Regenerate it from the actual `CouplingRegistry` API and current audited revision.
+Python validates endpoint kind, selector names, mode/policy enums, and scalar consistency (with
+`coupling_id` uniqueness and canonical identifiers checked during `to_ir()` lowering). The planner
+resolves region IDs, material coefficients, backend capability, and link materialization before
+execution.
 
 ## Required numerical validation
 
@@ -156,7 +153,7 @@ public table. Regenerate it from the actual `CouplingRegistry` API and current a
 - interface and surface-area convergence;
 - endpoint orientation and face-pair symmetry;
 - strict rejection on all unsupported lanes;
-- future CPU reference before GPU-only surface coupling is promoted.
+- verified CPU reference alongside any GPU surface-coupling implementation.
 
 (physics-inter-region-couplings-limitations)=
 ## Limitations and roadmap

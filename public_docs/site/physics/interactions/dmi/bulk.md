@@ -58,10 +58,7 @@ For an admissible variation $\mathbf v$,
 +\mathbf m\cdot(\nabla\times\mathbf v)\right]\mathrm dV.
 ```
 
-Using
-$\nabla\cdot(\mathbf v\times\mathbf m)
-=\mathbf m\cdot(\nabla\times\mathbf v)
--\mathbf v\cdot(\nabla\times\mathbf m)$:
+Using $\nabla\cdot(\mathbf v\times\mathbf m)=\mathbf m\cdot(\nabla\times\mathbf v)-\mathbf v\cdot(\nabla\times\mathbf m)$:
 
 ```{math}
 :label: eq-bulk-dmi-variation-separated
@@ -157,7 +154,7 @@ Panel (b) summarizes isotropic $T/O$ bulk DMI ($\mathbf D_{ij} \parallel \hat{\m
   rejects it.
 - FEM uses a nodal vector field, quadrature weak residual, and lumped-mass
   projection. The element coefficient is the arithmetic mean of nodal
-  Dbulk_field values.
+  `Dbulk_field` values.
 - General Lifshitz tensors, lower-symmetry crystals, surface-only DMI, and an
   independent DMI boundary operator are outside this contract.
 
@@ -226,7 +223,7 @@ study.stages.add_run(stage_id="measure_bulk_dmi", until=1.0e-12).autosave(
 | `FdmPbc.demag` | `str` | `"open"` | $1$ | three declared demag strings | FDM demag policy | FDM | `pbc.demag` |
 | `FdmPbc.image_counts` | `tuple[int,int,int] \| None` | `None` | $1$ | non-negative; truncated images only | image counts | FDM | `pbc.image_counts` |
 
-The other required Material parameters (name, Ms, A, alpha) are documented
+The other required `Material` parameters (`name`, `Ms`, `A`, `alpha`) are documented
 by the canonical Material API page.
 
 (bulk-dmi-problem-ir)=
@@ -247,7 +244,7 @@ Material authoring serializes as:
 The explicit and material routes are alternative coefficient sources and are
 not silently summed. The FEM planner can use the material scalar when no
 explicit scalar supplies the coefficient and promotes a material field into
-the resolved FEM field. FdmPbc converts booleans to periodic/open strings.
+the resolved FEM field. `FdmPbc` converts booleans to periodic/open strings.
 Requested Python intent is preserved separately from resolved execution:
 solver, device, precision, route, boundary policy, projection, and
 qualification evidence are provenance data.
@@ -255,8 +252,8 @@ qualification evidence are provenance data.
 (bulk-dmi-round-trip-and-failure-semantics)=
 ## 7. Round-trip and failure semantics
 
-Canonical script export preserves explicit BulkDMI(D=...) versus
-Material(Dbulk=...)/Material(Dbulk_field=...). Normalization never turns bulk
+Canonical script export preserves explicit `BulkDMI(D=...)` versus
+`Material(Dbulk=...)` / `Material(Dbulk_field=...)`. Normalization never turns bulk
 DMI into interfacial DMI or invents a non-periodic FDM boundary.
 
 Validation errors include non-finite coefficients, malformed FDM tuples,
@@ -325,14 +322,14 @@ E_{b,e}=D_{b,e}\sum_q
 H_{b,a}=-\frac{g_{b,a}}{\mu_0M_{s,a}M_a^{\mathrm{lump}}}.
 ```
 
-The native loop uses the arithmetic mean of nodal Dbulk_field, periodic
+The native loop uses the arithmetic mean of nodal `Dbulk_field`, periodic
 reduced-node projection, MFEM quadrature, and lumped projection.
 
 ### FEM GPU
 
-The CUDA dmi_element_residual_kernel has a bulk mode for tetrahedral
+The CUDA `dmi_element_residual_kernel` has a bulk mode for tetrahedral
 gradients, coefficient, curl, residual, and energy blocks. RK dispatch uses
-resident h_bulk_dmi, geometry, saturation, lumped-mass, and residual buffers.
+resident `h_bulk_dmi`, geometry, saturation, lumped-mass, and residual buffers.
 Final reduction owns a separate Bulk DMI energy slot. Atomic accumulation and
 reduction order differ from CPU.
 
@@ -341,7 +338,7 @@ reduction order differ from CPU.
 
 | Layer | FDM CPU | FDM GPU | FEM CPU | FEM GPU |
 |---|---|---|---|---|
-| coefficient | explicit scalar | device D_bulk | scalar or nodal mean | resident material field |
+| coefficient | explicit scalar | device `D_bulk` | scalar or nodal mean | resident material field |
 | field | centered curl | FP64/FP32 centered curl | weak residual + lumped projection | CUDA residual + RK projection |
 | energy | active-cell volume sum | CUDA reduction | quadrature sum | element blocks + final slot |
 | boundary | all-axis periodic gate | same gate | weak residual term | same weak form |
@@ -354,7 +351,7 @@ reduction order differ from CPU.
 |---|---|---|
 | constant m | zero curl, field, energy | analytical/unit test |
 | linear Cartesian field | analytic curl components | analytical/unit test |
-| D_b to -D_b | field and energy sign reverse | CPU/backend test |
+| $D_b \to -D_b$ | field and energy sign reverse | CPU/backend test |
 | FDM CPU/GPU | same periodic FP64 grid within tolerance | managed device run |
 | FEM weak residual | tetrahedral reference agreement | weak-residual test |
 | FEM CPU/GPU | field and final energy agreement | managed native runtime |
@@ -371,7 +368,7 @@ executed-device parity.
 - Multilayer FDM Bulk DMI is rejected.
 - Lower-symmetry/tensorial DMI families are outside this contract.
 - The material-field element reduction is an arithmetic nodal mean.
-- Material.Dbulk warning text and the public coefficient contract use
+- `Material.Dbulk` warning text and the public coefficient contract use
   $\mathrm{J\,m^{-2}}$.
 
 (bulk-dmi-scientific-bibliography)=

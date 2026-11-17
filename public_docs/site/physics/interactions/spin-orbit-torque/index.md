@@ -662,7 +662,7 @@ study.spin_torque(sot)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-The sign in `current_density_Apm2` is retained in ProblemIR. The authored
+The sign in `current_density_Apm2` is retained in `ProblemIR`. The authored
 `sigma=(0, 1, 0)` is normalized and serialized as `sigma_hat`.
 
 ### What the example numbers produce
@@ -708,8 +708,7 @@ sot = fm.PrescribedSpinOrbitTorque(
 sot.to_ir_module()
 ```
 
-For these axes, $\hat{\boldsymbol\sigma}=\hat{\mathbf z}\times\hat{\mathbf x}
-=\hat{\mathbf y}$ and only the $x$ projection of the named current contributes.
+For these axes, $\hat{\boldsymbol\sigma}=\hat{\mathbf z}\times\hat{\mathbf x}=\hat{\mathbf y}$ and only the $x$ projection of the named current contributes.
 `VectorCurrentDrive` has no independent envelope argument; timing belongs to the
 named current source.
 

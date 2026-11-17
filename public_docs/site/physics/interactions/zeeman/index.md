@@ -126,11 +126,9 @@ For exact constructor arguments and type validation on `fm.Zeeman`, see
 (physics-zeeman-validation)=
 ## Validation boundary
 
-At the audited revision, `Zeeman.__init__` uses `as_vector3`: it validates length and float
-conversion, but it does **not** itself reject `NaN` or infinity. Finite-value rejection is
-enforced at the `ProblemIR`/planner boundary unless the constructor is hardened.
-The recommended code change is to use a finite-vector validator so malformed input fails at the
-earliest public boundary.
+`Zeeman.__init__` uses `as_vector3` to validate vector length and float conversion, while
+finite-value rejection (`NaN` and infinity) is enforced downstream at the `ProblemIR` and planner
+validation boundary.
 
 (physics-zeeman-problem-ir)=
 ## ProblemIR and observables
@@ -140,8 +138,7 @@ earliest public boundary.
 ```
 
 Expected observables are `B_ext` in tesla, `H_ext` in $\mathrm{A\,m^{-1}}$, and
-`E_ext` in joules. Quantity naming must not obscure the one-time
-$\mathbf B/\mu_0$ conversion.
+`E_ext` in joules, keeping the one-time $\mathbf B/\mu_0$ conversion explicit.
 
 ## Required numerical validation
 
@@ -170,12 +167,11 @@ and are never silently omitted, downgraded to CPU, or converted into another fie
 Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/energy.py`,
 `world.py`), `ProblemIR` owns canonical intent, planners (`crates/fullmag-plan/src/fdm.rs`,
 `fem.rs`) convert $\mathbf B_{\mathrm{ext}}/\mu_0$ once and enforce lane legality, and backend
-CPU/CUDA kernels own uniform nodal or cell-wise evaluation and energy integration. Control Room
-support for field-source parameters is tracked in {doc}`/frontend/capability-register`; do not
-infer UI controls solely from backend or Python availability.
+CPU/CUDA kernels own uniform nodal or cell-wise evaluation and energy integration. Control Room exposure for field-source parameters is listed in {doc}`/frontend/capability-register`;
+parameters without a UI control are configured in Python.
 
 (physics-zeeman-limitations)=
-## Limitations and recommended extensions
+## Limitations
 
 Spatial field maps (`StaticFieldMap`) and time-dependent RF/regional excitations
 (`RegionalFieldDrive`, `AntennaFieldSource`) are separate typed IR contracts rather than

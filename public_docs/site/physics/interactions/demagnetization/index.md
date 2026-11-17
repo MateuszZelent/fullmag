@@ -29,7 +29,7 @@ validation
 (physics-demagnetization-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Magnetostatic (demagnetizing) interactions couple magnetization divergence in the bulk and on boundaries through long-range dipolar fields that oppose net magnetic flux closure gaps. This overview connects the continuum Poisson/dipolar formulation to Fullmag's `FDM` convolution, `FEM` airbox, and `FEM`–`BEM` solver families across Python authoring, `ProblemIR`, planning, and backend lanes.
 
 (physics-demagnetization-governing-equations)=
 ## Governing equations
@@ -176,25 +176,6 @@ mesh, or boundary-quadrature error.
 - CPU/GPU comparisons at identical geometry, material, precision, and reduction convention;
 - multilayer translation, self/cross-layer symmetry, and common-grid convergence.
 
-## Recommended documentation split
-
-Keep this root as the physical and capability owner. Detailed pages should separately own:
-FDM convolution, multilayer convolution, periodic demag, FEM airbox, FEM–BEM/Fredkin–Koehler,
-boundary conditions, and validation. Avoid duplicating complete parameter tables and enormous
-ProblemIR documents across all children.
-
-(physics-demagnetization-scientific-bibliography)=
-## Scientific bibliography
-
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963 ([WorldCat record](https://search.worldcat.org/title/536451)).
-2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555 (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
-3. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* **26**(2), 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
-4. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, National Institute of Standards and Technology, NISTIR 6376 (1999), [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
 (physics-demagnetization-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
@@ -203,17 +184,29 @@ Requested intent preserves the authored model, coefficients, orientations, targe
 (physics-demagnetization-assumptions-and-validity)=
 ## Assumptions and validity
 
-The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+Magnetostatic evaluation assumes piecewise-constant (`FDM`) or continuous piecewise-linear (`FEM`) reduced magnetization $\mathbf{m}$ with finite non-negative saturation $M_s$ over the active magnetic domain. Accuracy and planner legality depend on the selected solver family (uniform structured grids for single-grid and multilayer `FDM` convolution, conformal exterior airbox extent for `FEM` Poisson, or surface boundary-element coupling for `FEM`–`BEM`), the declared periodic boundary policy (`open` or `FdmPbc`), and the active numeric precision.
 
 (physics-demagnetization-implementation-mapping)=
 ## Implementation mapping
 
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+Python classes (`Demag`, `FDM`, `FDMDemag`, `FEM`, and `FdmPbc`) own authoring validation and `ProblemIR` serialization, while `crates/fullmag-plan` (`fdm.rs` and `fem.rs`) resolves topology, periodic bounds, and solver realization. Native `FDM` (`backends/fdm/cpu`, `backends/fdm/gpu/cuda`) and `FEM` (`backends/fem/cpu/mfem`, `backends/fem/gpu/cuda`) kernels perform numerical evaluation without silent GPU-to-CPU fallback.
+
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, support is partial: parameters without a UI control must be configured via the Python API or `ProblemIR` rather than inferred from backend availability. See {doc}`/frontend/capability-register` for current browser exposure.
 
 (physics-demagnetization-limitations)=
 ## Limitations
 
-Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
+Pure-`FEM` Poisson airbox accuracy degrades if the airbox boundary is too close to the magnetic sample, while `FDM` FFT convolution requires structured grids and currently rejects periodic boundary conditions in multilayer convolution mode. Any capability not marked executable fails closed; source presence alone does not constitute runtime or scientific qualification.
+
+(physics-demagnetization-scientific-bibliography)=
+## Scientific bibliography
+
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963 ([WorldCat record](https://search.worldcat.org/title/536451)).
+2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555 (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+3. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* **26**(2), 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+4. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, National Institute of Standards and Technology, NISTIR 6376 (1999), [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
 
 (physics-demagnetization-source-code-index)=
 ## Source-code index

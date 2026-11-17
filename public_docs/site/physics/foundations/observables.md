@@ -250,8 +250,7 @@ reduction phase, precision, and executed-device identity separately from setup a
 ## Implementation mapping
 
 Python declares sampling, the planner validates legality, the quantity registry evaluates named
-quantities, and backend state I/O copies the resolved fields. No standalone Control Room equation
-editor exists; use the Study and Results panels documented in {doc}`/frontend/capability-register`.
+quantities, and backend state I/O copies the resolved fields. Interactive Control Room equation editing is not exposed directly; use the Study and Results panels documented in {doc}`/frontend/capability-register`.
 
 (observables-validation)=
 ## Validation

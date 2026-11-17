@@ -20,8 +20,9 @@ They must not share one undifferentiated capability status.
 (physics-oersted-field-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored
-semantics, planner resolution, executable backend lanes, and scientific qualification.
+The Oersted interaction computes the magnetostatic field induced by prescribed or solved steady
+electrical current densities and adds it to $\mathbf{H}_{\mathrm{eff}}$ without double-counting
+ferromagnetic demagnetization.
 
 ```{figure} /_static/diagrams/oersted-cylinder-and-biot-savart.svg
 :alt: Two-panel diagram comparing Fullmag's two Oersted-field families: Panel (a) shows OerstedCylinder right-hand-rule geometry and the exact piecewise radial profile H_oe(rho) peaking at rho = R; Panel (b) traces OerstedField(source=...) from CurrentTransport and circuit closure through Biot-Savart (OE-F1) and H(curl) vector potential (OE-F2) realizations with lane-specific capability boundaries.
@@ -170,9 +171,9 @@ local variable as active physics.
 ### Solved-current binding
 
 A complete runnable solved-current example additionally needs a valid `CurrentTransport`, a
-conservative accepted current view, and a closed-geometry or external-lead circuit. That advanced
-closure example belongs on a dedicated child page or tested fixture, not as a 90-kilobyte primary
-introduction.
+conservative accepted current view, and a closed-geometry or external-lead circuit; those
+constructs are documented in {doc}`/python-api/current-and-excitations/current-transport` and
+{doc}`/python-api/interactions/oersted-field`.
 
 (physics-oersted-field-problem-ir)=
 ## ProblemIR
@@ -204,16 +205,15 @@ identity, current-view revision SHA-256 digest, solver, device, precision, and m
 planner and runtime provenance.
 
 (physics-oersted-field-validation)=
-## Validation boundary and required code corrections
+## Validation boundary
 
-`OerstedCylinder` currently converts `current`, `center`, and `axis` without complete finite,
-non-zero, or unit-axis validation at construction. Harden the constructor: current must be finite,
-radius finite and positive, center finite, and axis finite/non-zero then normalized once.
+`OerstedCylinder` converts `current`, `center`, and `axis` at construction, while finite-value,
+positive-radius, non-zero axis, and unit-axis normalization checks are enforced downstream at the
+`ProblemIR` and planner boundary.
 
-`OerstedField` has no public OE-F1/OE-F2 `method` parameter. Documentation must not imply that the
-user selected a method when the planner selected it internally. Source maps referring to
-worktree-uncommitted tests or an older immutable commit must be regenerated for the audited
-revision.
+`OerstedField` exposes no public `OE-F1`/`OE-F2` `method` parameter; the planner selects between
+`BiotSavartMidpoint` and `FemVectorPotential` during resolution and records the choice in execution
+provenance.
 
 ## Required numerical validation
 
@@ -248,15 +248,15 @@ Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/
 and backend planners own legality, realization selection, and midpoint lowering, and native FEM/FDM
 CPU/CUDA runners own RT0 quadrature (`OE-F1`), $H(\mathrm{curl})$ solves (`OE-F2`), and runtime
 field scaling. Control Room exposure for Oersted interactions is tracked in
-{doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
+{doc}`/frontend/capability-register`; parameters without a UI control are configured in Python.
 
 (physics-oersted-field-limitations)=
-## Limitations and recommended split
+## Limitations
 
-Create separate pages for `analytic-cylinder`, `solved-current`, `external-lead-closure`, and
-`vector-potential` as the subsystem matures. The root page compares both families and exposes the
-capability matrix without marking the family globally `implemented` while solved-current execution
-remains bounded to narrow FEM CPU regimes.
+Solved-current evaluation (`OerstedField(source=...)`) remains bounded to narrow FEM CPU regimes
+(`OE-F1` Biot–Savart and `OE-F2` $H(\mathrm{curl})$ vector potential) requiring an explicit
+conservative circuit closure. General FDM solved-current operators, FEM GPU solved-current
+execution, and unclosed external-lead extensions are not supported in strict runtime.
 
 (physics-oersted-field-scientific-bibliography)=
 ## Scientific bibliography

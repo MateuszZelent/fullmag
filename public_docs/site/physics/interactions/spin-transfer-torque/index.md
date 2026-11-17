@@ -17,7 +17,9 @@ canonical SI models.
 (physics-spin-transfer-torque-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Spin-transfer torque models angular-momentum transfer from spin-polarized charge currents via two
+local mechanisms: Slonczewski perpendicular/multilayer torque (`SlonczewskiSTT`) and Zhang–Li
+current-in-plane gradient torque (`ZhangLiSTT`).
 
 (physics-spin-transfer-torque-governing-equations)=
 ## Governing equations
@@ -95,8 +97,8 @@ and
 [(\mathbf u\cdot\nabla)\mathbf m].
 ```
 
-The exact sign is tied to conventional current, positive elementary charge $e$, and the
-Fullmag LLG convention. Documentation must not switch to electron-flow language mid-equation.
+The exact sign is tied to conventional charge current ($e > 0$) and the
+Fullmag LLG convention rather than electron-flow sign.
 
 ```{figure} /_static/diagrams/stt-slonczewski-vs-zhang-li.svg
 :alt: Comparison of Slonczewski CPP/MTJ trilayer torque with computed angular asymmetry curves epsilon_DL(theta) versus Zhang-Li CIP domain-wall translation, plus the single Gilbert-to-explicit conversion invariant.
@@ -138,7 +140,7 @@ Side-by-side physics and Fullmag formula comparison for local spin-transfer torq
 (physics-spin-transfer-torque-assumptions-and-validity)=
 ## Assumptions and validity
 
-The authored models assume continuum-scale magnetization ($\lVert\mathbf m\rVert_2 = 1$), positive local $M_s$, and strictly separate `SlonczewskiSTT` (volumetric thin-layer homogenized or authoring-only interface flux) and `ZhangLiSTT` (gradient-driven diffusive adiabatic/non-adiabatic) regimes within the discretization and capability limits stated on this page.
+The authored models assume continuum-scale magnetization ($\lVert\mathbf m\rVert_2 = 1$), positive local $M_s$, and strictly separate `SlonczewskiSTT` (volumetric thin-layer homogenized or schema-only interface flux) and `ZhangLiSTT` (gradient-driven diffusive adiabatic/non-adiabatic) regimes within the discretization and capability limits stated on this page.
 
 (physics-spin-transfer-torque-discrete-realization)=
 ## Capability matrix
@@ -184,15 +186,9 @@ study.spin_torque(stt)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-The previous public API example used non-existent parameters (`polarization`, `efficiency`,
-`direction_fixed`, `interface_inPlane`), passed a scalar where a three-vector was required, and
-declared no stage. The actual compatibility constructors are documented by the parameter tables
-below.
-
-At the audited revision, these cells prove constructor and lowering semantics only. Do not claim
-a complete executable stage unless the selected study facade, planner, target, formula version,
-and current-source route are all registered and accepted. A normal stage shell without an
-attached torque is not an STT example.
+See {doc}`/python-api/interactions/spin-transfer-torque` for complete constructor signatures, defaults,
+and validation rules for `fm.SlonczewskiSTT` and `fm.ZhangLiSTT`. Execution support depends on
+the selected study target, formula version, and current-source route.
 
 ## Constructor parameters
 
@@ -230,7 +226,7 @@ The IR must preserve:
 - thickness/interface realization;
 - all polarization/asymmetry parameters.
 
-Canonical export must not erase a legacy formula version or silently upgrade it.
+Canonical export preserves any explicit legacy formula version without silently upgrading it.
 
 (physics-spin-transfer-torque-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -240,7 +236,7 @@ Requested intent preserves the authored model, coefficients, orientations, targe
 (physics-spin-transfer-torque-validation)=
 ## Validation requirements
 
-Python validation should reject non-finite vectors/scalars, zero polarization direction, invalid
+Python and planner validation reject non-finite vectors/scalars, zero polarization direction, invalid
 degree/asymmetry domains, conflicting current sources, incomplete canonical identity, invalid
 target, and missing realization. Planner validation additionally owns mesh derivatives, target
 materialization, source availability, backend/device support, and current-field cardinality.
