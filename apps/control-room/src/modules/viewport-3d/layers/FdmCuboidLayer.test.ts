@@ -997,9 +997,12 @@ describe("FdmCuboidLayer model", () => {
     expect(layerSource).toContain("() => EMPTY_FDM_CUBOID_BUILD_SNAPSHOT");
   });
 
-  it("selects PBR only for uniform FDM surfaces and preserves instance-color rendering", () => {
+  it("uses PBR for Presentation instance colors and keeps Scientific colors unlit", () => {
     const profile = {
-      magneticSurface: { toneMapped: false },
+      magneticSurface: {
+        presentation: { roughness: 0.31, metalness: 0.58, shadows: true },
+        toneMapped: true,
+      },
       uniformGeometry: {
         lit: true,
         pbr: true,
@@ -1021,6 +1024,20 @@ describe("FdmCuboidLayer model", () => {
     });
 
     expect(resolveFdmCuboidSurfaceMaterialPlan(profile, true)).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.58,
+      receiveShadow: true,
+      roughness: 0.31,
+      toneMapped: true,
+      vertexColors: true,
+    });
+
+    const scientificProfile = {
+      ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
+    };
+    expect(resolveFdmCuboidSurfaceMaterialPlan(scientificProfile, true)).toEqual({
       castShadow: false,
       kind: "basic",
       receiveShadow: false,
@@ -1048,6 +1065,7 @@ describe("FdmCuboidLayer model", () => {
 
     expect(resolveFdmCuboidSurfaceMaterialPlan({
       ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
       uniformGeometry: {
         ...profile.uniformGeometry,
         lit: false,
@@ -1064,6 +1082,7 @@ describe("FdmCuboidLayer model", () => {
 
     expect(layerSource).toContain("resolveFdmCuboidSurfaceMaterialPlan(");
     expect(layerSource).toContain("new MeshStandardMaterial({");
+    expect(layerSource).toContain("vertexColors: surfaceMaterialPlan.vertexColors");
     expect(layerSource).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(layerSource).toContain("MeshBasicMaterial");
     expect(layerSource).toContain("color.fill(1);");

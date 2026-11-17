@@ -26,6 +26,7 @@ import {
   TabsTrigger,
 } from "@/shared/ui/Tabs";
 
+import { Viewport3DVisualizationModeControl } from "./Viewport3DVisualizationModeControl";
 import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
 
 export type Viewport3DSettingsSection = "view" | "appearance" | "quality" | "export";
@@ -87,21 +88,24 @@ export function Viewport3DSettingsContent({
         }}
         value={activeSection}
       >
-        <TabsList
-          aria-label="3D view settings sections"
-          className="fm-viewport-3d-settings__tab-list"
-          presentation="segmented"
-        >
-          {SETTINGS_SECTIONS.map((section) => (
-            <TabsTrigger
-              className="fm-viewport-3d-settings__tab"
-              key={section.id}
-              value={section.id}
-            >
-              {section.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="fm-viewport-3d-settings__field-list">
+          <Viewport3DVisualizationModeControl />
+          <TabsList
+            aria-label="3D view settings sections"
+            className="fm-viewport-3d-settings__tab-list"
+            presentation="segmented"
+          >
+            {SETTINGS_SECTIONS.map((section) => (
+              <TabsTrigger
+                className="fm-viewport-3d-settings__tab"
+                key={section.id}
+                value={section.id}
+              >
+                {section.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
         <div className="fm-viewport-3d-settings__panels">
           <TabsContent forceMount hidden={activeSection !== "view"} className="fm-viewport-3d-settings__panel" value="view">
@@ -226,20 +230,6 @@ export function Viewport3DSettingsContent({
               title="Geometry lighting"
             >
               <Choice
-                id="fm-view-render-mode"
-                label="Visualization mode"
-                onChange={(value) => {
-                  const renderMode = value as typeof appearance.renderMode;
-                  viewport3dStore.setAppearance({ renderMode });
-                  if (renderMode === "presentation") viewport3dStore.setEffectAmbientOcclusion(true);
-                }}
-                options={[["scientific", "Scientific"], ["presentation", "Presentation"]]}
-                value={appearance.renderMode}
-              />
-              <p className="fm-viewport-3d-settings__help">
-                Field colors stay faithful in both modes. Presentation materials and lighting affect uniform geometry.
-              </p>
-              <Choice
                 id="fm-view-lighting"
                 label="Geometry appearance"
                 onChange={(value) => viewport3dStore.setAppearance({ lightingMode: value as typeof appearance.lightingMode })}
@@ -329,11 +319,14 @@ export function Viewport3DSettingsContent({
             <SettingsGroup title="Render quality">
               <Choice
                 id="fm-view-quality"
-                label="Requested quality"
+                label="Quality profile"
                 onChange={(value) => viewport3dStore.setVisualProfile(value as typeof requestedQuality)}
                 options={QUALITY_OPTIONS}
                 value={requestedQuality}
               />
+              <p className="fm-viewport-3d-settings__help">
+                Rendering detail and cost, independent of the visualization mode above.
+              </p>
               <p className="fm-viewport-3d-settings__status" role="status">
                 {state.visualProfileId === "capture"
                   ? `Requested: ${QUALITY_LABELS[requestedQuality]}; active for export: ${currentQualityLabel}.`
@@ -353,7 +346,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Anti-Aliasing" diagnostic={state.appearanceDiagnostics.antialias} />
 
               <TogglePreference
-                description="Contact and crevice shading for geometry. Protected field colors remain unchanged."
+                description="Contact and crevice shading, including on field-colored surfaces in Presentation."
                 id="fm-viewport-3d-effect-ambient-occlusion"
                 label="Ambient occlusion"
                 onCheckedChange={(enabled) => viewport3dStore.setEffectAmbientOcclusion(enabled)}
@@ -362,7 +355,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Ambient occlusion" diagnostic={state.appearanceDiagnostics.ambientOcclusion} />
 
               <TogglePreference
-                description="Glow for presentation geometry; quantitative field colors remain unchanged."
+                description="Glow for Presentation geometry and field-colored surfaces. Scientific preserves exact field colors."
                 id="fm-viewport-3d-effect-bloom"
                 label="Bloom (Glow)"
                 onCheckedChange={(enabled) => viewport3dStore.setEffectBloom(enabled)}
@@ -371,7 +364,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Bloom" diagnostic={state.appearanceDiagnostics.bloom} />
 
               <TogglePreference
-                description="Filtered shadows for presentation geometry. Interactive Lite does not include shadows."
+                description="Filtered shadows for Presentation geometry and field-colored surfaces. Interactive Lite does not include shadows."
                 disabled={appearance.renderMode !== "presentation"}
                 id="fm-view-shadows"
                 label="Soft shadows"

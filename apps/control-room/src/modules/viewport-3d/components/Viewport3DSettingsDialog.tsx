@@ -14,6 +14,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
+import { Viewport3DVisualizationModeControl } from "./Viewport3DVisualizationModeControl";
 import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
 
 function EffectToggle({
@@ -77,6 +78,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
         </DialogHeader>
 
         <div className="fm-viewport-3d__settings-body">
+          <Viewport3DVisualizationModeControl />
           <SettingsSection title="Background" onReset={() => onCommand("viewport-3d.reset-appearance-background")}>
             <Choice id="fm-view-background" label="Background" value={a.backgroundMode} options={[["gradient", "Subtle gradient"], ["solid", "Solid"]]} onChange={(v) => viewport3dStore.setAppearance({ backgroundMode: v as typeof a.backgroundMode })} />
             <Range id="fm-view-background-strength" label="Gradient strength" value={a.backgroundStrength} min={0} max={1} step={0.05} disabled={a.backgroundMode === "solid"} onChange={(backgroundStrength) => viewport3dStore.setAppearance({ backgroundStrength })} />
@@ -92,8 +94,6 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             <Range id="fm-view-grid-contrast" label="Grid contrast" value={a.gridOpacity} min={0.25} max={2} step={0.05} onChange={(gridOpacity) => viewport3dStore.setAppearance({ gridOpacity })} />
           </SettingsSection>
           <SettingsSection title="Geometry lighting" onReset={() => onCommand("viewport-3d.reset-appearance-lighting")}>
-            <Choice id="fm-view-render-mode" label="Visualization mode" value={a.renderMode} options={[["scientific", "Scientific — faithful field colors"], ["presentation", "Presentation — PBR and studio HDRI"]]} onChange={(v) => { viewport3dStore.setAppearance({ renderMode: v as typeof a.renderMode }); if (v === "presentation") viewport3dStore.setEffectAmbientOcclusion(true); }} />
-            <p>Scientific field colors remain independent of lighting in both modes. Presentation materials apply to uniform geometry.</p>
             <Choice id="fm-view-lighting" label="Geometry appearance" value={a.lightingMode} options={[["studio", "Studio"], ["flat", "Flat"]]} onChange={(v) => viewport3dStore.setAppearance({ lightingMode: v as typeof a.lightingMode })} />
             <Choice id="fm-view-light-space" label="Lighting reference" value={a.lightingSpace} options={[["camera", "Follow camera"], ["world", "Lock to world"]]} disabled={a.lightingMode === "flat"} onChange={(v) => viewport3dStore.setAppearance({ lightingSpace: v as typeof a.lightingSpace })} />
             <Range id="fm-view-light-strength" label="Light intensity" value={a.lightingIntensity} min={0} max={2} step={0.05} disabled={a.lightingMode === "flat"} onChange={(lightingIntensity) => viewport3dStore.setAppearance({ lightingIntensity })} />
@@ -114,13 +114,14 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             </div>
           </SettingsSection>
           <SettingsSection title="Quality and effects" onReset={() => onCommand("viewport-3d.reset-appearance-effects")}>
-          <Choice id="fm-view-quality" label="Render quality" value={state.visualProfileId === "capture" ? state.captureReturnProfileId ?? "interactive" : state.visualProfileId} options={[["interactive-lite", "Interactive Lite"], ["interactive", "Interactive"], ["balanced", "Balanced"], ["figure", "Figure"]]} onChange={(v) => viewport3dStore.setVisualProfile(v as typeof state.visualProfileId)} />
+          <Choice id="fm-view-quality" label="Quality profile" value={state.visualProfileId === "capture" ? state.captureReturnProfileId ?? "interactive" : state.visualProfileId} options={[["interactive-lite", "Interactive Lite"], ["interactive", "Interactive"], ["balanced", "Balanced"], ["figure", "Figure"]]} onChange={(v) => viewport3dStore.setVisualProfile(v as typeof state.visualProfileId)} />
+          <p>Rendering detail and cost, independent of the visualization mode above.</p>
           <p>Interactive Lite omits shadows and AO. Higher qualities increase shadow detail; Figure uses full-resolution AO.</p>
           <EffectToggle id="fm-viewport-3d-effect-antialias" label="Anti-Aliasing" description="Smooths polygon boundaries within the selected quality profile." enabled={effectAntialias} onToggle={(v) => viewport3dStore.setEffectAntialias(v)} />
           <EffectToggle
             id="fm-viewport-3d-effect-ambient-occlusion"
             label="Ambient occlusion"
-            description="Contact and crevice shading for geometry. Disabled where it would alter quantitative field colors."
+            description="Contact and crevice shading, including on field-colored surfaces in Presentation."
             enabled={effectAmbientOcclusion}
             onToggle={(v) => viewport3dStore.setEffectAmbientOcclusion(v)}
           />
@@ -128,7 +129,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           <EffectToggle
             id="fm-viewport-3d-effect-bloom"
             label="Bloom (Glow)"
-            description="Presentation effect for geometry; unavailable for quantitative field colors."
+            description="Glow for Presentation geometry and field-colored surfaces. Scientific preserves exact field colors."
             enabled={effectBloom}
             onToggle={(v) => viewport3dStore.setEffectBloom(v)}
           />

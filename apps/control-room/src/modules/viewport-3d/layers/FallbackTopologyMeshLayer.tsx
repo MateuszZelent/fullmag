@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import {
   RENDER_POLICIES,
@@ -50,6 +50,7 @@ import {
   updateScalarSurfaceShaderMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { prepareViewport3DFieldPresentationNormals } from "../viewport3dFieldPresentationMaterial";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
@@ -308,13 +309,16 @@ export function FallbackTopologyMeshLayer({
       createScalarSurfaceShaderMaterial(shaderSurfaceBuffer, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
-        shadeStrength: 0,
+        shadeStrength: materialProfile.magneticSurface.shadeStrength,
         toneMapped: materialProfile.magneticSurface.toneMapped,
+        presentation: materialProfile.magneticSurface.presentation,
       }),
     );
   }, [
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.shadeStrength,
+    materialProfile.magneticSurface.presentation,
     meshQualityColors,
     shaderSurfaceBuffer,
     surfaceOpacity,
@@ -332,8 +336,13 @@ export function FallbackTopologyMeshLayer({
       scalarShaderMaterial,
       shaderSurfaceBuffer,
       surfaceOpacity,
+      materialProfile.magneticSurface.shadeStrength,
+      materialProfile.magneticSurface.presentation,
     );
-  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity]);
+  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity, materialProfile.magneticSurface]);
+  useLayoutEffect(() => {
+    if (prepareViewport3DFieldPresentationNormals(geometry, Boolean(materialProfile.magneticSurface.presentation))) invalidate();
+  }, [geometry, invalidate, materialProfile.magneticSurface.presentation]);
 
   const surfaceOwnerId = `saved-surface:${useId()}`;
   const visibleSurfaceBuffer = renderSettings.visible && renderPlan.surface.visible && !meshQualityColors
@@ -458,7 +467,9 @@ function FallbackTopologyMeshPrimitives({
     <group onPointerDown={onPointerDown}>
       {renderPlan.surface.visible && geometry ? (
         <mesh
+          castShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           geometry={geometry}
+          receiveShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           renderOrder={
             surfacePolicy.transparent
               ? RENDER_POLICIES.contextSurface.renderOrder
@@ -467,6 +478,16 @@ function FallbackTopologyMeshPrimitives({
         >
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
+          ) : materialProfile.magneticSurface.presentation ? (
+            <meshStandardMaterial
+              color={surfaceMaterialColorFromSettings(renderSettings, colors.mesh, hasScalarColors)}
+              opacity={surfaceOpacity}
+              roughness={materialProfile.magneticSurface.presentation.roughness}
+              metalness={materialProfile.magneticSurface.presentation.metalness}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
+              vertexColors={hasScalarColors}
+              {...surfacePolicy}
+            />
           ) : (
             <meshBasicMaterial
               key={hasScalarColors ? "fallback-vertex-colors" : "fallback-solid"}
@@ -476,7 +497,7 @@ function FallbackTopologyMeshPrimitives({
                 hasScalarColors,
               )}
               opacity={surfaceOpacity}
-              {...materialProfile.magneticSurface}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
               vertexColors={hasScalarColors}
               {...surfacePolicy}
             />
