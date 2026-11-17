@@ -97,6 +97,15 @@ The natural boundary term and exchange-coupled free boundary law are
 The non-periodic FDM planner does not expose this natural closure and fails
 closed; FEM carries it through the weak residual.
 
+```{figure} /_static/diagrams/dmi-three-variants-chirality.svg
+:alt: Three-panel DMI comparison highlighting panel (b) for isotropic B20 bulk DMI with Moriya vector parallel to bond r_ij, 1D Bloch helix, 2D Bloch skyrmion, and Fullmag's all-axis periodic FDM requirement versus open/periodic FEM support, alongside interfacial DMI in panel (a) and rotated interfacial DMI in panel (c).
+:width: 100%
+:name: fig-bulk-dmi-variants-comparison
+:figclass: fm-physics-figure
+
+Panel (b) summarizes isotropic $T/O$ bulk DMI ($\mathbf D_{ij} \parallel \hat{\mathbf r}_{ij}$, Bloch helix and Bloch skyrmion, 3D periodic FDM planner gate vs FEM weak residual) in contrast to interfacial (a) and rotated interfacial (c) variants (Dzyaloshinsky 1958; Moriya 1960; Bogdanov & Yablonskii 1989; Bogdanov & Rößler 2001).
+```
+
 (bulk-dmi-symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -368,11 +377,10 @@ executed-device parity.
 (bulk-dmi-scientific-bibliography)=
 ## 12. Scientific bibliography
 
-1. A. N. Bogdanov and D. A. Yablonskii, “Thermodynamically stable vortices
-   in magnetically ordered crystals,” *Soviet Physics JETP* 68, 101 (1989).
-2. A. N. Bogdanov and U. K. Rößler, “Chiral symmetry breaking in magnetic
-   thin films and multilayers,” *Physical Review Letters* 87, 037203 (2001),
-   [doi:10.1103/PhysRevLett.87.037203](https://doi.org/10.1103/PhysRevLett.87.037203).
+1. I. Dzyaloshinsky, “A thermodynamic theory of ‘weak’ ferromagnetism of antiferromagnetics,” *Journal of Physics and Chemistry of Solids* **4**(4), 241–255 (1958). [doi:10.1016/0022-3697(58)90076-3](https://doi.org/10.1016/0022-3697(58)90076-3).
+2. T. Moriya, “Anisotropic Superexchange Interaction and Weak Ferromagnetism,” *Physical Review* **120**(1), 91–98 (1960). [doi:10.1103/PhysRev.120.91](https://doi.org/10.1103/PhysRev.120.91).
+3. A. N. Bogdanov and D. A. Yablonskii, “Thermodynamically stable ‘vortices’ in magnetically ordered crystals. The mixed state of magnets,” *Soviet Physics JETP (Zh. Eksp. Teor. Fiz.)* **68**(1), 101 (1989).
+4. A. N. Bogdanov and U. Rößler, “Chiral Symmetry Breaking in Magnetic Thin Films and Multilayers,” *Physical Review Letters* **87**(3), 037203 (2001). [doi:10.1103/PhysRevLett.87.037203](https://doi.org/10.1103/PhysRevLett.87.037203) | [Open-access repository](https://doi.org/10.17877/de290r-6428).
 
 (bulk-dmi-source-code-index)=
 ## 13. Source-code index
@@ -396,18 +404,4 @@ executed-device parity.
 | FEM CUDA kernel | `backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu` | `dmi_element_residual_kernel` | residual/energy blocks | FEM GPU |
 | FEM CUDA dispatch | `backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu` | `gpu_rk_compute_dmi_field_contributions` | resident field dispatch | FEM GPU |
 | FEM CUDA reduction | `backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu` | `gpu_rk_reduce_final_dmi_energy_terms` | final energy slot | FEM GPU |
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
 

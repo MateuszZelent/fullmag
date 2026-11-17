@@ -26,9 +26,11 @@ A heavy metal (HM) carries conventional charge current. Spin-orbit scattering ge
 spin current and spin accumulation $\boldsymbol\mu_s$. At an oriented HM/FM interface, longitudinal
 spin is transmitted or reflected while absorbed transverse spin torques the ferromagnet (FM).
 
-```{figure} ../../../_static/diagrams/spin-hall-hm-fm.svg
+```{figure} /_static/diagrams/spin-hall-hm-fm.svg
 :alt: HM and FM stack with charge current, electric field, spin Hall current, spin accumulation, interface normal, magnetization, and torque.
 :width: 100%
+:name: fig-spin-hall-hm-fm
+:figclass: fm-physics-figure
 
 Fullmag convention map. The first index of $Q_{ia}$ is flow direction and the second is spin
 polarization. Here the normal points from HM to FM.
@@ -171,6 +173,15 @@ For magnetic cell $K$ adjacent to face $f$, the interface torque contribution is
 Optional spin-memory-loss reservoir data exists in authoring/reference FDM but is not generally
 executable. The spin domain must be a subset of the conducting charge domain; material coverage
 must be complete and non-overlapping.
+
+```{figure} /_static/diagrams/drift-diffusion-reactions-and-interface.svg
+:alt: Finite-volume spin-channel splitting and face flux Q_i, MixingConductanceSpinInterface transmission versus full transverse absorption, and volumetric FM spin reaction triad R_sf, R_J, and R_phi with computed 1D spatial decay profiles.
+:width: 100%
+:name: fig-drift-diffusion-reactions-and-interface
+:figclass: fm-physics-figure
+
+Finite-volume transport operators and interface/volumetric torque extraction in Fullmag (`SpinDriftDiffusion` $\to$ `DriftDiffusionSpinTorque`). **(a)** Spin-channel potential splitting $V \pm \boldsymbol\mu_s/2$ and the three additive face-flux contributions in $\mathbf Q_i$. **(b)** `MixingConductanceSpinInterface` separating longitudinal transmission and backflow ($G_\uparrow, G_\downarrow$) from full transverse absorption ($G_r, G_i$). **(c)** Volumetric spin-reaction triad inside the ferromagnet showing torque-free spin-flip relaxation $\mathbf R_{\mathrm{sf}}$ versus precessional $\mathbf R_J$ and dephasing $\mathbf R_\phi$ (with 1D steady spatial decay computed for $\lambda_{\mathrm{sf}} = 5\,\mathrm{nm}$, $\lambda_J = 1.0\,\mathrm{nm}$, $\lambda_\phi = 1.4\,\mathrm{nm}$).
+```
 
 ### M1, M2, and prescribed SOT
 
@@ -444,11 +455,15 @@ converted into these units and signs.
 (physics-drift-diffusion-spin-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-1. S. Zhang, P. M. Levy, and A. Fert, Physical Review Letters 88, 236601 (2002), [doi:10.1103/PhysRevLett.88.236601](https://doi.org/10.1103/PhysRevLett.88.236601).
-2. C. Abert et al., Scientific Reports 5, 14855 (2015), [doi:10.1038/srep14855](https://doi.org/10.1038/srep14855).
-3. C. Abert et al., Scientific Reports 6, 16 (2016), [doi:10.1038/s41598-016-0019-y](https://doi.org/10.1038/s41598-016-0019-y).
-4. J. Sinova et al., Reviews of Modern Physics 87, 1213 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213).
-5. S. Zhang, Physical Review Letters 85, 393 (2000), [doi:10.1103/PhysRevLett.85.393](https://doi.org/10.1103/PhysRevLett.85.393).
+1. S. Zhang, "Spin Hall Effect in the Presence of Spin Diffusion," *Physical Review Letters* **85**(2), 393–396 (2000), [doi:10.1103/PhysRevLett.85.393](https://doi.org/10.1103/PhysRevLett.85.393).
+2. S. Zhang, P. M. Levy, and A. Fert, "Mechanisms of Spin-Polarized Current-Driven Magnetization Switching," *Physical Review Letters* **88**(23), 236601 (2002), [doi:10.1103/PhysRevLett.88.236601](https://doi.org/10.1103/PhysRevLett.88.236601) ([arXiv:cond-mat/0202363](https://arxiv.org/abs/cond-mat/0202363)).
+3. Y. Tserkovnyak, A. Brataas, G. E. W. Bauer, and B. I. Halperin, "Nonlocal magnetization dynamics in ferromagnetic heterostructures," *Reviews of Modern Physics* **77**(4), 1375–1421 (2005), [doi:10.1103/RevModPhys.77.1375](https://doi.org/10.1103/RevModPhys.77.1375) ([arXiv:cond-mat/0409242](https://arxiv.org/abs/cond-mat/0409242)).
+4. P. M. Haney, H.-W. Lee, K.-J. Lee, A. Manchon, and M. D. Stiles, "Current induced torques and interfacial spin-orbit coupling: Semiclassical modeling," *Physical Review B* **87**(17), 174411 (2013), [doi:10.1103/PhysRevB.87.174411](https://doi.org/10.1103/PhysRevB.87.174411) ([arXiv:1301.4513](https://arxiv.org/abs/1301.4513)).
+5. J. Sinova, S. O. Valenzuela, J. Wunderlich, C. H. Back, and T. Jungwirth, "Spin Hall effects," *Reviews of Modern Physics* **87**(4), 1213–1260 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213) ([arXiv:1411.3249](https://arxiv.org/abs/1411.3249)).
+6. C. Abert, M. Ruggeri, F. Bruckner, C. Vogler, G. Hrkac, D. Praetorius, and D. Suess, "A three-dimensional spin-diffusion model for micromagnetics," *Scientific Reports* **5**(1), 14855 (2015), [doi:10.1038/srep14855](https://doi.org/10.1038/srep14855) ([Nature PDF](https://www.nature.com/articles/srep14855.pdf), CC-BY; [arXiv:1410.6067](https://arxiv.org/abs/1410.6067)).
+7. C. Abert, M. Ruggeri, F. Bruckner, C. Vogler, A. Manchon, D. Praetorius, and D. Suess, "A self-consistent spin-diffusion model for micromagnetics," *Scientific Reports* **6**(1), 16 (2016), [doi:10.1038/s41598-016-0019-y](https://doi.org/10.1038/s41598-016-0019-y) ([Nature PDF](https://www.nature.com/articles/s41598-016-0019-y.pdf), CC-BY; [arXiv:1512.05519](https://arxiv.org/abs/1512.05519)).
+8. A. Manchon, J. Železný, I. M. Miron, T. Jungwirth, J. Sinova, A. Thiaville, K. Garello, and P. Gambardella, "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**(3), 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://doi.org/10.1103/RevModPhys.91.035004) ([arXiv:1801.09636](https://arxiv.org/abs/1801.09636)).
+9. N. P. Jørstad, W. Goes, S. Selberherr, and V. A. Sverdlov, "Modeling spin-orbit torque driven magnetization dynamics in emerging magnetoresistive devices: a finite element method approach," *npj Spintronics* **4**(1) (2026), [doi:10.1038/s44306-026-00162-y](https://doi.org/10.1038/s44306-026-00162-y) ([Nature PDF](https://www.nature.com/articles/s44306-026-00162-y.pdf), CC-BY).
 
 (physics-drift-diffusion-spin-torque-source-code-index)=
 ## Source-code index

@@ -49,9 +49,13 @@ E[\mathbf{m}]=\sum_{k\in\mathcal{K}}E_k[\mathbf{m}].
 (foundation-energy-assumptions-and-validity)=
 ## Assumptions and validity
 
-The sum includes only explicitly enabled terms. Each interaction owns its sign, units,
-discretization, and boundary law. FEM and FDM reductions can use different weights and
-quadrature, so the composition equation alone is not a parity claim.
+The sum includes only explicitly enabled terms (see
+{ref}`fig-interactions-taxonomy-energy-vs-torque` for the taxonomy across all 12 interactions
+and {ref}`fig-effective-field-and-direct-torque-composition` for how conservative energy
+variation $\delta E_k$ maps to $\mathbf{H}_k$ separately from direct torques
+$\boldsymbol{\tau}_{\mathrm{direct}}$). Each interaction owns its sign, units, discretization,
+and boundary law. FEM and FDM reductions can use different weights and quadrature, so the
+composition equation alone is not a parity claim.
 
 (foundation-energy-python-api)=
 ## Python API
@@ -129,11 +133,9 @@ term kind is executable on every lane.
 (foundation-energy-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
-   [WorldCat record](https://search.worldcat.org/title/536451).
-2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* 92, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+3. J. Joos, P. Bassirian, P. Gypens, J. Mulkers, K. Litzius, B. Van Waeyenberge, and J. Leliaert, "Tutorial: Simulating modern magnetic material systems in mumax3," *Journal of Applied Physics* **134**(17), 171101 (2023). [doi:10.1063/5.0160988](https://doi.org/10.1063/5.0160988) · [Open Access (CC-BY PDF)](https://pubs.aip.org/aip/jap/article-pdf/doi/10.1063/5.0160988/18193198/171101_1_5.0160988.pdf).
 
 (foundation-energy-source-code-index)=
 ## Source-code index

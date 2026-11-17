@@ -117,6 +117,15 @@ One complete operator refresh for $L$ layers therefore has $L$ forward transform
 inverse transforms, and $L^2$ pair accumulations. These counters describe the demagnetization
 operator, not automatically the residency of the complete time integrator.
 
+```{figure} /_static/diagrams/demag-fdm-newell-and-multilayer.svg
+:alt: Two-panel diagram showing (a) Newell 27-point cell-averaged convolution on 2N zero-padded FFT grids and (b) Lepadatu (2019) multilayer cross-layer convolution skipping vacuum gaps with volume-adjoint push P and pull P* transfers between native per-magnet grids and a common computational FFT supercell, contrasted with periodic image truncation.
+:width: 100%
+:name: fig-demag-multilayer-newell-and-stack
+:figclass: fm-physics-figure
+
+Multilayer cross-layer FFT convolution in panel (b) (bottom left): native grids retain physical origins $\mathbf o_d$ and cell sizes $\mathbf h_d$, vacuum spacer gaps remain unmeshed via shifted pair kernels $\boldsymbol\delta_{d,s} = \mathbf o_d - \mathbf o_s$, and volume-adjoint transfers $(P, P^*)$ conserve work across unequal grids (Lepadatu 2019; Newell *et al.* 1993).
+```
+
 ### 2.4. Transfer between `native_grid` and `scratch_grid`
 
 When native and scratch grids differ, magnetization is transferred by operator $P$:
@@ -839,24 +848,24 @@ unavailable source files part of the published source index.
 
 1. S. Lepadatu, “Efficient computation of demagnetizing fields for magnetic
    multilayers using multilayered convolution,” *Journal of Applied Physics*
-   **126**, 103903 (2019),
-   [doi:10.1063/1.5116754](https://doi.org/10.1063/1.5116754).
+   **126**(10), 103903 (2019),
+   [doi:10.1063/1.5116754](https://doi.org/10.1063/1.5116754), Open Access
+   preprint: [arXiv:1906.00813](https://arxiv.org/abs/1906.00813).
 2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the
    demagnetizing tensor for nonuniform magnetization,” *Journal of
-   Geophysical Research: Solid Earth* **98**, 9551–9555 (1993),
-   [doi:10.1029/93JE01171](https://doi.org/10.1029/93JE01171).
+   Geophysical Research: Solid Earth* **98**(B6), 9551–9555 (1993),
+   [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
 3. A. Aharoni, “Demagnetizing factors for rectangular ferromagnetic prisms,”
-   *Journal of Applied Physics* **83**, 3432–3434 (1998),
+   *Journal of Applied Physics* **83**(6), 3432–3434 (1998),
    [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).
 
 ### BORIS clean-room boundary
 
-BORIS is used only as external traceability material for kernel categories and convolution
-organization. The canonical boundary is recorded in
-`docs/physics/multilayer_convolution/boris-reference-manifest.v1.json`. BORIS code is not
-copied into Fullmag, is not a numerical oracle, and is not qualification evidence. The
-equations on this page come from Lepadatu and Newell and map to independently maintained
-Fullmag code.
+BORIS is used only as external behavioral traceability material for kernel categories and
+convolution organization via Fullmag's internal clean-room manifest and behavioral transcription.
+BORIS code is not copied into Fullmag, is not a numerical oracle, and is not qualification
+evidence. The equations on this page come from Lepadatu and Newell and map to independently
+maintained Fullmag code.
 
 (multilayer-convolution-source-code-index)=
 ## 13. Source-code index
@@ -898,18 +907,8 @@ Fullmag code.
 | Fullmag Explorer omission | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | Omits unavailable layout nodes and keeps native-layer targets separate. | Explorer | Explorer tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Fullmag native-layer domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts physical native-layer carriers only. | Viewport | viewport adapter tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Fullmag target-only Airbox domain | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts target-only Airbox and validates field availability. | Viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability. Frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`.
 

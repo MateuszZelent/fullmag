@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 680" role="img" aria-labelledby="title desc">
+  <title id="title">Zeeman external field conversion, potential curve, and Fullmag source boundaries</title>
+  <desc id="desc">Panel (a) illustrates the single SI conversion from authored external flux density B_ext in tesla to H_ext = B_ext / mu_0 in amperes per meter, helical Larmor precession and Gilbert damping on the unit sphere, and the numerically plotted Zeeman energy density w_Z(theta) = -M_s B_ext cos(theta). Panel (b) contrasts uniform Zeeman(B) / study.b_ext across all four FDM/FEM CPU/GPU lanes with StaticFieldMap, RegionalFieldDrive, and RF antenna sources.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arrow-steel" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arrow-axis" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#3b4252"/></marker>
+    <style>
+      .title-main { font: 700 20px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .title-sub { font: 400 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .panel-badge { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #17467a; }
+      .panel-title { font: 700 15px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .sec-head { font: 700 12.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .body { font: 400 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .body-bold { font: 600 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .small { font: 400 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #667085; }
+      .small-bold { font: 600 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .math { font: italic 13.8px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .math-sm { font: italic 12.2px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .code { font: 600 11.2px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #1e2430; }
+      .code-sm { font: 400 10.6px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #4c566a; }
+    </style>
+  </defs>
+  <rect x="8" y="8" width="1344" height="664" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
+  <text x="28" y="37" class="title-main">Zeeman Interaction: Field Conversion, Potential Landscape, and Source Boundaries</text>
+  <text x="28" y="57" class="title-sub">Prescribed uniform induction B_ext [T] → H_ext = B_ext / μ₀ [A m⁻¹], conservative LLG precession, and spatial/RF separation</text>
+  <line x1="26" y1="68" x2="1334" y2="68" stroke="#d7dce5" stroke-width="1"/>
+  <rect x="26" y="82" width="666" height="556" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="38" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="52" y="107.5" text-anchor="middle" class="panel-badge">(a)</text>
+  <text x="74" y="108" class="panel-title">SI Conversion, Precession Sphere, and Potential w_Z(θ)</text>
+  <line x1="38" y1="121" x2="680" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="42" y="134" width="634" height="82" rx="6" fill="#e7f0fa" stroke="#1d5fa7" stroke-width="1.2"/>
+  <text x="58" y="156" class="sec-head" fill="#1d5fa7">Single SI Conversion at Planning Boundary</text>
+  <text x="58" y="179" class="math">H<tspan baseline-shift="sub" font-size="74%">ext</tspan> = B<tspan baseline-shift="sub" font-size="74%">ext</tspan> / μ<tspan baseline-shift="sub" font-size="74%">0</tspan>&#x2003;&#x2003;H<tspan baseline-shift="sub" font-size="74%">Z</tspan> = H<tspan baseline-shift="sub" font-size="74%">ext</tspan>&#x2003;&#x2003;E<tspan baseline-shift="sub" font-size="74%">Z</tspan> = −μ<tspan baseline-shift="sub" font-size="74%">0</tspan> ∫<tspan baseline-shift="sub" font-size="74%">Ωm</tspan> M · H<tspan baseline-shift="sub" font-size="74%">ext</tspan> dV = −∫<tspan baseline-shift="sub" font-size="74%">Ωm</tspan> M · B<tspan baseline-shift="sub" font-size="74%">ext</tspan> dV</text>
+  <text x="58" y="202" class="small">Example: B<tspan baseline-shift="sub" font-size="74%">ext</tspan> = (0, 0, 0.1) T  →  H<tspan baseline-shift="sub" font-size="74%">ext</tspan> = (0, 0, 79.58 kA m<tspan baseline-shift="super" font-size="74%">−1</tspan>);  μ<tspan baseline-shift="sub" font-size="74%">0</tspan> = 4π × 10<tspan baseline-shift="super" font-size="74%">−7</tspan> N A<tspan baseline-shift="super" font-size="74%">−2</tspan></text>
+  <rect x="42" y="232" width="306" height="390" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="56" y="254" class="sec-head">Precession &amp; Relaxation on S<tspan baseline-shift="super" font-size="74%">2</tspan></text>
+  <text x="56" y="272" class="small">H<tspan baseline-shift="sub" font-size="74%">Z</tspan> = H<tspan baseline-shift="sub" font-size="74%">ext</tspan> along +z; ||m|| = 1</text>
+  <circle cx="194.0" cy="422.0" r="94.0" fill="#eef2f8" fill-opacity="0.55" stroke="#6e7b91" stroke-width="1.3"/>
+  <polyline points="278.5,437.4 281.8,434.6 284.4,431.7 286.3,428.7 287.5,425.7 288.0,422.6 287.8,419.5 286.8,416.5 285.2,413.5 282.9,410.5 279.9,407.7 276.2,404.9 271.9,402.3 267.1,399.8 261.6,397.5 255.7,395.4 249.3,393.5 242.4,391.8 235.2,390.4 227.7,389.1 219.9,388.2 211.9,387.4 203.8,387.0 195.6,386.8 187.4,386.9 179.3,387.2 171.3,387.8 163.4,388.7 155.8,389.8 148.4,391.2 141.4,392.8 134.8,394.6 128.7,396.7 123.1,398.9 118.0,401.3 113.4,403.9 109.5,406.6 106.2,409.4 103.6,412.3 101.7,415.3 100.5,418.3 100.0,421.4 100.2,424.5 101.2,427.5 102.8,430.5 105.1,433.5 108.1,436.3 111.8,439.1 116.1,441.7 120.9,444.2 126.4,446.5 132.3,448.6 138.7,450.5 145.6,452.2 152.8,453.6 160.3,454.9 168.1,455.8 176.1,456.6 184.2,457.0 192.4,457.2 200.6,457.1 208.7,456.8 216.7,456.2 224.6,455.3 232.2,454.2 239.6,452.8 246.6,451.2 253.2,449.4 259.3,447.3 264.9,445.1 270.0,442.7 274.6,440.1 278.5,437.4" fill="none" stroke="#6e7b91" stroke-width="1.0" stroke-dasharray="4 3"/>
+  <line x1="194.0" y1="422.0" x2="194.0" y2="307.0" stroke="#1d5fa7" stroke-width="3.0" marker-end="url(#arrow-blue)"/>
+  <text x="204.0" y="313.0" class="math" fill="#1d5fa7">B<tspan baseline-shift="sub" font-size="74%">ext</tspan> = μ<tspan baseline-shift="sub" font-size="74%">0</tspan>H<tspan baseline-shift="sub" font-size="74%">ext</tspan></text>
+  <polyline points="237.3,478.2 241.1,476.5 244.8,474.7 248.4,472.9 251.9,471.0 255.2,468.9 258.5,466.9 261.6,464.7 264.6,462.5 267.5,460.2 270.2,457.9 272.7,455.5 275.0,453.0 277.2,450.6 279.2,448.0 281.0,445.4 282.6,442.8 284.0,440.1 285.2,437.5 286.2,434.7 286.9,432.0 287.5,429.3 287.9,426.5 288.0,423.8 287.9,421.0 287.6,418.2 287.1,415.5 286.3,412.7 285.4,410.0 284.2,407.3 282.8,404.6 281.2,402.0 279.5,399.4 277.5,396.8 275.4,394.3 273.0,391.8 270.5,389.4 267.8,387.0 265.0,384.7 262.0,382.5 258.9,380.3 255.6,378.2 252.2,376.1 248.7,374.2 245.1,372.3 241.4,370.4 237.6,368.7 233.7,367.0 229.8,365.5 225.8,364.0 221.8,362.5 217.7,361.2 213.7,360.0 209.6,358.8 205.5,357.8 201.4,356.8 197.4,355.9 193.4,355.1 189.4,354.3 185.5,353.7 181.6,353.1 177.8,352.6 174.1,352.2 170.5,351.8 167.0,351.6 163.6,351.4 160.3,351.3 157.1,351.2 154.0,351.2 151.1,351.3 148.3,351.4 145.7,351.6 143.2,351.8 140.8,352.1 138.6,352.4 136.6,352.7 134.7,353.1 133.0,353.6 131.5,354.0 130.1,354.5 128.9,355.1 127.9,355.6 127.0,356.2 126.3,356.7 125.8,357.3 125.5,357.9 125.3,358.5 125.2,359.2 125.3,359.8 125.6,360.4 126.0,361.0 126.6,361.6 127.3,362.1 128.2,362.7 129.2,363.3 130.3,363.8 131.6,364.3 133.0,364.8 134.4,365.2 136.0,365.7 137.7,366.1 139.5,366.5 141.4,366.8 143.4,367.1 145.4,367.4 147.5,367.6 149.7,367.8 152.0,368.0 154.2,368.2 156.6,368.2 159.0,368.3 161.4,368.3 163.8,368.3 166.2,368.2 168.7,368.1 171.2,368.0 173.6,367.8 176.1,367.6 178.5,367.4 181.0,367.1 183.4,366.8 185.7,366.4 188.1,366.0 190.4,365.6 192.7,365.1 194.9,364.6 197.1,364.1 199.2,363.6 201.2,363.0 203.2,362.4 205.1,361.8 207.0,361.1 208.8,360.4 210.5,359.8 212.1,359.0 213.7,358.3 215.2,357.6 216.5,356.8 217.9,356.0 219.1,355.3 220.2,354.5 221.3,353.7 222.2,352.9 223.1,352.1 223.9,351.3 224.6,350.4 225.2,349.6 225.7,348.8 226.2,348.0 226.6,347.2 226.8,346.4 227.0,345.6 227.1,344.8 227.2,344.1 227.1,343.3 227.0,342.6 226.8,341.8 226.6,341.1 226.3,340.4 225.9,339.7 225.4,339.0 224.9,338.4 224.3,337.8 223.7,337.1 223.0,336.6 222.3,336.0 221.5,335.4 220.7,334.9 219.8,334.4 218.9,333.9 218.0,333.4 217.0,333.0 216.0,332.6 215.0,332.2 213.9,331.8 212.8,331.5 211.8,331.2 210.7,330.9 209.6,330.6 208.4,330.4 207.3,330.1 206.2,329.9 205.1,329.8 203.9,329.6 202.8,329.5 201.7,329.4 200.6,329.3 199.5,329.2 198.5,329.2 197.4,329.1 196.4,329.1 195.3,329.1 194.3,329.2 193.4,329.2 192.4,329.3 191.5,329.3 190.6,329.4 189.8,329.5 188.9,329.7 188.1,329.8 187.4,330.0 186.6,330.1 186.0,330.3 185.3,330.5 184.7,330.7 184.1,330.9 183.5,331.1 183.0,331.3 182.6,331.5 182.1,331.7 181.7,331.9 181.4,332.2 181.1,332.4 180.8,332.7 180.5,332.9 180.3,333.1 180.2,333.4 180.0,333.6 179.9,333.9 179.9,334.1 179.8,334.4 179.8,334.6 179.9,334.8 179.9,335.1 180.0,335.3 180.2,335.5 180.3,335.7 180.5,335.9 180.7,336.1 180.9,336.3 181.2,336.5 181.5,336.7 181.8,336.9 182.1,337.1 182.4,337.2 182.8,337.4 183.2,337.5 183.6,337.7 184.0,337.8 184.4,337.9 184.8,338.0 185.3,338.1 185.7,338.2 186.2,338.3 186.6,338.4 187.1,338.5 187.6,338.5 188.0,338.6 188.5,338.6 189.0,338.7 189.5,338.7" fill="none" stroke="#147d75" stroke-width="1.9" stroke-opacity="0.88"/>
+  <line x1="194.0" y1="422.0" x2="285.4" y2="410.0" stroke="#b8392b" stroke-width="3.2" marker-end="url(#arrow-red)"/>
+  <circle cx="285.4" cy="410.0" r="4.0" fill="#b8392b"/>
+  <polyline points="194.0,390.6 197.1,390.5 200.2,390.6 203.3,391.1 206.3,391.8 209.1,392.8 211.8,394.0 214.4,395.5 216.8,397.3 218.9,399.3 220.9,401.5 222.6,403.8 224.0,406.4 225.1,409.0 226.0,411.8 226.6,414.7 226.9,417.7" fill="none" stroke="#1e2430" stroke-width="1.3"/>
+  <text x="230.0" y="395.8" class="math-sm">θ</text>
+  <line x1="285.4" y1="410.0" x2="294.5" y2="424.4" stroke="#147d75" stroke-width="2.4" marker-end="url(#arrow-teal)"/>
+  <line x1="285.4" y1="410.0" x2="283.8" y2="377.1" stroke="#b86b11" stroke-width="2.4" marker-end="url(#arrow-amber)"/>
+  <text x="297.4" y="422.0" class="math" fill="#b8392b">m</text>
+  <line x1="56" y1="556" x2="84" y2="556" stroke="#147d75" stroke-width="2.4" marker-end="url(#arrow-teal)"/>
+  <text x="92" y="560" class="small"><tspan fill="#147d75" font-weight="600">Larmor precession:</tspan> −γ<tspan baseline-shift="sub" font-size="74%">0</tspan> m × H<tspan baseline-shift="sub" font-size="74%">Z</tspan></text>
+  <line x1="56" y1="580" x2="84" y2="580" stroke="#b86b11" stroke-width="2.4" marker-end="url(#arrow-amber)"/>
+  <text x="92" y="584" class="small"><tspan fill="#b86b11" font-weight="600">Damping:</tspan> −αγ<tspan baseline-shift="sub" font-size="74%">0</tspan> m × (m × H<tspan baseline-shift="sub" font-size="74%">Z</tspan>)</text>
+  <text x="56" y="606" class="small">Conservative torque vanishes at θ = 0, π</text>
+  <rect x="360" y="232" width="316" height="390" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="374" y="254" class="sec-head">Zeeman Energy Density w<tspan baseline-shift="sub" font-size="74%">Z</tspan>(θ)</text>
+  <text x="374" y="272" class="small">w<tspan baseline-shift="sub" font-size="74%">Z</tspan> / (M<tspan baseline-shift="sub" font-size="74%">s</tspan> B<tspan baseline-shift="sub" font-size="74%">ext</tspan>) = −cos θ (odd under B<tspan baseline-shift="sub" font-size="74%">ext</tspan> → −B<tspan baseline-shift="sub" font-size="74%">ext</tspan>)</text>
+  <rect x="420.0" y="304.0" width="236.0" height="194.0" fill="#fafbfd" stroke="#e5e9f0" stroke-width="1"/>
+  <line x1="420.0" y1="401.0" x2="656.0" y2="401.0" stroke="#3b4252" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="538.0" y1="304.0" x2="538.0" y2="498.0" stroke="#e5e9f0" stroke-width="1"/>
+  <line x1="420.0" y1="498.0" x2="656.0" y2="498.0" stroke="#3b4252" stroke-width="1.3"/>
+  <line x1="420.0" y1="304.0" x2="420.0" y2="498.0" stroke="#3b4252" stroke-width="1.3"/>
+  <text x="412.0" y="326.0" text-anchor="end" class="small">+1</text>
+  <text x="412.0" y="405.0" text-anchor="end" class="small">0</text>
+  <text x="412.0" y="484.0" text-anchor="end" class="small">−1</text>
+  <text x="374" y="294" class="math-sm">w<tspan baseline-shift="sub" font-size="74%">Z</tspan>/(M<tspan baseline-shift="sub" font-size="74%">s</tspan>B)</text>
+  <text x="420.0" y="514.0" text-anchor="middle" class="small">0</text>
+  <text x="538.0" y="514.0" text-anchor="middle" class="small">π/2</text>
+  <text x="656.0" y="514.0" text-anchor="middle" class="small">π</text>
+  <text x="538.0" y="531.0" text-anchor="middle" class="small">Angle θ between m and B<tspan baseline-shift="sub" font-size="74%">ext</tspan></text>
+  <polyline points="420.0,322.0 422.4,322.0 424.7,322.2 427.1,322.4 429.4,322.6 431.8,323.0 434.2,323.4 436.5,323.9 438.9,324.5 441.2,325.1 443.6,325.9 446.0,326.7 448.3,327.5 450.7,328.5 453.0,329.5 455.4,330.6 457.8,331.8 460.1,333.0 462.5,334.3 464.8,335.7 467.2,337.1 469.6,338.6 471.9,340.1 474.3,341.7 476.6,343.4 479.0,345.1 481.4,346.9 483.7,348.8 486.1,350.6 488.4,352.6 490.8,354.6 493.2,356.6 495.5,358.7 497.9,360.8 500.2,362.9 502.6,365.1 505.0,367.4 507.3,369.6 509.7,371.9 512.0,374.2 514.4,376.6 516.8,379.0 519.1,381.4 521.5,383.8 523.8,386.2 526.2,388.6 528.6,391.1 530.9,393.6 533.3,396.0 535.6,398.5 538.0,401.0 540.4,403.5 542.7,406.0 545.1,408.4 547.4,410.9 549.8,413.4 552.2,415.8 554.5,418.2 556.9,420.6 559.2,423.0 561.6,425.4 564.0,427.8 566.3,430.1 568.7,432.4 571.0,434.6 573.4,436.9 575.8,439.1 578.1,441.2 580.5,443.3 582.8,445.4 585.2,447.4 587.6,449.4 589.9,451.4 592.3,453.2 594.6,455.1 597.0,456.9 599.4,458.6 601.7,460.3 604.1,461.9 606.4,463.4 608.8,464.9 611.2,466.3 613.5,467.7 615.9,469.0 618.2,470.2 620.6,471.4 623.0,472.5 625.3,473.5 627.7,474.5 630.0,475.3 632.4,476.1 634.8,476.9 637.1,477.5 639.5,478.1 641.8,478.6 644.2,479.0 646.6,479.4 648.9,479.6 651.3,479.8 653.6,480.0 656.0,480.0" fill="none" stroke="#6e7b91" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <polyline points="420.0,480.0 422.4,480.0 424.7,479.8 427.1,479.6 429.4,479.4 431.8,479.0 434.2,478.6 436.5,478.1 438.9,477.5 441.2,476.9 443.6,476.1 446.0,475.3 448.3,474.5 450.7,473.5 453.0,472.5 455.4,471.4 457.8,470.2 460.1,469.0 462.5,467.7 464.8,466.3 467.2,464.9 469.6,463.4 471.9,461.9 474.3,460.3 476.6,458.6 479.0,456.9 481.4,455.1 483.7,453.2 486.1,451.4 488.4,449.4 490.8,447.4 493.2,445.4 495.5,443.3 497.9,441.2 500.2,439.1 502.6,436.9 505.0,434.6 507.3,432.4 509.7,430.1 512.0,427.8 514.4,425.4 516.8,423.0 519.1,420.6 521.5,418.2 523.8,415.8 526.2,413.4 528.6,410.9 530.9,408.4 533.3,406.0 535.6,403.5 538.0,401.0 540.4,398.5 542.7,396.0 545.1,393.6 547.4,391.1 549.8,388.6 552.2,386.2 554.5,383.8 556.9,381.4 559.2,379.0 561.6,376.6 564.0,374.2 566.3,371.9 568.7,369.6 571.0,367.4 573.4,365.1 575.8,362.9 578.1,360.8 580.5,358.7 582.8,356.6 585.2,354.6 587.6,352.6 589.9,350.6 592.3,348.8 594.6,346.9 597.0,345.1 599.4,343.4 601.7,341.7 604.1,340.1 606.4,338.6 608.8,337.1 611.2,335.7 613.5,334.3 615.9,333.0 618.2,331.8 620.6,330.6 623.0,329.5 625.3,328.5 627.7,327.5 630.0,326.7 632.4,325.9 634.8,325.1 637.1,324.5 639.5,323.9 641.8,323.4 644.2,323.0 646.6,322.6 648.9,322.4 651.3,322.2 653.6,322.0 656.0,322.0" fill="none" stroke="#1d5fa7" stroke-width="2.6"/>
+  <circle cx="420.0" cy="480.0" r="4.5" fill="#147d75"/>
+  <circle cx="538.0" cy="401.0" r="4.5" fill="#b86b11"/>
+  <circle cx="656.0" cy="322.0" r="4.5" fill="#b8392b"/>
+  <text x="430.0" y="379.0" class="small" fill="#6e7b91">−B<tspan baseline-shift="sub" font-size="74%">ext</tspan> (+cos θ)</text>
+  <text x="650.0" y="316.0" text-anchor="end" class="small-bold" fill="#b8392b">Antiparallel (+M<tspan baseline-shift="sub" font-size="74%">s</tspan>B)</text>
+  <text x="430.0" y="472.0" class="small-bold" fill="#147d75">Aligned min (−M<tspan baseline-shift="sub" font-size="74%">s</tspan>B)</text>
+  <text x="546.0" y="419.0" class="small" fill="#b86b11">Max torque (θ=π/2)</text>
+  <rect x="374" y="544" width="288" height="64" rx="6" fill="#e4f5f3" stroke="#147d75" stroke-width="1.2"/>
+  <text x="386" y="564" class="small-bold" fill="#147d75">Zero-Field &amp; Reversal Invariants</text>
+  <text x="386" y="582" class="small">• B<tspan baseline-shift="sub" font-size="74%">ext</tspan> = 0 is legal and gives E<tspan baseline-shift="sub" font-size="74%">Z</tspan> = 0, H<tspan baseline-shift="sub" font-size="74%">Z</tspan> = 0.</text>
+  <text x="386" y="598" class="small">• B<tspan baseline-shift="sub" font-size="74%">ext</tspan> → −B<tspan baseline-shift="sub" font-size="74%">ext</tspan> reverses H<tspan baseline-shift="sub" font-size="74%">Z</tspan> and E<tspan baseline-shift="sub" font-size="74%">Z</tspan> exactly.</text>
+  <rect x="708" y="82" width="626" height="556" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="720" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="734" y="107.5" text-anchor="middle" class="panel-badge">(b)</text>
+  <text x="756" y="108" class="panel-title">Fullmag Boundary: Uniform Zeeman vs Spatial Maps &amp; RF Drives</text>
+  <line x1="720" y1="121" x2="1322" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="724" y="134" width="594" height="108" rx="6" fill="#e7f0fa" stroke="#1d5fa7" stroke-width="1.2"/>
+  <text x="740" y="156" class="sec-head" fill="#1d5fa7">1. Uniform Prescribed Field: fm.Zeeman(B) / study.b_ext(...)</text>
+  <rect x="1134" y="141" width="170" height="22" rx="4" fill="#ffffff" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="1219" y="156" text-anchor="middle" class="small-bold" fill="#1d5fa7">FDM &amp; FEM · CPU &amp; GPU</text>
+  <text x="740" y="179" class="code">IR: {"kind": "zeeman", "B": [Bx, By, Bz]}  →  B / μ<tspan baseline-shift="sub" font-size="74%">0</tspan></text>
+  <text x="740" y="199" class="body">• Single spatially constant vector broadcast across active cells or magnetic nodes.</text>
+  <text x="740" y="218" class="body">• Observables: B<tspan baseline-shift="sub" font-size="74%">ext</tspan> [T], H<tspan baseline-shift="sub" font-size="74%">ext</tspan> [A m<tspan baseline-shift="super" font-size="74%">−1</tspan>], E<tspan baseline-shift="sub" font-size="74%">ext</tspan> [J]. FEM requires double precision.</text>
+  <text x="740" y="234" class="small">Declared at most once per problem; zero Maxwell or current-transport solve.</text>
+  <rect x="724" y="256" width="594" height="104" rx="6" fill="#f2ecfc" stroke="#6f3cc4" stroke-width="1.2"/>
+  <text x="740" y="278" class="sec-head" fill="#6f3cc4">2. Cell-Wise Static Map: fm.StaticFieldMap(id, field_B_T)</text>
+  <rect x="1134" y="263" width="170" height="22" rx="4" fill="#ffffff" stroke="#6f3cc4" stroke-width="0.9"/>
+  <text x="1219" y="278" text-anchor="middle" class="small-bold" fill="#6f3cc4">FDM CPU/GPU · No FEM</text>
+  <text x="740" y="301" class="code">IR: {"kind": "static_field_map", "id": ..., "field_B_T": [[...]]}</text>
+  <text x="740" y="321" class="body">• Arbitrary per-cell static B<tspan baseline-shift="sub" font-size="74%">ext</tspan>(x<tspan baseline-shift="sub" font-size="74%">i</tspan>) validated against realized FDM cell count.</text>
+  <text x="740" y="340" class="body">• Rejected fail-closed by FEM planner and mutually exclusive with FDM Oersted.</text>
+  <rect x="724" y="374" width="594" height="126" rx="6" fill="#e6f2f7" stroke="#246b8e" stroke-width="1.2"/>
+  <text x="740" y="396" class="sec-head" fill="#246b8e">3. Dynamic &amp; Antenna Drives (RF / Regional)</text>
+  <rect x="1134" y="381" width="170" height="22" rx="4" fill="#ffffff" stroke="#246b8e" stroke-width="0.9"/>
+  <text x="1219" y="396" text-anchor="middle" class="small-bold" fill="#246b8e">Stage-Timed Sources</text>
+  <text x="740" y="419" class="code">MicrostripAntenna | CPWAntenna | RegionalFieldDrive(waveform=...)</text>
+  <text x="740" y="439" class="body">• Spatial field profiles + explicit waveforms (Sinusoidal, Pulse, SincPulse, Piecewise).</text>
+  <text x="740" y="458" class="body">• Supports prescribed_zeeman_mask or 2.5D MQS solve (mqs_2p5d_az).</text>
+  <text x="740" y="477" class="body">• Evaluated at stage/RHS evaluation time t (never collapsed into constant Zeeman).</text>
+  <rect x="724" y="514" width="594" height="108" rx="6" fill="#fdf3e4" stroke="#b86b11" stroke-width="1.2" stroke-dasharray="5 3"/>
+  <text x="740" y="536" class="sec-head" fill="#b86b11">Validation Boundary, Provenance, and Fail-Closed Rules</text>
+  <text x="740" y="558" class="body">• Requested intent preserves authored B [T] vs resolved H<tspan baseline-shift="sub" font-size="74%">ext</tspan> [A m<tspan baseline-shift="super" font-size="74%">−1</tspan>], device &amp; precision.</text>
+  <text x="740" y="577" class="body">• Constructor audit note: Zeeman uses as_vector3 (length 3, float cast);</text>
+  <text x="752" y="594" class="body">non-finite NaN/Inf is rejected at ProblemIR/planner validation.</text>
+  <text x="740" y="612" class="body">• Strict GPU mode never falls back silently to CPU if device execution is unavailable.</text>
+  <text x="28" y="662" class="small">Fullmag SI Zeeman contract: H_Z = B_ext / μ₀; conservative variational field H = −(μ₀ M_s)⁻¹ δE/δm.</text>
+</svg>
