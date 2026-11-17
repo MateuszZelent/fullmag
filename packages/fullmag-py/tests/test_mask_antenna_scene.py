@@ -264,6 +264,24 @@ class MaskAntennaSceneTests(unittest.TestCase):
             """
         ))
 
+    def test_antenna_added_again_with_new_parameters_after_remove_survives_export(self) -> None:
+        # Add(a) -> Remove(a.id) -> Add(a.with_parameters(...)): two definitions of id "a",
+        # never active at the same time.
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.add_field_drive(a.with_parameters(mask_parameters={"B": 5e-3}), stage_id="on_again")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.update_field_drive("a", time_parameters={"f0": 2e9}, stage_id="u")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ))
+
     def test_functions_with_equal_bodies_keep_their_names(self) -> None:
         script = WHOLE_STUDY_HEADER + textwrap.dedent(
             """

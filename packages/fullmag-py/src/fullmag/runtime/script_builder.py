@@ -2452,6 +2452,8 @@ def _render_scene_stage_bootstrap(
         drive_id = _text_value(stage.get("drive_id"))
         if not drive_id:
             raise ValueError(f"SceneDocument stages[{index}] remove_field_drive requires drive_id")
+        if mask_renderer is not None:
+            mask_renderer.remove(drive_id)
         stage_id_arg_text = (
             f", stage_id={_python_literal(stage_id)}" if stage_id is not None else ""
         )
@@ -6646,6 +6648,68 @@ def _render_mask_activation_expr(value: object) -> str:
     raise ValueError(f"unsupported mask antenna activation {activation!r}")
 
 
+def _mask_parameter_updates(
+    before: Mapping[str, object], after: Mapping[str, object]
+) -> list[str] | None:
+    """``.with_parameters(...)`` calls turning antenna ``before`` into ``after``.
+
+    ``None`` when the two differ in anything but parameter values (the
+    ready-antenna ``origin`` is dropped by ``with_parameters`` and ignored).
+    """
+
+    def values(function: object) -> dict[str, float]:
+        if not isinstance(function, Mapping):
+            return {}
+        return {
+            str(item["name"]): float(item["value"])
+            for item in function.get("parameters") or []
+            if isinstance(item, Mapping)
+        }
+
+    def skeleton(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                key: (
+                    [{"name": item.get("name")} if isinstance(item, Mapping) else item for item in item_value]
+                    if key == "parameters" and isinstance(item_value, list)
+                    else skeleton(item_value)
+                )
+                for key, item_value in value.items()
+                if key not in {"origin", "source"}
+            }
+        if isinstance(value, list):
+            return [skeleton(item) for item in value]
+        return value
+
+    if skeleton(before) != skeleton(after):
+        return None
+    if after.get("origin") not in (None, before.get("origin")):
+        return None
+    calls: list[str] = []
+    old_terms = list(before.get("terms") or [])
+    new_terms = list(after.get("terms") or [])
+    for index, (old, new) in enumerate(zip(old_terms, new_terms)):
+        parts = []
+        for part, argument in (("mask", "mask_parameters"), ("time", "time_parameters")):
+            old_function, new_function = old.get(part), new.get(part)
+            if part == "mask":
+                old_function = (old_function or {}).get("function")
+                new_function = (new_function or {}).get("function")
+            changed = {
+                name: value
+                for name, value in values(new_function).items()
+                if values(old_function).get(name) != value
+            }
+            if changed:
+                rendered = ", ".join(
+                    f"{_py_repr(name)}: {_py_float_roundtrip(value)}" for name, value in changed.items()
+                )
+                parts.append(f"{argument}={{{rendered}}}")
+        if parts:
+            calls.append(f".with_parameters(term={index}, {', '.join(parts)})")
+    return calls
+
+
 class _MaskAntennaRenderer:
     """Renders the mask antennas of one script; functions and variables are shared."""
 
@@ -6660,6 +6724,8 @@ class _MaskAntennaRenderer:
         self._taken |= {name.rsplit(".", 1)[-1] for name in READY_ANTENNAS}
         self._defs: dict[tuple[str, str], str] = {}
         self._antennas: dict[str, tuple[str, str]] = {}
+        # Ids removed by a stage: their next Add may carry a new definition.
+        self._removed: set[str] = set()
         self._source_root = source_root
         self._loop_names: tuple[str, str, str] | None = None
 
@@ -6667,18 +6733,40 @@ class _MaskAntennaRenderer:
         known = self._antennas.get(drive_id)
         return None if known is None else known[0]
 
+    def remove(self, drive_id: str) -> None:
+        """A stage removed the antenna ``drive_id``."""
+        if drive_id in self._antennas:
+            self._removed.add(drive_id)
+
     def define(self, payload: Mapping[str, object]) -> tuple[str, list[str]]:
-        """The antenna's variable and the lines that create it (none when already created)."""
+        """The antenna's variable and the lines that create it (none when already created).
+
+        An id removed by a stage may be added again with another definition
+        (``Add(a) -> Remove(a.id) -> Add(a.with_parameters(...))``); it then gets
+        a new variable, which later Update stages use.
+        """
         drive_id = str(payload["id"])
         key = json.dumps(payload, sort_keys=True)
         known = self._antennas.get(drive_id)
+        removed = drive_id in self._removed
+        self._removed.discard(drive_id)
         if known is not None:
-            if known[1] != key:
+            if known[1] == key:
+                return known[0], []
+            calls = (
+                _mask_parameter_updates(json.loads(known[1]), payload) if removed else None
+            )
+            if calls is None:
                 raise ValueError(
                     f"mask antenna {drive_id!r} is added with two different definitions; "
-                    "give the changed antenna its own id"
+                    "give the changed antenna its own id, or change only parameter values "
+                    "after removing it"
                 )
-            return known[0], []
+            # The same antenna with new parameter values: a frozen copy, as
+            # ``antenna.with_parameters(...)`` in the original script.
+            variable = _unique_identifier(drive_id, self._taken)
+            self._antennas[drive_id] = (variable, key)
+            return variable, [f"{variable} = {known[0]}{''.join(calls)}"]
         variable = _unique_identifier(drive_id, self._taken)
         self._antennas[drive_id] = (variable, key)
         def_lines: list[str] = []
@@ -9284,6 +9372,7 @@ def _render_stages(
                 drive_id = _text_value(stage.action.get("drive_id"))
                 if not drive_id:
                     raise ValueError("remove_field_drive action requires drive_id")
+                mask_renderer.remove(drive_id)
                 call_parts = [_py_repr(drive_id)]
                 if stage.stage_id is not None:
                     call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
