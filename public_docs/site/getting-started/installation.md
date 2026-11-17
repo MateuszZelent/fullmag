@@ -165,18 +165,6 @@ tracked stage-first smoke scripts through your DEV group, or by connecting a liv
 `fm.connect()` and running the {ref}`first FDM simulation <public-docs-getting-started-first-fdm-simulation>`
 or {ref}`first FEM simulation <public-docs-getting-started-first-fem-simulation>` tutorials.
 
-## Control Room crosswalk
-
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
-
 ## Source-code index
 
 - `packages/fullmag-py/pyproject.toml` — `[project]`, `[project.optional-dependencies]`: Python

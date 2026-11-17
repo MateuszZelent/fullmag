@@ -128,7 +128,7 @@ preconditioner, tolerances, mesh identity, field recovery, and energy reduction.
 (demag-math-realization-matrix)=
 ## Realization hierarchy
 
-See {ref}`fig-demag-solver-families-comparison` on {doc}`index` for a visual comparison of Fullmag's four discrete operator families solving this continuum magnetostatic system.
+See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for a visual comparison of Fullmag's four discrete operator families solving this continuum magnetostatic system.
 
 ### FDM CPU and GPU: discrete Green operator
 
@@ -193,6 +193,10 @@ weak form. Both must reproduce the same sign convention and energy derivative.
 Newell tensor construction is in `compute_newell_kernels`; FEM source assembly is in
 `assemble_demag_poisson_rhs`; energy reduction is in `demag_poisson_energy_from_field`.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control are configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-math-validation)=
 ## Validation
 
@@ -217,10 +221,6 @@ precision, periodicity, or airbox policy.
    preprint: [arXiv:1305.3162](https://arxiv.org/abs/1305.3162).
 3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963.
    [WorldCat record](https://search.worldcat.org/title/536451).
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability.
 
 (demag-math-source-code-index)=
 ## Source-code index

@@ -203,22 +203,12 @@ method/device label.
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Routing and Python interoperability
 
 - **Navigation**: `InstanceTabStrip` (`/home`, `/session/<slug>`, `?port=`, `/instance/<port>`), `AppMenuBar`, and `CommandPaletteModule` (`Ctrl+Shift+P`).
 - **Command authoring**: `RibbonModule` renders verified commands from `ribbonContributions.tsx` / `ribbonTabViews.tsx` after `stripRibbonPlaceholders`.
 - **Selection routing**: `ExplorerModule` (`Model`, `Resources`, `Results`, `Jobs`, `Diagnostics`) drives `Selection` into `InspectorRegistry`, while `FooterModule` and `StatusBarModule` remain observational and diagnostic docks.
-
-## Python/API crosswalk
-
-- Every Ribbon geometry, material, physics, mesh, and stage action commits via OpenAPI v2 session endpoints mirrored in `packages/fullmag-py`.
-- `File -> Save canonical copy as…` exports an equivalent script, whereas `automation` tab two-way script diffing remains hidden (`TODO: frontend support`, gated by `preview: true`).
-
-## Physics and bibliography scope
-
-This page covers shell navigation, command routing, and resource indexing only; numerical algorithms and micromagnetic equations are documented under the physics and numerical-methods guides.
+- **OpenAPI v2 & Python alignment**: Every Ribbon geometry, material, physics, mesh, and stage action commits via OpenAPI v2 session endpoints mirrored in `packages/fullmag-py`. `File -> Save canonical copy as…` exports an equivalent script, whereas two-way script diffing in the hidden `automation` tab remains `Python-only` (gated behind `preview: true`).
 
 ## Source-code index
 

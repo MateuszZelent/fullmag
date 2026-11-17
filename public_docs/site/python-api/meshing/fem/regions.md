@@ -16,32 +16,22 @@ Region policy participates in the same shared-domain mesh; it does not create an
 overlapping submesh. Conflicts are resolved by explicit priority/conflict policy and recorded in the
 realization report.
 
-(python-api-meshing-fem-regions-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-regions-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-regions-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-regions-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-regions-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-regions-problem-statement)=
 ## 1. What it is and when to use it
 
 An object-owned region mesh policy refines a named region inside the shared
 FEM domain. Use it for local size/order/transition control; it does not create
 an independent solver mesh.
 
+(python-api-meshing-fem-regions-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 The region policy selects a local finite-element resolution. It has no own
@@ -77,11 +67,12 @@ study.stages.add_relax(
 )
 ```
 
+(python-api-meshing-fem-regions-python-api)=
 ## 4. Exact API
 
 | Parameter/function | Type | Default | SI unit | Validation | Meaning |
 |---|---|---|---|---|---|
-| `ObjectRegion.mesh` | `mesh(*, maximum_element_size=None, minimum_element_size=None, transition_distance=None, order=None)` | inherited | mixed | hmin <= hmax; positive sizes; supported order | local mesh policy |
+| `ObjectRegion.mesh` | `mesh(*, maximum_element_size=None, minimum_element_size=None, transition_distance=None, order=None)` | inherited | mixed | `hmin <= hmax`; positive sizes; supported order | local mesh policy |
 | `maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | strictly positive | upper local target |
 | `minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | strictly positive | lower local target |
 | `transition_distance` | `float \| None` | `None` | $\mathrm{m}$ | non-negative | blend distance |
@@ -92,17 +83,14 @@ invalid positive-value constraints. The policy is serialized into the owning
 object's region mesh specification.
 
 (python-api-meshing-fem-regions-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-regions-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-regions-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -125,21 +113,20 @@ structured-cell membership inspector). See {doc}`/frontend/meshing/region-mesh` 
 :width: 92%
 ```
 
+(python-api-meshing-fem-regions-implementation-mapping)=
 ## 6. Backend and frontend support
 
 | Lane | Status | Notes |
 |---|---|---|
 | FEM CPU/GPU | partial/planner-gated | Region policy is shared-domain input. |
 | FDM CPU/GPU | not applicable | FDM regions are structured-cell membership. |
-| Control Room | partial | Typed region fields are exposed; advanced conflict policies remain not implemented. |
+| Control Room | partial | Typed region fields are exposed; advanced conflict policies remain Python-only. |
 
 (python-api-meshing-fem-regions-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-regions-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - A region policy cannot create an overlapping independent submesh.
@@ -147,7 +134,6 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 - Final conformity and values belong to the build report.
 
 (python-api-meshing-fem-regions-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
@@ -155,24 +141,12 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
    mesh generator,” *International Journal for Numerical Methods in Engineering*
    **79**, 1309-1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
-(python-api-meshing-fem-regions-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-regions-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Repository path | Stable symbol | Evidence |
 |---|---|---|---|
+| region markers and typed mesh realization | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | mesh realization and API tests |
 | region mesh signature and validation | `packages/fullmag-py/src/fullmag/model/structure.py` | `ObjectRegion.mesh` | source implementation |
 | region policy resolution | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | region mesh policy builder | shared-domain lowering |
 | region UI | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | frontend component |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Region markers and typed mesh realization. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | [`class MeshData`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L1357) | Region markers and typed mesh realization. | Source-map validator and focused API tests |

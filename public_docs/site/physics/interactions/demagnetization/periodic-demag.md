@@ -195,6 +195,10 @@ not reproducible even when the final energy is finite.
 `FdmPbc` owns Python validation. FDM periodic spectra are computed separately from open spectra;
 FEM periodic reduction is implemented by `solve_demag_periodic_poisson_reduced`.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes periodic demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-periodic-validation)=
 ## Validation
 
@@ -219,10 +223,6 @@ must be reported independently of historical artifact validation.
 2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for
    nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555
    (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability.
 
 (demag-periodic-source-code-index)=
 ## Source-code index

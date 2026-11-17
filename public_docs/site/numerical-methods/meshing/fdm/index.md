@@ -14,8 +14,6 @@ source_of_truth: "FDM execution plan, structured grid descriptors, mask resource
 (public-docs-numerical-methods-meshing-fdm-index)=
 # Finite-difference meshing
 
-**Last changes: 12:31 24.08.2026**
-
 Fullmag FDM meshing is owned by the Study execution plan and produces a structured lattice plus canonical magnetic-support masks and region metadata.
 
 ::::{admonition} Implementation status
@@ -217,7 +215,3 @@ boundary-correction
 multi-magnet-grids
 periodic-grids
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

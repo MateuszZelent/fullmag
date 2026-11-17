@@ -77,22 +77,12 @@ publication-quality rendering alongside strict quantitative safeguards:
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Controls, boundaries, and state synchronization
 
 - **Primary module**: `Viewport3DModule` and `Viewport3DCanvas` (`apps/control-room/src/modules/viewport-3d/`).
 - **Controls**: Ribbon **View** / **Results** / **Analysis** tabs, `Viewport3DAppearanceHud` (**View settings**), `Viewport3DSettingsDialog`, `Viewport3DCameraDialog`, and `ObjectVisualizationPanel`.
 - **Rendering boundary**: A rendered surface never guarantees element quality or mesh validity; inspect `MeshQualityStatisticsView` and backend validation diagnostics before claiming solver readiness.
-
-## Python/API crosswalk
-
-- The 3D viewport consumes published scene, mesh, and field resources and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect` scripts.
-- Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
-
-## Physics and bibliography scope
-
-This page covers WebGL scene composition, instanced glyph shading, HDRI studio lighting, and RGBA16F capture unpremultiplication; physical field equations are defined in the physics guides.
+- **Session synchronization**: The 3D viewport consumes published scene, mesh, and field resources and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect()` scripts. Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
 
 ## Source-code index
 

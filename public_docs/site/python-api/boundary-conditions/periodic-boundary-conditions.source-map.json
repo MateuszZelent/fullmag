@@ -142,7 +142,7 @@
         "python": "pair_ids",
         "type": "Sequence[str]",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty sequence; IDs non-empty",
         "meaning": "paired boundary identifiers",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",

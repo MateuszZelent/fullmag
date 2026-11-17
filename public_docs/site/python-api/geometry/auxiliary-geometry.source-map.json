@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-waveguide_geometry",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_waveguide_geometry"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_waveguide_geometry",
@@ -63,7 +46,7 @@
         "python": "length/width/height/period",
         "type": "float",
         "default": "required",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive",
         "meaning": "waveguide dimensions and period",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
@@ -73,7 +56,7 @@
         "python": "amplitude",
         "type": "float",
         "default": "required",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
         "meaning": "sinusoidal amplitude",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
@@ -83,7 +66,7 @@
         "python": "phase",
         "type": "float",
         "default": "0.0",
-        "si_unit": "rad",
+        "si_unit": "$\\mathrm{rad}$",
         "validation": "finite",
         "meaning": "phase offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -93,7 +76,7 @@
         "python": "z0",
         "type": "float",
         "default": "0.0",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "finite",
         "meaning": "vertical offset",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -103,8 +86,8 @@
         "python": "arch_height",
         "type": "float",
         "default": "required",
-        "si_unit": "m",
-        "validation": "finite for ArchWaveguide",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite for `ArchWaveguide`",
         "meaning": "arch height",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
         "problem_ir": "arch_height"
@@ -113,7 +96,7 @@
         "python": "name",
         "type": "str",
         "default": "sin_waveguide/arch_waveguide",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "stable name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

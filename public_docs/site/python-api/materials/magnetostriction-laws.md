@@ -16,48 +16,38 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 Family-specific parameters are required explicitly; cubic and isotropic laws are not inferred.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates explicit family-specific magnetostriction parameters (`B1`/`B2` for `"cubic"` or `lambda_s` for `"isotropic"`) in Python, while `to_ir()` emits the canonical `ProblemIR` law record.
 
 (python-api-materials-magnetostriction-laws-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-magnetostriction_law
-
-q_{\mathrm{IR}} = \mathrm{magnetostriction_law}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object magnetostriction_law. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+Magnetostriction laws specify the strain-magnetization coupling density $w_{\mathrm{mel}}(\mathbf{m}, \boldsymbol{\varepsilon})$ either in cubic crystal symmetry ($w_{\mathrm{mel}} = B_1\sum_i \varepsilon_{ii} m_i^2 + B_2\sum_{i\neq j}\varepsilon_{ij} m_i m_j$) or isotropic saturation form parameterized by $\lambda_s$. Continuum equations and bounded FEM regimes are documented in {doc}`../../physics/interactions/magnetoelastic/index`.
 
 (python-api-materials-magnetostriction-laws-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+Cubic magnetoelastic coupling coefficients (`B1`, `B2`) use pascals ($\mathrm{Pa}$). The law `name`, `kind`, and isotropic saturation magnetostriction strain `lambda_s` are dimensionless ($1$).
 
 (python-api-materials-magnetostriction-laws-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`name` must be non-empty, `kind` must be `"cubic"` or `"isotropic"`, `"cubic"` requires both `B1` and `B2`, and `"isotropic"` requires `lambda_s`; missing family parameters fail closed at construction, and finiteness is enforced at lowering/planning.
 
 (python-api-materials-magnetostriction-laws-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.MagnetostrictionLaw(name, kind="cubic", B1=None, B2=None, lambda_s=None)
+`fm.MagnetostrictionLaw(name, kind="cubic", B1=None, B2=None, lambda_s=None)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `name` | `str` | `required` | `1` | non-empty | law identifier | FEM CPU/GPU: IR; FDM not currently resolved | `name` |
-| `kind` | `str` | `cubic` | `1` | cubic or isotropic | law family | FEM CPU/GPU: IR; FDM not currently resolved | `kind` |
-| `B1/B2` | `float or None` | `None` | `Pa` | both required for cubic; finite | cubic coefficients | FEM CPU/GPU: IR; FDM not currently resolved | `B1/B2` |
-| `lambda_s` | `float or None` | `None` | `1` | required for isotropic; finite | saturation magnetostriction | FEM CPU/GPU: IR; FDM not currently resolved | `lambda_s` |
+| `name` | `str` | `required` | $1$ | non-empty | law identifier | FEM CPU/GPU: IR; FDM not currently resolved | `name` |
+| `kind` | `str` | `cubic` | $1$ | cubic or isotropic | law family | FEM CPU/GPU: IR; FDM not currently resolved | `kind` |
+| `B1/B2` | `float or None` | `None` | $\mathrm{Pa}$ | both required for cubic; finite | cubic coefficients | FEM CPU/GPU: IR; FDM not currently resolved | `B1/B2` |
+| `lambda_s` | `float or None` | `None` | $1$ | required for isotropic; finite | saturation magnetostriction | FEM CPU/GPU: IR; FDM not currently resolved | `lambda_s` |
 
 ### Stage-first example
 
@@ -78,52 +68,48 @@ value = fm.MagnetostrictionLaw(name="cubic-law", kind="cubic", B1=-1.0e6, B2=2.0
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, reference the authored `MagnetostrictionLaw` by name from `fm.Magnetoelastic(magnet, body, law)`.
 
 (python-api-materials-magnetostriction-laws-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed magnetostriction_law record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits `{"kind": "cubic", "name": ..., "b1": ..., "b2": ...}` for cubic laws or `{"kind": "isotropic", "name": ..., "lambda_s": ...}` for isotropic laws.
 
 (python-api-materials-magnetostriction-laws-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves law family and explicit coupling coefficients in `ProblemIR` independently of `resolved execution`. `Validation errors` reject unknown `kind` names, non-finite values, or omitted required family coefficients, while `unsupported combinations` fail closed at planning.
 
 (python-api-materials-magnetostriction-laws-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies constitutive law coefficients in `ProblemIR` only; evaluating strain-coupled effective fields and energies on FEM or FDM discretizations belongs to the solver backends.
 
 (python-api-materials-magnetostriction-laws-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/mechanics.py symbol class MagnetostrictionLaw. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/mechanics.py` (`class MagnetostrictionLaw`). Constructor checks, defaults, and lower-case `to_ir()` keys come directly from that module.
 
 (python-api-materials-magnetostriction-laws-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_magnetostriction_law_requires_family_parameters. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering `MagnetostrictionLaw` family validation and IR lowering include `test_magnetostriction_law_requires_family_parameters`. Live solver runtime and Control Room behavior require separate qualification.
 
 (python-api-materials-magnetostriction-laws-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Control Room has no dedicated form editor for `fm.MagnetostrictionLaw`; author magnetostriction laws in Python scripts. See {doc}`/frontend/capability-register`.
 
 (python-api-materials-magnetostriction-laws-scientific-bibliography)=
 ## Scientific bibliography
 
-- L. D. Landau and E. M. Lifshitz, Theory of Elasticity, 3rd ed., DOI: https://doi.org/10.1016/C2013-0-03754-0
+- L. D. Landau and E. M. Lifshitz, *Theory of Elasticity*, 3rd ed., Pergamon / Elsevier, [doi:10.1016/C2013-0-03754-0](https://doi.org/10.1016/C2013-0-03754-0).
+- C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949), [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+- F. Vanderveken, J. Mulkers, J. Leliaert, B. Van Waeyenberge, B. Sorée, O. Zografos, F. Ciubotaru, and C. Adelmann, “Finite difference magnetoelastic simulator,” *Open Research Europe* **1**, 35 (2021), [doi:10.12688/openreseurope.13302.1](https://doi.org/10.12688/openreseurope.13302.1).
 
 (python-api-materials-magnetostriction-laws-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/mechanics.py | class MagnetostrictionLaw | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/mechanics.py::class MagnetostrictionLaw
-- Source-map: materials/magnetostriction-laws.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/mechanics.py` | `class MagnetostrictionLaw` | public constructor and IR lowering |

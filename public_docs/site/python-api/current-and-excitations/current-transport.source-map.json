@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-current_transport",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_current_transport"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_current_transport",
@@ -63,7 +46,7 @@
         "python": "name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "module identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,8 +56,8 @@
         "python": "model",
         "type": "str",
         "default": "prescribed_density",
-        "si_unit": "1",
-        "validation": "prescribed_density, ohmic_poisson, or magnetoresistive_poisson",
+        "si_unit": "$1$",
+        "validation": "`prescribed_density`, `ohmic_poisson`, or `magnetoresistive_poisson`",
         "meaning": "transport equation family",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "model"
@@ -83,7 +66,7 @@
         "python": "current_density",
         "type": "tuple[float,float,float] or None",
         "default": "None",
-        "si_unit": "A/m^2",
+        "si_unit": "$\\mathrm{A\\,m^{-2}}$",
         "validation": "required by prescribed; forbidden by ohmic",
         "meaning": "prescribed density",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
@@ -93,7 +76,7 @@
         "python": "solve_region",
         "type": "str or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty when supplied",
         "meaning": "solution region",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
@@ -103,7 +86,7 @@
         "python": "conductivity_s_per_m",
         "type": "float or field",
         "default": "None",
-        "si_unit": "S/m",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$",
         "validation": "positive when supplied",
         "meaning": "conductivity",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
@@ -113,8 +96,8 @@
         "python": "coupling",
         "type": "str",
         "default": "one_way",
-        "si_unit": "1",
-        "validation": "one_way or bidirectional; bidirectional requires ohmic",
+        "si_unit": "$1$",
+        "validation": "`one_way` or `bidirectional`; bidirectional requires ohmic",
         "meaning": "coupling direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "coupling"
@@ -123,8 +106,8 @@
         "python": "domain/materials/boundaries/gauge/solver",
         "type": "typed values",
         "default": "empty/None",
-        "si_unit": "various",
-        "validation": "complete for ohmic_poisson",
+        "si_unit": "$\\mathrm{S\\,m^{-1}}$, $\\mathrm{A\\,m^{-2}}$, or $1$",
+        "validation": "complete for `ohmic_poisson`",
         "meaning": "Poisson charge contract",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
         "problem_ir": "transport"

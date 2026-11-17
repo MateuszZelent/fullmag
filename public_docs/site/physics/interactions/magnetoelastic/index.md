@@ -16,8 +16,9 @@ displacement, elastic equilibrium, or elastodynamics.
 (physics-magnetoelastic-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored
-semantics, planner resolution, executable backend lanes, and scientific qualification.
+Cubic magnetoelasticity couples magnetization $\mathbf{m}$ to local mechanical strain
+$\boldsymbol{\varepsilon}^{\mathrm{eng}}$ through coefficients $B_1$ and $B_2$. In the current
+prescribed-strain realization, strain is an input field rather than a coupled elastodynamic unknown.
 
 ```{figure} /_static/diagrams/magnetoelastic-voigt-strain-coupling.svg
 :alt: Two-panel diagram of magnetoelastic coupling in Fullmag: Panel (a) maps the symmetric 3x3 strain tensor to the 6-component engineering-Voigt vector (epsilon_11, epsilon_22, epsilon_33, gamma_23, gamma_13, gamma_12), highlighting the factor of 2 in engineering shear gamma_ij = 2 epsilon_ij and the resulting B_1/B_2 energy density and field; Panel (b) maps the Fullmag mechanics object graph and separates the executable FEM prescribed-strain subset from fail-closed FDM and coupled-mechanics roadmaps.
@@ -139,27 +140,21 @@ coupling = fm.Magnetoelastic(magnet="film", body=substrate.name, law=law.name)
 study.stages.add_run(stage_id="authoring_boundary", until=1.0e-15)
 ```
 
-At the audited revision, the stage-first builder does not expose complete registration methods
-for `ElasticBody`, `MagnetostrictionLaw`, `MechanicalLoad`, and `Magnetoelastic`. Therefore the
-block above documents the **IR-only authoring boundary**, not a runnable coupled simulation. Do
-not surround disconnected objects with a normal run stage and call it a magnetoelastic example;
-publish a complete stage example only after the mechanics graph can be attached and lowered end
-to end. For exact constructor arguments on `fm.Magnetoelastic`, see
+The stage-first builder currently does not expose direct stage-registration methods for
+`ElasticBody`, `MagnetostrictionLaw`, `MechanicalLoad`, and `Magnetoelastic`; the block above
+therefore illustrates the standalone object-construction and `ProblemIR` authoring boundary rather
+than an end-to-end coupled stage run. For exact constructor arguments on `fm.Magnetoelastic`, see
 {doc}`/python-api/interactions/magnetoelastic`.
 
 (physics-magnetoelastic-validation)=
-## Validation boundary and required code corrections
+## Validation boundary
 
-Current API checks are incomplete:
-
-- `MagnetostrictionLaw.B1`, `B2`, and `lambda_s` are not explicitly finite-validated.
-- `MechanicalLoad.strain` and `stress` check length but not all numeric/finite values.
-- `ElasticMaterial` currently requires positive $C_{12}$, which is unnecessarily restrictive,
-  while it does not enforce the actual cubic stability conditions
-  $C_{44}>0$, $C_{11}-C_{12}>0$, and $C_{11}+2C_{12}>0$.
-
-The documentation distinguishes the current API restriction from physical stability, and the
-implementation should adopt the stability conditions.
+- `MagnetostrictionLaw.B1`, `B2`, and `lambda_s` are validated for finiteness downstream at the
+  `ProblemIR`/planner boundary rather than at Python construction.
+- `MechanicalLoad.strain` and `stress` verify vector length at construction and check finite values
+  during IR/planner validation.
+- `ElasticMaterial` enforces positive $C_{12}$ at construction rather than the full cubic elastic
+  stability inequalities $C_{44}>0$, $C_{11}-C_{12}>0$, and $C_{11}+2C_{12}>0$.
 
 (physics-magnetoelastic-problem-ir)=
 ## ProblemIR semantics
@@ -210,16 +205,14 @@ Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/
 `study.rs`), `crates/fullmag-plan/src/fem.rs` (`resolve_fem_magnetoelastic_plan`) owns prescribed-strain
 legality, and native FEM CPU/CUDA kernels own Voigt shear halving, local $M_{s,i}$ scaling, and
 lumped-mass energy integration. Control Room support for magnetoelastic authoring is tracked in
-{doc}`/frontend/capability-register`; do not infer UI controls solely from backend or Python
-availability.
+{doc}`/frontend/capability-register`; parameters without a UI control are configured in Python.
 
 (physics-magnetoelastic-limitations)=
-## Limitations and roadmap
+## Limitations
 
-Quasistatic elasticity, elastodynamics, two-way magnetostriction, damping, acoustic radiation,
-and temperature-dependent elasticity are semantic API intentions, not currently executable
-features. Promote them only with a complete graph, time-integration policy, conservation/dissipation
-tests, and provenance.
+Quasistatic elasticity, elastodynamics, two-way magnetostriction, mechanical damping, acoustic
+radiation, and temperature-dependent elasticity are represented in schema vocabulary only and are
+not currently executable features.
 
 (physics-magnetoelastic-scientific-bibliography)=
 ## Scientific bibliography

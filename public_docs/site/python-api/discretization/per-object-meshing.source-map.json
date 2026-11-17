@@ -308,7 +308,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "auto, free_tetrahedral, thin_film_tetrahedral, swept_prism, or swept_hex.",
+        "validation": "`auto`, `free_tetrahedral`, `thin_film_tetrahedral`, `swept_prism`, or `swept_hex`.",
         "meaning": "Requested object topology strategy.",
         "backend_support": "FEM capability-gated",
         "problem_ir": "mesh_workflow.per_geometry.<object>.mesh_strategy"
@@ -328,7 +328,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "fixed, linear, or exponential.",
+        "validation": "`fixed`, `linear`, or `exponential`.",
         "meaning": "Layer-thickness distribution.",
         "backend_support": "FEM swept/thin-film",
         "problem_ir": "mesh_workflow.per_geometry.<object>.through_thickness_distribution"
@@ -358,7 +358,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "triangular or quadrilateral.",
+        "validation": "`triangular` or `quadrilateral`.",
         "meaning": "Source-face element family.",
         "backend_support": "FEM swept",
         "problem_ir": "mesh_workflow.per_geometry.<object>.sweep_face_meshing"
@@ -368,7 +368,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "tetrahedral or prismatic; tetrahedral contradicts swept intent.",
+        "validation": "`tetrahedral` or `prismatic`; tetrahedral contradicts swept intent.",
         "meaning": "Requested high-level topology.",
         "backend_support": "FEM capability-gated",
         "problem_ir": "mesh_workflow.per_geometry.<object>.topology"
@@ -378,7 +378,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "auto, x, y, or z.",
+        "validation": "`auto`, `x`, `y`, or `z`.",
         "meaning": "Sweep direction.",
         "backend_support": "FEM swept",
         "problem_ir": "mesh_workflow.per_geometry.<object>.sweep_direction"
@@ -388,7 +388,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "prism or hex with matching strategy/source faces.",
+        "validation": "`prism` or `hex` with matching strategy/source faces.",
         "meaning": "Swept volume element family.",
         "backend_support": "FEM capability-gated",
         "problem_ir": "mesh_workflow.per_geometry.<object>.element_family"
@@ -398,7 +398,7 @@
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
-        "validation": "pyramid_to_tetrahedra or reject.",
+        "validation": "`pyramid_to_tetrahedra` or `reject`.",
         "meaning": "Transition into surrounding topology.",
         "backend_support": "FEM capability-gated",
         "problem_ir": "mesh_workflow.per_geometry.<object>.transition_policy"
@@ -458,7 +458,7 @@
         "type": "str",
         "default": "required",
         "si_unit": "1",
-        "validation": "Representable values are free_tetrahedral, boundary_layers, refine, adapt, swept, or size_field; execution is unavailable.",
+        "validation": "Representable values are `free_tetrahedral`, `boundary_layers`, `refine`, `adapt`, `swept`, or `size_field`; execution is unavailable.",
         "meaning": "Authored operation family.",
         "backend_support": "Unavailable",
         "problem_ir": "mesh_workflow.per_geometry.<object>.operations[].kind"

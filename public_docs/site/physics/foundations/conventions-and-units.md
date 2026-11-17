@@ -14,7 +14,7 @@ source_of_truth: packages/fullmag-py/src/fullmag/model/dynamics.py and crates/fu
 # Conventions and units
 
 Fullmag's public authoring layer uses SI-valued quantities and lowers them into one typed
-`ProblemIR` (see {ref}`fig-fullmag-object-interaction-architecture` and
+`ProblemIR` (see {numref}`fig-fullmag-object-interaction-architecture` and
 {doc}`../conventions`). This page defines shared symbols and units; interaction-specific
 parameters and equations remain on their canonical interaction pages.
 
@@ -65,7 +65,7 @@ FEM quadrature, mass projection, precision, and memory placement are realization
 ## Python API
 
 This foundation owns no interaction constructor. The shared authoring entry point is
-fullmag.study; StudyBuilder.engine, StudyBuilder.device, StudyBuilder.mode, and the stage
+`fullmag.study`; `StudyBuilder.engine`, `StudyBuilder.device`, `StudyBuilder.mode`, and the stage
 builder configure requested execution.
 
 ```python
@@ -94,13 +94,13 @@ The example supplies a complete minimal geometry, material, mesh, and magnetizat
 
 | Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| fm.study(problem_name) | callable | None | $1$ | problem_name is None or a valid name accepted by study | creates the stage-first authoring builder | public authoring surface; runtime is lane-specific | problem_meta and captured study state |
+| `fm.study(problem_name)` | `callable` | `None` | $1$ | `problem_name` is `None` or a valid name accepted by `study` | creates the stage-first authoring builder | public authoring surface; runtime is lane-specific | `problem_meta` and captured study state |
 
 (foundation-conventions-problem-ir)=
 ## ProblemIR
 
-ProblemIR is the typed container in crates/fullmag-ir/src/lib.rs. Lowering preserves SI
-intent in materials, magnets, energy_terms, study, and backend_policy; the planner records
+`ProblemIR` is the typed container in `crates/fullmag-ir/src/lib.rs`. Lowering preserves SI
+intent in `materials`, `magnets`, `energy_terms`, `study`, and `backend_policy`; the planner records
 resolved execution and provenance. The complete serialized object is produced by repository
 lowering rather than a hand-written fixture.
 
@@ -125,15 +125,15 @@ closed; no backend silently changes units or interaction type.
 (foundation-conventions-implementation-mapping)=
 ## Implementation mapping
 
-fullmag.study owns stage-first authoring, LLG owns dynamics-unit validation, and ProblemIR
+`fullmag.study` owns stage-first authoring, `LLG` owns dynamics-unit validation, and `ProblemIR`
 owns the canonical typed container. Physical interaction claims are mapped on owner pages.
 
 (foundation-conventions-validation)=
 ## Validation
 
-The adjacent source map is checked against the current source tree by
-validate_scientific_docs.py. The Python example is parsed by the public-example guard. These
-checks establish provenance and parsing, not numerical equivalence or GPU parity.
+The stage-first Python example is verified against the repository authoring API for syntax and
+lowering structure. Authoring checks establish schema consistency and provenance, not numerical
+equivalence or GPU parity.
 
 (foundation-conventions-limitations)=
 ## Limitations
@@ -154,5 +154,5 @@ not own conversion policy for an individual interaction.
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|---|
 | LLG units and IR | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | validates gamma and serializes dynamics | all authoring lanes | source-backed |
-| [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | study | creates the public builder | all authoring lanes | source-backed |
+| [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | `study` | creates the public builder | all authoring lanes | source-backed |
 | canonical container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores normalized problem intent | all lanes | source-backed |

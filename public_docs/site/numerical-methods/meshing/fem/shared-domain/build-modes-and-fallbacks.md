@@ -47,19 +47,13 @@ The precedence relation is stated in the function docstring. It applies to the p
 
 ### Complete public signature and IR matrix
 
-The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+The following rows document the public signature and `ProblemIR` contract for this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| study.build_domain_mesh() | zero-argument method | n/a | $1$ | accepts no public arguments; capture marks the request without invoking Gmsh, ordinary execution reaches SDK-backed realization | shared-domain materialization request | FEM CPU/GPU capability-gated | runtime_metadata.mesh_workflow.default_mesh.build_requested |
-
-
+| `study.build_domain_mesh()` | `zero-argument method` | n/a | $1$ | accepts no public arguments; capture marks the request without invoking Gmsh, ordinary execution reaches SDK-backed realization | shared-domain materialization request | FEM CPU/GPU capability-gated | `runtime_metadata.mesh_workflow.default_mesh.build_requested` |
 
 `realize_fem_mesh_asset(...)` is internal. Public scripts request shared-domain materialization with zero-argument `StudyBuilder.build_domain_mesh()`, which sets `build_requested` before the SDK-backed realization boundary.
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `StudyBuilder.build_domain_mesh()` | no public arguments | n/a | $1$ | sets `build_requested`; capture stops before Gmsh and ordinary execution may require the Gmsh Python SDK | shared-domain build request | FEM CPU/GPU capability-gated | `runtime_metadata.mesh_workflow.default_mesh.build_requested` |
 
 ```python
 # %%
@@ -126,21 +120,19 @@ This function is not the universal build-mode planner and does not qualify a sur
 Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
 (build-modes-source-code-index)=
-## Contract source-code index
+## Source-code index
 
 | ID | Path | Symbol | Responsibility | Evidence |
 | --- | --- | --- | --- | --- |
-| fem_asset | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_mesh_asset | FEM asset realization and volume checks | source-inspected |
-| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
-| build_request | packages/fullmag-py/src/fullmag/world.py | class StudyBuilder | public `StudyBuilder.build_domain_mesh` request | source-inspected |
-| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
-| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR and geometry-asset serialization | source-inspected |
-| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain build-mode realization | source-inspected |
-| build_report | packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py | _build_shared_domain_build_report | requested/effective/fallback provenance | source-inspected |
-| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
-| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
-
-**Last changes: 12:31 24.08.2026**
+| fem_asset | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_mesh_asset` | FEM asset realization and volume checks | source-inspected |
+| public_study | `packages/fullmag-py/src/fullmag/world.py` | `study` | public study entry point | source-inspected |
+| build_request | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | public `StudyBuilder.build_domain_mesh` request | source-inspected |
+| problem_lowering | `packages/fullmag-py/src/fullmag/world.py` | `_build_problem` | builder-state lowering | source-inspected |
+| problem_ir | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | ProblemIR and geometry-asset serialization | source-inspected |
+| domain_realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_domain_mesh_asset_from_components_with_report` | shared-domain build-mode realization | source-inspected |
+| build_report | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | requested/effective/fallback provenance | source-inspected |
+| planner | `crates/fullmag-plan/src/lib.rs` | `plan` | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | `crates/fullmag-runner/src/lib.rs` | `run_planned_problem` | planned runtime dispatch | source-inspected, device-unverified |
 
 Build mode is part of numerical provenance. A production report distinguishes requested strategy, normalized plan, actual generator, fallback/degradation reason and realized topology.
 
@@ -346,7 +338,4 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
 

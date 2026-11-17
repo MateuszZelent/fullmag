@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0700-frequency-domain-linearized-llg.md
+source_of_truth: /physics/foundations/llg-equation, /physics/foundations/observables
 ---
 
 (public-docs-numerical-methods-frequency-domain-response-solver)=
@@ -75,7 +75,6 @@ is obtained, the three-component Cartesian perturbation is reconstructed via:
 \mathbf m_0(\mathbf x)\cdot\widehat{\mathbf m}(\mathbf x) = 0.
 ```
 
-(numerical-methods-frequency-response-si-observable-reference)=
 ### 2.2 Dynamic susceptibility and cycle-averaged absorbed power
 
 The physical magnetization response is $\widehat{\mathbf M}(\mathbf x) = M_s(\mathbf x)\widehat{\mathbf m}(\mathbf x)$
@@ -326,9 +325,6 @@ frequency grid, excitation vector/phase, operator flags, and `solver_policy`:
    $\varepsilon_{\mathrm{true}}(\omega_j) \le \mathrm{rtol}$ and writes the susceptibility and power
    spectra via `build_field_driven_response_sweep_artifact`.
 
-(numerical-methods-frequency-response-planner-struct-source)=
-(numerical-methods-frequency-response-planner-input-overload-source)=
-(numerical-methods-frequency-response-planner-capability-overload-source)=
 (response-solver-implementation-mapping)=
 (implementation-mapping)=
 ## 9. Implementation mapping
@@ -369,7 +365,7 @@ frequency grid, excitation vector/phase, operator flags, and `solver_policy`:
 
 1. D. Polder, “On the theory of ferromagnetic resonance,” *Philosophical Magazine*, 40, 99–115 (1949).
 2. A. G. Gurevich and G. A. Melkov, *Magnetization Oscillations and Waves*, CRC Press, 1996.
-3. FullMag physics contracts: `docs/physics/0700-frequency-domain-linearized-llg.md` and `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
+3. FullMag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/foundations/observables`.
 
 (response-solver-source-code-index)=
 ## 13. Source-code index
@@ -388,10 +384,8 @@ frequency grid, excitation vector/phase, operator flags, and `solver_policy`:
 | [`backends/fem/src/frequency_domain/operator_contract.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/operator_contract.cpp#L107) | [`validate_driven_frequency_response_request`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/operator_contract.cpp#L107) | Native operator and boundary legality checks. |
 | [`backends/fem/include/frequency_domain/driven_response_solver.hpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/include/frequency_domain/driven_response_solver.hpp#L177) | [`solve_driven_frequency_response`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/include/frequency_domain/driven_response_solver.hpp#L177) | Production driven-response ABI declaration. |
 | [`backends/fem/src/frequency_domain/driven_response_solver.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/driven_response_solver.cpp#L16901) | [`solve_driven_frequency_response`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/src/frequency_domain/driven_response_solver.cpp#L16901) | Production validation, lane dispatch, solve, residual, and artifact entry point. |
-| [`public_docs/site/numerical-methods/frequency-domain/response-solver.md`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L391) | [`DOC-ANCHOR:numerical-methods-frequency-response-si-observable-reference`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L391) | Literature-backed target definitions for full-SI susceptibility and magnetic work. |
-| [`public_docs/site/numerical-methods/frequency-domain/response-solver.md`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L392) | [`DOC-ANCHOR:numerical-methods-frequency-response-planner-struct-source`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L392) | Validated documentation identity for `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` (`struct FrequencySolvePlan`). |
-| [`public_docs/site/numerical-methods/frequency-domain/response-solver.md`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L393) | [`DOC-ANCHOR:numerical-methods-frequency-response-planner-input-overload-source`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L393) | Validated documentation identity for `plan_frequency_response(const FrequencySolvePlannerInput&)`. |
-| [`public_docs/site/numerical-methods/frequency-domain/response-solver.md`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L394) | [`DOC-ANCHOR:numerical-methods-frequency-response-planner-capability-overload-source`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/public_docs/site/numerical-methods/frequency-domain/response-solver.md#L394) | Validated documentation identity for `plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)`. |
+| [`crates/fullmag-plan/src/fem.rs`](https://github.com/MateuszZelent/fullmag/blob/master/crates/fullmag-plan/src/fem.rs#L6597) | [`plan_fem_frequency_response`](https://github.com/MateuszZelent/fullmag/blob/master/crates/fullmag-plan/src/fem.rs#L6597) | Resolves driven frequency-response lane, periodic constraint sets, and planner policy. |
+| [`backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp`](https://github.com/MateuszZelent/fullmag/blob/master/backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp#L96) | [`schur_certification_passes`](https://github.com/MateuszZelent/fullmag/blob/master/backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp#L96) | Checks Schur complement residual and breakdown gates in `FrequencySolvePlan`. |
 | [`crates/fullmag-runner/src/frequency_response.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/frequency_response.rs#L212) | [`frequency_response_solver_method_rejection_reason`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/frequency_response.rs#L212) | Current runtime availability boundary for explicit solver methods. |
 | [`crates/fullmag-runner/src/frequency_response.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/frequency_response.rs#L199) | [`resolved_frequency_response_solver_method_name`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/frequency_response.rs#L199) | Resolved runtime method identity. |
 | [`crates/fullmag-runner/src/eigen/response_block_real.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/response_block_real.rs#L226) | [`solve_block_real_harmonic_response`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-runner/src/eigen/response_block_real.rs#L226) | Dense block-real validation solve. |

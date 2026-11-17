@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-grading)=
 # Airbox Grading API
 
-(python-api-meshing-fem-airbox-grading-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-airbox-grading-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-airbox-grading-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-airbox-grading-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-airbox-grading-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-airbox-grading-problem-statement)=
 ## 1. What it is and when to use it
 
 `study.universe.mesh(...)` controls air sizing: element size bounds and how the
@@ -39,6 +28,7 @@ near objects (accurate near field) and coarse ones far away (low cost).
 Impact on the simulation: an overly aggressive growth rate degrades transition
 element quality; an overly gentle one inflates the element count.
 
+(python-api-meshing-fem-airbox-grading-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 Grading controls discretization of the stray field, whose strength decays with
@@ -100,6 +90,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-airbox-grading-python-api)=
 ## 4. Exact API
 
 `study.universe.mesh(**kwargs)`:
@@ -121,17 +112,14 @@ ProblemIR mapping: airbox hmin/hmax/growth/grading in mesh workflow metadata;
 realization in the build report.
 
 (python-api-meshing-fem-airbox-grading-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-airbox-grading-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-airbox-grading-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -149,6 +137,7 @@ The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) configure
 :width: 92%
 ```
 
+(python-api-meshing-fem-airbox-grading-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -158,12 +147,10 @@ The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) configure
 | FDM | CPU/GPU | not applicable | constant Cartesian step |
 
 (python-api-meshing-fem-airbox-grading-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-airbox-grading-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Growth rates well above $1.5$ usually degrade transition element quality; check
@@ -171,29 +158,16 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
 - Realized extrema may deviate from the request — the report is authoritative.
 
 (python-api-meshing-fem-airbox-grading-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. J. D. Jackson, *Classical Electrodynamics*, 3rd ed., Wiley, 1999.
 2. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
-(python-api-meshing-fem-airbox-grading-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-airbox-grading-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| Gmsh mesh sizing and grading options | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | [`class MeshOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | meshing and API tests |
 | air sizing and grading | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | validation and `_configure_study_universe` |
 | FDM/FEM mutual exclusion | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | `cell_size` vs FEM controls branch |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Gmsh mesh sizing and grading options. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | [`class MeshOptions`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py#L272) | Gmsh mesh sizing and grading options. | Source-map validator and focused API tests |

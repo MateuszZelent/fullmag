@@ -360,6 +360,10 @@ The boundary operator ownership is:
 4. the linear-solver module consumes the conditioned operator;
 5. recovery and energy modules consume only the solved potential/field.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes demagnetization boundary controls under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-boundary-validation)=
 ## 12. Validation and qualification
 
@@ -413,8 +417,4 @@ executed-device evidence.
 | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `upload_demag_poisson_operators` | Device CSR operator upload and boundary-policy transfer. | FEM GPU |
 | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FDM open/periodic convolution realization. | FDM CPU |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | FDM device convolution state; no FEM boundary matrix. | FDM GPU |
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability. Frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`.
 

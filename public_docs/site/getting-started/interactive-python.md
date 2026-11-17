@@ -75,6 +75,13 @@ Key connection parameters:
   conflicting edits between the UI and Python raise `StaleRevisionError` instead of silently
   overwriting changes.
 
+Live sessions created by `fm.connect()` appear in **Start Screen -> Active simulations** and
+synchronize in real time with **Model Explorer**, **3D Viewport**, **Inspector**, and **Live Charts**
+(see {doc}`/frontend/control-room/start-screen`, {doc}`/frontend/inspectors/studies-and-stages`, and
+{doc}`/frontend/capability-register`). Complete live transport signatures, event schemas, and error
+contracts (`LiveModeError`, `StaleRevisionError`, `UnsupportedCapabilityError`) are documented in
+{doc}`/python-api/runtime/live-session`.
+
 ## Transactions, synchronization, and script export
 
 Outside a transaction, each top-level DSL call (`fm.b_ext(...)`, material assignments, geometry
@@ -244,26 +251,6 @@ study.stages.add_run(
     until=1.0e-9,
 )
 ```
-
-## Control Room crosswalk
-
-Live sessions created by `fm.connect()` appear in **Start Screen -> Active simulations**, and
-opening them in the Control Room displays the shared model in **Model Explorer**, **3D Viewport**,
-**Inspector**, and **Live Charts**. See {doc}`/frontend/control-room/start-screen`,
-{doc}`/frontend/inspectors/studies-and-stages`, and {doc}`/frontend/capability-register` for exact
-panel coverage.
-
-## Python/API crosswalk
-
-Exact live transport signatures, event schemas, error hierarchy (`LiveModeError`,
-`StaleRevisionError`, `UnsupportedCapabilityError`), and HTTP/WebSocket protocol details are
-maintained in {doc}`/python-api/runtime/live-session`.
-
-## Physics, limitations, and bibliography
-
-Live transport adds no physical equations; governing physics, units, and discretization assumptions
-are inherited from the active FDM/FEM backend and {doc}`/python-api/studies/relaxation` /
-{doc}`/python-api/studies/time-evolution`.
 
 ## Source-code index
 

@@ -138,7 +138,7 @@ An artifact that omits any of these fields is not sufficient for a CPU/GPU quali
 
 FDM compares cell fields and volume-weighted energy. FEM compares recovered nodal/element fields,
 integrated energy, and residuals. CPU/GPU parity requires the same precision and tolerance.
-See {ref}`fig-demag-solver-families-comparison` on {doc}`index` for the operator distinctions
+See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for the operator distinctions
 between FDM convolution, FEM Poisson airbox, FEM–BEM Fredkin–Koehler, and periodic demagnetization.
 
 For FDM, the reference comparison must fix cell dimensions, padding, kernel convention, FFT
@@ -179,6 +179,10 @@ Contract tests include `batched_demag_fft_contract.cpp`, `cuda_demag_robin_energ
 and `cuda_periodic_demag_contract.cpp`; production qualification additionally needs managed runtime
 and executed-device evidence.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes demagnetization settings under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-validation-validation)=
 ## Validation matrix
 
@@ -216,10 +220,6 @@ as a production qualification claim without current evidence.
    Materials* **535**, 168057 (2021),
    [doi:10.1016/j.jmmm.2021.168057](https://doi.org/10.1016/j.jmmm.2021.168057), Open Access
    preprint: [arXiv:2107.05364](https://arxiv.org/abs/2107.05364).
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability.
 
 (demag-validation-source-code-index)=
 ## Source-code index
