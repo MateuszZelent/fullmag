@@ -143,9 +143,13 @@ def history(request, original):
         n["Status"] == "running" and n["Endpoint"]
         and isinstance(n["IDs"], list) and n["IDs"] and all(isinstance(x, str) and x for x in n["IDs"])
         for n in b["Nodes"]) for b in inventory), "History inspection requires complete running builders")
-    require(all(n["Version"] == "v0.32.2" for b in inventory for n in b["Nodes"]),
-            "History filter-before-limit semantics require the reviewed BuildKit v0.32.2")
-    # BuildKit v0.32.2 filters complete events before its limit. Keep running discovery unbounded in time.
+    # Reviewed upstream solver/llbsolver/history/filter.go is byte-identical in
+    # these releases (SHA-256 1804d02c5874d9c9c6596dbdd8b7c83c4597f34173c59e332846f86b1e8f8640).
+    # Queue.Listen in buildhistory.go also retains the separate active-events
+    # enumeration and applies filterHistoryEvents before emitting terminal rows.
+    require(all(n["Version"] in {"v0.32.2", "v0.34.2"} for b in inventory for n in b["Nodes"]),
+            "History filter-before-limit semantics require a reviewed BuildKit version")
+    # Keep running discovery unbounded in time, independently of the terminal filter.
     since = datetime.fromtimestamp(int(original["started_at"]) - 1, timezone.utc).isoformat().replace("+00:00", "Z")
     matches = {}
     seen_workers = set()

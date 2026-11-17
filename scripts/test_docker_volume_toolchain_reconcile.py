@@ -118,6 +118,21 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(subject, "docker_capture", self.history_fake()):
             self.assertEqual(subject.history(self.request, self.original), self.record)
 
+    def test_history_accepts_reviewed_buildkit_0342(self):
+        self.builder["Nodes"][0]["Version"] = "v0.34.2"
+        self.request["builders"] = [self.builder]
+        with patch.object(subject, "docker_capture", self.history_fake()):
+            self.assertEqual(subject.history(self.request, self.original), self.record)
+
+    def test_history_rejects_unreviewed_buildkit_versions(self):
+        for version in ("v0.34.1", "v0.34.3", "v0.35.0", "", None):
+            with self.subTest(version=version):
+                self.builder["Nodes"][0]["Version"] = version
+                self.request["builders"] = [self.builder]
+                with patch.object(subject, "docker_capture", self.history_fake()), \
+                        self.assertRaisesRegex(BuildControlError, "reviewed BuildKit"):
+                    subject.history(self.request, self.original)
+
     def test_history_rejects_possible_truncation(self):
         rows = [{"ref": str(i), "created_at": "1970-01-01T00:16:50Z"} for i in range(50)]
         with patch.object(subject, "docker_capture", self.history_fake(rows=rows)), self.assertRaises(BuildControlError):
