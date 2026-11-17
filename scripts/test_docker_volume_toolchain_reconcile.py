@@ -133,6 +133,104 @@ class RecoveryTests(unittest.TestCase):
                         self.assertRaisesRegex(BuildControlError, "reviewed BuildKit"):
                     subject.history(self.request, self.original)
 
+    def inactive_fixture(self):
+        self.builder["Nodes"][0]["IDs"] = ["engine"]
+        stopped = {"Name": "old", "Driver": "docker-container", "Nodes": [
+            {"Name": "old0", "Endpoint": "endpoint", "Status": "stopped"}]}
+        unavailable = {"Name": "desktop-windows", "Driver": "", "Err": "endpoint unavailable",
+                       "Nodes": [{"Name": "", "Endpoint": ""}]}
+        self.request["buildkit_observer"] = {"kind": "windows-docker-desktop", "context": "desktop-linux"}
+        container = {"Id": "1" * 64, "Name": "/buildx_buildkit_old0", "Image": "sha256:" + "2" * 64,
+            "Config": {}, "HostConfig": {}, "Created": "1970-01-01T00:01:00Z", "RestartCount": 0,
+            "Mounts": [{"Type": "volume", "Name": "buildx_buildkit_old0_state", "Destination": "/var/lib/buildkit"}],
+            "State": {"Status": "exited", "Running": False, "Paused": False, "Restarting": False,
+                      "Dead": False, "Pid": 0, "StartedAt": "1970-01-01T00:02:00Z", "FinishedAt": "1970-01-01T00:03:00Z"}}
+        context = [{"Name": "desktop-windows", "Endpoints": {"docker": {
+            "Host": "npipe:////./pipe/dockerDesktopWindowsEngine"}}}]
+        status = {"Status": "running", "SessionID": "desktop-session"}
+        engines = [{"Name": "linux", "Current": True}]
+        self.request["inactive_builders"] = {
+            "old": {"kind": "stopped-before-attempt", "container_id": container["Id"],
+                    "container_fingerprint": subject.fingerprint(container),
+                    "container_state": {**container["State"], "RestartCount": 0}},
+            "desktop-windows": {"kind": "unavailable-desktop-windows", "context_sha256": subject.digest(canonical(context)),
+                "desktop_session_id": status["SessionID"], "desktop_engines_sha256": subject.digest(canonical(engines))}}
+        builders = [self.builder, stopped, unavailable]
+        self.request["builders"] = sorted([{"Name": b["Name"], "Driver": b.get("Driver"),
+            "Nodes": [{k: n.get(k) for k in ("Name", "Endpoint", "IDs", "Version", "Status")} for n in b["Nodes"]]}
+            for b in builders], key=lambda b: b["Name"])
+        fallback = self.history_fake(builders=builders)
+        calls = []
+        def capture(*args, **kwargs):
+            calls.append(args)
+            if args == ("inspect", "--type", "container", "buildx_buildkit_old0"):
+                value = canonical([container])
+            elif args == ("context", "inspect", "desktop-windows"):
+                value = canonical(context)
+            elif args == ("desktop", "status", "--format", "json"):
+                value = canonical(status)
+            elif args == ("desktop", "engine", "ls", "--format", "json"):
+                value = canonical(engines)
+            else:
+                return fallback(*args, **kwargs)
+            return SimpleNamespace(stdout=value, returncode=0)
+        return builders, container, context, status, engines, capture, calls
+
+    def test_history_accounts_for_pinned_inactive_builders_without_starting_them(self):
+        builders, container, context, status, engines, capture, calls = self.inactive_fixture()
+        with patch.object(subject, "validate_observer"), patch.object(subject, "docker_capture", capture), \
+             patch.object(subject, "observer_capture", side_effect=lambda _request, *args: capture(*args)):
+            self.assertEqual(subject.history(self.request, self.original), self.record)
+        queried = [c[c.index("--builder") + 1] for c in calls if "--builder" in c]
+        self.assertEqual(queried, ["builder"] * 3)
+        self.assertFalse(any("start" in c or "--bootstrap" in c for c in calls))
+
+    def test_stopped_builder_proof_rejects_unknown_live_or_recent_incarnation(self):
+        changes = [lambda c: c["State"].update(Running=True), lambda c: c["State"].update(Restarting=True),
+                   lambda c: c["State"].update(Pid=123), lambda c: c.update(Id="3" * 64),
+                   lambda c: c["State"].update(FinishedAt="1970-01-01T00:17:00Z"),
+                   lambda c: c["State"].update(FinishedAt="unknown"), lambda c: c.update(Mounts=[])]
+        for change in changes:
+            with self.subTest(change=change):
+                builders, container, context, status, engines, capture, calls = self.inactive_fixture()
+                change(container)
+                # Repinning must never turn a running or post-admission daemon into an inactive one.
+                self.request["inactive_builders"]["old"].update(
+                    container_fingerprint=subject.fingerprint(container),
+                    container_state={**container["State"], "RestartCount": container["RestartCount"]})
+                with patch.object(subject, "docker_capture", capture), self.assertRaises(subject.BuildControlError):
+                    subject.running_builders(self.request, self.original, builders)
+
+    def test_unavailable_windows_context_requires_same_session_and_linux_only_modes(self):
+        changes = [lambda ctx, status, engines: status.update(SessionID="new-session"),
+                   lambda ctx, status, engines: status.update(Status="stopped"),
+                   lambda ctx, status, engines: ctx[0]["Endpoints"]["docker"].update(Host="tcp://remote:2375"),
+                   lambda ctx, status, engines: engines.append({"Name": "windows", "Current": False}),
+                   lambda ctx, status, engines: engines[0].update(Current=1)]
+        for change in changes:
+            with self.subTest(change=change):
+                builders, container, context, status, engines, capture, calls = self.inactive_fixture()
+                change(context, status, engines)
+                self.request["inactive_builders"]["desktop-windows"].update(
+                    context_sha256=subject.digest(canonical(context)), desktop_engines_sha256=subject.digest(canonical(engines)))
+                with patch.object(subject, "docker_capture", capture), \
+                     patch.object(subject, "observer_capture", side_effect=lambda _request, *args: capture(*args)), \
+                     self.assertRaises(subject.BuildControlError):
+                    subject.running_builders(self.request, self.original, builders)
+
+    def test_inactive_proof_cannot_hide_running_remote_or_extra_builder(self):
+        changes = [lambda b: b[1]["Nodes"][0].update(Endpoint="remote"),
+                   lambda b: b[1]["Nodes"][0].update(Status="running"),
+                   lambda b: b[2].update(Name="remote"),
+                   lambda b: self.request["inactive_builders"].update(ghost={"kind": "stopped-before-attempt"}),
+                   lambda b: self.request["inactive_builders"].update(builder={"kind": "stopped-before-attempt"})]
+        for change in changes:
+            with self.subTest(change=change):
+                builders, container, context, status, engines, capture, calls = self.inactive_fixture()
+                change(builders)
+                with patch.object(subject, "docker_capture", capture), self.assertRaises(subject.BuildControlError):
+                    subject.running_builders(self.request, self.original, builders)
+
     def test_history_rejects_possible_truncation(self):
         rows = [{"ref": str(i), "created_at": "1970-01-01T00:16:50Z"} for i in range(50)]
         with patch.object(subject, "docker_capture", self.history_fake(rows=rows)), self.assertRaises(BuildControlError):

@@ -129,6 +129,88 @@ def validate_observer(request):
             "Buildx plugin version changed")
 
 
+def running_builders(request, original, builders):
+    """Account for every builder; never boot an inactive daemon to inspect it."""
+    inactive = request.get("inactive_builders", {})
+    require(isinstance(inactive, dict), "Inactive-builder proofs must be explicit")
+    names = [b["Name"] for b in builders]
+    require(len(set(names)) == len(names) and set(inactive) <= set(names),
+            "Inactive-builder proof does not belong to this inventory")
+    active = [b for b in builders if b.get("Driver") and b.get("Nodes") and all(
+        n.get("Status") == "running" and n.get("Endpoint")
+        and isinstance(n.get("IDs"), list) and n["IDs"]
+        and all(isinstance(x, str) and x for x in n["IDs"]) for n in b["Nodes"])]
+    local_endpoints = {n["Endpoint"] for b in active if b["Driver"] == "docker"
+                       for n in b["Nodes"] if request["engine_id"] in n["IDs"]}
+    for builder in builders:
+        name = builder["Name"]
+        if builder in active:
+            require(name not in inactive, "A running builder cannot have an inactivity proof")
+            continue
+        proof = inactive.get(name)
+        require(isinstance(proof, dict), "History inspection requires complete running builders or pinned inactivity proofs")
+        nodes = builder.get("Nodes", [])
+        if proof.get("kind") == "stopped-before-attempt":
+            require(builder.get("Driver") == "docker-container" and len(nodes) == 1
+                    and nodes[0].get("Status") == "stopped"
+                    and nodes[0].get("Endpoint") in local_endpoints,
+                    "Stopped builder is not bound to the observed local engine")
+            node = nodes[0].get("Name", "")
+            require(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", node), "Invalid stopped builder node")
+            container_name = "buildx_buildkit_" + node
+            observed = json.loads(docker_capture("inspect", "--type", "container", container_name).stdout)
+            require(isinstance(observed, list) and len(observed) == 1, "Stopped builder container is absent or ambiguous")
+            container = observed[0]
+            require(SHA.fullmatch(proof.get("container_id", ""))
+                    and container.get("Id") == proof["container_id"]
+                    and container.get("Name") == "/" + container_name
+                    and fingerprint(container) == proof.get("container_fingerprint"),
+                    "Stopped builder container identity changed")
+            state = container.get("State", {})
+            projected = {k: state.get(k) for k in
+                         ("Status", "Running", "Paused", "Restarting", "Dead", "Pid", "StartedAt", "FinishedAt")}
+            projected["RestartCount"] = container.get("RestartCount")
+            require(projected == proof.get("container_state")
+                    and state.get("Status") == "exited" and state.get("Running") is False
+                    and state.get("Paused") is False and state.get("Restarting") is False
+                    and state.get("Dead") is False and state.get("Pid") == 0
+                    and timestamp(container.get("Created")) <= timestamp(state.get("StartedAt"))
+                    <= timestamp(state.get("FinishedAt")) < original["started_at"],
+                    "Builder was not terminal before the admitted operation")
+            require(any(m.get("Type") == "volume" and m.get("Name") == container_name + "_state"
+                        and m.get("Destination") == "/var/lib/buildkit" for m in container.get("Mounts", [])),
+                    "Stopped builder lacks its registered BuildKit state volume")
+        elif proof.get("kind") == "unavailable-desktop-windows":
+            require(request["buildkit_observer"].get("kind") == "windows-docker-desktop"
+                    and name == "desktop-windows" and not builder.get("Driver") and builder.get("Err")
+                    and len(nodes) == 1 and not nodes[0].get("Endpoint")
+                    and not nodes[0].get("IDs"), "Only the unavailable built-in Windows context is admissible")
+            context_raw = observer_capture(request, "context", "inspect", name).stdout
+            contexts = json.loads(context_raw)
+            require(isinstance(contexts, list) and len(contexts) == 1
+                    and contexts[0].get("Name") == name
+                    and contexts[0].get("Endpoints", {}).get("docker", {}).get("Host")
+                    == "npipe:////./pipe/dockerDesktopWindowsEngine"
+                    and digest(canonical(contexts)) == proof.get("context_sha256"),
+                    "Unavailable Windows context identity changed")
+            status = json.loads(observer_capture(request, "desktop", "status", "--format", "json").stdout)
+            engines = json.loads(observer_capture(request, "desktop", "engine", "ls", "--format", "json").stdout)
+            require(isinstance(engines, list) and all(isinstance(e, dict)
+                    and isinstance(e.get("Name"), str) and type(e.get("Current")) is bool for e in engines),
+                    "Desktop engine enumeration is incomplete")
+            modes = [{k: e.get(k) for k in ("Name", "Current")} for e in engines]
+            require(isinstance(status, dict) and status.get("Status") == "running"
+                    and isinstance(status.get("SessionID"), str) and status["SessionID"]
+                    and status["SessionID"] == proof.get("desktop_session_id")
+                    and modes == [{"Name": "linux", "Current": True}]
+                    and digest(canonical(modes)) == proof.get("desktop_engines_sha256"),
+                    "Desktop Windows engine absence or Desktop session is unproven")
+        else:
+            raise BuildControlError("Unknown inactive-builder proof")
+    require(active, "No running BuildKit worker was authenticated")
+    return active
+
+
 def history(request, original):
     validate_observer(request)
     builders = json_lines(observer_capture(request, "buildx", "ls", "--format", "json").stdout)
@@ -139,15 +221,12 @@ def history(request, original):
                          for node in x.get("Nodes", [])], key=lambda node: node["Name"])}
         for x in builders], key=lambda builder: builder["Name"])
     require(inventory == request["builders"], "Builder/node/version inventory changed")
-    require(all(b["Driver"] and b["Nodes"] and all(
-        n["Status"] == "running" and n["Endpoint"]
-        and isinstance(n["IDs"], list) and n["IDs"] and all(isinstance(x, str) and x for x in n["IDs"])
-        for n in b["Nodes"]) for b in inventory), "History inspection requires complete running builders")
+    builders = running_builders(request, original, builders)
     # Reviewed upstream solver/llbsolver/history/filter.go is byte-identical in
     # these releases (SHA-256 1804d02c5874d9c9c6596dbdd8b7c83c4597f34173c59e332846f86b1e8f8640).
     # Queue.Listen in buildhistory.go also retains the separate active-events
     # enumeration and applies filterHistoryEvents before emitting terminal rows.
-    require(all(n["Version"] in {"v0.32.2", "v0.34.2"} for b in inventory for n in b["Nodes"]),
+    require(all(n.get("Version") in {"v0.32.2", "v0.34.2"} for b in builders for n in b["Nodes"]),
             "History filter-before-limit semantics require a reviewed BuildKit version")
     # Keep running discovery unbounded in time, independently of the terminal filter.
     since = datetime.fromtimestamp(int(original["started_at"]) - 1, timezone.utc).isoformat().replace("+00:00", "Z")

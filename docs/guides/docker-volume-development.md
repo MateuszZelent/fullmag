@@ -612,6 +612,36 @@ Kontrakt i warunki rollback opisuje
 Stan runtime: **NOT VERIFIED**, dopóki rzeczywiste stop, anulowanie, archiwizacja
 i admission nie mają osobnych, dopasowanych receiptów.
 
+### Zamknięcie anulowanego buildu zależności
+
+`docker-dev-reconcile-toolchain` potwierdza wyłącznie porażkę dokładnie jednej
+zachowanej próby BuildKit. Nie ponawia kompilacji ani Solve. Żądanie zapisane
+w control volume przypina oryginalny receipt, Compose, log, źródła kontrolera,
+referencję BuildKit, silnik, wersję klienta oraz pełną listę builderów.
+Najpierw wykonaj preview, potem apply z tym samym hashem żądania:
+
+```sh
+just docker-dev-reconcile-toolchain <request-in-control> <request-sha256> <source-root> true
+just docker-dev-reconcile-toolchain <request-in-control> <request-sha256> <source-root> false
+```
+
+Nieaktywny builder wymaga osobnego wpisu `inactive_builders`; sam błąd
+połączenia ani brak PID klienta nie wystarcza. `stopped-before-attempt`
+przypina kontener pojedynczego węzła `docker-container`, jego fingerprint i stan.
+Węzeł musi wskazywać zaobserwowany lokalny silnik, a kontener pozostawać
+zatrzymany z datą zakończenia sprzed początku próby i własnym wolumenem BuildKit.
+`unavailable-desktop-windows` dotyczy wyłącznie wbudowanego kontekstu Windows:
+wymaga jego dokładnej tożsamości, tej samej sesji Docker Desktop oraz listy
+dostępnych trybów zawierającej wyłącznie bieżący Linux. Istnienie named pipe
+nie jest dowodem aktywności silnika.
+
+Kontroler ponawia te odczyty przed publikacją wyniku. Nie uruchamia builderów,
+nie ignoruje nieznanych lub zdalnych niedostępnych węzłów i nadal sprawdza
+historię wszystkich aktywnych workerów, niejednoznaczność oraz ucięcie listy.
+Oryginalny helper zachowuje lease aż do terminalnego handshake; zweryfikowany
+pakiet i wcześniejsze receipty pozostają zachowane. Źródłowy test kontrolera
+nie zastępuje udanego preview/apply konkretnej próby ani kwalifikacji GPU.
+
 ### Aktywacja skryptu w już działającym Workspace
 
 Jeżeli grupa ma już zdrowe, działające usługi `backend` i `frontend`, skrypt
