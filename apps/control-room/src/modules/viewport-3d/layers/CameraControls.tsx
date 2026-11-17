@@ -12,7 +12,7 @@ import {
   resolveViewport3DCameraFovDegrees,
 } from "../viewport3dCameraFov";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
-import { scheduleViewport3DCameraRestCommit } from "./viewport3DCameraRestCommit";
+import { scheduleViewport3DCameraRestCommit, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS } from "./viewport3DCameraRestCommit";
 import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -114,7 +114,6 @@ const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;
 const ORBIT_DEBUG_TWO_PI = Math.PI * 2;
-const VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS = 180;
 export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
   azimuthMax: ORBIT_DEBUG_TWO_PI,
   azimuthMin: 0,
