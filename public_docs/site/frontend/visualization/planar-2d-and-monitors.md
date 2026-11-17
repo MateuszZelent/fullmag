@@ -62,22 +62,12 @@ overlay masks, and export:
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Modules and data boundaries
 
 - **Primary module**: `FieldMapModule` (`apps/control-room/src/modules/field-map/FieldMapModule.tsx`).
 - **Inspector companions**: `PlanarMonitorDraftInspectorPanel`, `PlanarMonitorInspectorPanel`, `PlanarFieldLayerList`, and `PlanarSectionPlaneSection`.
 - **Rendering boundary**: Planar slices sample backend field resources (`usePlanarScalarResource`, `usePlanarVectorResource`, `usePlanarMeshOverlayResource`, `usePlanarProfileResource`) and never compute solver residuals locally.
-
-## Python/API crosswalk
-
-- Planar monitor definitions authored in UI commit to the session planar monitor catalog matching Python monitor definitions.
-- Line profiles and CSV slice exports represent sampled visualization buffers for interactive analysis; full volumetric outputs remain in session/Zarr artifacts.
-
-## Physics and bibliography scope
-
-This page covers 2D slice rendering, component projection, contour/streamline generation, and UI probing tools; it introduces no independent physical equations.
+- **Python alignment**: Planar monitor definitions authored in UI commit to the session planar monitor catalog matching Python monitor definitions. Line profiles and CSV slice exports represent sampled visualization buffers for interactive analysis; full volumetric outputs remain in session and Zarr artifacts.
 
 ## Source-code index
 

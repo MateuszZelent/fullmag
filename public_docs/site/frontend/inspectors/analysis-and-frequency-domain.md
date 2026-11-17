@@ -60,21 +60,11 @@ controls synchronized with the Ribbon's contextual **Analysis** (`analysis-conte
 - **Live & Analysis Charts (`LiveChartInspectorPanel`, `ChartInspectorPanel`, `QuickChartInspectorPanel`)**: Configure time/stage traces, horizontal axes, window decimation, and CSV exports.
 - **Materialized Datasets & Playback (`MaterializedDatasetInspectorPanel`, `SavedResultsPlaybackInspector`)**: Browse paged scalar/table datasets and scrub saved frame timelines without reopening a solver backend.
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Selection routes and Python interoperability
 
 - **Selection routes**: `planar-monitor`, `planar-monitor-draft`, `eigen-dispersion`, `eigen-branch`, `eigen-dispersion-point`, `eigen-mode`, `frequency-response-sweep`, `frequency-response-point`, `fmr-peak`, `mode-visualization`, `chart`, `live-chart`, `materialized-dataset`, and `saved-results-playback`.
-- **State boundary**: Monitor definitions commit authoring revisions (`MODEL_PLANAR_MONITORS_PATH`); all frequency-domain and dataset inspectors are `inspection-only` result views coupled to visualization state.
-
-## Python/API crosswalk
-
-- Planar monitors, eigenmode studies, Bloch $k$-paths, and driven frequency response sweeps are defined in `packages/fullmag-py` stages and problem definitions.
-- Phase rotation and 3D playback rate controls affect UI visualization state only and do not mutate Python study objects.
-
-## Physics and bibliography scope
-
-This page documents inspection panels and complex-phasor visualization controls; generalized Bloch-periodic eigenvalue and linear-response susceptibility formulations are documented in the numerical-methods guide.
+- **State boundary**: Monitor definitions commit authoring revisions (`MODEL_PLANAR_MONITORS_PATH`); all frequency-domain and dataset inspectors are read-only (`inspection-only`) result views coupled to visualization state.
+- **Python alignment**: Planar monitors, eigenmode studies, Bloch $k$-paths, and driven frequency response sweeps are defined in `packages/fullmag-py` stages and problem definitions. Phase rotation and 3D playback rate controls affect UI visualization state only and do not mutate Python study objects.
 
 ## Source-code index
 

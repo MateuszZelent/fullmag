@@ -21,7 +21,7 @@ and `ObjectPlacementPanel` handle primitive shape parameters (`box`, `cylinder`,
 composites), rigid translation (`translation`, also interactively via Ribbon **Move** `W`), metadata
 (`name`, `notes`, `ObjectGeneralPanel`), and unit conversions via `quantityDraftFields`.
 
-- **Rigid rotation & scale policy**: Rigid `rotation` and `scale` controls stay disabled in the UI (`PROBLEM_IR_03_RIGID_TRANSFORM_REASON`); interactive Boolean CSG builder commands on the Ribbon are currently gated behind `preview: true` and stripped from the active toolbar, so multi-body CSG operations remain `TODO: frontend support` and should be authored in Python.
+- **Rigid rotation & scale policy**: Rigid `rotation` and `scale` controls stay disabled in the UI (`PROBLEM_IR_03_RIGID_TRANSFORM_REASON`); interactive Boolean CSG builder commands on the Ribbon are currently gated behind `preview: true` and stripped from the active toolbar, so multi-body CSG operations remain `Python-only` and should be authored in Python.
 - **Optimistic revision reconciliation**: If a live Python script modifies an unrelated object while a Geometry draft is open, `reconcileObjectEditAck` / `reconcileObjectIdentityAck` preserves unconflicted local edits or presents explicit rebase controls.
 
 ```{image} /_static/images/ui/inspector-geometry-and-csg.png
@@ -63,22 +63,12 @@ invalidation (`returnToCurrentFieldView`) once `commitMagneticTextureApply` comp
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Selection routes and Python interoperability
 
 - **Selection routes**: `object` / `object.geometry` / `object.general` / `object.placement` (`GeometryObjectPanel`, `ObjectGeneralPanel`, `ObjectPlacementPanel`), `object.material` / `material` (`ObjectMaterialPanel`), `object.region` / `region` (`ObjectRegionsPanel`, `RegionsListPanel`), and `object.magnetization` (`ObjectMagneticTexturePanel`).
 - **Transaction boundary**: Changes stay staged in local draft stores until **Apply** commits with `runAuthoringMutationWithHistory`.
-- **Gated items**: Boolean CSG authoring, rigid `Rotate`/`Scale` authoring, and arbitrary spatially varying functional expressions remain `TODO: frontend support` in {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-- Geometry primitives, CSG compositions, materials, absorbing boundary frames, region overrides, and initial magnetization fields are constructed in `packages/fullmag-py` and preserved verbatim during live `fm.connect` sessions.
-- Script export preserves authored region IDs and material assignments without mutating backend representations.
-
-## Physics and bibliography scope
-
-This page documents UI property editors, unit formatting, and revision concurrency; material constitutive laws and magnetization texture definitions belong to the physics documentation.
+- **Python-only features**: Boolean CSG authoring, rigid `Rotate`/`Scale` authoring, and arbitrary spatially varying functional expressions remain `Python-only` (see {doc}`/frontend/capability-register`).
+- **Python alignment**: Geometry primitives, CSG compositions, materials, absorbing boundary frames, region overrides, and initial magnetization fields are constructed in `packages/fullmag-py` and preserved verbatim during live `fm.connect()` sessions; script export preserves authored region IDs and material assignments.
 
 ## Source-code index
 

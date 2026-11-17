@@ -50,9 +50,9 @@ source_of_truth: readme.md
 </div>
 
 <div class="fm-home-intro">
-  <p class="fm-home-eyebrow">Documentation organized by ownership</p>
+  <p class="fm-home-eyebrow">Documentation organized by layer</p>
   <h2>Frontend, backend, and Python API are separate documentation families.</h2>
-  <p>The documentation tree follows the layer that owns a fact. Control Room behavior is documented under Frontend; numerical realization, physics, and runtime contracts under Backend; public authoring commands and parameters under Python API. Install the pure-Python DSL from <a href="https://pypi.org/project/fullmag/">PyPI (<code>pip install fullmag</code>)</a> and run solves inside the Docker Compose DEV runtime.</p>
+  <p>Control Room behavior is documented under Frontend; physical equations, numerical realization, and runtime contracts under Backend; and public authoring commands and parameters under Python API. Install the pure-Python DSL from <a href="https://pypi.org/project/fullmag/">PyPI (<code>pip install fullmag</code>)</a> and run solves inside the Docker Compose DEV runtime.</p>
   <div class="fm-home-actions">
     <a class="fm-home-action fm-home-action--primary" href="getting-started/index.html">Getting started</a>
     <a class="fm-home-action" href="getting-started/interactive-python.html">Live Python (REPL)</a>
@@ -97,13 +97,13 @@ acknowledgements/index
 | How do I run a first study? | {doc}`getting-started/index` |
 | Where are EU grant details, institutional credits, and inspired-solver citations? | {doc}`acknowledgements/index` |
 
-The same concept may appear in more than one branch, but each page has one owner. For example,
+A capability can appear in more than one branch, with each branch documenting its own layer. For example,
 **FEM meshing** is split into:
 
 - Frontend: panels, drafts, Apply/Build transactions, reports, and visualization;
 - Backend: Gmsh/MFEM realization, topology, conformity, fallbacks, and numerical validity;
 - Python API: `FEM`, `PerObjectMeshRecipe`, `study.universe.mesh(...)`, object mesh helpers,
-  parameter tables, and ProblemIR lowering.
+  parameter tables, and `ProblemIR` lowering.
 
 ## Simulation data flow
 
@@ -170,11 +170,3 @@ citations with DOIs.
 
 Until a versioned release with a persistent identifier is available, cite the repository and the
 exact commit used for the reported result (alongside the published [`fullmag`](https://pypi.org/project/fullmag/) PyPI version when applicable); full BibTeX and related software references are collected on {doc}`acknowledgements/index`.
-
-## Bibliography
-
-No independent scientific model is introduced by this navigation page. Use the bibliography on {doc}`acknowledgements/index` or the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.
