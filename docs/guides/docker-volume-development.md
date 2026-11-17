@@ -439,6 +439,31 @@ próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy ro
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
 Przed pierwszym admission awaria samego buildu może zachować ten sam root sesji. Wymaga to dokładnego bootstrap certyfikatu, jednej potwierdzonej awarii przypiętej do bieżącego `Docker StartedAt` oraz braku handoff, publikacji pakietu i storage probe. Dowód wskazuje bezpośredni terminal tej próby development albo związany terminal resume; bieżąca inkarnacja kontenera musi być zgodna. Launcher ponawia cały dowód pod blokadą przed odtworzeniem usług. Nie ustawia `restart_verified`, nie zmienia ownera i nie powtarza Solve; nowe API nadal wymaga zwykłego admission. Brak lub zmiana dowodu blokuje tę ścieżkę.
 
+Przerwanie początkowego startu przed handoff pakietu można zamknąć przez
+`scripts/docker_volume_development_interrupted.py`. Checkpoint
+`starting-services` wymaga zgodnych ID oraz `StartedAt` obu zatrzymanych usług;
+zachowany wariant `starting` zachowuje wcześniejszy kontrakt. Builder
+`--build-interrupted-request --attempt <development-attempt>` zbiera piny z
+wybranej grupy i zapisuje immutable request w jej control volume dopiero po
+pełnej obserwacji. Wymagany jest brak starego helpera oraz dowodów handoff/API.
+Wywołanie z `--request <control-relative-path> --request-sha256 <sha256>`
+domyślnie wykonuje preview; jawne `--apply` zatwierdza wyłącznie
+`failed-confirmed` pod blokadą i CAS. Receipty zachowują nieznany status wyjścia
+producenta, a dalszy start lub odtworzenie usług przechodzi własne bramki.
+
+Jeżeli późniejsze resume zatrzyma się przed PID1 na błędzie OCI `not a directory`
+przy montowaniu `/run/fullmag/linux-native-host.json`, builder
+`scripts/docker_volume_resume_mount_refusal.py --source-root <checkout>
+--attempt <resume-attempt> --port <port>` obsługuje wyłącznie ten przypadek po
+potwierdzonym przerwaniu początkowego startu przed handoff. Wymaga niezmienionych
+zatrzymanych usług, działającego oryginalnego helpera i jego blokady, poprawnego
+certyfikatu na hoście oraz pustego stanu poza certyfikatem, ownerem i sentinelem.
+Zapisany request i SHA przekazuje się do `docker_volume_reconcile.py` najpierw z
+`--preview`, następnie bez tej flagi. Publikacja zachowuje rzeczywisty błąd OCI
+i ostatnie `verified`; tylko oryginalny helper zwalnia `active`. Nie naprawia
+mountu ani nie uruchamia usług. Następny krok to osobno walidowane
+`recreate-volume --fresh-state`, zachowujące poprzedni root stanu.
+
 Bezpośredni CLI `recreate-volume` obsługuje również powtarzane
 `--include-untracked`. Jawne opcje przypinają kompletną listę plików nowej
 konfiguracji; brak opcji zachowuje listę poprzedniej próby. Obowiązują te same

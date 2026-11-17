@@ -674,6 +674,58 @@ class CgroupFailureFences(unittest.TestCase):
                 "journal", "d"*64, request["unknown_receipt_sha256"], publish_verified=True)
 
 
+class CertificateMountRefusalDispatch(unittest.TestCase):
+    def request(self):
+        import docker_volume_resume_mount_refusal as refusal
+        attempt, parent, project, source = "1"*32, "2"*32, "fullmag-test", "/source"
+        error = ("OCI runtime create failed: error during container init: error mounting "
+            "\"/run/host/linux-native-host.json\" to rootfs at \"/run/fullmag/linux-native-host.json\": not a directory")
+        proof = {
+            "error": error, "error_sha256": recovery.digest(error.encode()),
+            "parent": {"attempt": parent, "request_path": refusal.parent_request_path(parent, "a"*64),
+                "request_sha256": "a"*64, "receipt_sha256": "b"*64, "terminal_sha256": "c"*64,
+                "compose_sha256": "d"*64, "config_sha256": "e"*64, "source_root": source,
+                "compose_project": project, "control_volume": "volume",
+                "image_id": "sha256:"+"f"*64, "controller_sha256": "1"*64,
+                "controller_inputs_sha256": "2"*64},
+            "certificate": {"path": "/state/linux-native-host.json", "sha256": "3"*64,
+                "inode": 4, "device": 5}, "compose_sha256": "6"*64,
+            "private_owner_sha256": "7"*64, "frontend_inputs_sha256": "8"*64,
+            "helper_log_sha256": "9"*64, "service_states": {"backend": "a"*64, "frontend": "b"*64},
+            "engine_id": "engine", "active_sha256": "c"*64,
+            "current_sha256": None, "verified_sha256": None,
+            "absent_control_files": {key: None for key in refusal.ABSENT_CONTROL_FILES},
+            "absent_attempt_files": {key: None for key in refusal.ABSENT_ATTEMPT_FILES},
+            "state_files": {key: "d"*64 for key in refusal.STATE_FILES},
+            "controllers": {key: "e"*64 for key in refusal.CONTROLLERS}}
+        return {"schema": refusal.SCHEMA, "attempt": attempt, "compose_project": project,
+            "source_root": source, "port": 3350, "config_sha256": "e"*64,
+            "unknown_receipt_sha256": "f"*64, "controller_sha256": "e"*64,
+            "containers": {name: {"id": str(index)*64, "image": "sha256:"+"f"*64,
+                "started_at": "start", "fingerprint": "a"*64}
+                for index, name in enumerate(("lease", "backend", "frontend"), 1)},
+            "failure": proof}
+
+    def test_failure_only_resume_request_uses_resume_cas_and_dispatch(self):
+        import docker_volume_resume_mount_refusal as refusal
+        request = self.request()
+        recovery.validate_request(request)
+        control = type("Control", (), {"path": staticmethod(lambda path: "/control/"+path)})()
+        root = "resume/attempts/" + request["attempt"]
+        script = recovery.commit_script(control, root, request, root+"/reconciliation/journal",
+            "a"*64, request["unknown_receipt_sha256"], phase="resume", publish_verified=False)
+        self.assertIn("/control/resume/current.json", script)
+        self.assertIn("/control/resume/verified.json", script)
+        self.assertIn("/control/resume/attempts/" + request["attempt"] + "/terminal.json", script)
+        with self.assertRaises(recovery.BuildControlError):
+            recovery.commit_script(control, root, request, "journal", "a"*64,
+                request["unknown_receipt_sha256"], phase="resume", publish_verified=True)
+        with patch.object(refusal, "validate_failure", return_value={"pinned": True}) as validate:
+            result = recovery.validate_failed_build(control, root, request, {}, {}, Path("/state"))
+        validate.assert_called_once_with(control, root, request, {}, {}, Path("/state"))
+        self.assertEqual(result, {"pinned": True})
+
+
 class CgroupCpuEnableRace(unittest.TestCase):
     @staticmethod
     def module():
