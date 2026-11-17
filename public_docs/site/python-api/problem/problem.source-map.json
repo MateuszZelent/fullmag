@@ -261,7 +261,7 @@
         "python": "Problem.temperature",
         "type": "float | None",
         "default": "None",
-        "si_unit": "K",
+        "si_unit": "$\\mathrm{K}$",
         "validation": "non-negative compatibility temperature; thermal-term consistency checked",
         "meaning": "non-negative compatibility temperature; thermal-term consistency checked",
         "backend_support": "non-negative compatibility temperature; thermal-term consistency checked",

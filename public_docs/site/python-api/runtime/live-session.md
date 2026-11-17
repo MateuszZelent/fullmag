@@ -10,7 +10,6 @@ owner: fullmag-public-docs
 # Live Session
 
 (python-api-runtime-live-session-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 
 `fm.connect()` turns a plain Python process—an interactive interpreter, a standalone script, or a
@@ -32,7 +31,6 @@ restores ordinary eager DSL semantics in the current Python process.
 ```
 
 (python-api-runtime-live-session-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 
 This page introduces no physical equation; it defines the transport, synchronization, presence, and
@@ -41,7 +39,6 @@ command to the next reuses the previous command's final state when the spatial d
 unchanged; it adds no PDE or energy term.
 
 (python-api-runtime-live-session-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 
 `until` in `fm.run(until)` and `chunk_time` / `max_time` in `fm.run_until(...)` are durations in
@@ -53,7 +50,6 @@ $\mathbf{m}$, $\mathrm{J}/\mathrm{m}^3$ for energy densities, and $\mathrm{s}$ f
 Identifiers, counts, and flags are dimensionless ($1$).
 
 (python-api-runtime-live-session-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 
 - **Single shared current session per instance**: One running FullMag instance (typically a Docker DEV
@@ -80,7 +76,6 @@ Identifiers, counts, and flags are dimensionless ($1$).
   likewise raises `fm.LiveModeError`.
 
 (python-api-runtime-live-session-python-api)=
-<!-- (python-api)= -->
 ## Python API
 
 All live entry points are re-exported on top-level `fullmag` (`import fullmag as fm`), with notebook
@@ -248,7 +243,6 @@ updates cleanly rather than failing with a stale-revision error.
 | `05_jupyter_monitor.py` | `fullmag.live.jupyter.monitor(...)` live notebook scalar monitor with `fm.field("m")` readout | FDM CPU |
 
 (python-api-runtime-live-session-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 
 Live mode does not mutate raw `ProblemIR` directly. Each synchronization serializes the world with the
@@ -259,7 +253,6 @@ and submit a command targeting `stage_index`, so `fm.export_script()` reconstruc
 stage sequence cleanly.
 
 (python-api-runtime-live-session-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 
 Requested intent remains the Python-authored configuration serialized into `SceneDocument`/`ProblemIR`;
@@ -275,7 +268,6 @@ timing rule client-side (`ValueError`) or before execution, and unsupported comb
 `LiveModeError` or `UnsupportedCapabilityError` rather than falling back silently.
 
 (python-api-runtime-live-session-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 
 All numerical execution runs inside the attached session's backend runtime (FDM CPU/GPU or FEM CPU/GPU);
@@ -283,7 +275,6 @@ live mode introduces no separate solver implementation. See {doc}`runtime-select
 and backend-specific physics pages for solver-lane guarantees and device qualification gates.
 
 (python-api-runtime-live-session-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
 
 Primary owners under `packages/fullmag-py/src/fullmag/`:
@@ -301,7 +292,6 @@ Primary owners under `packages/fullmag-py/src/fullmag/`:
 - `client/` — typed HTTP client, WebSocket `EventStream`, FMVP binary field decoder, and FMTB table decoder.
 
 (python-api-runtime-live-session-validation)=
-<!-- (validation)= -->
 ## Validation
 
 Contract suites `packages/fullmag-py/tests/test_live_dsl_mode.py`, `test_live_events.py`,
@@ -313,7 +303,6 @@ verify Python client behavior against the server API contract; physics accuracy 
 governed by the dedicated suites under {doc}`/validation/index`.
 
 (python-api-runtime-live-session-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 
 - `fm.pause()`, `fm.paused()`, and `fm.skip()` are rejected in Docker accepted mode (`UnsupportedCapabilityError`); edit parameters between commands or start a fresh stage instead.
@@ -322,16 +311,12 @@ governed by the dedicated suites under {doc}`/validation/index`.
 - `fullmag[jupyter]` is required for inline matplotlib widgets in `fullmag.live.jupyter.monitor()`; core live mode otherwise degrades cleanly to headless `.samples` buffering.
 
 (python-api-runtime-live-session-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 
 No independent physical equation is introduced by the live session protocol. Transport and binary payload
 contracts reference the server API and solver documentation directly.
 
-(python-api-runtime-live-session-source-code-index)=
-<!-- (source-code-index)= -->
-
-## Control Room crosswalk
+## Control Room support
 
 Status: Control Room displays every scene revision, authored stage, run telemetry trace, and field output driven by `fm.connect()` in real time.
 
@@ -341,30 +326,20 @@ Status: Control Room displays every scene revision, authored stage, run telemetr
 | `fm.relax()` / `fm.run()` / `fm.run_until()` | `Model Explorer -> Stages -> <stage>` & `Footer` | `implemented` (`stage_index` re-execution in Stage Inspector) | Runtime `stage_index` commands pinned to `scene_revision` (`reason="python_live"` vs UI `executeStageAfterApply`) |
 | `fm.field()` / `fm.table()` / `fm.on()` | `3D Viewport`, `Field Map (2D)`, & `Live Charts` | `implemented` (`inspection-only` overlays/plots) | Binary `/v2/sessions/current/data/*` (FMVP/FMTB) and `/v2/sessions/current/events/ws` stream |
 | Multi-group `fm.sweep()` monitoring | `Start Screen -> Other instances` & top instance tab strip | `implemented` (per-instance view) | Host instance discovery (`PLATFORM_INSTANCES_PATH`) and instance tabs |
-| Script presence (`LiveSession` heartbeat) | `Start Screen -> Active simulations` (`ActiveSessions`); per-client badge not yet wired | `partial` (session surfaced; client list badge not implemented) | Server `/v2/sessions/current/clients` (`10 s` heartbeat / `30 s` TTL); `SESSION_CLIENTS_PATH` typed in `apiPaths.ts` |
+| Script presence (`LiveSession` heartbeat) | `Start Screen -> Active simulations` (`ActiveSessions`) | `partial` | Server `/v2/sessions/current/clients` (`10 s` heartbeat / `30 s` TTL); `SESSION_CLIENTS_PATH` typed in `apiPaths.ts`; per-client workspace-bar badge remains Python/API-only |
 
-See [Control Room capability register](/frontend/capability-register) for the support matrix and UI exposure rules.
+See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
 Frontend source owners: `apps/control-room/src/modules/start/home/ActiveSessions.tsx`, `apps/control-room/src/kernel/layout/InstanceTabStrip.tsx`, `apps/control-room/src/modules/inspector/panels/studyStageApplyAndRun.ts`, `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx`, and `apps/control-room/src/modules/status-bar/StatusBarModule.tsx`.
 
+(python-api-runtime-live-session-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Live connection | [`packages/fullmag-py/src/fullmag/live/__init__.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/__init__.py) | `connect` | Switch the DSL to live mode | `test_live_dsl_mode.py` |
-| Session, presence & IO | [`packages/fullmag-py/src/fullmag/live/_session.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/_session.py) | `LiveSession` | Manage live session sync, heartbeats, commands, fields, tables, and script export | `test_live_dsl_mode.py`, `test_live_client_data.py` |
+| Session, presence & IO | [`packages/fullmag-py/src/fullmag/live/_session.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/_session.py) | `class LiveSession` | Manage live session sync, heartbeats, commands, fields, tables, and script export | `test_live_dsl_mode.py`, `test_live_client_data.py` |
 | Synchronisation | [`packages/fullmag-py/src/fullmag/live/_scene.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/_scene.py) | `plan_transactions` | Plan atomic scene transactions between the local DSL state and server revision | `test_live_dsl_mode.py` |
-| Events | [`packages/fullmag-py/src/fullmag/client/events.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/client/events.py) | `EventStream` | Maintain WebSocket realtime subscriptions with cursor resume | `test_live_events.py` |
+| Events | [`packages/fullmag-py/src/fullmag/client/events.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/client/events.py) | `class EventStream` | Maintain WebSocket realtime subscriptions with cursor resume | `test_live_events.py` |
 | Sweeps | [`packages/fullmag-py/src/fullmag/live/sweep.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/sweep.py) | `sweep` | Dispatch parameter sweep points concurrently across running groups | `test_live_sweep.py` |
 | Jupyter monitor | [`packages/fullmag-py/src/fullmag/live/jupyter.py`](https://github.com/MateuszZelent/fullmag/blob/4c9424ca0/packages/fullmag-py/src/fullmag/live/jupyter.py) | `monitor` | Stream scalar telemetry for live notebook plots and headless capture | `test_live_client_data.py` |
 | Server presence store | `crates/fullmag-api/src/router_v2/handlers/sessions/clients.rs` | `SESSION_CLIENT_TTL_MS` | Track live client heartbeats within 30 s TTL and emit `"session-clients"` invalidations | `live` presence API handler |
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Switch the DSL to live mode. | `packages/fullmag-py/src/fullmag/live/__init__.py` | `connect` | Switch the DSL to live mode. | Source-map validator and live contract tests |
-| Manage live session sync, heartbeats, commands, fields, tables, and script export. | `packages/fullmag-py/src/fullmag/live/_session.py` | `class LiveSession` | Manage live session sync, heartbeats, commands, fields, tables, and script export. | Source-map validator and live contract tests |
-| Plan atomic scene transactions between the local DSL state and server revision. | `packages/fullmag-py/src/fullmag/live/_scene.py` | `plan_transactions` | Plan atomic scene transactions between the local DSL state and server revision. | Source-map validator and live contract tests |
-| Maintain WebSocket realtime subscriptions with cursor resume. | `packages/fullmag-py/src/fullmag/client/events.py` | `class EventStream` | Maintain WebSocket realtime subscriptions with cursor resume. | Source-map validator and WebSocket tests |
-| Dispatch parameter sweep points concurrently across running groups. | `packages/fullmag-py/src/fullmag/live/sweep.py` | `sweep` | Dispatch parameter sweep points concurrently across running groups. | Source-map validator and sweep tests |
-| Stream scalar telemetry for live notebook plots and headless capture. | `packages/fullmag-py/src/fullmag/live/jupyter.py` | `monitor` | Stream scalar telemetry for live notebook plots and headless capture. | Source-map validator and live data tests |

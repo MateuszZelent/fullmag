@@ -102,8 +102,8 @@ Failure behavior: `cell_size` (FDM) cannot be combined with FEM controls and vic
 versa → `ValueError`; non-positive sizes → `ValueError`. Values are **targets**,
 not guaranteed realized extrema.
 
-ProblemIR mapping: universe policy lands in mesh workflow metadata (airbox
-hmin/hmax/growth/grading); realization and any fallbacks are recorded in the build
+`ProblemIR` mapping: universe policy lands in mesh workflow metadata (airbox
+`hmin`/`hmax`/`growth_rate`/`grading`); realization and any fallbacks are recorded in the build
 report.
 
 ## 5. How to set it in Control Room
@@ -159,7 +159,3 @@ geometry
 grading
 build
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

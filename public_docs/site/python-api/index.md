@@ -14,9 +14,8 @@ FullMag's public authoring surface is the embedded stage-first Python DSL
 `study.stages.add_*`) or **interactive live sessions** connected to a running FullMag instance
 ({doc}`runtime/live-session`, `fm.connect()`). The tree is organized by authoring owner.
 
-Every terminal API page follows the public entry contract and includes a **Control Room crosswalk**
-mapping Python constructs to the Control Room v2 workspace, Semantic Inspectors, and visualization
-views. Frontend coverage and explicit missing-UI notes are centralized in
+Each reference page documents the public Python constructor, SI units, `ProblemIR` serialization,
+and Control Room availability. Browser coverage and Python-only parameters are tracked in
 {doc}`../frontend/capability-register`.
 
 ```{image} /_static/images/ui/control-room-workspace-overview.png
@@ -59,11 +58,3 @@ studies/index
 outputs/index
 runtime/index
 ```
-
-## Bibliography
-
-No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

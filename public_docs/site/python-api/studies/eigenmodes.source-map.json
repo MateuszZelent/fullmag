@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/python-api/studies/eigenmodes.md",
     "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
-    "source_of_truth": "docs/physics/0600-fem-eigenmodes-linearized-llg.md"
+    "source_of_truth": "packages/fullmag-py/src/fullmag/model/study.py, crates/fullmag-plan/src/fem.rs, backends/fem/src/frequency_domain/modal_eigen_solver.cpp"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},

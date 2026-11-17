@@ -15,47 +15,37 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The interaction links already-authored magnetic, mechanical, and law objects by stable identifiers.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates non-empty string identifiers linking an authored magnetic region/object, mechanical body, and magnetostriction law in Python, while `to_ir()` emits the canonical `ProblemIR` link record.
 
 (python-api-interactions-magnetoelastic-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-magnetoelastic
-
-q_{\mathrm{IR}} = \mathrm{magnetoelastic}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object magnetoelastic. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+Magnetoelastic coupling computes an effective anisotropy-like field $\mathbf{H}_{\mathrm{mel}} = -\frac{1}{\mu_0 M_s}\frac{\partial w_{\mathrm{mel}}(\mathbf{m}, \boldsymbol{\varepsilon})}{\partial \mathbf{m}}$ connecting magnetization $\mathbf{m}$ on `magnet`, strain state on `body`, and constitutive constants defined by `law`. Energy densities and bounded prescribed-strain regimes are documented in {doc}`../../physics/interactions/magnetoelastic/index`, {doc}`../materials/elastic-materials`, and {doc}`../materials/magnetostriction-laws`.
 
 (python-api-interactions-magnetoelastic-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+The link identifiers (`magnet`, `body`, `law`) are dimensionless string references ($1$). Physical magnetoelastic constants (`B1`, `B2` in $\mathrm{Pa}$) and elastic moduli (`C11`, `C12`, `C44` in $\mathrm{Pa}$) reside on the referenced law and elastic-material records.
 
 (python-api-interactions-magnetoelastic-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`magnet`, `body`, and `law` must each be non-empty string identifiers referencing valid study entities. Empty strings fail closed at construction, and unresolved link targets or unsupported mechanics regimes fail closed during planning.
 
 (python-api-interactions-magnetoelastic-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.Magnetoelastic(magnet, body, law)
+`fm.Magnetoelastic(magnet, body, law)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `magnet` | `str` | `required` | `1` | non-empty magnet link | magnetic object link | FEM CPU/GPU: IR; coupled mechanics runtime required | `magnet` |
-| `body` | `str` | `required` | `1` | non-empty body link | mechanical body link | FEM CPU/GPU: IR; coupled mechanics runtime required | `body` |
-| `law` | `str` | `required` | `1` | non-empty law link | magnetostriction law link | FEM CPU/GPU: IR; coupled mechanics runtime required | `law` |
+| `magnet` | `str` | `required` | $1$ | non-empty magnet link | magnetic object link | FEM CPU/GPU: IR; coupled mechanics runtime required | `magnet` |
+| `body` | `str` | `required` | $1$ | non-empty body link | mechanical body link | FEM CPU/GPU: IR; coupled mechanics runtime required | `body` |
+| `law` | `str` | `required` | $1$ | non-empty law link | magnetostriction law link | FEM CPU/GPU: IR; coupled mechanics runtime required | `law` |
 
 ### Stage-first example
 
@@ -76,52 +66,48 @@ value = fm.Magnetoelastic(magnet="film", body="substrate", law="cubic-law")
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, pair `fm.Magnetoelastic(...)` with matching `ElasticMaterial`, `ElasticBody`, `MagnetostrictionLaw`, and `MechanicalLoad` objects.
 
 (python-api-interactions-magnetoelastic-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed magnetoelastic record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits `{"kind": "magnetoelastic", "magnet": ..., "body": ..., "law": ...}` referencing the authored entities by stable identifier.
 
 (python-api-interactions-magnetoelastic-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves the exact magnetic/mechanical/law identifier triples in `ProblemIR` independently of `resolved execution`. `Validation errors` reject empty link strings, while `unsupported combinations` (such as coupled elastodynamics or backends lacking magnetoelastic support) fail closed at planning.
 
 (python-api-interactions-magnetoelastic-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies typed reference identifiers in `ProblemIR` only; evaluating strain-coupled effective fields and magnetoelastic energy on FEM or FDM discretizations is owned by the solver backends.
 
 (python-api-interactions-magnetoelastic-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/energy.py symbol class Magnetoelastic. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/energy.py` (`class Magnetoelastic`). Validation checks and `to_ir()` keys come directly from that module.
 
 (python-api-interactions-magnetoelastic-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_magnetoelastic_links_round_trip. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering magnetoelastic reference serialization include `test_magnetoelastic_links_round_trip`. Coupled runtime and Control Room behavior require separate qualification.
 
 (python-api-interactions-magnetoelastic-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Control Room has no dedicated interactive editor for `fm.Magnetoelastic`; author magnetoelastic couplings in Python scripts. See {doc}`/frontend/capability-register`.
 
 (python-api-interactions-magnetoelastic-scientific-bibliography)=
 ## Scientific bibliography
 
-- L. D. Landau and E. M. Lifshitz, Theory of Elasticity, 3rd ed., DOI: https://doi.org/10.1016/C2013-0-03754-0
+- C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949), [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+- F. Vanderveken, J. Mulkers, J. Leliaert, B. Van Waeyenberge, B. Sorée, O. Zografos, F. Ciubotaru, and C. Adelmann, “Finite difference magnetoelastic simulator,” *Open Research Europe* **1**, 35 (2021), [doi:10.12688/openreseurope.13302.1](https://doi.org/10.12688/openreseurope.13302.1).
+- L. D. Landau and E. M. Lifshitz, *Theory of Elasticity*, 3rd ed., Pergamon / Elsevier, [doi:10.1016/C2013-0-03754-0](https://doi.org/10.1016/C2013-0-03754-0).
 
 (python-api-interactions-magnetoelastic-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/energy.py | class Magnetoelastic | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/energy.py::class Magnetoelastic
-- Source-map: interactions/magnetoelastic.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Magnetoelastic` | public constructor and IR lowering |

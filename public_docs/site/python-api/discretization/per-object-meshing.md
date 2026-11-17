@@ -200,6 +200,51 @@ operations supplied directly through `per_object_recipes`.
 Consequently `refine`, `adapt`, `swept`, and `size_field` do not currently reach execution or report
 classification. An empty operation list is required for an executable public build.
 
+### Exhaustive public-API and Python-to-ProblemIR mapping
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `PerObjectMeshRecipe.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Positive when authored by the public facade. | Canonical object maximum element-size target. | FEM | `mesh_workflow.per_geometry.<object>.maximum_element_size` |
+| `PerObjectMeshRecipe.minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Positive and no larger than the effective maximum when authored by the public facade. | Canonical object minimum element-size target. | FEM | `mesh_workflow.per_geometry.<object>.minimum_element_size` |
+| `PerObjectMeshRecipe.hmax` | `float \| None` | `None` | $\mathrm{m}$ | Compatibility alias used when maximum_element_size is absent. | Object maximum-size alias. | FEM | `mesh_workflow.per_geometry.<object>.hmax` |
+| `PerObjectMeshRecipe.hmin` | `float \| None` | `None` | $\mathrm{m}$ | Compatibility alias used when minimum_element_size is absent. | Object minimum-size alias. | FEM | `mesh_workflow.per_geometry.<object>.hmin` |
+| `PerObjectMeshRecipe.order` | `int \| None` | `None` | $1$ | Non-Boolean `Integral`, normalized to `int`; prismatic topology permits only order one. | Object finite-element order. | FEM | `mesh_workflow.per_geometry.<object>.order` |
+| `PerObjectMeshRecipe.source` | `str \| None` | `None` | $1$ | Any authored value is rejected; use study-level `FEM(mesh=...)`. | Reserved object mesh source. | Unavailable | `none` |
+| `PerObjectMeshRecipe.calibrate_for` | `str \| None` | `None` | $1$ | Normalized and rejected at construction unless it belongs to the supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | `mesh_workflow.per_geometry.<object>.calibrate_for` |
+| `PerObjectMeshRecipe.size_preset` | `str \| None` | `None` | $1$ | Normalized and rejected at construction unless it belongs to the supported size-preset vocabulary. | Named mesh-size preset. | FEM | `mesh_workflow.per_geometry.<object>.size_preset` |
+| `PerObjectMeshRecipe.algorithm_2d` | `int \| None` | `None` | $1$ | Finite integer algorithm identifier. | Gmsh surface meshing algorithm. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.algorithm_2d` |
+| `PerObjectMeshRecipe.algorithm_3d` | `int \| None` | `None` | $1$ | Finite integer algorithm identifier. | Gmsh volume meshing algorithm. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.algorithm_3d` |
+| `PerObjectMeshRecipe.size_factor` | `float \| None` | `None` | $1$ | Positive when authored by structured controls. | Preset-derived size multiplier. | FEM | `mesh_workflow.per_geometry.<object>.size_factor` |
+| `PerObjectMeshRecipe.size_from_curvature` | `int \| None` | `None` | $1$ | Nonnegative integer in structured UI. | Gmsh curvature sizing control. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.size_from_curvature` |
+| `PerObjectMeshRecipe.curvature_factor` | `float \| None` | `None` | $1$ | Positive when authored. | Curvature-derived size factor. | FEM | `mesh_workflow.per_geometry.<object>.curvature_factor` |
+| `PerObjectMeshRecipe.growth_rate` | `float \| None` | `None` | $1$ | Positive; stage-first facade limits the practical range. | Maximum requested local size growth. | FEM | `mesh_workflow.per_geometry.<object>.growth_rate` |
+| `PerObjectMeshRecipe.narrow_regions` | `int \| None` | `None` | $1$ | Integer at least zero. | Gmsh narrow-region sizing switch/count. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.narrow_regions` |
+| `PerObjectMeshRecipe.narrow_region_resolution` | `float \| None` | `None` | $1$ | Positive when authored. | Narrow-region resolution target. | FEM | `mesh_workflow.per_geometry.<object>.narrow_region_resolution` |
+| `PerObjectMeshRecipe.smoothing_steps` | `int \| None` | `None` | $1$ | Nonnegative integer when authored; zero disables smoothing. | Gmsh smoothing passes. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.smoothing_steps` |
+| `PerObjectMeshRecipe.optimize` | `str \| None` | `None` | $1$ | Optimizer must be supported by the active Gmsh path. | Post-generation optimizer. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.optimize` |
+| `PerObjectMeshRecipe.optimize_iters` | `int \| None` | `None` | $1$ | Positive integer when authored. | Optimizer iteration count. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.optimize_iters` |
+| `PerObjectMeshRecipe.boundary_layer_count` | `int \| None` | `None` | $1$ | Positive integer when authored. | Boundary-layer element count. | FEM/Gmsh selector-gated | `mesh_workflow.per_geometry.<object>.boundary_layer_count` |
+| `PerObjectMeshRecipe.boundary_layer_thickness` | `float \| None` | `None` | $\mathrm{m}$ | Positive when authored. | First boundary-layer thickness (`hwall_n`), not total stack thickness. | FEM/Gmsh selector-gated | `mesh_workflow.per_geometry.<object>.boundary_layer_thickness` |
+| `PerObjectMeshRecipe.boundary_layer_stretching` | `float \| None` | `None` | $1$ | Positive growth ratio. | Boundary-layer stretching ratio. | FEM/Gmsh selector-gated | `mesh_workflow.per_geometry.<object>.boundary_layer_stretching` |
+| `PerObjectMeshRecipe.mesh_strategy` | `str \| None` | `None` | $1$ | `auto`, `free_tetrahedral`, `thin_film_tetrahedral`, `swept_prism`, or `swept_hex`. | Requested object topology strategy. | FEM capability-gated | `mesh_workflow.per_geometry.<object>.mesh_strategy` |
+| `PerObjectMeshRecipe.through_thickness_elements` | `int \| None` | `None` | $1$ | Integer at least one. | Element layers through thickness. | FEM swept/thin-film | `mesh_workflow.per_geometry.<object>.through_thickness_elements` |
+| `PerObjectMeshRecipe.through_thickness_distribution` | `str \| None` | `None` | $1$ | `fixed`, `linear`, or `exponential`. | Layer-thickness distribution. | FEM swept/thin-film | `mesh_workflow.per_geometry.<object>.through_thickness_distribution` |
+| `PerObjectMeshRecipe.through_thickness_element_ratio` | `float \| None` | `None` | $1$ | Positive ratio when authored. | Relative layer-size ratio. | FEM swept/thin-film | `mesh_workflow.per_geometry.<object>.through_thickness_element_ratio` |
+| `PerObjectMeshRecipe.through_thickness_symmetric` | `bool` | `False` | $1$ | Boolean. | Symmetric through-thickness grading. | FEM swept/thin-film | `mesh_workflow.per_geometry.<object>.through_thickness_symmetric` |
+| `PerObjectMeshRecipe.sweep_face_meshing` | `str \| None` | `None` | $1$ | `triangular` or `quadrilateral`. | Source-face element family. | FEM swept | `mesh_workflow.per_geometry.<object>.sweep_face_meshing` |
+| `PerObjectMeshRecipe.topology` | `str \| None` | `None` | $1$ | `tetrahedral` or `prismatic`; tetrahedral contradicts swept intent. | Requested high-level topology. | FEM capability-gated | `mesh_workflow.per_geometry.<object>.topology` |
+| `PerObjectMeshRecipe.sweep_direction` | `str \| None` | `None` | $1$ | `auto`, `x`, `y`, or `z`. | Sweep direction. | FEM swept | `mesh_workflow.per_geometry.<object>.sweep_direction` |
+| `PerObjectMeshRecipe.element_family` | `str \| None` | `None` | $1$ | `prism` or `hex` with matching strategy/source faces. | Swept volume element family. | FEM capability-gated | `mesh_workflow.per_geometry.<object>.element_family` |
+| `PerObjectMeshRecipe.transition_policy` | `str \| None` | `None` | $1$ | `pyramid_to_tetrahedra` or `reject`. | Transition into surrounding topology. | FEM capability-gated | `mesh_workflow.per_geometry.<object>.transition_policy` |
+| `PerObjectMeshRecipe.exact_layer_count` | `bool \| None` | `None` | $1$ | Boolean; strict prism may not set false. | Require exact requested layer count. | FEM capability-gated | `mesh_workflow.per_geometry.<object>.exact_layer_count` |
+| `PerObjectMeshRecipe.compute_quality` | `bool \| None` | `None` | $1$ | Boolean when authored; `None` inherits. | Request aggregate quality statistics. | FEM | `mesh_workflow.per_geometry.<object>.compute_quality` |
+| `PerObjectMeshRecipe.per_element_quality` | `bool \| None` | `None` | $1$ | Boolean when authored; `None` inherits. | Request per-element quality arrays. | FEM | `mesh_workflow.per_geometry.<object>.per_element_quality` |
+| `PerObjectMeshRecipe.size_fields` | `list[dict]` | `[]` | $1$ | Each field is validated/resolved by its field kind and selectors. | Additional ordered size fields. | FEM/Gmsh | `mesh_workflow.per_geometry.<object>.size_fields` |
+| `PerObjectMeshRecipe.operations` | `list[MeshOperation]` | `[]` | $1$ | Any nonempty list is rejected before mesh generation. | Authored operation intent; no public executor is currently available. | Unavailable | `mesh_workflow.per_geometry.<object>.operations` |
+| `MeshOperation.kind` | `str` | `required` | $1$ | Representable values are `free_tetrahedral`, `boundary_layers`, `refine`, `adapt`, `swept`, or `size_field`; execution is unavailable. | Authored operation family. | Unavailable | `mesh_workflow.per_geometry.<object>.operations[].kind` |
+| `MeshOperation.params` | `dict[str, Any]` | `{}` | $1$ | Preserved as authored data; execution validation is unavailable. | Authored operation parameters. | Unavailable | `mesh_workflow.per_geometry.<object>.operations[].params` |
+| `MeshOperation.enabled` | `bool` | `True` | $1$ | Boolean, but false does not bypass rejection of the nonempty operation list. | Authored enable flag only; no operation currently executes. | Unavailable | `mesh_workflow.per_geometry.<object>.operations[].enabled` |
+
 ### Complete stage-first example
 
 ```python
@@ -410,60 +455,15 @@ layer convergence rather than treating one layer as universally sufficient.
    [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
 
 (python-api-discretization-per-object-meshing-source-code-index)=
-### Exhaustive public-API and Python-to-ProblemIR mapping
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| PerObjectMeshRecipe.maximum_element_size | float \| None | None | $\mathrm{m}$ | Positive when authored by the public facade. | Canonical object maximum element-size target. | FEM | mesh_workflow.per_geometry.<object>.maximum_element_size |
-| PerObjectMeshRecipe.minimum_element_size | float \| None | None | $\mathrm{m}$ | Positive and no larger than the effective maximum when authored by the public facade. | Canonical object minimum element-size target. | FEM | mesh_workflow.per_geometry.<object>.minimum_element_size |
-| PerObjectMeshRecipe.hmax | float \| None | None | $\mathrm{m}$ | Compatibility alias used when maximum_element_size is absent. | Object maximum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmax |
-| PerObjectMeshRecipe.hmin | float \| None | None | $\mathrm{m}$ | Compatibility alias used when minimum_element_size is absent. | Object minimum-size alias. | FEM | mesh_workflow.per_geometry.<object>.hmin |
-| PerObjectMeshRecipe.order | int \| None | None | $1$ | Non-Boolean `Integral`, normalized to `int`; prismatic topology permits only order one. | Object finite-element order. | FEM | mesh_workflow.per_geometry.<object>.order |
-| PerObjectMeshRecipe.source | str \| None | None | $1$ | Any authored value is rejected; use study-level `FEM(mesh=...)`. | Reserved object mesh source. | Unavailable | none |
-| PerObjectMeshRecipe.calibrate_for | str \| None | None | $1$ | Normalized and rejected at construction unless it belongs to the supported provenance vocabulary; currently no numerical effect. | Recorded physics/workflow calibration family. | Provenance only | mesh_workflow.per_geometry.<object>.calibrate_for |
-| PerObjectMeshRecipe.size_preset | str \| None | None | $1$ | Normalized and rejected at construction unless it belongs to the supported size-preset vocabulary. | Named mesh-size preset. | FEM | mesh_workflow.per_geometry.<object>.size_preset |
-| PerObjectMeshRecipe.algorithm_2d | int \| None | None | $1$ | Finite integer algorithm identifier. | Gmsh surface meshing algorithm. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.algorithm_2d |
-| PerObjectMeshRecipe.algorithm_3d | int \| None | None | $1$ | Finite integer algorithm identifier. | Gmsh volume meshing algorithm. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.algorithm_3d |
-| PerObjectMeshRecipe.size_factor | float \| None | None | $1$ | Positive when authored by structured controls. | Preset-derived size multiplier. | FEM | mesh_workflow.per_geometry.<object>.size_factor |
-| PerObjectMeshRecipe.size_from_curvature | int \| None | None | $1$ | Nonnegative integer in structured UI. | Gmsh curvature sizing control. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.size_from_curvature |
-| PerObjectMeshRecipe.curvature_factor | float \| None | None | $1$ | Positive when authored. | Curvature-derived size factor. | FEM | mesh_workflow.per_geometry.<object>.curvature_factor |
-| PerObjectMeshRecipe.growth_rate | float \| None | None | $1$ | Positive; stage-first facade limits the practical range. | Maximum requested local size growth. | FEM | mesh_workflow.per_geometry.<object>.growth_rate |
-| PerObjectMeshRecipe.narrow_regions | int \| None | None | $1$ | Integer at least zero. | Gmsh narrow-region sizing switch/count. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.narrow_regions |
-| PerObjectMeshRecipe.narrow_region_resolution | float \| None | None | $1$ | Positive when authored. | Narrow-region resolution target. | FEM | mesh_workflow.per_geometry.<object>.narrow_region_resolution |
-| PerObjectMeshRecipe.smoothing_steps | int \| None | None | $1$ | Nonnegative integer when authored; zero disables smoothing. | Gmsh smoothing passes. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.smoothing_steps |
-| PerObjectMeshRecipe.optimize | str \| None | None | $1$ | Optimizer must be supported by the active Gmsh path. | Post-generation optimizer. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.optimize |
-| PerObjectMeshRecipe.optimize_iters | int \| None | None | $1$ | Positive integer when authored. | Optimizer iteration count. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.optimize_iters |
-| PerObjectMeshRecipe.boundary_layer_count | int \| None | None | $1$ | Positive integer when authored. | Boundary-layer element count. | FEM/Gmsh selector-gated | mesh_workflow.per_geometry.<object>.boundary_layer_count |
-| PerObjectMeshRecipe.boundary_layer_thickness | float \| None | None | $\mathrm{m}$ | Positive when authored. | First boundary-layer thickness (`hwall_n`), not total stack thickness. | FEM/Gmsh selector-gated | mesh_workflow.per_geometry.<object>.boundary_layer_thickness |
-| PerObjectMeshRecipe.boundary_layer_stretching | float \| None | None | $1$ | Positive growth ratio. | Boundary-layer stretching ratio. | FEM/Gmsh selector-gated | mesh_workflow.per_geometry.<object>.boundary_layer_stretching |
-| PerObjectMeshRecipe.mesh_strategy | str \| None | None | $1$ | auto, free_tetrahedral, thin_film_tetrahedral, swept_prism, or swept_hex. | Requested object topology strategy. | FEM capability-gated | mesh_workflow.per_geometry.<object>.mesh_strategy |
-| PerObjectMeshRecipe.through_thickness_elements | int \| None | None | $1$ | Integer at least one. | Element layers through thickness. | FEM swept/thin-film | mesh_workflow.per_geometry.<object>.through_thickness_elements |
-| PerObjectMeshRecipe.through_thickness_distribution | str \| None | None | $1$ | fixed, linear, or exponential. | Layer-thickness distribution. | FEM swept/thin-film | mesh_workflow.per_geometry.<object>.through_thickness_distribution |
-| PerObjectMeshRecipe.through_thickness_element_ratio | float \| None | None | $1$ | Positive ratio when authored. | Relative layer-size ratio. | FEM swept/thin-film | mesh_workflow.per_geometry.<object>.through_thickness_element_ratio |
-| PerObjectMeshRecipe.through_thickness_symmetric | bool | False | $1$ | Boolean. | Symmetric through-thickness grading. | FEM swept/thin-film | mesh_workflow.per_geometry.<object>.through_thickness_symmetric |
-| PerObjectMeshRecipe.sweep_face_meshing | str \| None | None | $1$ | triangular or quadrilateral. | Source-face element family. | FEM swept | mesh_workflow.per_geometry.<object>.sweep_face_meshing |
-| PerObjectMeshRecipe.topology | str \| None | None | $1$ | tetrahedral or prismatic; tetrahedral contradicts swept intent. | Requested high-level topology. | FEM capability-gated | mesh_workflow.per_geometry.<object>.topology |
-| PerObjectMeshRecipe.sweep_direction | str \| None | None | $1$ | auto, x, y, or z. | Sweep direction. | FEM swept | mesh_workflow.per_geometry.<object>.sweep_direction |
-| PerObjectMeshRecipe.element_family | str \| None | None | $1$ | prism or hex with matching strategy/source faces. | Swept volume element family. | FEM capability-gated | mesh_workflow.per_geometry.<object>.element_family |
-| PerObjectMeshRecipe.transition_policy | str \| None | None | $1$ | pyramid_to_tetrahedra or reject. | Transition into surrounding topology. | FEM capability-gated | mesh_workflow.per_geometry.<object>.transition_policy |
-| PerObjectMeshRecipe.exact_layer_count | bool \| None | None | $1$ | Boolean; strict prism may not set false. | Require exact requested layer count. | FEM capability-gated | mesh_workflow.per_geometry.<object>.exact_layer_count |
-| PerObjectMeshRecipe.compute_quality | bool \| None | None | $1$ | Boolean when authored; `None` inherits. | Request aggregate quality statistics. | FEM | mesh_workflow.per_geometry.<object>.compute_quality |
-| PerObjectMeshRecipe.per_element_quality | bool \| None | None | $1$ | Boolean when authored; `None` inherits. | Request per-element quality arrays. | FEM | mesh_workflow.per_geometry.<object>.per_element_quality |
-| PerObjectMeshRecipe.size_fields | list[dict] | [] | $1$ | Each field is validated/resolved by its field kind and selectors. | Additional ordered size fields. | FEM/Gmsh | mesh_workflow.per_geometry.<object>.size_fields |
-| PerObjectMeshRecipe.operations | list[MeshOperation] | [] | $1$ | Any nonempty list is rejected before mesh generation. | Authored operation intent; no public executor is currently available. | Unavailable | mesh_workflow.per_geometry.<object>.operations |
-| MeshOperation.kind | str | required | $1$ | Representable values are free_tetrahedral, boundary_layers, refine, adapt, swept, or size_field; execution is unavailable. | Authored operation family. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].kind |
-| MeshOperation.params | dict[str, Any] | {} | $1$ | Preserved as authored data; execution validation is unavailable. | Authored operation parameters. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].params |
-| MeshOperation.enabled | bool | True | $1$ | Boolean, but false does not bypass rejection of the nonempty operation list. | Authored enable flag only; no operation currently executes. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].enabled |
-
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
 ## Source-code index
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
 |---|---|---|---|---|---|---|
 | complete typed field inventory | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | source and constructor tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| ordered meshing operation schema | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class MeshOperation` | operation validation tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| stage-first object mesh facade | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/world.py` | `class MagnetHandle` | stage-first facade tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/world.py) |
+| target precedence resolution | FEM CPU/GPU meshing | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` | target precedence tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py) |
+| geometry sweepability classification | FEM CPU/GPU meshing | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `classify_sweepability` | swept meshing tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) |
 | exact prism canonical tuple | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | model and DOM tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
 | capability scope | Control Room, FEM CPU/GPU | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` | capability tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
 | rendered groups and transactions | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |

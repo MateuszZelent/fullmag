@@ -38,39 +38,25 @@ selection, constraint, torque, transport, geometry, material, stage, and interfa
 validated before execution.
 
 (python-api-problem-problem-frozen-spins)=
-## Frozen-spin constraints
+## Frozen-spins constraints (`FrozenSpins`)
 
-`Problem.magnetization_constraints` carries `FrozenSpins` intent as stage-first, typed contract
-data:
+`Problem.magnetization_constraints` carries `FrozenSpins` intent as typed contract data that remains explicit through to planning rather than being flattened prematurely into backend masks:
 
-- `selector`: geometry/object/region selection used for the frozen region.
+- `selector`: geometry, object, or region selection defining the frozen domain.
 - `membership`: static freeze or snapshot-at-activation behavior.
-- `reference`: source orientation mode (`capture_current_at_activation`, `initial_state`,
-  `explicit_field_asset`).
+- `reference`: orientation source mode (`capture_current_at_activation`, `initial_state`, or `explicit_field_asset`).
 - `stage_ids` / `activation`: stage-scoped applicability controls.
 
-Constraint definitions are validated before planning. Unsupported runtime/lane combinations must fail
-closed rather than silently rewrite intent.
+Constraint definitions are validated before planning; unsupported runtime or lane combinations fail closed rather than silently rewriting intent.
 
-## Standard entry: Frozen-spins (source-first, argument-complete)
+### Validation and helper entrypoints
 
-### Introduction
+- `class FrozenSpins` (`packages/fullmag-py/src/fullmag/model/constraints.py`): validates inputs in `__init__` and normalizes `reference` and `activation`.
+- `ObjectRegion.freeze_spins` (`packages/fullmag-py/src/fullmag/model/structure.py`): constructs `FrozenSpins` for a region (`in_region_selection`).
+- `Ferromagnet.freeze_spins` (`packages/fullmag-py/src/fullmag/model/structure.py`): constructs `FrozenSpins` for an object (`in_object_selection`), requiring `object_id`.
+- `class Problem` (`packages/fullmag-py/src/fullmag/model/problem.py`): serializes constraints into `ProblemIR`.
 
-`Problem.magnetization_constraints` stores `FrozenSpins` instances as part of the problem's
-contractual intent. The contract stays typed through to the planner layer and is never collapsed into
-backend masks prematurely.
-
-### Direct source-level evidence
-
-- `class FrozenSpins` (`packages/fullmag-py/src/fullmag/model/constraints.py`) validates inputs in
-  `__init__` and normalizes `reference`/`activation`.
-- `ObjectRegion.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) constructs
-  `FrozenSpins` for a region (`in_region_selection`).
-- `Ferromagnet.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) constructs
-  `FrozenSpins` for an object (`in_object_selection`), requiring `object_id`.
-- `Problem` (`packages/fullmag-py/src/fullmag/model/problem.py`) serializes constraints into IR.
-
-### Python authoring pattern (source-first)
+### Authoring `FrozenSpins` constraints
 
 ```python
 from fullmag.model.constraints import FrozenSpins
@@ -87,7 +73,7 @@ constraint = FrozenSpins(
 )
 ```
 
-### Functions and arguments (from signatures)
+### Functions and arguments
 
 | Function | Arguments |
 |---|---|
@@ -95,18 +81,6 @@ constraint = FrozenSpins(
 | `ObjectRegion.freeze_spins(*, id=None, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Region helper: default `id` is `<region_id>_frozen`; selector is `in_region_selection`. |
 | `Ferromagnet.freeze_spins(*, id, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Object helper: selector is `in_object_selection`; requires explicit `object_id`. |
 | `Problem(..., magnetization_constraints=(...))` | Carries constraints into the problem-level field and into IR (`ProblemIR`). |
-
-### Code references
-
-- `packages/fullmag-py/src/fullmag/model/constraints.py:137`
-- `packages/fullmag-py/src/fullmag/model/constraints.py:148`
-- `packages/fullmag-py/src/fullmag/model/structure.py:516`
-- `packages/fullmag-py/src/fullmag/model/structure.py:769`
-- `packages/fullmag-py/src/fullmag/model/problem.py`
-
-### Bibliography
-
-- Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
 (python-api-problem-problem-python-api)=
 ## Python API
@@ -135,7 +109,7 @@ constraint = FrozenSpins(
 | `Problem.spin_torques` | sequence | `()` | mixed | canonical torque modules | `spin_torque_modules` / study runtime contract |
 | `Problem.spin_torque_activation` | mapping | `{}` | $1$ | stage-local activation; unknown IDs rejected | stage torque activation |
 | `Problem.spin_transports` | sequence | `()` | mixed | canonical spin drift-diffusion modules | `spin_transport_modules` |
-| `Problem.temperature` | `float \| None` | `None` | K | non-negative compatibility temperature; thermal-term consistency checked | `temperature` |
+| `Problem.temperature` | `float \| None` | `None` | $\mathrm{K}$ | non-negative compatibility temperature; thermal-term consistency checked | `temperature` |
 | `Problem.elastic_materials` | sequence | `()` | mixed | elastic constitutive records | `elastic_materials` |
 | `Problem.elastic_bodies` | sequence | `()` | mixed | elastic body assignments | `elastic_bodies` |
 | `Problem.magnetostriction_laws` | sequence | `()` | mixed | magnetostriction laws | `magnetostriction_laws` |
@@ -260,7 +234,7 @@ reference integrity.
 (python-api-problem-problem-validation)=
 ## Validation
 
-The documentation ownership test compares this inventory and source map with the live constructor
+The documentation ownership test compares this inventory with the live constructor
 signature. Runtime qualification remains module- and lane-specific.
 
 (python-api-problem-problem-limitations)=
@@ -272,20 +246,20 @@ primary user surface while direct construction stays fully documented for reprod
 (python-api-problem-problem-scientific-bibliography)=
 ## Scientific bibliography
 
-No independent physical equation is introduced.
+No independent physical equation is introduced. For micromagnetic discretization and constraint modeling background, see:
 
-(python-api-problem-problem-source-code-index)=
+1. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
-## Control Room crosswalk
+## Control Room support
 
-Status: Control Room authors a study, objects, couplings, and `FrozenSpins` constraints and lowers them to `ProblemIR`; direct standalone `Problem`/`ProblemIR` editing is not exposed.
+Status: Control Room authors a study, objects, couplings, and `FrozenSpins` constraints and lowers them to `ProblemIR`; direct standalone `Problem`/`ProblemIR` editing remains Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | `Problem.magnetization_constraints` (`FrozenSpins`) | `Model Explorer -> Physics / Constraints -> Frozen Spins` (`FrozenSpinsInspectorPanel`, `SelectionExpressionBuilder`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision`; `FrozenSpinsOverlay` viewport preview |
 | `Problem.couplings` & `Problem.field_drives` | `Model Explorer -> Physics -> Couplings / Drives` (`CouplingInspectorPanel`, `RegionalFieldDrivePanel`) | `partial` | `runAuthoringMutationWithHistory` via `MODEL_COUPLINGS_RESOURCE_KEY` / scene deltas |
 | `Problem.antenna_*` / `solved_antenna_drives` | `Model Explorer -> Physics Objects -> <antenna>` (`AntennaObjectPanel`, `AntennaFieldSolveAuthoring`) | `partial` | `runAuthoringMutationWithHistory` with pre-solved basis overlays |
-| Standalone `Problem` aggregate constructor / raw IR parameters without UI fields | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
+| Standalone `Problem` aggregate constructor / raw IR parameters without UI fields | `No standalone Control Room route` | `Python-only` | Authored in Python |
 
 ```{image} /_static/images/ui/inspector-physics-couplings-frozen-spins.png
 :alt: Control Room Frozen Spins constraint inspector showing frz_edge_pin, Left Edge Pinning, and In region selection for reg_pinning_ring on obj_yig_film
@@ -293,14 +267,15 @@ Status: Control Room authors a study, objects, couplings, and `FrozenSpins` cons
 :width: 100%
 ```
 
-not implemented: frontend support for standalone Problem/ProblemIR authoring or aggregate parameters without matching inspector panels.
+Standalone `Problem`/`ProblemIR` authoring and aggregate parameters without inspector panels remain Python-only.
 See [Control Room capability register](/frontend/capability-register) and [Physics, Couplings & Frozen Spins Inspectors](/frontend/inspectors/physics-antennas-and-transport).
-Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`, `FrozenSpinsInspectorPanel`, and `CouplingInspectorPanel`.
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx` (`StudyInspectorPanel`), `FrozenSpinsInspectorPanel`, and `CouplingInspectorPanel`.
 
+(python-api-problem-problem-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| aggregate API and IR | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | graph validation and lowering | signature/source-map/round-trip tests |
+| aggregate API and IR | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | [`class Problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L2601) | graph validation and lowering | signature and round-trip tests |
 | selections | `packages/fullmag-py/src/fullmag/model/selection.py` | `SelectionDefinition` | canonical selection graph | selection validation tests |
 | constraints | `packages/fullmag-py/src/fullmag/model/constraints.py` | `FrozenSpins` | magnetization constraint semantics | constraint tests |

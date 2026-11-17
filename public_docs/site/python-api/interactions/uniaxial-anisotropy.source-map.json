@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-uniaxial_anisotropy",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_uniaxial_anisotropy"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_uniaxial_anisotropy",
@@ -63,7 +46,7 @@
         "python": "fm.UniaxialAnisotropy.ku1",
         "type": "float",
         "default": "required",
-        "si_unit": "J/m^3",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
         "validation": "finite",
         "meaning": "first anisotropy constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
@@ -73,7 +56,7 @@
         "python": "fm.UniaxialAnisotropy.ku2",
         "type": "float",
         "default": "0.0",
-        "si_unit": "J/m^3",
+        "si_unit": "$\\mathrm{J\\,m^{-3}}$",
         "validation": "finite",
         "meaning": "second anisotropy constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
@@ -83,7 +66,7 @@
         "python": "fm.UniaxialAnisotropy.axis",
         "type": "tuple[float,float,float]",
         "default": "(0,0,1)",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite non-zero; normalized",
         "meaning": "easy axis",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
