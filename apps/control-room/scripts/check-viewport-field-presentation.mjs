@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { choose, readChoice } from "./lib/viewport-appearance-browser-qa.mjs";
+import { installViewportReadOnlyReplica, prepareViewportOrientationProof } from "./lib/viewport-read-only-replica.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightRequire = createRequire(require.resolve("playwright/package.json"));
@@ -15,56 +16,17 @@ const directory = resolve(process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ?? ".arti
 await mkdir(directory, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1668, height: 1000 }, colorScheme: "dark" });
-const errors = [], deniedMutations = [], frames = {}, audit = {};
+const errors = [], frames = {}, audit = {};
 const ui = {};
-const responses = new Map();
 let failure = null;
 page.on("pageerror", (error) => errors.push(error.message));
 page.on("console", (message) => {
   if (message.type() === "error" && !message.text().includes("403 (Forbidden)")) errors.push(message.text());
 });
 
-// The browser uses current production renderer code but cannot author into its data source.
-await page.route("**/v2/**", async (route) => {
-  const request = route.request();
-  const parsed = new URL(request.url());
-  if (request.method() !== "GET") {
-    deniedMutations.push({ method: request.method(), path: parsed.pathname });
-    return route.fulfill({ status: 403, body: "Read-only renderer verification" });
-  }
-  if (!readOnlyApi) return route.continue();
-  const resource = parsed.pathname + parsed.search;
-  // Topology and field resources use HTTP byte ranges. Each range is a distinct response.
-  const key = `${resource}|range=${request.headers().range ?? ""}|scope=${request.headers()["x-fullmag-session-scope"] ?? ""}`;
-  if (!responses.has(key)) {
-    const response = await page.request.get(new URL(resource, readOnlyApi).href, { headers: request.headers(), timeout: 120_000 });
-    let body = await response.body();
-    if (orientationProof && parsed.pathname.endsWith("/visualization/state") && response.ok()) {
-      const state = JSON.parse(body);
-      for (const target of state.targets?.objects ?? []) {
-        target.settings.active_quantity_id = "m";
-        target.settings.surface_color_source = "orientation";
-        if (target.override) {
-          target.override.quantity = { active_quantity_id: "m" };
-          target.override.style = { ...target.override.style, surface_color_source: "orientation" };
-        }
-      }
-      for (const override of state.overrides ?? []) {
-        if (override.scope !== "object") continue;
-        override.quantity = { active_quantity_id: "m" };
-        override.style = { ...override.style, surface_color_source: "orientation" };
-      }
-      // Display-only fixture: choose +X orientation and a repeatable camera without changing field values.
-      state.camera = { ...state.camera, position: [-3.730710e-6, -2.863532e-6, 3.654640e-6],
-        target: [0, 0, 0], orthographic_scale: 7.5e-6 };
-      body = Buffer.from(JSON.stringify(state));
-    }
-    const headers = { ...response.headers() };
-    delete headers["content-length"];
-    delete headers["content-encoding"];
-    responses.set(key, { status: response.status(), headers, body });
-  }
-  return route.fulfill(responses.get(key));
+const { deniedMutations } = await installViewportReadOnlyReplica(page, {
+  apiBase: readOnlyApi,
+  transformVisualizationState: orientationProof ? prepareViewportOrientationProof : undefined,
 });
 await page.addInitScript(() => {
   window.__FULLMAG_CONFIG__ = { disableRealtime: true, enableAuditHooks: true };

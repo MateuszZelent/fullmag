@@ -779,7 +779,7 @@ def _validate_archive_contents(
         _fail(b, "archived candidate receipt is not source-manifest-bound")
     toolchain = _candidate_toolchain(b, receipt)
     cargo_profile = marker.get("cargo_profile")
-    if not b._package_matches_fresh_live_manifest(
+    if not b._package_source_matches_fresh_live_manifest(
         receipt,
         source_path,
         toolchain,
@@ -1103,7 +1103,7 @@ def _validate_candidate_source_binding(
         _fail(b, "ready candidate Cargo profile identity differs")
     toolchain = _candidate_toolchain(b, spec.receipt)
     manifest_path = archive / "source" / "live-manifest.json"
-    if not b._package_matches_fresh_live_manifest(
+    if not b._package_source_matches_fresh_live_manifest(
         spec.receipt,
         manifest_path,
         toolchain,

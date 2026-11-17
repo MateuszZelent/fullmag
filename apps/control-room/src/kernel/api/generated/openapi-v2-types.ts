@@ -17454,6 +17454,7 @@ export interface components {
             viewport_colorbar_visible: boolean;
             visible: boolean;
             wireframe_color: string;
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
             wireframe_opacity: number;
             wireframe_visible: boolean;
@@ -17593,6 +17594,7 @@ export interface components {
             vectors?: null | components["schemas"]["VectorLayerPatch"];
             visible?: boolean | null;
             wireframe?: null | components["schemas"]["BasicLayerPatch"];
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
         };
         /** @enum {string} */
         VisualizationTargetGeometryScope: "surface" | "full";

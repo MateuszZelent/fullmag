@@ -135,7 +135,7 @@ Disposal rules:
 | object mesh | topology revision, displayed object/part set, per-object display style |
 | scalar field | field revision, quantity/component, color range, compatible topology, FMVP indexing map |
 | vector glyphs | vector field revision, density, vector scope, per-object glyph visibility/style, FMVP indexing map for sampled/scoped payloads |
-| wireframe | topology revision or per-object wireframe visibility |
+| wireframe | topology revision, per-object wireframe visibility/extent; prepared preview selected during camera navigation |
 | airbox | mesh/manifest revision or airbox visualization state |
 | axes/grid/bounds | camera/domain setting |
 | selection | kernel selection change |
@@ -143,6 +143,27 @@ Disposal rules:
 Layers may share render-model inputs, but one layer cannot own another layer's disposal.
 
 Object and airbox layers resolve display settings through the target visualization registry. A target can independently enable/disable shader surface, wireframe, points, vector glyphs, visibility, and opacity. The renderer applies those settings per manifest object/part where the backend supplies object/part mapping; otherwise it falls back to the domain-level target and marks the display as degraded.
+
+FEM object/part wireframe has its own `wireframeGeometryScope`, serialized as
+`display.wireframe_geometry_scope` and resolved `settings.wireframe_geometry_scope`.
+The Inspector offers **Surface mesh** (default) and **Full volume mesh**. This
+choice changes only mesh edges; `geometryScope`, point selection, vector sample
+scope and vector budget remain independent. Missing legacy wireframe extent
+uses surface edges. Airbox and structured FDM keep their existing extent rules.
+
+During camera navigation a prepared surface preview uses at most 12000 evenly
+distributed edge segments per visible FEM part. Once the camera settles or the
+gesture is cancelled, the exact selected edge geometry returns. The preview
+shares topology positions, owns only its sampled index buffer and uses the
+existing upload/disposal pipeline; camera frames do not rebuild topology.
+If the preview is not ready, the selected full-detail geometry remains visible.
+This motion preview is an explicitly accepted presentation fallback, not a
+change to scientific field values or saved full-detail mesh semantics.
+
+The controls commit the final live camera pose only after 500 ms of quiet and
+observed rest. Wheel impulses within that interval restart the same guarded
+commit path; stale epochs, cancelled gestures and unmounted controls cannot
+publish a late pose. OrbitControls remains the only zoom owner.
 
 For multilayer FDM, Airbox owns cells whose centres are outside the active
 native magnetic layers. The field API applies this mask before sampling and

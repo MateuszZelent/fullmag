@@ -1,8 +1,60 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { scheduleViewport3DCameraRestCommit } from "./viewport3DCameraRestCommit";
+import { scheduleViewport3DCameraRestCommit, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS } from "./viewport3DCameraRestCommit";
 afterEach(() => vi.useRealTimers());
 
 describe("camera rest commit on slow frames", () => {
+  it.each([250, 330])("coalesces wheel impulses %i ms apart into one final live pose", (interval) => {
+    vi.useFakeTimers();
+    const commit = vi.fn();
+    let cancel = () => {};
+    let epoch = 0;
+    let livePose = { position: [0, 0, 1], orthographicScale: 1 };
+    for (let index = 0; index < 5; index += 1) {
+      cancel();
+      const currentEpoch = ++epoch;
+      livePose = { position: [0, 0, 1 + index], orthographicScale: 1 / (index + 1) };
+      cancel = scheduleViewport3DCameraRestCommit({
+        delayMs: VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS,
+        isCurrent: () => epoch === currentEpoch,
+        isMoving: () => false,
+        requestFrame: vi.fn(),
+        commit: () => commit(livePose),
+      });
+      if (index < 4) {
+        vi.advanceTimersByTime(interval);
+        expect(commit).not.toHaveBeenCalled();
+      }
+    }
+    vi.advanceTimersByTime(499);
+    expect(commit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(commit).toHaveBeenCalledExactlyOnceWith({ position: [0, 0, 5], orthographicScale: 0.2 });
+    vi.advanceTimersByTime(1000);
+    expect(commit).toHaveBeenCalledOnce();
+  });
+
+  it("commits a single impulse only after its quiet period and observed rest", () => {
+    vi.useFakeTimers();
+    let moving = true;
+    let liveScale = 1;
+    const requestFrame = vi.fn(), commit = vi.fn();
+    scheduleViewport3DCameraRestCommit({
+      delayMs: VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS,
+      isCurrent: () => true,
+      isMoving: () => moving,
+      requestFrame,
+      commit: () => commit(liveScale),
+    });
+    vi.advanceTimersByTime(500);
+    expect(commit).not.toHaveBeenCalled();
+    expect(requestFrame).toHaveBeenCalledOnce();
+    moving = false;
+    liveScale = 0.75;
+    vi.advanceTimersByTime(499);
+    expect(commit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(0.75);
+  });
   it("does not commit during an inter-frame gap, then commits once after observed rest", () => {
     vi.useFakeTimers();
     let moving = true;

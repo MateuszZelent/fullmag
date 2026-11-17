@@ -758,7 +758,8 @@ jobs:
 
   browser-fixture-smoke:
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.contract_scope != 'native-receipt' && inputs.contract_scope != 'positive-mass' && inputs.contract_scope != 'floquet-source-moments' && inputs.contract_scope != 'native-modal' && inputs.contract_scope != 'floquet-modal-slepc' && inputs.contract_scope != 'generic-modal-slepc' && inputs.contract_scope != 'floquet-count-slepc' && inputs.contract_scope != 'modal-phase-slepc' && inputs.contract_scope != 'retention' && inputs.contract_scope != 'rust' && inputs.contract_scope != 'bias-field-artifacts') }}
-    runs-on: ubuntu-latest
+    # Keep Chromium dependencies on Ubuntu 24.04 across runner image migrations.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -884,7 +885,8 @@ jobs:
           if-no-files-found: error
 
   inspector-actions-browser-smoke:
-    runs-on: ubuntu-latest
+    # Keep Chromium dependencies on Ubuntu 24.04 across runner image migrations.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
