@@ -7,6 +7,7 @@ import copy
 import os
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -462,6 +463,20 @@ class ToolchainBootstrapTests(unittest.TestCase):
         self.assertIn("cpu_hypre_sha256_after", block)
         self.assertIn('test "${cpu_hypre_sha256_before}" = "${cpu_hypre_sha256_after}"', block)
         self.assertNotIn("/opt/fullmag-mfem-cpu install", block)
+
+    def test_hash_pinned_hypre_headers_keep_bytes_in_windows_checkout(self):
+        repository = Path(__file__).resolve().parents[1]
+        dockerfile = (repository / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
+        for stem in ("l1", "residual"):
+            relative = f"docker/fem-gpu/patches/hypre-3.1.0-{stem}-stream-copy.hpp"
+            with self.subTest(path=relative):
+                checkout = subprocess.run(
+                    ["git", "-c", "core.autocrlf=true", "cat-file", "--filters",
+                     "--path=" + relative, "HEAD:" + relative],
+                    cwd=repository, check=True, capture_output=True,
+                ).stdout
+                self.assertNotIn(b"\r\n", checkout)
+                self.assertIn(hashlib.sha256(checkout).hexdigest(), dockerfile)
 
     def test_hypre_l1_patch_is_pinned_applied_and_recorded(self):
         repository = Path(__file__).resolve().parents[1]
