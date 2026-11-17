@@ -1310,6 +1310,11 @@ fn is_supported_study_artifact_codec(data_kind: &str, codec_id: &str, version: &
         || (data_kind == "artifact"
             && codec_id == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_ID
             && version == crate::study_artifact::STUDY_ANTENNA_INSPECTION_CODEC_VERSION)
+        || (data_kind == "artifact"
+            && matches!(codec_id,
+                crate::study_frequency_response_artifact::FREQUENCY_RESPONSE_INDEX_CODEC_ID
+                | crate::study_frequency_response_artifact::FREQUENCY_RESPONSE_POINT_CODEC_ID)
+            && version == crate::study_frequency_response_artifact::FREQUENCY_RESPONSE_CODEC_VERSION)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

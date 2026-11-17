@@ -599,6 +599,22 @@ mod tests {
     }
 
     #[test]
+    fn study_registry_accepts_only_exact_driven_response_artifact_codec_tuples() {
+        let f=files();
+        for (is_point,codec) in [(false,FREQUENCY_RESPONSE_INDEX_CODEC_ID),
+                                (true,FREQUENCY_RESPONSE_POINT_CODEC_ID)] {
+            let m=bytes(&manifest(is_point.then_some(0),&f));
+            let raw=if is_point {encode_frequency_response_point_bundle(&m,&f,1_000_000)}
+                    else {encode_frequency_response_index_bundle(&m,&f,1_000_000)}.unwrap();
+            assert!(crate::decode_study_artifact_bytes("artifact",codec,"v1",&raw).is_ok());
+            assert!(crate::decode_study_artifact_bytes("state",codec,"v1",&raw).is_err());
+            assert!(crate::decode_study_artifact_bytes("artifact",codec,"v2",&raw).is_err());
+            let opposite=if is_point {FREQUENCY_RESPONSE_INDEX_CODEC_ID} else {FREQUENCY_RESPONSE_POINT_CODEC_ID};
+            assert!(crate::decode_study_artifact_bytes("artifact",opposite,"v1",&raw).is_err());
+        }
+    }
+
+    #[test]
     fn index_and_point_roundtrip_preserve_exact_bytes_and_approximate_hybrid_provenance() {
         let f = files();
         for is_point in [false, true] {
