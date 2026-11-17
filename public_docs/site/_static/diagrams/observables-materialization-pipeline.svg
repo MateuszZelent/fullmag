@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 620" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Observables legality, accepted-step sampling, support-scoped volume reductions, and provenance</title>
+  <desc id="desc">Four-stage Fullmag observable materialization pipeline: (a) adaptive time integration emitting rows only on accepted steps and discarding rejected adaptive trials; (b) planner legality gate validate_executable_outputs rejecting unmaterializable requests instead of emitting silent zeros; (c) discretization-aware field extraction and volume-weighted scalar reductions Q_scalar = sum_{i in Omega_m} w_i q_i excluding FEM airbox elements; (d) provenance-complete Zarr/HDF5 and scalar table artifacts.</desc>
+  <defs>
+    <style>
+      .fig-title { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #4b5568; }
+      .panel-title { font: 700 14.5px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .badge { font: 700 12.5px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .sec-hdr { font: 700 13px 'Segoe UI', Arial, sans-serif; fill: #1d3557; }
+      .label-bold { font: 600 12.5px 'Segoe UI', Arial, sans-serif; fill: #1e2433; }
+      .body { font: 400 12px 'Segoe UI', Arial, sans-serif; fill: #2b3344; }
+      .small { font: 400 11px 'Segoe UI', Arial, sans-serif; fill: #4f586b; }
+      .tiny { font: 400 10px 'Segoe UI', Arial, sans-serif; fill: #5c657a; }
+      .code { font: 600 11px 'Consolas', 'Courier New', monospace; fill: #283147; }
+      .code-sm { font: 500 10.2px 'Consolas', 'Courier New', monospace; fill: #354059; }
+      .math { font: italic 13px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-bold { font: italic 700 13.5px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 11.5px 'Cambria Math', 'Times New Roman', serif; fill: #2b3344; }
+      .pill-text { font: 600 11px 'Segoe UI', Arial, sans-serif; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-muted-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_DL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-T_FL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-DMI-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-J_c" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-J_c-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-air-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <pattern id="hatch-amber" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#b86b11" stroke-width="1.4" stroke-opacity="0.32"/></pattern>
+    <pattern id="hatch-slate" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#6e7b91" stroke-width="1.2" stroke-opacity="0.28"/></pattern>
+    <filter id="soft-shadow" x="-3%" y="-3%" width="106%" height="108%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1e2433" flood-opacity="0.06"/></filter>
+  </defs>
+  <rect x="2.00" y="2.00" width="1356.00" height="616.00" fill="#fbfcfe" rx="10.0" stroke="#ccd0da" stroke-width="1.50"/>
+  <text x="28.00" y="36.00" class="fig-title">Observables Pipeline: Accepted-Step Sampling, Legality Gate, and Support Reduction</text>
+  <text x="28.00" y="57.00" class="fig-subtitle">Fail-closed capability enforcement from adaptive RK steps through QuantityRegistry to provenance-backed artifacts</text>
+  <line x1="24.00" y1="68.00" x2="1336.00" y2="68.00" stroke="#e1e5ee" stroke-width="1.20" stroke-linecap="round"/>
+  <rect x="24.00" y="82.00" width="320.00" height="516.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="38.00" y="95.00" width="30.00" height="22.00" fill="#147d75" rx="5.0"/>
+  <text x="53.00" y="110.50" class="badge" text-anchor="middle">(a)</text>
+  <text x="78.00" y="110.50" class="panel-title">Accepted-Step Sampling</text>
+  <text x="38.00" y="130.00" class="small">Rejected RK trials never emit rows/fields</text>
+  <line x1="54.00" y1="232.00" x2="314.00" y2="232.00" stroke="#1e2433" stroke-width="1.60" stroke-linecap="round" marker-end="url(#arr-ink-sm)"/>
+  <text x="312.00" y="220.00" class="math-sm" text-anchor="end">t (s)</text>
+  <line x1="72.00" y1="226.00" x2="72.00" y2="238.00" stroke="#256b15" stroke-width="2.20" stroke-linecap="round"/>
+  <circle cx="72.00" cy="232.00" r="5.00" fill="#256b15" stroke="#ffffff" stroke-width="1.20"/>
+  <text x="72.00" y="254.00" class="math-sm" text-anchor="middle" style="fill:#256b15">t<tspan baseline-shift="sub" font-size="72%">0</tspan></text>
+  <line x1="146.00" y1="226.00" x2="146.00" y2="238.00" stroke="#256b15" stroke-width="2.20" stroke-linecap="round"/>
+  <circle cx="146.00" cy="232.00" r="5.00" fill="#256b15" stroke="#ffffff" stroke-width="1.20"/>
+  <text x="146.00" y="254.00" class="math-sm" text-anchor="middle" style="fill:#256b15">t<tspan baseline-shift="sub" font-size="72%">1</tspan></text>
+  <line x1="250.00" y1="226.00" x2="250.00" y2="238.00" stroke="#256b15" stroke-width="2.20" stroke-linecap="round"/>
+  <circle cx="250.00" cy="232.00" r="5.00" fill="#256b15" stroke="#ffffff" stroke-width="1.20"/>
+  <text x="250.00" y="254.00" class="math-sm" text-anchor="middle" style="fill:#256b15">t<tspan baseline-shift="sub" font-size="72%">2</tspan></text>
+  <line x1="288.00" y1="226.00" x2="288.00" y2="238.00" stroke="#256b15" stroke-width="2.20" stroke-linecap="round"/>
+  <circle cx="288.00" cy="232.00" r="5.00" fill="#256b15" stroke="#ffffff" stroke-width="1.20"/>
+  <text x="288.00" y="254.00" class="math-sm" text-anchor="middle" style="fill:#256b15">t<tspan baseline-shift="sub" font-size="72%">3</tspan></text>
+  <path d="M 146.0 228 Q 178.0 180 210.0 224" fill="none" stroke="#ba092f" stroke-width="1.80" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3" marker-end="url(#arr-err-sm)"/>
+  <circle cx="210.00" cy="224.00" r="5.50" fill="#fdecef" stroke="#ba092f" stroke-width="1.50"/>
+  <text x="210.00" y="228.00" class="label-bold" text-anchor="middle" style="fill:#ba092f;font-size:11.0px">×</text>
+  <text x="178.00" y="180.00" class="tiny" text-anchor="middle" style="fill:#ba092f">Rejected RK trial (err &gt; tol)</text>
+  <text x="178.00" y="194.00" class="tiny" text-anchor="middle" style="fill:#ba092f">Discarded: no TableAutosave row</text>
+  <path d="M 146.0 236 Q 198.0 286 250.0 236" fill="none" stroke="#256b15" stroke-width="1.80" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-ok-sm)"/>
+  <text x="198.00" y="284.00" class="tiny" text-anchor="middle" style="fill:#256b15">Shrunk Δt accepted → sample</text>
+  <rect x="42.00" y="316.00" width="284.00" height="126.00" fill="#f5f7fb" rx="6.0" stroke="#a8dcd6" stroke-width="1.10"/>
+  <text x="54.00" y="338.00" class="label-bold" style="fill:#147d75">Cadence Policy (Table &amp; Field)</text>
+  <text x="54.00" y="360.00" class="code-sm">• TableAutosave(every_steps | t_sampl)</text>
+  <text x="54.00" y="380.00" class="code-sm">• FieldAutosave(quantity, every_steps | every)</text>
+  <text x="54.00" y="400.00" class="code-sm">• SaveScalar / SaveField / Snapshot</text>
+  <text x="54.00" y="424.00" class="tiny" style="fill:#5c657a">Mutually exclusive step vs. time cadence</text>
+  <rect x="42.00" y="456.00" width="284.00" height="124.00" fill="#ffffff" rx="6.0" stroke="#dce0e8" stroke-width="1.00"/>
+  <text x="54.00" y="478.00" class="label-bold">Accepted State Vector  m(t<tspan baseline-shift="sub" font-size="72%">n</tspan>)</text>
+  <text x="54.00" y="500.00" class="math-sm" style="fill:#1e2433">Q<tspan baseline-shift="sub" font-size="72%">n</tspan> = Q[ m(t<tspan baseline-shift="sub" font-size="72%">n</tspan>), G, M, P ]</text>
+  <text x="54.00" y="524.00" class="small">Normalized active spins (‖m<tspan baseline-shift="sub" font-size="72%">i</tspan>‖<tspan baseline-shift="sub" font-size="72%">2</tspan>=1);</text>
+  <text x="54.00" y="542.00" class="small">evaluated only after step acceptance</text>
+  <text x="54.00" y="562.00" class="small">and optional interaction refresh.</text>
+  <rect x="362.00" y="82.00" width="312.00" height="516.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="376.00" y="95.00" width="30.00" height="22.00" fill="#6f3cc4" rx="5.0"/>
+  <text x="391.00" y="110.50" class="badge" text-anchor="middle">(b)</text>
+  <text x="416.00" y="110.50" class="panel-title">Planner Legality Gate</text>
+  <text x="376.00" y="130.00" class="small">validate_executable_outputs (fail-closed)</text>
+  <line x1="346.00" y1="342.00" x2="358.00" y2="342.00" stroke="#5c657a" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-muted)"/>
+  <rect x="378.00" y="150.00" width="280.00" height="212.00" fill="#f5f7fb" rx="6.0" stroke="#cbb4ef" stroke-width="1.10"/>
+  <text x="390.00" y="172.00" class="label-bold" style="fill:#6f3cc4">Enabling-Interaction Prerequisites</text>
+  <text x="390.00" y="196.00" class="code-sm" style="fill:#1e2433">m, mx, my, mz</text>
+  <text x="646.00" y="196.00" class="tiny" text-anchor="end" style="fill:#5c657a">always available</text>
+  <text x="390.00" y="216.00" class="code-sm" style="fill:#1e2433">H_ex, E_ex</text>
+  <text x="646.00" y="216.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires Exchange()</text>
+  <text x="390.00" y="236.00" class="code-sm" style="fill:#1e2433">H_demag, E_demag</text>
+  <text x="646.00" y="236.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires Demag()</text>
+  <text x="390.00" y="256.00" class="code-sm" style="fill:#1e2433">H_ext, E_ext</text>
+  <text x="646.00" y="256.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires Zeeman()</text>
+  <text x="390.00" y="276.00" class="code-sm" style="fill:#1e2433">H_dmi, E_dmi</text>
+  <text x="646.00" y="276.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires DMI term</text>
+  <text x="390.00" y="296.00" class="code-sm" style="fill:#1e2433">H_mel, E_mel</text>
+  <text x="646.00" y="296.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires Magnetoelastic()</text>
+  <text x="390.00" y="316.00" class="code-sm" style="fill:#1e2433">H_therm</text>
+  <text x="646.00" y="316.00" class="tiny" text-anchor="end" style="fill:#5c657a">requires ThermalNoise()</text>
+  <text x="390.00" y="336.00" class="code-sm" style="fill:#1e2433">H_eff, E_total</text>
+  <text x="646.00" y="336.00" class="tiny" text-anchor="end" style="fill:#5c657a">≥ 1 active energy/field</text>
+  <rect x="378.00" y="376.00" width="280.00" height="92.00" fill="#f3ecfc" rx="6.0" stroke="#6f3cc4" stroke-width="1.20"/>
+  <text x="390.00" y="398.00" class="label-bold" style="fill:#6f3cc4">Lane CapabilityMatrix Check</text>
+  <text x="390.00" y="420.00" class="small">• Checks selected (FDM|FEM) × (CPU|GPU)</text>
+  <text x="390.00" y="438.00" class="small">• Verifies materialization &amp; precision</text>
+  <text x="390.00" y="456.00" class="small">• Rejects duplicate or unknown names</text>
+  <rect x="378.00" y="484.00" width="280.00" height="96.00" fill="#fdecef" rx="6.0" stroke="#ba092f" stroke-width="1.30"/>
+  <text x="518.00" y="508.00" class="label-bold" text-anchor="middle" style="fill:#ba092f">Fail-Closed Rejection Gate</text>
+  <text x="518.00" y="530.00" class="small" text-anchor="middle" style="fill:#ba092f">Missing interaction or unmaterialisable</text>
+  <text x="518.00" y="547.00" class="small" text-anchor="middle" style="fill:#ba092f">GPU reduction → immediate planner error</text>
+  <text x="518.00" y="566.00" class="label-bold" text-anchor="middle" style="fill:#ba092f;font-size:11.0px">NEVER substituted by silent 0.0!</text>
+  <rect x="692.00" y="82.00" width="342.00" height="516.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="706.00" y="95.00" width="30.00" height="22.00" fill="#1d5fa7" rx="5.0"/>
+  <text x="721.00" y="110.50" class="badge" text-anchor="middle">(c)</text>
+  <text x="746.00" y="110.50" class="panel-title">Support &amp; Scalar Reduction</text>
+  <text x="706.00" y="130.00" class="small">Native field support &amp; airbox-excluding weights w<tspan baseline-shift="sub" font-size="72%">i</tspan></text>
+  <line x1="676.00" y1="342.00" x2="688.00" y2="342.00" stroke="#256b15" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-ok)"/>
+  <rect x="708.00" y="150.00" width="310.00" height="92.00" fill="#eaf1fb" rx="6.0" stroke="#1d5fa7" stroke-width="1.10"/>
+  <text x="720.00" y="171.00" class="label-bold" style="fill:#1d5fa7">Field Observables (Spatial Support)</text>
+  <text x="720.00" y="193.00" class="small">• FDM: cell-centered Cartesian arrays</text>
+  <text x="720.00" y="211.00" class="small">• FEM: nodal/vector DOF arrays</text>
+  <text x="720.00" y="229.00" class="tiny" style="fill:#1d5fa7">  (context_copy_field_f64; no silent resample)</text>
+  <rect x="708.00" y="254.00" width="310.00" height="118.00" fill="#ffffff" rx="6.0" stroke="#1d5fa7" stroke-width="1.20"/>
+  <text x="720.00" y="276.00" class="label-bold" style="fill:#1d5fa7">Volume-Weighted Scalar Reductions</text>
+  <text x="863.00" y="306.00" class="math-bold" text-anchor="middle" style="font-size:14.5px">Q<tspan baseline-shift="sub" font-size="72%">scalar</tspan> = ∑<tspan baseline-shift="sub" font-size="72%">i ∈ Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></tspan> w<tspan baseline-shift="sub" font-size="72%">i</tspan> q<tspan baseline-shift="sub" font-size="72%">i</tspan></text>
+  <text x="863.00" y="332.00" class="math-sm" text-anchor="middle">E<tspan baseline-shift="sub" font-size="72%">total</tspan>(t<tspan baseline-shift="sub" font-size="72%">n</tspan>) = ∑<tspan baseline-shift="sub" font-size="72%">k ∈ K</tspan> E<tspan baseline-shift="sub" font-size="72%">k</tspan>(t<tspan baseline-shift="sub" font-size="72%">n</tspan>)</text>
+  <text x="863.00" y="357.00" class="code-sm" text-anchor="middle" style="fill:#5c657a">QuantityRegistry::evaluate_by_name</text>
+  <rect x="708.00" y="384.00" width="310.00" height="196.00" fill="#f5f7fb" rx="6.0" stroke="#dce0e8" stroke-width="1.10"/>
+  <text x="720.00" y="406.00" class="label-bold" style="font-size:11.5px">Domain Support Masking (Airbox Excluded)</text>
+  <rect x="728.00" y="420.00" width="270.00" height="114.00" fill="#eef2f8" rx="5.0" stroke="#6e7b91" stroke-width="1.60"/>
+  <rect x="728.00" y="420.00" width="270.00" height="114.00" fill="url(#hatch-slate)" rx="5.0"/>
+  <text x="738.00" y="438.00" class="tiny" style="fill:#6e7b91;font-weight:600">Ω<tspan baseline-shift="sub" font-size="72%">a</tspan> ∖ Ω<tspan baseline-shift="sub" font-size="72%">m</tspan> (airbox): w<tspan baseline-shift="sub" font-size="72%">i</tspan> = 0  EXCLUDED</text>
+  <rect x="772.00" y="454.00" width="182.00" height="60.00" fill="#f6e8df" rx="4.0" stroke="#b97a56" stroke-width="1.80"/>
+  <text x="863.00" y="479.00" class="label-bold" text-anchor="middle" style="fill:#6d3a1c;font-size:11.5px">Ω<tspan baseline-shift="sub" font-size="72%">m</tspan> (magnetic)</text>
+  <text x="863.00" y="498.00" class="tiny" text-anchor="middle" style="fill:#256b15;font-weight:600">w<tspan baseline-shift="sub" font-size="72%">i</tspan> &gt; 0  INCLUDED</text>
+  <text x="863.00" y="556.00" class="tiny" text-anchor="middle" style="fill:#3e4659">FDM: w<tspan baseline-shift="sub" font-size="72%">i</tspan> = Δx Δy Δz  |  FEM: nodal/quadrature weights</text>
+  <text x="863.00" y="572.00" class="tiny" text-anchor="middle" style="fill:#5c657a">Nonmagnetic airbox potential u does not enter E<tspan baseline-shift="sub" font-size="72%">k</tspan></text>
+  <rect x="1052.00" y="82.00" width="284.00" height="516.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="1066.00" y="95.00" width="30.00" height="22.00" fill="#256b15" rx="5.0"/>
+  <text x="1081.00" y="110.50" class="badge" text-anchor="middle">(d)</text>
+  <text x="1106.00" y="110.50" class="panel-title">Artifacts &amp; Provenance</text>
+  <text x="1066.00" y="130.00" class="small">OutputStorage (Zarr/HDF5/CSV)</text>
+  <line x1="1036.00" y1="342.00" x2="1048.00" y2="342.00" stroke="#256b15" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-ok)"/>
+  <rect x="1066.00" y="150.00" width="256.00" height="98.00" fill="#fdf3e6" rx="6.0" stroke="#b86b11" stroke-width="1.10"/>
+  <text x="1076.00" y="171.00" class="label-bold" style="fill:#b86b11">1. Scalar Table Channel</text>
+  <text x="1076.00" y="189.00" class="code-sm">TableAutosave (CSV / Zarr)</text>
+  <text x="1076.00" y="210.00" class="tiny">• Columns: t, step, solver_dt, E_k,</text>
+  <text x="1076.00" y="226.00" class="tiny">  E_total, mx..mz, max_torque</text>
+  <rect x="1066.00" y="260.00" width="256.00" height="98.00" fill="#eaf1fb" rx="6.0" stroke="#1d5fa7" stroke-width="1.10"/>
+  <text x="1076.00" y="281.00" class="label-bold" style="fill:#1d5fa7">2. Binary Spatial Fields</text>
+  <text x="1076.00" y="299.00" class="code-sm">FieldAutosave / SaveField</text>
+  <text x="1076.00" y="320.00" class="tiny">• Native grid or FEM mesh vectors</text>
+  <text x="1076.00" y="336.00" class="tiny">  m(x,t_n), H_eff, H_k, u, J_c</text>
+  <rect x="1066.00" y="370.00" width="256.00" height="98.00" fill="#ebf6e7" rx="6.0" stroke="#256b15" stroke-width="1.10"/>
+  <text x="1076.00" y="391.00" class="label-bold" style="fill:#256b15">3. Self-Contained Archive</text>
+  <text x="1076.00" y="409.00" class="code-sm">OutputStorage(data_format=&#x27;zarr&#x27;)</text>
+  <text x="1076.00" y="430.00" class="tiny">• Continuous or separate stage layout</text>
+  <text x="1076.00" y="446.00" class="tiny">  with replayable checkpoints</text>
+  <rect x="1066.00" y="480.00" width="256.00" height="98.00" fill="#f5f7fb" rx="6.0" stroke="#3e4659" stroke-width="1.10"/>
+  <text x="1076.00" y="501.00" class="label-bold" style="fill:#3e4659">4. Provenance Metadata</text>
+  <text x="1076.00" y="519.00" class="code-sm">Run Receipt &amp; Result</text>
+  <text x="1076.00" y="540.00" class="tiny">• Resolved engine, device ID, precision,</text>
+  <text x="1076.00" y="556.00" class="tiny">  support ordering &amp; capability checks</text>
+</svg>

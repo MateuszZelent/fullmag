@@ -511,10 +511,12 @@ main article span.math {
   border-left: 1px solid var(--fm-docs-border-subtle);
 }
 
-.fm-home-masthead__funding > img {
+.fm-home-masthead__funding > img,
+.fm-home-masthead__funding > svg {
   display: block;
   width: 3.5rem;
   height: auto;
+  border-radius: 0.2rem;
 }
 
 .fm-home-funding-badge {
@@ -644,4 +646,139 @@ main article figure.fm-ui-figure figcaption {
 
 .fm-ui-gallery figure.fm-ui-figure {
   margin: 0;
+}
+
+/* Scientific physics diagrams and schematic figures */
+main article figure.fm-physics-figure {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 1.5rem 0;
+  padding: 0.9rem;
+  background: var(--fm-docs-bg-surface);
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.6rem;
+}
+
+main article figure.fm-physics-figure a.image-reference {
+  display: block;
+  max-width: 100%;
+  text-decoration: none;
+}
+
+main article figure.fm-physics-figure img,
+main article figure.align-default img[src$=".svg"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+  background-color: #fbfcfe;
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.45rem;
+}
+
+main article figure.fm-physics-figure img[src$=".svg"],
+main article figure.align-default img[src$=".svg"] {
+  padding: 0.35rem;
+}
+
+html[data-theme="dark"] main article figure.fm-physics-figure {
+  border-color: var(--fm-docs-border-default);
+}
+
+html[data-theme="dark"] main article figure.fm-physics-figure img[src$=".svg"],
+html[data-theme="dark"] main article figure.align-default img[src$=".svg"] {
+  background-color: #fbfcfe;
+  border-color: #ccd0da;
+  box-shadow: 0 2px 12px rgb(17 17 27 / 0.36);
+}
+
+main article figure.fm-physics-figure figcaption {
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--fm-docs-border-subtle);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--fm-docs-text-secondary);
+}
+
+main article figure.fm-physics-figure figcaption > p {
+  margin: 0;
+}
+
+main article figure.fm-physics-figure figcaption > p + p {
+  margin-top: 0.45rem;
+}
+
+main article figure.fm-physics-figure figcaption .caption-number {
+  font-weight: 600;
+  color: var(--fm-docs-text-primary);
+}
+
+@media (max-width: 48rem) {
+  main article figure.fm-physics-figure {
+    margin: 1.1rem 0;
+    padding: 0.6rem;
+  }
+
+  main article figure.fm-physics-figure figcaption {
+    font-size: 0.87rem;
+  }
+}
+
+/* Prominent EU Horizon Europe MSCA grant acknowledgement card */
+.fm-eu-grant-card {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 1.15rem;
+  align-items: start;
+  margin: 1.25rem 0 1.75rem;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid color-mix(in srgb, var(--fm-docs-accent) 40%, var(--fm-docs-border-subtle));
+  border-left: 4px solid #003399;
+  border-radius: 0.55rem;
+  background-color: var(--fm-docs-bg-surface);
+}
+
+.fm-eu-grant-card__flag svg {
+  display: block;
+  width: 4.5rem;
+  height: auto;
+  border-radius: 0.25rem;
+  border: 1px solid color-mix(in srgb, #003399 35%, transparent);
+}
+
+.fm-eu-grant-card__body > p {
+  margin: 0 0 0.55rem;
+}
+
+.fm-eu-grant-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin: 0.5rem 0;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.35rem;
+  background-color: var(--fm-docs-bg-elevated);
+  font-size: 0.85rem;
+}
+
+.fm-eu-grant-card__disclaimer {
+  margin: 0.5rem 0 0 !important;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--fm-docs-text-muted);
+}
+
+@media (max-width: 40rem) {
+  .fm-eu-grant-card {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .fm-eu-grant-card__flag svg {
+    width: 3.75rem;
+  }
 }

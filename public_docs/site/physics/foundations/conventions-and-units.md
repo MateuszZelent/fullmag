@@ -14,8 +14,9 @@ source_of_truth: packages/fullmag-py/src/fullmag/model/dynamics.py and crates/fu
 # Conventions and units
 
 Fullmag's public authoring layer uses SI-valued quantities and lowers them into one typed
-ProblemIR. This page defines shared symbols and units; interaction-specific parameters and
-equations remain on their canonical interaction pages.
+`ProblemIR` (see {ref}`fig-fullmag-object-interaction-architecture` and
+{doc}`../conventions`). This page defines shared symbols and units; interaction-specific
+parameters and equations remain on their canonical interaction pages.
 
 (foundation-conventions-governing-equations)=
 ## Governing equations
@@ -143,11 +144,9 @@ not own conversion policy for an individual interaction.
 (foundation-conventions-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
-   [WorldCat record](https://search.worldcat.org/title/536451).
-2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+3. M. Beg, R. A. Pepper, and H. Fangohr, "User interfaces for computational science: A domain specific language for OOMMF embedded in Python," *AIP Advances* **7**(5) (2017). [doi:10.1063/1.4977225](https://doi.org/10.1063/1.4977225) · [Open Access (CC-BY PDF)](https://aip.scitation.org/doi/pdf/10.1063/1.4977225) · [arXiv:1609.07432](https://arxiv.org/abs/1609.07432).
 
 (foundation-conventions-source-code-index)=
 ## Source-code index

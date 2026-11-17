@@ -24,8 +24,8 @@ term
 
 ```{math}
 :label: eq-idmi-bc
-A\,\partial_n\mathbf{m}
-+ D\,\hat{\mathbf{n}}\times(\mathbf{n}_s\times\mathbf{m})
+2A\,\partial_n\mathbf{m}
++ D\,(\hat{\mathbf{n}}\times\mathbf{n}_s)\times\mathbf{m}
 = \mathbf{0}
 \qquad\text{on }\partial\Omega_m,
 ```
@@ -66,8 +66,8 @@ The combined exchange-plus-bulk-DMI natural boundary term is
 
 ```{math}
 :label: eq-bdmi-bc
-A\,\partial_n\mathbf{m}
-+ D\,\mathbf{n}_s\times\mathbf{m}
+2A\,\partial_n\mathbf{m}
++ D\,\mathbf{m}\times\mathbf{n}_s
 = \mathbf{0}
 \qquad\text{on }\partial\Omega_m.
 ```
@@ -84,9 +84,11 @@ The DMI boundary condition introduces a characteristic length
 \ell_{\mathrm{DMI}} = \frac{2A}{|D|}
 ```
 
-that determines the spatial extent of the boundary twist. When the sample dimension is much
-larger than $\ell_{\mathrm{DMI}}$, the boundary modification is confined to a surface layer.
-When the sample is comparable to $\ell_{\mathrm{DMI}}$, the DMI boundary condition
+that sets the inverse boundary rotation slope ($|\partial_\nu\theta|^{-1}$), while the inward edge-canting
+tail in an exchange–anisotropy film decays over the exchange recovery length
+$\Delta = \sqrt{A/K_{\mathrm{eff}}}$. When the sample dimension is much larger than $\Delta$, the
+boundary modification is confined to an edge layer of thickness $\mathcal O(\Delta)$. When the
+sample width is comparable to $\Delta$ and $\ell_{\mathrm{DMI}}$, the DMI boundary condition
 significantly modifies the bulk magnetization profile.
 
 ## Impact on skyrmion confinement
@@ -95,6 +97,15 @@ In confined geometries (nanodiscs, nanowires), the DMI boundary condition determ
 whether skyrmions are attracted to or repelled from the sample edge. The Rohart–Thiaville
 analysis shows that the boundary condition creates an effective edge potential for skyrmion
 centres.
+
+```{figure} /_static/diagrams/dmi-boundary-canting-and-normals.svg
+:alt: Two-panel diagram showing (a) the numerically solved Rohart-Thiaville edge canting profile m_z(x) across an open nanostrip under 2A d_nu m + D[(n_hat x nu) x m] = 0, and (b) FDM fixed +z_hat interface normal with ghost boundary correction versus FEM general normalized interface normal n_hat carrying the natural boundary integral weakly, plus isotropic bulk DMI boundary law contrast.
+:width: 100%
+:name: fig-dmi-boundary-canting-and-normals
+:figclass: fm-physics-figure
+
+Solved chiral boundary canting profile $m_z(x)$ across an open nanostrip showing the inward exponential decay length $\Delta = \sqrt{A/K_{\mathrm{eff}}}$ and inverse boundary slope $\ell_{\mathrm{DMI}} = 2A/|D|$ (a), and discrete realization of interface normals and natural boundary laws across FDM and FEM (b) (Rohart & Thiaville 2013; Leonov et al. 2016; Mulkers et al. 2018).
+```
 
 ## Symbols and SI units
 
@@ -249,31 +260,13 @@ or an arbitrary FDM interface orientation. The boundary equations describe the c
 physical target; lane status must be read from the canonical DMI realization pages.
 
 (dmi-boundary-scientific-bibliography)=
-
 ## Scientific bibliography
 
-1. S. Rohart and A. Thiaville, "Skyrmion confinement in ultrathin film nanostructures in
-   the presence of Dzyaloshinskii-Moriya interaction," *Physical Review B* **88**, 184422
-   (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
-2. A. O. Leonov, T. L. Monchesky, N. Romming, A. Kubetzka, A. N. Bogdanov, and
-   R. Wiesendanger, "The properties of isolated chiral skyrmions in thin magnetic films,"
-   *New Journal of Physics* **18**, 065003 (2016).
-   [doi:10.1088/1367-2630/18/6/065003](https://doi.org/10.1088/1367-2630/18/6/065003).
+1. S. Rohart and A. Thiaville, “Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction,” *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) | [arXiv:1310.0666](https://arxiv.org/abs/1310.0666).
+2. A. O. Leonov, T. L. Monchesky, N. Romming, A. Kubetzka, A. N. Bogdanov, and R. Wiesendanger, “The properties of isolated chiral skyrmions in thin magnetic films,” *New Journal of Physics* **18**(6), 065003 (2016). [doi:10.1088/1367-2630/18/6/065003](https://doi.org/10.1088/1367-2630/18/6/065003) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/18/6/065003/pdf) | [arXiv:1508.02155](https://arxiv.org/abs/1508.02155).
+3. J. Mulkers, K. M. D. Hals, J. Leliaert, M. V. Milošević, B. Van Waeyenberge, and K. Everschor-Sitte, “Effect of boundary-induced chirality on magnetic textures in thin films,” *Physical Review B* **98**(6), 064429 (2018). [doi:10.1103/PhysRevB.98.064429](https://doi.org/10.1103/PhysRevB.98.064429) | [arXiv:1805.11110](https://arxiv.org/abs/1805.11110).
 
 (dmi-boundary-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |

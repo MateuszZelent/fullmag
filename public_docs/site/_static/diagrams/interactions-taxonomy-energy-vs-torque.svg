@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 720" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Taxonomy of all 12 Fullmag physical interactions: conservative energy vs direct spin torques</title>
+  <desc id="desc">Complete taxonomy of Fullmag&#x27;s 12 physical interactions grouped by mathematical role: local energy densities (Zeeman, Anisotropy, Magnetoelastic), differential operators with natural BCs (Exchange, DMI, Inter-region couplings), nonlocal magnetostatic and current-field operators (Demagnetization, Oersted field), stochastic thermal Brown field (Thermal noise), and direct non-conservative spin torques (Slonczewski/Zhang-Li STT, Prescribed SOT, Drift-diffusion spin torque).</desc>
+  <defs>
+    <style>
+      .fig-title { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #4b5568; }
+      .panel-title { font: 700 14.5px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .badge { font: 700 12.5px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .sec-hdr { font: 700 13px 'Segoe UI', Arial, sans-serif; fill: #1d3557; }
+      .label-bold { font: 600 12.5px 'Segoe UI', Arial, sans-serif; fill: #1e2433; }
+      .body { font: 400 12px 'Segoe UI', Arial, sans-serif; fill: #2b3344; }
+      .small { font: 400 11px 'Segoe UI', Arial, sans-serif; fill: #4f586b; }
+      .tiny { font: 400 10px 'Segoe UI', Arial, sans-serif; fill: #5c657a; }
+      .code { font: 600 11px 'Consolas', 'Courier New', monospace; fill: #283147; }
+      .code-sm { font: 500 10.2px 'Consolas', 'Courier New', monospace; fill: #354059; }
+      .math { font: italic 13px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-bold { font: italic 700 13.5px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 11.5px 'Cambria Math', 'Times New Roman', serif; fill: #2b3344; }
+      .pill-text { font: 600 11px 'Segoe UI', Arial, sans-serif; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-muted-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_DL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-T_FL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-DMI-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-J_c" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-J_c-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-air-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <pattern id="hatch-amber" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#b86b11" stroke-width="1.4" stroke-opacity="0.32"/></pattern>
+    <pattern id="hatch-slate" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#6e7b91" stroke-width="1.2" stroke-opacity="0.28"/></pattern>
+    <filter id="soft-shadow" x="-3%" y="-3%" width="106%" height="108%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1e2433" flood-opacity="0.06"/></filter>
+  </defs>
+  <rect x="2.00" y="2.00" width="1356.00" height="716.00" fill="#fbfcfe" rx="10.0" stroke="#ccd0da" stroke-width="1.50"/>
+  <text x="28.00" y="36.00" class="fig-title">Taxonomy of Fullmag&#x27;s 12 Physical Interactions: Effective Fields vs. Direct Torques</text>
+  <text x="28.00" y="57.00" class="fig-subtitle">Grouping by variational structure, operator locality, natural boundary laws, and LLG entry channel (H<tspan baseline-shift="sub" font-size="72%">eff</tspan> vs τ<tspan baseline-shift="sub" font-size="72%">direct</tspan>)</text>
+  <line x1="24.00" y1="68.00" x2="1336.00" y2="68.00" stroke="#e1e5ee" stroke-width="1.20" stroke-linecap="round"/>
+  <rect x="24.00" y="82.00" width="252.00" height="468.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="38.00" y="95.00" width="30.00" height="22.00" fill="#1d5fa7" rx="5.0"/>
+  <text x="53.00" y="110.50" class="badge" text-anchor="middle">(a)</text>
+  <text x="78.00" y="110.50" class="panel-title">Local Energy → H<tspan baseline-shift="sub" font-size="72%">k</tspan></text>
+  <text x="38.00" y="130.00" class="small">Algebraic ∂w<tspan baseline-shift="sub" font-size="72%">k</tspan>/∂m; no BCs</text>
+  <rect x="36.00" y="150.00" width="228.00" height="118.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="46.00" y="171.00" class="label-bold" style="fill:#1d5fa7">[1] Zeeman</text>
+  <text x="46.00" y="189.00" class="code-sm">Zeeman · StaticFieldMap</text>
+  <line x1="46.00" y1="200.00" x2="254.00" y2="200.00" stroke="#dce4f2" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="46.00" y="222.00" class="math-sm">E<tspan baseline-shift="sub" font-size="72%">Z</tspan> = −∫ M·B<tspan baseline-shift="sub" font-size="72%">ext</tspan> dV</text>
+  <text x="46.00" y="247.00" class="math-sm">H<tspan baseline-shift="sub" font-size="72%">Z</tspan> = B<tspan baseline-shift="sub" font-size="72%">ext</tspan> / μ<tspan baseline-shift="sub" font-size="72%">0</tspan></text>
+  <rect x="36.00" y="280.00" width="228.00" height="118.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="46.00" y="301.00" class="label-bold" style="fill:#1d5fa7">[2] Anisotropy</text>
+  <text x="46.00" y="319.00" class="code-sm">Uniaxial · CubicAnisotropy</text>
+  <line x1="46.00" y1="330.00" x2="254.00" y2="330.00" stroke="#dce4f2" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="46.00" y="352.00" class="math-sm">w<tspan baseline-shift="sub" font-size="72%">u</tspan> = −K<tspan baseline-shift="sub" font-size="72%">u1</tspan>q<tspan baseline-shift="super" font-size="72%">2</tspan> − K<tspan baseline-shift="sub" font-size="72%">u2</tspan>q<tspan baseline-shift="super" font-size="72%">4</tspan></text>
+  <text x="46.00" y="377.00" class="math-sm">w<tspan baseline-shift="sub" font-size="72%">c</tspan> = K<tspan baseline-shift="sub" font-size="72%">c1</tspan>P + K<tspan baseline-shift="sub" font-size="72%">c2</tspan>α<tspan baseline-shift="sub" font-size="72%">1</tspan><tspan baseline-shift="super" font-size="72%">2</tspan>α<tspan baseline-shift="sub" font-size="72%">2</tspan><tspan baseline-shift="super" font-size="72%">2</tspan>α<tspan baseline-shift="sub" font-size="72%">3</tspan><tspan baseline-shift="super" font-size="72%">2</tspan> + ...</text>
+  <rect x="36.00" y="410.00" width="228.00" height="118.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="46.00" y="431.00" class="label-bold" style="fill:#1d5fa7">[3] Magnetoelastic</text>
+  <text x="46.00" y="449.00" class="code-sm">Magnetoelastic + ElasticBody</text>
+  <line x1="46.00" y1="460.00" x2="254.00" y2="460.00" stroke="#dce4f2" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="46.00" y="482.00" class="math-sm">w<tspan baseline-shift="sub" font-size="72%">mel</tspan>(m, ε) = B<tspan baseline-shift="sub" font-size="72%">1</tspan>∑ε<tspan baseline-shift="sub" font-size="72%">ii</tspan>m<tspan baseline-shift="sub" font-size="72%">i</tspan><tspan baseline-shift="super" font-size="72%">2</tspan> + ...</text>
+  <text x="46.00" y="507.00" class="math-sm">H<tspan baseline-shift="sub" font-size="72%">mel</tspan> = −(μ<tspan baseline-shift="sub" font-size="72%">0</tspan>M<tspan baseline-shift="sub" font-size="72%">s</tspan>)<tspan baseline-shift="super" font-size="72%">-1</tspan> ∂w<tspan baseline-shift="sub" font-size="72%">mel</tspan>/∂m</text>
+  <rect x="290.00" y="82.00" width="256.00" height="468.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="304.00" y="95.00" width="30.00" height="22.00" fill="#6f3cc4" rx="5.0"/>
+  <text x="319.00" y="110.50" class="badge" text-anchor="middle">(b)</text>
+  <text x="344.00" y="110.50" class="panel-title">Differential &amp; BCs → H<tspan baseline-shift="sub" font-size="72%">k</tspan></text>
+  <text x="304.00" y="130.00" class="small">Spatial ∇m, ∇<tspan baseline-shift="super" font-size="72%">2</tspan>m &amp; surface/link laws</text>
+  <rect x="302.00" y="150.00" width="232.00" height="118.00" fill="#f3ecfc" rx="6.0" stroke="#cbb4ef" stroke-width="1.10"/>
+  <text x="312.00" y="171.00" class="label-bold" style="fill:#6f3cc4">[4] Bulk Exchange</text>
+  <text x="312.00" y="189.00" class="code-sm">Exchange</text>
+  <line x1="312.00" y1="200.00" x2="524.00" y2="200.00" stroke="#dfd1f7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="312.00" y="222.00" class="math-sm">E<tspan baseline-shift="sub" font-size="72%">ex</tspan> = ∫ A |∇m|<tspan baseline-shift="super" font-size="72%">2</tspan> dV</text>
+  <text x="312.00" y="247.00" class="math-sm" style="fill:#6f3cc4">A ∂<tspan baseline-shift="sub" font-size="72%">n</tspan>m = 0 on ∂Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></text>
+  <rect x="302.00" y="280.00" width="232.00" height="118.00" fill="#f3ecfc" rx="6.0" stroke="#cbb4ef" stroke-width="1.10"/>
+  <text x="312.00" y="301.00" class="label-bold" style="fill:#6f3cc4">[5] DMI (3 variants)</text>
+  <text x="312.00" y="319.00" class="code-sm">Interfacial · Rotated · BulkDMI</text>
+  <line x1="312.00" y1="330.00" x2="524.00" y2="330.00" stroke="#dfd1f7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="312.00" y="352.00" class="math-sm">w<tspan baseline-shift="sub" font-size="72%">i</tspan>, w<tspan baseline-shift="sub" font-size="72%">rot</tspan>, w<tspan baseline-shift="sub" font-size="72%">b</tspan> ∼ D (m·∇m)</text>
+  <text x="312.00" y="377.00" class="math-sm" style="fill:#6f3cc4">2A ∂<tspan baseline-shift="sub" font-size="72%">ν</tspan>m + D[(n̂×ν)×m] = 0</text>
+  <rect x="302.00" y="410.00" width="232.00" height="118.00" fill="#f3ecfc" rx="6.0" stroke="#cbb4ef" stroke-width="1.10"/>
+  <text x="312.00" y="431.00" class="label-bold" style="fill:#6f3cc4">[6] Inter-Region</text>
+  <text x="312.00" y="449.00" class="code-sm">couplings.exchange / .rkky</text>
+  <line x1="312.00" y1="460.00" x2="524.00" y2="460.00" stroke="#dfd1f7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="312.00" y="482.00" class="math-sm">A<tspan baseline-shift="sub" font-size="72%">ab</tspan> = s · 2A<tspan baseline-shift="sub" font-size="72%">a</tspan>A<tspan baseline-shift="sub" font-size="72%">b</tspan>/(A<tspan baseline-shift="sub" font-size="72%">a</tspan>+A<tspan baseline-shift="sub" font-size="72%">b</tspan>)</text>
+  <text x="312.00" y="507.00" class="math-sm" style="fill:#6f3cc4">σ<tspan baseline-shift="sub" font-size="72%">surf</tspan> = −J<tspan baseline-shift="sub" font-size="72%">1</tspan>(m<tspan baseline-shift="sub" font-size="72%">a</tspan>·m<tspan baseline-shift="sub" font-size="72%">b</tspan>) − J<tspan baseline-shift="sub" font-size="72%">2</tspan>(m<tspan baseline-shift="sub" font-size="72%">a</tspan>·m<tspan baseline-shift="sub" font-size="72%">b</tspan>)<tspan baseline-shift="super" font-size="72%">2</tspan></text>
+  <rect x="560.00" y="82.00" width="246.00" height="468.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="574.00" y="95.00" width="30.00" height="22.00" fill="#246b8e" rx="5.0"/>
+  <text x="589.00" y="110.50" class="badge" text-anchor="middle">(c)</text>
+  <text x="614.00" y="110.50" class="panel-title">Nonlocal Fields → H<tspan baseline-shift="sub" font-size="72%">k</tspan></text>
+  <text x="574.00" y="130.00" class="small">Long-range Green &amp; Poisson solves</text>
+  <rect x="572.00" y="150.00" width="222.00" height="198.00" fill="#e8f3f8" rx="6.0" stroke="#9fc6da" stroke-width="1.10"/>
+  <text x="582.00" y="171.00" class="label-bold" style="fill:#246b8e">[7] Demagnetization</text>
+  <text x="582.00" y="189.00" class="code-sm">Demag(model=..., variant=...)</text>
+  <line x1="582.00" y1="200.00" x2="784.00" y2="200.00" stroke="#c7dfec" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="582.00" y="221.00" class="math-sm">∇·(H<tspan baseline-shift="sub" font-size="72%">d</tspan> + M) = 0,  H<tspan baseline-shift="sub" font-size="72%">d</tspan> = −∇u</text>
+  <text x="582.00" y="244.00" class="math-sm">E<tspan baseline-shift="sub" font-size="72%">d</tspan> = −(μ<tspan baseline-shift="sub" font-size="72%">0</tspan>/2) ∫ M·H<tspan baseline-shift="sub" font-size="72%">d</tspan> dV</text>
+  <text x="582.00" y="270.00" class="tiny">• FDM open/multilayer/PBC FFT</text>
+  <text x="582.00" y="288.00" class="tiny">• FEM Poisson airbox (Dirichlet/Robin)</text>
+  <text x="582.00" y="306.00" class="tiny">• FEM-BEM Fredkin–Koehler</text>
+  <text x="582.00" y="324.00" class="tiny">• FMM (planner-gated)</text>
+  <rect x="572.00" y="360.00" width="222.00" height="170.00" fill="#e8f3f8" rx="6.0" stroke="#9fc6da" stroke-width="1.10"/>
+  <text x="582.00" y="381.00" class="label-bold" style="fill:#246b8e">[8] Oersted Field</text>
+  <text x="582.00" y="399.00" class="code-sm">OerstedCylinder · OerstedField</text>
+  <line x1="582.00" y1="410.00" x2="784.00" y2="410.00" stroke="#c7dfec" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="582.00" y="432.00" class="math-sm">Ampère cylinder H<tspan baseline-shift="sub" font-size="72%">oe</tspan>(ρ, I, R)</text>
+  <text x="582.00" y="455.00" class="math-sm">Biot–Savart: (4π)<tspan baseline-shift="super" font-size="72%">-1</tspan> ∫ J<tspan baseline-shift="sub" font-size="72%">c</tspan>×Δr / r<tspan baseline-shift="super" font-size="72%">3</tspan> dV&#x27;</text>
+  <text x="582.00" y="480.00" class="tiny" style="fill:#246b8e">Requires CurrentTransport closure</text>
+  <text x="582.00" y="498.00" class="tiny" style="fill:#5c657a">Not conservative under time-varying I</text>
+  <rect x="820.00" y="82.00" width="218.00" height="468.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="834.00" y="95.00" width="30.00" height="22.00" fill="#b8392b" rx="5.0"/>
+  <text x="849.00" y="110.50" class="badge" text-anchor="middle">(d)</text>
+  <text x="874.00" y="110.50" class="panel-title">Stochastic Field</text>
+  <text x="834.00" y="130.00" class="small">FDT noise; no standalone E<tspan baseline-shift="sub" font-size="72%">th</tspan></text>
+  <rect x="832.00" y="150.00" width="194.00" height="380.00" fill="#fceceb" rx="6.0" stroke="#e4b2ad" stroke-width="1.10"/>
+  <text x="842.00" y="173.00" class="label-bold" style="fill:#b8392b">[9] Thermal Brown Noise</text>
+  <text x="842.00" y="193.00" class="code-sm">ThermalNoise(temperature, seed)</text>
+  <line x1="842.00" y1="206.00" x2="1016.00" y2="206.00" stroke="#f0cbc7" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="842.00" y="232.00" class="math-sm">H<tspan baseline-shift="sub" font-size="72%">th,i</tspan><tspan baseline-shift="super" font-size="72%">n</tspan> = σ<tspan baseline-shift="sub" font-size="72%">i</tspan><tspan baseline-shift="super" font-size="72%">n</tspan> ξ<tspan baseline-shift="sub" font-size="72%">i</tspan><tspan baseline-shift="super" font-size="72%">n</tspan>,  ξ ∼ N(0, I<tspan baseline-shift="sub" font-size="72%">3</tspan>)</text>
+  <text x="842.00" y="260.00" class="math-sm">σ<tspan baseline-shift="sub" font-size="72%">i</tspan><tspan baseline-shift="super" font-size="72%">n</tspan> = √( 2α<tspan baseline-shift="sub" font-size="72%">i</tspan>k<tspan baseline-shift="sub" font-size="72%">B</tspan>T / (γ<tspan baseline-shift="sub" font-size="72%">0</tspan>μ<tspan baseline-shift="sub" font-size="72%">0</tspan>M<tspan baseline-shift="sub" font-size="72%">s,i</tspan>V<tspan baseline-shift="sub" font-size="72%">i</tspan>Δt<tspan baseline-shift="sub" font-size="72%">n</tspan>) )</text>
+  <text x="842.00" y="298.00" class="label-bold" style="fill:#b8392b;font-size:11.5px">Key Contract Rules:</text>
+  <text x="842.00" y="320.00" class="small">• Enters H<tspan baseline-shift="sub" font-size="72%">eff</tspan> as stochastic field</text>
+  <text x="842.00" y="340.00" class="small">• No conservative energy E<tspan baseline-shift="sub" font-size="72%">th</tspan></text>
+  <text x="842.00" y="360.00" class="small">• Bare γ<tspan baseline-shift="sub" font-size="72%">0</tspan> in denominator</text>
+  <text x="842.00" y="380.00" class="small">• Disables RK FSAL stage reuse</text>
+  <text x="842.00" y="400.00" class="small">• Seed controls stream policy,</text>
+  <text x="842.00" y="418.00" class="small">  not CPU/GPU bitwise identity</text>
+  <rect x="840.00" y="442.00" width="178.00" height="68.00" fill="#ffffff" rx="5.0" stroke="#e4b2ad" stroke-width="1.00"/>
+  <text x="929.00" y="464.00" class="label-bold" text-anchor="middle" style="fill:#b8392b;font-size:11.0px">Statistical SDE Qualification</text>
+  <text x="929.00" y="484.00" class="tiny" text-anchor="middle">Boltzmann Gibbs &amp; fluctuation</text>
+  <text x="929.00" y="498.00" class="tiny" text-anchor="middle">variance, not trajectory equality</text>
+  <rect x="1052.00" y="82.00" width="284.00" height="468.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="1066.00" y="95.00" width="30.00" height="22.00" fill="#b86b11" rx="5.0"/>
+  <text x="1081.00" y="110.50" class="badge" text-anchor="middle">(e)</text>
+  <text x="1106.00" y="110.50" class="panel-title">Direct Torques → τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <text x="1066.00" y="130.00" class="small">Non-conservative RHS rates (s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <rect x="1064.00" y="150.00" width="260.00" height="118.00" fill="#fdf3e6" rx="6.0" stroke="#e6c08a" stroke-width="1.10"/>
+  <text x="1074.00" y="171.00" class="label-bold" style="fill:#b86b11">[10] Spin-Transfer Torque</text>
+  <text x="1074.00" y="189.00" class="code-sm">SlonczewskiSTT · ZhangLiSTT</text>
+  <line x1="1074.00" y1="200.00" x2="1314.00" y2="200.00" stroke="#f0d9b8" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="1074.00" y="222.00" class="math-sm" style="font-size:10.5px">T<tspan baseline-shift="sub" font-size="72%">SL,G</tspan> = Ω<tspan baseline-shift="sub" font-size="72%">DL</tspan> m×(p̂×m) + Ω<tspan baseline-shift="sub" font-size="72%">FL</tspan> m×p̂</text>
+  <text x="1074.00" y="247.00" class="small" style="fill:#b86b11">T<tspan baseline-shift="sub" font-size="72%">ZL,G</tspan> = −(u·∇)m + β m×[(u·∇)m]</text>
+  <rect x="1064.00" y="280.00" width="260.00" height="118.00" fill="#fdf3e6" rx="6.0" stroke="#e6c08a" stroke-width="1.10"/>
+  <text x="1074.00" y="301.00" class="label-bold" style="fill:#b86b11">[11] Prescribed SOT</text>
+  <text x="1074.00" y="319.00" class="code-sm">PrescribedSpinOrbitTorque</text>
+  <line x1="1074.00" y1="330.00" x2="1314.00" y2="330.00" stroke="#f0d9b8" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="1074.00" y="352.00" class="math-sm" style="font-size:10.5px">T<tspan baseline-shift="sub" font-size="72%">SOT,G</tspan> = Ω<tspan baseline-shift="sub" font-size="72%">DL</tspan> m×(σ̂×m) + Ω<tspan baseline-shift="sub" font-size="72%">FL</tspan> m×σ̂</text>
+  <text x="1074.00" y="377.00" class="small" style="fill:#b86b11">SignedScalarDrive | VectorCurrentDrive</text>
+  <rect x="1064.00" y="410.00" width="260.00" height="118.00" fill="#fdf3e6" rx="6.0" stroke="#e6c08a" stroke-width="1.10"/>
+  <text x="1074.00" y="431.00" class="label-bold" style="fill:#b86b11">[12] Drift–Diffusion Torque</text>
+  <text x="1074.00" y="449.00" class="code-sm">CurrentTransport + SpinDriftDiffusion</text>
+  <line x1="1074.00" y1="460.00" x2="1314.00" y2="460.00" stroke="#f0d9b8" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="1074.00" y="482.00" class="math-sm" style="font-size:10.5px">T<tspan baseline-shift="sub" font-size="72%">tr,G</tspan> = −(γ<tspan baseline-shift="sub" font-size="72%">e</tspan>/M<tspan baseline-shift="sub" font-size="72%">s</tspan>)(ħ/2e)(R<tspan baseline-shift="sub" font-size="72%">J</tspan>+R<tspan baseline-shift="sub" font-size="72%">φ</tspan>)</text>
+  <text x="1074.00" y="507.00" class="small" style="fill:#b86b11">M1 (one_way) or M2 (bidirectional)</text>
+  <line x1="150.00" y1="552.00" x2="150.00" y2="584.00" stroke="#1d5fa7" stroke-width="1.70" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <line x1="418.00" y1="552.00" x2="418.00" y2="584.00" stroke="#1d5fa7" stroke-width="1.70" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <line x1="683.00" y1="552.00" x2="683.00" y2="584.00" stroke="#1d5fa7" stroke-width="1.70" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <path d="M 929.0 552 L 929.0 568 L 652 568 L 652 584" fill="none" stroke="#b8392b" stroke-width="1.70" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-m)"/>
+  <rect x="24.00" y="588.00" width="668.00" height="108.00" fill="#eaf1fb" rx="8.0" stroke="#1d5fa7" stroke-width="1.50" filter="url(#soft-shadow)"/>
+  <text x="42.00" y="614.00" class="label-bold" style="fill:#1d5fa7;font-size:13.5px">Composed Effective Field  H<tspan baseline-shift="sub" font-size="72%">eff</tspan>  (A/m)</text>
+  <text x="42.00" y="640.00" class="math">H<tspan baseline-shift="sub" font-size="72%">eff</tspan>(x, t) = ∑<tspan baseline-shift="sub" font-size="72%">k ∈ K<tspan baseline-shift="sub" font-size="72%">field</tspan></tspan> H<tspan baseline-shift="sub" font-size="72%">k</tspan>   (plus optional H<tspan baseline-shift="sub" font-size="72%">oe</tspan>, H<tspan baseline-shift="sub" font-size="72%">th</tspan>)</text>
+  <text x="42.00" y="666.00" class="small">Conservative energy terms enter ONLY through −(μ<tspan baseline-shift="sub" font-size="72%">0</tspan>M<tspan baseline-shift="sub" font-size="72%">s</tspan>)<tspan baseline-shift="super" font-size="72%">-1</tspan> δE<tspan baseline-shift="sub" font-size="72%">k</tspan>/δm; never treated as direct torques.</text>
+  <text x="42.00" y="684.00" class="tiny" style="fill:#5c657a">Auxiliary PDEs (CurrentTransport, ElasticBody, AntennaFieldSolve) supply driving fields/strains explicitly.</text>
+  <line x1="1194.00" y1="552.00" x2="1194.00" y2="584.00" stroke="#b86b11" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-T_DL)"/>
+  <line x1="694.00" y1="642.00" x2="716.00" y2="642.00" stroke="#1d5fa7" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <rect x="720.00" y="588.00" width="616.00" height="108.00" fill="#ffffff" rx="8.0" stroke="#1e2433" stroke-width="1.50" filter="url(#soft-shadow)"/>
+  <text x="738.00" y="614.00" class="label-bold" style="font-size:13.5px">Total Explicit LLG Right-Hand Side  (s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <text x="738.00" y="641.00" class="math" style="fill:#1e2433">∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m = −γ<tspan baseline-shift="sub" font-size="72%">0</tspan>/(1+α<tspan baseline-shift="super" font-size="72%">2</tspan>) [ s<tspan baseline-shift="sub" font-size="72%">prec</tspan> m×H<tspan baseline-shift="sub" font-size="72%">eff</tspan> + α m×(m×H<tspan baseline-shift="sub" font-size="72%">eff</tspan>) ] + τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <text x="738.00" y="666.00" class="math-sm" style="fill:#b86b11">τ<tspan baseline-shift="sub" font-size="72%">direct</tspan> = (T<tspan baseline-shift="sub" font-size="72%">G</tspan> + α m×T<tspan baseline-shift="sub" font-size="72%">G</tspan>) / (1 + α<tspan baseline-shift="super" font-size="72%">2</tspan>)   [applied exactly once; never converted to pseudo-H]</text>
+  <text x="738.00" y="684.00" class="tiny" style="fill:#5c657a">Every term preserves m · ∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m = 0 on S<tspan baseline-shift="super" font-size="72%">2</tspan>; planner enforces lane legality per interaction.</text>
+</svg>
