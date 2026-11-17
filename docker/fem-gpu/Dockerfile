@@ -343,8 +343,32 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
     cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
     cmake --install /tmp/build/mfem/build-cpu
 
+# DOC-ANCHOR: hypre-residual-stream-copy-patch
+# Reuse the configured GPU HYPRE objects after the cached full stack. This
+# implementation-only change keeps the public ABI and the CPU prefix intact.
+COPY docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff /tmp/build/hypre-3.1.0-residual-stream-copy.diff
+COPY docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp /tmp/build/hypre-3.1.0-residual-stream-copy.hpp
+RUN test "$(git -C /tmp/build/hypre rev-parse HEAD)" = "${HYPRE_SOURCE_COMMIT}" && \
+    residual_patch_sha256="$(sha256sum /tmp/build/hypre-3.1.0-residual-stream-copy.diff | cut -d ' ' -f 1)" && \
+    residual_source_sha256="$(sha256sum /tmp/build/hypre-3.1.0-residual-stream-copy.hpp | cut -d ' ' -f 1)" && \
+    test "${residual_patch_sha256}" = "8cf907f25946c2fd074ea79b438a3877aedb7bc0b4304ff03dc4f178ea9f3642" && \
+    test "${residual_source_sha256}" = "9a5aa645c0bc813916c07697f9bd242501d1157ba05dfcd8ffab8aa52676bddd" && \
+    cpu_hypre_sha256_before="$(sha256sum "$(readlink -f /opt/fullmag-mfem-cpu/lib/libHYPRE.so)" | cut -d ' ' -f 1)" && \
+    test "$(sha256sum /tmp/build/hypre/src/seq_mv/csr_matvec_device.c | cut -d ' ' -f 1)" = "58d86763361cbf5d0510d6e3386aeccc06a0d4f2c3646259ab064564eb65bea2" && \
+    git -C /tmp/build/hypre apply --check /tmp/build/hypre-3.1.0-residual-stream-copy.diff && \
+    git -C /tmp/build/hypre apply /tmp/build/hypre-3.1.0-residual-stream-copy.diff && \
+    cp /tmp/build/hypre-3.1.0-residual-stream-copy.hpp /tmp/build/hypre/src/seq_mv/fullmag_residual_stream_copy.hpp && \
+    make -C /tmp/build/hypre/src -j2 && \
+    make -C /tmp/build/hypre/src install && \
+    cpu_hypre_sha256_after="$(sha256sum "$(readlink -f /opt/fullmag-mfem-cpu/lib/libHYPRE.so)" | cut -d ' ' -f 1)" && \
+    test "${cpu_hypre_sha256_before}" = "${cpu_hypre_sha256_after}" && \
+    HYPRE_RESIDUAL_PATCH_SHA256="${residual_patch_sha256}" \
+    HYPRE_RESIDUAL_SOURCE_SHA256="${residual_source_sha256}" \
+    HYPRE_RESIDUAL_CPU_LIBRARY_SHA256="${cpu_hypre_sha256_after}" \
+    python3 -c 'import hashlib,json,os; from pathlib import Path; root=Path(os.environ["INSTALL_PREFIX"]); p=root/"share/fullmag/hypre-build-metadata.json"; value=json.loads(p.read_text()); value.update(hypre_residual_stream_copy_patch_sha256=os.environ["HYPRE_RESIDUAL_PATCH_SHA256"],hypre_residual_stream_copy_source_sha256=os.environ["HYPRE_RESIDUAL_SOURCE_SHA256"],hypre_residual_stream_copy_abi_version=1,hypre_residual_stream_copy_gpu_library_sha256=hashlib.sha256((root/"lib/libHYPRE.so").resolve().read_bytes()).hexdigest(),hypre_residual_stream_copy_cpu_library_sha256=os.environ["HYPRE_RESIDUAL_CPU_LIBRARY_SHA256"]); p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))'
+
 RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps --source-root /tmp/build --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json" && \
-    python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["declared"].setdefault("mfem", {})["cuda_fast_compile"]=os.environ["FULLMAG_MFEM_CUDA_FAST_COMPILE"]; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+    python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["declared"].setdefault("mfem", {})["cuda_fast_compile"]=os.environ["FULLMAG_MFEM_CUDA_FAST_COMPILE"]; value["actual"]["hypre_build"]=json.loads((Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json").read_text()); p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
 FROM cuda-base-normalized AS fem-gpu-dev
 

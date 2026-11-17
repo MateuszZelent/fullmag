@@ -786,6 +786,30 @@
       "responsibility": "Enables one-shot native initial fields only for an actual GPU allocation and the existing full-generation live budget gate; retains bounded preview behavior elsewhere.",
       "reviewed_revision": "cb16b1e84f7fdd9967a267155e389c58509946b7",
       "evidence_status": "Source candidate; no solver or scheduler lane added, runtime qualification pending."
+    },
+    {
+      "id": "hypre-residual-stream-copy-patch",
+      "path": "scripts/test_bootstrap_docker_toolchain.py",
+      "symbol": "test_hypre_residual_patch_is_pinned_after_cached_stack_and_recorded",
+      "responsibility": "Checks the Dockerfile contract: pinned GPU-only patch applied after cached builds, unchanged CPU library and recorded dependency digests."
+    },
+    {
+      "id": "hypre-residual-stream-copy-bridge",
+      "path": "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp",
+      "symbol": "hypre_FullmagResidualCopyAsyncDevice",
+      "responsibility": "Preserves exact copy values, HYPRE stream order and sticky failure semantics without allocation, fence, arithmetic or solver-policy change."
+    },
+    {
+      "id": "hypre-residual-stream-copy-device-regression",
+      "path": "backends/fem/tests/hypre_residual_async_copy_fixture.hpp",
+      "symbol": "run_hypre_residual_async_copy_contract",
+      "responsibility": "Exercises real out-of-place GPU results, alias/layout exclusion and sticky submission failure; no invalid-offset calls."
+    },
+    {
+      "id": "hypre-residual-stream-copy-production-hit",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step",
+      "responsibility": "Requires new patch symbols and real CG/AMG residual-copy hits while retaining field parity and corrupted-potential rejection."
     }
   ],
   "public_api": {
@@ -887,6 +911,7 @@
     "gpu_terminal_performance_snapshot": "Bounded source contract: complete native v1 fields inline in terminal ExecutionProvenance for native FEM GPU direct minimization only when final accepted step is positive. 480-byte ABI unchanged; Rust tests and managed execution pending. No CPU, LLG, interactive-runtime, or full-SP4 qualification.",
     "gpu_pgbb_accepted_potential_c2": "Move-only, exact-key, single-use accepted-potential guess for only the first ordinary PGBB trial. Managed fem-demag-poisson GPU contract including requested Auto passed at998032a3cef54e568cd0feac015ec813, source9686d96898506fedda2930e2abc11d0bff3ea797f6f4225e4d42b271868437fe, libraryd0972baf40b81785526e484e8d33ddc3ff1226e7b857717398623930078d393c. One matched full-Zarr SP4 relaxation passes retained component-energy, torque and native-residual gates. Repeated total-time measurements and broader workloads remain pending; no overall speedup claim. The fixture does not force an accepted-refinement endpoint.",
     "accepted_potential_pgbb_reuse": "Native gate998032a3cef54e568cd0feac015ec813 including resolved Auto owner passed. Three full-Zarr static SP4 runs share selected ProblemIR and authored m0; all21 numeric chunks match across C2 runs. Hot-loop PCG7477→6106iterations,1017→852statusreads; worker44.345637/39.772995/39.002946s. Startup versus Run This Stage and output-port differences prevent an isolated causal or UI end-to-end speedup claim.",
-    "hypre_l1_stream_copy": "Source candidate only. Managed dependency build/link, production predicate hit, submission-error regression, terminal SP4 count/bytes, unchanged physics/Zarr and speedup are NOT VERIFIED."
+    "hypre_l1_stream_copy": "Source candidate only. Managed dependency build/link, production predicate hit, submission-error regression, terminal SP4 count/bytes, unchanged physics/Zarr and speedup are NOT VERIFIED.",
+    "hypre_residual_stream_copy": "Source candidate; managed dependency build, real GPU predicate hit/failure/layout regressions, identical SP4 science and Zarr plus matched timing remain NOT VERIFIED."
   }
 }

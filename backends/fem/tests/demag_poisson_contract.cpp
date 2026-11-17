@@ -70,6 +70,7 @@
 #include <vector>
 #include <cerrno>
 #include "hypre_l1_async_copy_fixture.hpp"
+#include "hypre_residual_async_copy_fixture.hpp"
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -3696,6 +3697,9 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
 
 #ifndef _WIN32
         const auto l1_copy_before = fullmag::fem::test::capture_hypre_l1_async_copies(check);
+        const auto residual_copy_before = fullmag::fem::test::capture_hypre_residual_async_copies(check);
+        check(residual_copy_before.available,
+              "selected GPU toolchain must expose the pinned residual-copy patch");
 #endif
         error.clear();
         check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
@@ -3703,6 +3707,13 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
                      error, "mixed CUDA/Hypre AMG Poisson device step");
 #ifndef _WIN32
         fullmag::fem::test::require_hypre_l1_async_copy_production_hit(l1_copy_before, check);
+        const auto residual_copy_after = fullmag::fem::test::capture_hypre_residual_async_copies(check);
+        check(residual_copy_after.available && residual_copy_after.count > residual_copy_before.count &&
+                  residual_copy_after.bytes > residual_copy_before.bytes,
+              "real production CG/AMG must submit residual copies on the HYPRE stream");
+        std::fprintf(stderr, "hypre_residual_async_copy_production_hit count=%llu bytes=%llu\n",
+                     residual_copy_after.count - residual_copy_before.count,
+                     residual_copy_after.bytes - residual_copy_before.bytes);
 #endif
         auto *fresh_pcg_workspace=fullmag::fem::workspace_ptr(ctx);
         check(fresh_pcg_workspace && fresh_pcg_workspace->device_pcg &&
@@ -3727,6 +3738,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
 #ifndef _WIN32
         fullmag::fem::test::hypre_l1_async_copy_submission_error_contract(
             ctx.gpu_state.device.demag_poisson.poisson_solution, check);
+        fullmag::fem::test::run_hypre_residual_async_copy_contract(check);
 #endif
         const uint32_t valid_max_iterations=ctx.demag.solver.max_iterations;
         ctx.demag.solver.max_iterations=0;

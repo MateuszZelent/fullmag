@@ -22,3 +22,5 @@
 !docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff
 !docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp
 !docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff
+!docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff
+!docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp

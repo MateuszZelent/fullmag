@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-11-14
+- Last updated: 2026-11-17
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -806,6 +806,53 @@ terminal SP4 observations, and the unchanged energy, torque, true-residual and
 complete-Zarr gates. Submitted-copy counts alone do not prove a performance
 gain or the removal of every blocking operation in AMG.
 
+### Kandydat 2026-11-17: kopia RHS residuum na strumieniu HYPRE
+
+Status wykonania i przyspieszenia: **NOT VERIFIED**. To odrębny callsite od
+poprawki Relax7. Przypięty `hypre_CSRMatrixMatvecDevice` inicjalizuje osobny
+wektor wyjściowy `y` kopią `b` przed obliczeniem macierzowym. Dla CUDA bez
+mixed precision wąska ścieżka kwalifikuje dodatnie, równe rozmiary dwóch
+pojedynczych wektorów w rzeczywistej pamięci DEVICE, ciągły układ z
+`index_stride=1`, `vector_stride=size`, metodę przechowywania 0, niepuste
+wskaźniki i `offset=0`. Pozostałe układy zachowują dotychczasową operację
+kopiowania; nie jest to zmiana realizacji solvera. Zewnętrzny warunek
+różnych wskaźników pozostawia alias `b==y` jako no-op.
+
+`hypre_FullmagResidualCopyAsyncDevice` zleca dokładną kopię D2D przez
+`cudaMemcpyAsync` na `hypre_HandleComputeStream(hypre_handle())`, bez
+alokacji ani nowego fence. Następny matvec pozostaje na tym strumieniu;
+dotychczasowe końcowe `hypre_SyncComputeStream` nadal respektuje politykę
+HYPRE. Odrzucone zlecenie zachowuje sticky `HYPRE_ERROR_GENERIC` i kończy
+funkcję przed matvec; nie nalicza sukcesu ani nie wybiera innego backendu.
+Zmiana nie dotyczy operatora Poissona, współczynników, AMG, polityki
+vendor-kernels, kryterium PCG ani certyfikatu prawdziwego residuum.
+
+| Realizacja | Zakres tej poprawki |
+|---|---|
+| FDM CPU | Nie dotyczy; nie korzysta z tego callsite HYPRE. |
+| FDM GPU | Nie dotyczy; nie zmienia operatorów FDM. |
+| FEM CPU | Osobny CUDA-free prefix pozostaje niezmieniony. |
+| FEM GPU | Wąska kopia RHS na istniejącym strumieniu, wymagająca kwalifikacji runtime. |
+
+Prywatne gettery `hypre_FullmagResidualAsyncCopyCount` i
+`hypre_FullmagResidualAsyncCopyBytes` opisują zlecone kopie w całym procesie,
+nie zakończone zdarzenia GPU ani liczniki Physical/HotLoop. Licznik operacji
+jest bezwymiarowy, licznik danych podaje bajty. Nie zmienia się Python DSL,
+`ProblemIR`, żaden publiczny parametr ani rozmiar struktur ABI HYPRE/MFEM.
+Zarządzany deps-stage sprawdza bazowy commit i hashe patcha/helpera, następnie
+przebudowuje skonfigurowaną bibliotekę GPU. Hash biblioteki CPU przed i po
+instalacji musi być identyczny. Metadane zależności zawierają hashe poprawki,
+helpera i wynikowej biblioteki GPU.
+
+Wymagane bramki: faktyczne wywołanie out-of-place na GPU z niezależnym
+wynikiem, count/bytes, alias i legalny layout poza fastpath, odrzucenie
+nieprawidłowego zlecenia oraz zgodność z polem/energią/torque i certyfikatem
+residuum w pełnym Zarr tego samego SP4. Sama kompilacja, obecność symboli lub
+liczba zleceń nie dowodzą przyspieszenia. CUDA Graph nie jest włączany tą
+poprawką: zgodność całego wywołania AMG z capture wymaga osobnego dowodu.
+Ograniczenia legacy-stream i capture opisuje
+[oficjalny CUDA Programming Guide 12.4](https://docs.nvidia.com/cuda/archive/12.4.1/cuda-c-programming-guide/index.html#prohibited-and-unhandled-operations).
+
 Update 2026-11-14 initial-observation execution policy (implementation and
 runtime qualification **NOT VERIFIED**): a task requesting FEM GPU must not
 evaluate its prepared initial fields in a separate FEM CPU backend. Mesh/space
@@ -1280,6 +1327,12 @@ managed-runtime qualification.
 | hypre-l1-stream-copy-native-hit | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `require_hypre_l1_async_copy_production_hit` | Brackets a production CG/AMG computation and requires actual successful copy submissions. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
 | hypre-l1-stream-copy-submission-error | `backends/fem/tests/hypre_l1_async_copy_fixture.hpp` | `hypre_l1_async_copy_submission_error_contract` | Exercises rejected submission and unchanged successful-copy counters while preserving exact HYPRE error handling. | FEM GPU | Managed native gate pending. | Unpublished task candidate. |
 | hypre-l1-stream-copy-terminal-observation | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `terminal_hypre_relax7_async_copy` | Optionally observes process-cumulative host counters after solver completion without changing the native snapshot ABI. | FEM GPU | Serialization regressions present; managed runtime pending. | Unpublished task candidate. |
+| hypre-residual-stream-copy-patch | `scripts/test_bootstrap_docker_toolchain.py` | `test_hypre_residual_patch_is_pinned_after_cached_stack_and_recorded` | Checks pinned application of the additive residual-copy patch after cached dependency builds, preserves the CPU library hash and records GPU dependency provenance. | FEM GPU dependency | Source candidate; managed build and performance pending. | Unpublished task candidate. |
+| hypre-residual-stream-copy-bridge | `docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp` | `hypre_FullmagResidualCopyAsyncDevice` | Submits the byte-exact D2D copy on HYPRE's stream and preserves sticky submission errors and success-counter semantics. | FEM GPU | Source candidate; native and scientific gates pending. | Unpublished task candidate. |
+| hypre-residual-stream-copy-device-regression | `backends/fem/tests/hypre_residual_async_copy_fixture.hpp` | `run_hypre_residual_async_copy_contract` | Exercises actual GPU out-of-place output, alias/layout exclusion and sticky submission rejection. | FEM GPU | Managed execution pending; source presence is not parity proof. | Unpublished task candidate. |
+| hypre-residual-stream-copy-production-hit | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Requires patched dependency symbols and brackets real CG/AMG for positive residual-copy submissions while retaining independent CPU/field/residual gates. | FEM GPU | Managed execution pending. | Unpublished task candidate. |
+
+
 | gpu-pgbb-accepted-potential-key | `backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp` | `gpu_demag_pgbb_potential_key` | Computes the exact eligibility key for accepted-potential reuse, including endpoint, operator, device, workspace, solution, streams, row count, and setup generations. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
 | gpu-pgbb-accepted-potential-consume | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `gpu_demag_consume_pgbb_potential` | Issues a move-only single-use permit and consumes it before the solution buffer can be overwritten. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |
 | gpu-pgbb-accepted-potential-trial | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_pgbb_trial` | Applies a qualified initial guess only on the first ordinary trial; subsequent backtracks, refinement, and confirmation use fresh solves. | FEM GPU PGBB | Controlled native GPU gate and three static SP4 runs passed; isolated causal timing pending. | Unpublished task candidate. |

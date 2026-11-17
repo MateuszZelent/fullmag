@@ -1,0 +1,63 @@
+--- a/src/seq_mv/csr_matvec_device.c
++++ b/src/seq_mv/csr_matvec_device.c
+@@ -13,6 +13,10 @@
+
+ #include "_hypre_seq_mv.h"
+ #include "_hypre_utilities.hpp"
++
++#if defined(HYPRE_USING_CUDA) && !defined(HYPRE_MIXED_PRECISION)
++#include "fullmag_residual_stream_copy.hpp"
++#endif
+ #include "seq_mv.hpp"
+
+ #if defined(HYPRE_USING_GPU) || defined(HYPRE_USING_DEVICE_OPENMP)
+@@ -144,13 +148,42 @@
+
+    if (hypre_VectorData(b) != hypre_VectorData(y))
+    {
+-      hypre_TMemcpy( hypre_VectorData(y) + offset,
+-                     hypre_VectorData(b) + offset,
+-                     HYPRE_Complex,
+-                     (ny - offset) * num_vectors,
+-                     hypre_VectorMemoryLocation(y),
+-                     hypre_VectorMemoryLocation(b) );
+-
++#if defined(HYPRE_USING_CUDA) && !defined(HYPRE_MIXED_PRECISION)
++      HYPRE_Int copy_count = ny - offset;
++      HYPRE_Int async_copy_eligible =
++         offset == 0 && copy_count > 0 && num_vectors == 1 &&
++         hypre_VectorSize(b) > 0 &&
++         hypre_VectorSize(b) == hypre_VectorSize(y) &&
++         hypre_VectorNumVectors(b) == 1 && hypre_VectorNumVectors(y) == 1 &&
++         hypre_VectorMultiVecStorageMethod(b) == 0 &&
++         hypre_VectorMultiVecStorageMethod(y) == 0 &&
++         hypre_VectorIndexStride(b) == 1 && hypre_VectorIndexStride(y) == 1 &&
++         hypre_VectorVectorStride(b) == hypre_VectorSize(b) &&
++         hypre_VectorVectorStride(y) == hypre_VectorSize(y) &&
++         hypre_GetActualMemLocation(hypre_VectorMemoryLocation(b)) == hypre_MEMORY_DEVICE &&
++         hypre_GetActualMemLocation(hypre_VectorMemoryLocation(y)) == hypre_MEMORY_DEVICE &&
++         hypre_VectorData(b) != NULL && hypre_VectorData(y) != NULL;
++
++      if (async_copy_eligible)
++      {
++         if (hypre_FullmagResidualCopyAsyncDevice(copy_count,
++                                                  hypre_VectorData(b),
++                                                  hypre_VectorData(y)) != 0)
++         {
++            return hypre_error_flag;
++         }
++      }
++      else
++#endif
++      {
++         hypre_TMemcpy( hypre_VectorData(y) + offset,
++                        hypre_VectorData(b) + offset,
++                        HYPRE_Complex,
++                        (ny - offset) * num_vectors,
++                        hypre_VectorMemoryLocation(y),
++                        hypre_VectorMemoryLocation(b) );
++
++      }
+    }
+
+    if (hypre_CSRMatrixNumNonzeros(A) <= 0 || alpha == 0.0)
