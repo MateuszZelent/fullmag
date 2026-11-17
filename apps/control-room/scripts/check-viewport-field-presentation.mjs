@@ -15,6 +15,7 @@ await mkdir(directory, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1668, height: 1000 }, colorScheme: "dark" });
 const errors = [], deniedMutations = [], frames = {}, audit = {};
+const ui = {};
 const responses = new Map();
 let failure = null;
 page.on("pageerror", (error) => errors.push(error.message));
@@ -75,8 +76,7 @@ const waitMode = (mode) => page.waitForFunction((expected) => {
   return fields?.length > 0 && fields.every((material) => material.kind === expected);
 }, mode, { timeout: 180_000 });
 async function chooseMode(mode) {
-  await page.locator("#fm-view-render-mode").click();
-  await page.getByRole("option", { name: mode === "presentation" ? /^Presentation/ : /^Scientific/ }).click();
+  await page.getByRole("radio", { name: mode === "presentation" ? "Presentation" : "Scientific", exact: true }).click();
   await waitMode(mode);
 }
 async function capture(name) {
@@ -117,14 +117,30 @@ try {
   await waitMode("scientific");
   console.log("field-presentation: scientific field surface ready");
   await page.getByRole("button", { name: "View settings", exact: true }).click();
-  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+  await page.getByRole("tab", { name: "Quality", exact: true }).click();
+  const modeGroup = page.getByRole("radiogroup", { name: "Visualization mode", exact: true });
+  assert.equal(await modeGroup.count(), 1);
+  assert.equal(await modeGroup.getByRole("radio").count(), 2);
+  assert.equal(await page.getByRole("radio", { name: "Presentation", exact: true }).isVisible(), true);
+  const quality = await page.getByRole("combobox", { name: "Quality profile", exact: true }).textContent();
   const scientific = await capture("scientific");
-  await chooseMode("presentation");
+  await page.getByRole("radio", { name: "Scientific", exact: true }).focus();
+  await page.getByRole("radio", { name: "Scientific", exact: true }).press("ArrowRight");
+  await waitMode("presentation");
+  assert.equal(await page.getByRole("radio", { name: "Presentation", exact: true }).getAttribute("aria-checked"), "true");
+  assert.equal(await page.getByRole("combobox", { name: "Quality profile", exact: true }).textContent(), quality);
+  ui.modeVisibleInQuality = true;
+  ui.keyboardModeSelection = true;
+  ui.qualityUnchanged = quality;
+  await page.locator(".fm-viewport-3d-settings").screenshot({ path: resolve(directory, "inspector-quality-mode.png"), animations: "disabled" });
   console.log("field-presentation: PBR field surface ready");
   const presentation = await capture("presentation");
   assert.equal(audit.presentation.presentation.environmentReady, true);
   assert.ok(audit.presentation.presentation.fieldMaterials.every((material) => material.normals > 0 && material.castShadow && material.receiveShadow));
   assert.deepEqual(audit.presentation.presentation.fieldMaterials.map((material) => material.geometry), audit.scientific.presentation.fieldMaterials.map((material) => material.geometry));
+  await page.getByRole("tab", { name: "Appearance", exact: true }).click();
+  assert.equal(await page.getByRole("radiogroup", { name: "Visualization mode", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("radio", { name: "Presentation", exact: true }).getAttribute("aria-checked"), "true");
   await page.getByRole("button", { name: "Advanced light direction", exact: true }).click();
   await page.locator("#fm-view-light-azimuth-number").fill("95");
   await page.locator("#fm-view-light-azimuth-number").press("Enter");
@@ -151,6 +167,7 @@ try {
   console.error(failure);
   process.exitCode = 1;
 } finally {
-  await writeFile(resolve(directory, "proof.json"), JSON.stringify({ state: failure ? "failed" : "passed", qualification: "browser-renderer-only", orientationProof, readOnlyReplica: Boolean(readOnlyApi), failure, errors, deniedMutations, frames, audit }, null, 2));
+  await writeFile(resolve(directory, "proof.json"), JSON.stringify({ state: failure ? "failed" : "passed", qualification: "browser-renderer-only", orientationProof, readOnlyReplica: Boolean(readOnlyApi), failure, errors, deniedMutations, frames, audit, ui }, null, 2));
+  await page.unrouteAll({ behavior: "wait" });
   await browser.close();
 }

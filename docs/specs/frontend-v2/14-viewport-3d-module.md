@@ -269,6 +269,12 @@ a locally generated linear HDR studio panorama filtered through PMREM, and
 filtered directional shadows. Roughness and metalness are visual preferences,
 not solver material parameters. No remote asset request is required.
 
+The Scientific/Presentation choice is always visible above the 3D View settings
+tabs as a labelled two-option control. Quality profiles (Interactive Lite,
+Interactive, Balanced, Figure) stay in Quality and independently choose detail
+and rendering cost. Selecting a visualization mode never changes the quality
+profile; selecting quality never changes the visualization mode.
+
 Scientific surfaces and glyphs retain their unlit palette and bypass tone
 mapping. AO, bloom and presentation tone mapping are suppressed while field data
 are visible in Scientific. Presentation field surfaces use the same scalar/vector
