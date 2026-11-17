@@ -1114,6 +1114,13 @@ blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źród
 są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
 Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
 aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
+Zakres `fem-preparation-contracts` sprawdza przekazanie importowanego STL
+z osobnego katalogu źródeł do przygotowanej siatki; po kompilacji ogranicza
+czas wykonania wskazanego testu do 60 sekund. `stl-classification-contracts`
+sprawdza powłoki, ownerów komponentów oraz eksport granic, a
+`stl-meshing-contracts` obejmuje dodatkowo pełny zestaw testów meshera.
+Receipty tych zakresów wiążą także hashe wykonywanych źródeł i testów Pythona.
+
 Sukces buildu nie stanowi kwalifikacji FDM/FEM/BORIS. Release, CI i kwalifikacja
 naukowa zachowują własne jawne zarządzane recepty zgodnie z AGENTS.md.
 

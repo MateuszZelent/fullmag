@@ -40,6 +40,8 @@ def _source_hashes(selected: Path) -> dict[str, str]:
     for directory in ('crates', '.cargo'):
         paths.extend(path for path in (selected / directory).rglob('*')
                      if path.is_file() and path.suffix in ('.rs', '.toml'))
+    for directory in ('packages/fullmag-py/src', 'packages/fullmag-py/tests'):
+        paths.extend(path for path in (selected / directory).rglob('*.py') if path.is_file())
     return {str(path.relative_to(selected)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(paths)}
 
@@ -55,6 +57,34 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
+        ),
+        "fem-preparation-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'imported_geometry_sources::tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0', '/usr/bin/timeout', '--kill-after=5', '60',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api',
+             'script::tests::accepted_fem_preparation_resolves_imported_asset_from_source_root',
+             '--', '--exact', '--nocapture'),
+        ),
+        "stl-classification-contracts": (
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_stl_shell_domains.py', '-v'),
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_frozen_boundary_stl_export.py', '-v'),
+        ),
+        "stl-meshing-contracts": tuple(
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', module, '-v')
+            for module in ('test_meshing.py', 'test_stl_shell_domains.py',
+                           'test_frozen_boundary_stl_export.py')
         ),
         "stl-api-contracts": tuple(
             ('/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
@@ -87,8 +117,13 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
                                     CHECK_SCRIPT, *command, allow_failure=True, timeout=1800)
             operation['daemon_pending'] = False
             output = result.stdout.decode('utf-8', 'replace')
-            if result.returncode == 0 and ('test result: ok.' not in output or 'running 0 tests' in output):
+            if (result.returncode == 0 and '/root/.cargo/bin/cargo' in command
+                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
                 raise BuildControlError('Selected Rust test harness did not execute tests')
+            if result.returncode == 0 and 'unittest' in command:
+                diagnostic = result.stderr.decode('utf-8', 'replace')
+                if 'Ran ' not in diagnostic or 'Ran 0 tests' in diagnostic:
+                    raise BuildControlError('Selected Python test harness did not execute tests')
             outputs.append((result.stdout, result.stderr))
             if result.returncode:
                 exit_code = result.returncode
@@ -105,5 +140,5 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
         control.write(root + '/receipt.json', operation['receipt'])
         for stdout, stderr in outputs:
             print(stdout.decode('utf-8', 'replace')[-24000:] + stderr.decode('utf-8', 'replace')[-8000:])
-        print('Rust source check receipt: ' + root + '/receipt.json')
+        print('Source check receipt: ' + root + '/receipt.json')
         return exit_code

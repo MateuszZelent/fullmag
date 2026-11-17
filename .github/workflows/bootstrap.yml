@@ -1307,6 +1307,11 @@ jobs:
           python -m pytest -q
           tests/standard_problems/mumag/comsol_nonzero_k_dispersion/test_contract.py
           -k materialization_cli_terminal_status_follows_benchmark_mesh_acceptance
+      - name: Run STL shell recovery contracts
+        run: |
+          python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_stl_shell_domains.py' -v
+          python -B -m unittest discover -s packages/fullmag-py/tests -p 'test_frozen_boundary_stl_export.py' -v
+
       - name: Run Python meshing tests
         env:
           FULLMAG_MESH_FAILURE_ARTIFACT_DIR: ${{ runner.temp }}/fullmag-mesh-failure-artifacts

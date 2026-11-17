@@ -1238,16 +1238,31 @@ def _build_stl_volume_models_for_components(
     return_topology: bool = False,
     coordinate_scale: float = 1.0,
 ):
-    """Classify all STL shells once, retaining exact source-element owners."""
-    owners: dict[int,str] = {}
+    """Recover owned STL shells with a bounded geometry-parametrization retry."""
     names = [component.geometry_name for component in components]
     if len(names) != len(set(names)):
         raise StlTopologyError('STL source-component identities must be unique')
-    for component in components:
-        merge_owned_stl(gmsh,component.stl_path,component.geometry_name,owners)
-    _scale_stl_source_nodes(gmsh, coordinate_scale)
-    topology = classify_owned_stl_shells(gmsh,owners,reparametrize=True)
-    gmsh.model.mesh.createGeometry()
+    # Sparse closed surfaces can stall Gmsh's forced single-map partitioning.
+    # Use ordinary classified patches first, matching the single-STL importer.
+    for reparametrize in (False, True):
+        if reparametrize:
+            emit_progress('Gmsh: retrying component STL geometry with reparametrized surfaces')
+            gmsh.clear()
+            gmsh.model.add('shared_domain_components')
+        owners: dict[int,str] = {}
+        for component in components:
+            merge_owned_stl(gmsh,component.stl_path,component.geometry_name,owners)
+        # Every retry imports fresh source nodes, so SI conditioning is applied once.
+        _scale_stl_source_nodes(gmsh, coordinate_scale)
+        topology = classify_owned_stl_shells(gmsh,owners,reparametrize=reparametrize)
+        try:
+            gmsh.model.mesh.createGeometry()
+            break
+        except Exception as exc:
+            if (not reparametrize
+                    and 'Wrong topology of boundary mesh for parametrization' in str(exc)):
+                continue
+            raise
     volumes,surfaces = material_shell_volumes(gmsh,topology)
     if set(volumes) != set(names):
         raise StlTopologyError('Could not recover all imported STL source-component identities')

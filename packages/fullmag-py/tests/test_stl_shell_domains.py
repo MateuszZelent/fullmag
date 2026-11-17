@@ -578,5 +578,89 @@ class ImportedStlShellConstructionTests(unittest.TestCase):
         _reject_anonymous_import_fallback([analytic,analytic],error)
 
 
+
+class ComponentStlParametrizationTests(unittest.TestCase):
+    def _exercise(self, geometry_error=None, topology_error=None):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from fullmag.meshing import _gmsh_generators as generators
+
+        gmsh = Mock()
+        gmsh.model.mesh.createGeometry.side_effect = (
+            [geometry_error, None] if geometry_error is not None else [None]
+        )
+        components = [SimpleNamespace(geometry_name=name, stl_path=Path(name + '.stl'))
+                      for name in ('first', 'second')]
+        imports, classifications, scalings = [], [], []
+        topologies = [object(), object()]
+
+        def merge(_gmsh, path, owner, owners):
+            generation = gmsh.clear.call_count
+            tag = generation * 10 + len(owners) + 1
+            owners[tag] = owner
+            imports.append((generation, path, owner))
+
+        def classify(_gmsh, owners, *, reparametrize):
+            generation = gmsh.clear.call_count
+            self.assertEqual(owners, {generation * 10 + 1: 'first',
+                                      generation * 10 + 2: 'second'})
+            classifications.append(reparametrize)
+            if topology_error is not None:
+                raise topology_error
+            return topologies[generation]
+
+        with patch.object(generators, 'merge_owned_stl', side_effect=merge), \
+             patch.object(generators, '_scale_stl_source_nodes',
+                          side_effect=lambda _gmsh, scale: scalings.append(scale)), \
+             patch.object(generators, 'classify_owned_stl_shells', side_effect=classify), \
+             patch.object(generators, 'material_shell_volumes',
+                          return_value=({'second': [22], 'first': [21]},
+                                        {'first': [31], 'second': [32]})) as material:
+            try:
+                result = generators._build_stl_volume_models_for_components(
+                    gmsh, components, return_topology=True, coordinate_scale=1e6)
+            except Exception:
+                self.last_gmsh = gmsh
+                self.last_classifications = classifications
+                raise
+        return gmsh, imports, classifications, scalings, topologies, material, result
+
+    def test_simple_components_use_ordinary_surface_classification(self):
+        gmsh, imports, classifications, scalings, topologies, material, result = self._exercise()
+        self.assertEqual(classifications, [False])
+        self.assertEqual(scalings, [1e6])
+        self.assertEqual(len(imports), 2)
+        gmsh.clear.assert_not_called()
+        material.assert_called_once_with(gmsh, topologies[0])
+        self.assertEqual(list(result[0]), ['first', 'second'])
+
+    def test_parametrization_retry_reimports_owners_and_scales_only_fresh_nodes(self):
+        failure = RuntimeError('Wrong topology of boundary mesh for parametrization')
+        gmsh, imports, classifications, scalings, topologies, material, result = self._exercise(failure)
+        self.assertEqual(classifications, [False, True])
+        self.assertEqual(scalings, [1e6, 1e6])
+        self.assertEqual([(generation, owner) for generation, _, owner in imports],
+                         [(0, 'first'), (0, 'second'), (1, 'first'), (1, 'second')])
+        gmsh.clear.assert_called_once()
+        gmsh.model.add.assert_called_once_with('shared_domain_components')
+        material.assert_called_once_with(gmsh, topologies[1])
+        self.assertIs(result[2], topologies[1])
+        self.assertEqual(list(result[0]), ['first', 'second'])
+
+    def test_other_geometry_errors_do_not_trigger_reparametrization(self):
+        with self.assertRaisesRegex(RuntimeError, 'unrelated failure'):
+            self._exercise(RuntimeError('unrelated failure'))
+        self.assertEqual(self.last_classifications, [False])
+        self.last_gmsh.clear.assert_not_called()
+
+    def test_invalid_shells_are_rejected_before_any_geometry_retry(self):
+        from fullmag.meshing._gmsh_stl_shells import StlTopologyError
+        with self.assertRaisesRegex(StlTopologyError, 'invalid shell'):
+            self._exercise(topology_error=StlTopologyError('invalid shell'))
+        self.assertEqual(self.last_classifications, [False])
+        self.last_gmsh.model.mesh.createGeometry.assert_not_called()
+        self.last_gmsh.clear.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
