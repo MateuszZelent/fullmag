@@ -49,7 +49,7 @@ study.engine("fem")
 study.device("gpu", precision="double")
 study.mode("strict")
 study.interactive(True)
-study.wait_for_solve(False)
+study.wait_for_solve(True)
 
 # Explicit absolute storage keeps results and scratch on the admitted E: ext4 volume.
 # This path is the private user-data bind of this task's Compose group.
