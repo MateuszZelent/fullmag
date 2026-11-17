@@ -109,7 +109,10 @@ vector nie staje się global XYZ przez zmianę etykiety.
 
 Kompletność plików i zbieżność są oddzielne. Sukces accepted FR wymaga
 wszystkich zadeklarowanych punktów i native `converged=true` dla każdego,
-skończonego residual oraz spełnienia jawnego kryterium solvera. Niezbieżny
+skończonego residual oraz spełnienia jawnego kryterium solvera. Pierwszy
+accepted kontrakt wymaga także relative residual nie większego niż jawnie
+zapisana relative tolerance. Native sukces osiągnięty wyłącznie przez luźniejszy
+absolute threshold nie omija tej bramki jakości i daje czytelny błąd. Niezbieżny
 punkt oznacza failed attempt z zachowanym partial/diagnostic output, bez
 complete indeksu. Codec nie zastępuje fizycznego walidatora solvera.
 
@@ -153,6 +156,23 @@ Existing `frequency_domain_artifact_generation.v1` hash publisher jest
 ponownie używany z jawną allow-listą. Obecna native FR ścieżka zwraca pustą
 listę auxiliary artifacts, dlatego nowe source tests muszą wykazać faktyczne
 wywołanie generation commit, a nie tylko obecność manifestu w katalogu.
+
+### 4.2. Dokładna mapa próbek do domeny
+
+Native FR kompresuje węzły według `norm(M0)>1e-12`, w kolejności pełnego planu.
+To ta sama funkcja, której używa builder native payloadu; nie wolno zastąpić
+jej ponownym doborem węzłów z markerów ani wnioskowaniem z długości wektora.
+Dla BuckyBall 52093 magnetic samples i 196126 węzłów pełnej domeny są różnymi
+przestrzeniami indeksowania, mimo wspólnego źródła siatki.
+
+Globalna closure zachowuje dokładną ordered `magnetic_node_indices`, byte
+length i SHA mapy, source topology identity oraz hash M0. Każdy punkt wiąże
+mapę i native sample count. API weryfikuje count, digest, zakres, unikalność
+i source topology, a następnie emituje istniejące FMVP v5
+`ExplicitNodeIndices`. Viewport obsługuje ten mapping; nie potrzeba ekspansji
+na air nodes ani tworzenia osobnej siatki. Brak lub niezgodność dowodu mapy
+zamyka binary response field z czytelnym błędem, zachowując odczyt widma.
+Legacy count-only inference nie może certyfikować nowego accepted wyniku.
 
 ## 5. Wykonanie, Stop i recovery
 

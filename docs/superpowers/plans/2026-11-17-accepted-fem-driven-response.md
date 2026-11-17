@@ -95,6 +95,7 @@
 **Files:** existing `router_v2/handlers/analysis/frequency_domain.rs`, `analysis/results.rs`, data-plane field readers, accepted stage projection; tylko konieczne frontend resource parsers/tests, bez cudzych zmian viewport material.
 
 - [ ] Typed readers preferują compact v3 dla nowego published manifestu; v1/v2 czytają starsze wyniki. Jeden existing resource contract, bez host-path endpointu.
+- [ ] Native compact mapping zapisany z rzeczywistego magnetic_node_indices oraz source topology/M0 hash; API odrzuca count-only dopasowanie i podaje zweryfikowaną ordered mapę do existing FMVP5 ExplicitNodeIndices. Test same-count permutation i obcy mesh muszą nie przejść.
 - [ ] Root published location wynika z immutable attempt/output receipt; wszystkie source revisions i session/run/stage/runtime muszą pasować.
 - [ ] Test spectrum/response field reads i CAS-only reopen z usuniętą wyłącznie testową mutable kopią. Nie uruchamiać ponownie Solve w recovery.
 - [ ] Source lint/typecheck/API contract gates dla dotkniętych warstw; commit.

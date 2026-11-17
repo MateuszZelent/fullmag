@@ -58,6 +58,11 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
         ),
+        "fem-response-codec-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-application', '--lib', 'study_frequency_response_artifact'),
+        ),
         "fem-live-control-contracts": tuple(
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
