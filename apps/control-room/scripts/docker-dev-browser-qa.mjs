@@ -433,7 +433,17 @@ const canvasState = async (page) => page.locator(".fm-viewport-3d canvas").first
 const viewportDomObservation = async (page) => page.locator(".fm-viewport-3d").evaluate((viewport) => {
   const datasetEntries = Object.entries(viewport.dataset);
   const quantityLabels = [...viewport.querySelectorAll("[data-quantity-id]")];
+  const refresh = viewport.querySelector(".fm-viewport-3d__refresh-countdown");
+  const refreshRect = refresh?.getBoundingClientRect();
   return {
+    field_refresh: refresh ? {
+      aria_label: refresh.getAttribute("aria-label")?.slice(0, 256) ?? "",
+      detail: refresh.querySelector(".fm-viewport-3d__refresh-countdown-detail")?.textContent?.trim().slice(0, 128) ?? "",
+      pulse_id: refresh.getAttribute("data-pulse-id"),
+      state: refresh.getAttribute("data-refresh-state"),
+      title: refresh.querySelector(".fm-viewport-3d__refresh-countdown-title")?.textContent?.trim().slice(0, 128) ?? "",
+      visible: Boolean(refreshRect?.width > 0 && refreshRect?.height > 0),
+    } : null,
     dataset: Object.fromEntries(datasetEntries.slice(0, 64).map(([key, value]) => [key, value.slice(0, 1024)])),
     dataset_entry_count: datasetEntries.length,
     dataset_truncated: datasetEntries.length > 64 || datasetEntries.some(([, value]) => value.length > 1024),

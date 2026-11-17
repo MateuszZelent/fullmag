@@ -459,6 +459,8 @@ TELEMETRY_FILES = (
     'src/modules/footer/FooterTelemetry.tsx',
     'src/modules/footer/FooterTelemetry.test.ts',
     'src/modules/footer/FooterTelemetry.refresh.test.tsx',
+    'src/modules/viewport-3d/viewport3dRefreshCountdown.ts',
+    'src/modules/viewport-3d/viewport3dRefreshCountdown.test.ts',
 )
 # Source checks remain available when compiling unit tests is disabled.
 TELEMETRY_SOURCE_COMMANDS = (
