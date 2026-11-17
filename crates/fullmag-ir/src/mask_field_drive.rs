@@ -454,12 +454,14 @@ fn validate_sampled(label: &str, source: &MaskSourceIR, errors: &mut Vec<String>
         return;
     };
     let digest_ok = sha256.len() == 64 && sha256.bytes().all(|byte| byte.is_ascii_hexdigit());
-    let cells = size.iter().map(|value| u64::from(*value)).product::<u64>();
+    // Checked: a product that overflows u64 (e.g. 2^31 x 2^31 x 4) must not wrap
+    // to a small number and pass the limit.
+    let cells = sampled_mask_cell_count(size);
     if encoding != SAMPLED_MASK_ENCODING
         || data.trim().is_empty()
         || !digest_ok
         || size.contains(&0)
-        || cells > MAX_SAMPLED_MASK_CELLS
+        || cells.is_none_or(|cells| cells > MAX_SAMPLED_MASK_CELLS)
         || !cell_m.iter().all(|value| positive(*value))
         || !finite3(origin_m)
     {
@@ -467,6 +469,13 @@ fn validate_sampled(label: &str, source: &MaskSourceIR, errors: &mut Vec<String>
             "mask_array_invalid: {label}: a sampled mask needs encoding '{SAMPLED_MASK_ENCODING}', data, a sha256 of 64 hex digits, a non-zero size of at most {MAX_SAMPLED_MASK_CELLS} cells, positive cells and a finite origin"
         ));
     }
+}
+
+/// Number of cells of a sampled mask lattice, or `None` when the product
+/// overflows `u64`.
+pub fn sampled_mask_cell_count(size: &[u32; 3]) -> Option<u64> {
+    size.iter()
+        .try_fold(1_u64, |cells, value| cells.checked_mul(u64::from(*value)))
 }
 
 /// Validate `ProblemIR.mask_field_drives`. Every message starts with its code.

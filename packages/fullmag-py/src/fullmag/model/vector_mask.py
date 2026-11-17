@@ -33,6 +33,8 @@ from typing import Mapping, Sequence
 import numpy as np
 
 SAMPLED_MASK_ENCODING = "f32le-zlib-base64"
+# Largest sampled lattice, as `MAX_SAMPLED_MASK_CELLS` in crates/fullmag-ir.
+MAX_SAMPLED_MASK_CELLS = 1 << 28
 
 
 def _vector3(value: Sequence[float], name: str, *, positive: bool = False) -> tuple[float, float, float]:
@@ -153,16 +155,29 @@ class VectorMask:
         """Rebuild a mask from its IR payload (used by exported scripts)."""
         if encoding != SAMPLED_MASK_ENCODING:
             raise ValueError(f"unknown vector mask encoding {encoding!r}")
-        raw = zlib.decompress(base64.b64decode(data))
+        try:
+            nx, ny, nz = (int(value) for value in size)
+        except (TypeError, ValueError):
+            raise ValueError("size must be three integers (nx, ny, nz)") from None
+        if min(nx, ny, nz) <= 0 or nx * ny * nz > MAX_SAMPLED_MASK_CELLS:
+            raise ValueError(
+                f"vector mask size must be positive with at most {MAX_SAMPLED_MASK_CELLS} cells"
+            )
+        expected = nx * ny * nz * 3 * 4
+        # Inflate at most one byte more than the lattice needs: a small payload
+        # that expands to gigabytes is rejected without being expanded.
+        inflater = zlib.decompressobj()
+        try:
+            raw = inflater.decompress(base64.b64decode(data, validate=True), expected + 1)
+        except (zlib.error, ValueError) as error:
+            raise ValueError(f"vector mask data is not zlib base64: {error}") from None
+        if len(raw) != expected or not inflater.eof:
+            raise ValueError("vector mask data does not match its size")
         digest = hashlib.sha256(raw).hexdigest()
         if digest != sha256.lower():
             raise ValueError(f"vector mask sha256 {digest} differs from {sha256}")
-        mask = cls(size, cell, origin)
-        nx, ny, nz = mask.size
-        values = np.frombuffer(raw, dtype="<f4")
-        if values.size != nx * ny * nz * 3:
-            raise ValueError("vector mask data does not match its size")
-        mask._array[...] = values.reshape(nz, ny, nx, 3)
+        mask = cls((nx, ny, nz), cell, origin)
+        mask._array[...] = np.frombuffer(raw, dtype="<f4").reshape(nz, ny, nx, 3)
         return mask
 
     @classmethod

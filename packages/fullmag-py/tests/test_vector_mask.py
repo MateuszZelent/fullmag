@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import textwrap
 import unittest
+import unittest.mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -88,6 +89,58 @@ class VectorMaskTests(unittest.TestCase):
         self.assertEqual(restored.to_ir()["sha256"], ir["sha256"])
         with self.assertRaisesRegex(ValueError, "sha256"):
             fm.VectorMask.from_ir({**ir, "sha256": "0" * 64})
+
+    def test_from_data_does_not_inflate_past_the_declared_size(self) -> None:
+        import base64
+        import hashlib
+        import zlib
+
+        # 4 MiB of zeros declared as a single cell (12 bytes).
+        bomb = zlib.compress(bytes(4 << 20))
+        payload = {
+            "encoding": "f32le-zlib-base64",
+            "data": base64.b64encode(bomb).decode(),
+            "sha256": hashlib.sha256(bytes(4 << 20)).hexdigest(),
+            "size": (1, 1, 1),
+            "cell": (1e-9, 1e-9, 1e-9),
+            "origin": (0.0, 0.0, 0.0),
+        }
+        inflated = []
+        real = zlib.decompressobj
+
+        class Recording:
+            def __init__(self) -> None:
+                self._inner = real()
+
+            def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+                out = self._inner.decompress(data, max_length)
+                inflated.append(len(out))
+                return out
+
+            @property
+            def eof(self) -> bool:
+                return self._inner.eof
+
+        with unittest.mock.patch("fullmag.model.vector_mask.zlib.decompressobj", Recording):
+            with self.assertRaisesRegex(ValueError, "does not match its size"):
+                fm.VectorMask.from_data(**payload)
+        self.assertEqual(inflated, [13])
+
+        # A payload that is too short or has trailing data is rejected too.
+        one_cell = np.ones(3, dtype="<f4").tobytes()
+        for raw in (one_cell[:8], one_cell + b"\0"):
+            with self.assertRaisesRegex(ValueError, "does not match its size"):
+                fm.VectorMask.from_data(
+                    **{**payload, "data": base64.b64encode(zlib.compress(raw)).decode(),
+                       "sha256": hashlib.sha256(raw).hexdigest()}
+                )
+
+    def test_from_data_rejects_sizes_beyond_the_rust_limit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at most 268435456 cells"):
+            fm.VectorMask.from_data(
+                encoding="f32le-zlib-base64", data="", sha256="0" * 64,
+                size=(2**31, 2**31, 4), cell=(1e-9, 1e-9, 1e-9), origin=(0.0, 0.0, 0.0),
+            )
 
     def test_errors(self) -> None:
         mask = fm.VectorMask((2, 2, 2), (1e-9, 1e-9, 1e-9))

@@ -319,8 +319,21 @@ fn decode_sampled_mask(
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(data.as_bytes())
         .map_err(|error| invalid(format!("data is not base64: {error}")))?;
+    // Checked: an overflowing lattice must not wrap to a small byte count.
+    let expected = fullmag_ir::sampled_mask_cell_count(size)
+        .filter(|cells| *cells <= fullmag_ir::MAX_SAMPLED_MASK_CELLS)
+        .and_then(|cells| cells.checked_mul(3 * 4))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .ok_or_else(|| {
+            invalid(format!(
+                "a {}x{}x{} lattice exceeds {} cells",
+                size[0],
+                size[1],
+                size[2],
+                fullmag_ir::MAX_SAMPLED_MASK_CELLS
+            ))
+        })?;
     let size = size.map(|value| value as usize);
-    let expected = size[0] * size[1] * size[2] * 3 * 4;
     // Read at most one byte more than the lattice needs: a small payload that
     // inflates to gigabytes is rejected without being expanded.
     let mut raw = Vec::new();

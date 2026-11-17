@@ -291,6 +291,20 @@ fn rejects_bad_shape_and_sampled_lattice() {
 }
 
 #[test]
+fn rejects_sampled_lattice_whose_cell_count_overflows() {
+    // 2^31 * 2^31 * 4 = 2^64 wraps to 0 in unchecked u64 arithmetic.
+    assert_eq!(sampled_mask_cell_count(&[2_147_483_648, 2_147_483_648, 4]), None);
+    assert_eq!(sampled_mask_cell_count(&[1200, 200, 15]), Some(3_600_000));
+    let mut drive = antenna_drive();
+    drive["terms"][2]["mask"]["size"] = json!([2_147_483_648_u64, 2_147_483_648_u64, 4]);
+    assert_error(
+        &errors_of(problem_with(json!([drive]))),
+        "mask_array_invalid",
+        "mask_field_drives[0].terms[2].mask",
+    );
+}
+
+#[test]
 fn drive_active_in_relax_requires_constant_time() {
     let mut value = problem_with(json!([antenna_drive()]));
     value["mask_field_drives"][0]["activation"] =
