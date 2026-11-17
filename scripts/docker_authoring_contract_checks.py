@@ -58,6 +58,24 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
         ),
+        "fem-response-preparer-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-fem-preparer',
+             'accepted_fem_preparer::tests'),
+        ),
+        "fem-response-input-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runner', '--lib',
+             'fem_frequency_response_'),
+        ),
+        "fem-response-preparation-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runtime-control', '--lib',
+             'accepted_frequency_response_preparation_binds_native_evidence_to_exact_run_problem_and_step'),
+        ),
         "fem-response-codec-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
