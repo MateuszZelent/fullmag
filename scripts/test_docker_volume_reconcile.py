@@ -691,6 +691,7 @@ class CertificateMountRefusalDispatch(unittest.TestCase):
             "certificate": {"path": "/state/linux-native-host.json", "sha256": "3"*64,
                 "inode": 4, "device": 5}, "compose_sha256": "6"*64,
             "private_owner_sha256": "7"*64, "frontend_inputs_sha256": "8"*64,
+            "frontend_seed_sha256": "f"*64,
             "helper_log_sha256": "9"*64, "service_states": {"backend": "a"*64, "frontend": "b"*64},
             "engine_id": "engine", "active_sha256": "c"*64,
             "current_sha256": None, "verified_sha256": None,

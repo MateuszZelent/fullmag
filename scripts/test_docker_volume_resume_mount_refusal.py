@@ -115,7 +115,8 @@ class ResumeMountRefusalTests(unittest.TestCase):
             "certificate": {"path": "/state/linux-native-host.json", "sha256": "c" * 64,
                 "inode": 20, "device": 2144},
             "compose_sha256": "d" * 64, "private_owner_sha256": "e" * 64,
-            "frontend_inputs_sha256": "1" * 64, "helper_log_sha256": "2" * 64,
+            "frontend_inputs_sha256": "1" * 64, "frontend_seed_sha256": "4" * 64,
+            "helper_log_sha256": "2" * 64,
             "service_states": {name: refusal.digest(canonical(self.actual[name]["State"]))
                 for name in ("backend", "frontend")}, "engine_id": "engine",
             "current_sha256": None, "verified_sha256": None,
@@ -305,13 +306,17 @@ class ResumeMountRefusalTests(unittest.TestCase):
             attempt_root = "resume/attempts/" + self.token
             owner = {"schema": "fullmag.docker-group-storage-owner.v1", "compose_project": self.project}
             group_owner_raw = canonical(owner) + b"\n"
+            frontend_inputs = canonical({"source_root": str(self.source), "host_port": 3350,
+                "files": [{"relative": "package.json"}]})
+            frontend_seed = canonical({"state": "seeded", "files": 1})
             documents = {"active": active, parent_root + "/terminal.json": self.parent_terminal_raw,
                 parent_root + "/compose.json": compose_raw,
                 parent_root + "/unknown-receipt.json": parent_unknown,
                 refusal.parent_request_path(self.parent, self.parent_request_sha): self.parent_request_raw,
                 **{"development/attempts/" + self.parent + "/" + name: raw
                     for name, raw in attempt_doc_bytes.items()},
-                "private/.owner.json": group_owner_raw, "frontend/development-inputs.json": b"frontend inputs\n",
+                "private/.owner.json": group_owner_raw, "frontend/development-inputs.json": frontend_inputs,
+                attempt_root + "/frontend-seed.json": frontend_seed,
                 "resume/current.json": None, "resume/verified.json": None}
             control = SimpleNamespace(project=self.project, volume=self.volume,
                 path=lambda name: "/control/" + name,
@@ -321,7 +326,8 @@ class ResumeMountRefusalTests(unittest.TestCase):
             self.request["containers"]["lease"].update(started_at=actuals["lease"]["State"]["StartedAt"],
                 fingerprint=reconcile.fingerprint(actuals["lease"]))
             self.request["failure"]["private_owner_sha256"] = refusal.digest(group_owner_raw)
-            self.request["failure"]["frontend_inputs_sha256"] = refusal.digest(b"frontend inputs\n")
+            self.request["failure"]["frontend_inputs_sha256"] = refusal.digest(frontend_inputs)
+            self.request["failure"]["frontend_seed_sha256"] = refusal.digest(frontend_seed)
             self.request["failure"]["helper_log_sha256"] = refusal.digest(b"READY\nLOGGED\n")
             self.request["failure"]["service_states"] = {name: refusal.digest(canonical(actuals[name]["State"]))
                 for name in ("backend", "frontend")}
@@ -384,6 +390,18 @@ class ResumeMountRefusalTests(unittest.TestCase):
             (root / "runs/docker-all/session-store/runtime-services/OWNER.json").write_text("{}")
             with self.assertRaises(BuildControlError):
                 refusal.validate_empty_session_store(root)
+
+    def test_frontend_metadata_seed_precedes_service_start_and_is_exactly_bound(self):
+        inputs = {"source_root": str(self.source), "host_port": 3350,
+            "files": [{"relative": "package.json"}]}
+        raw = canonical({"state": "seeded", "files": 1})
+        refusal.validate_frontend_seed(raw, canonical(inputs), self.request)
+        for changed in ({"state": "seeded", "files": 2}, {"state": "starting", "files": 1}):
+            with self.assertRaises(BuildControlError):
+                refusal.validate_frontend_seed(canonical(changed), canonical(inputs), self.request)
+        for key, value in (("source_root", "/foreign"), ("host_port", 3351)):
+            with self.assertRaises(BuildControlError):
+                refusal.validate_frontend_seed(raw, canonical({**inputs, key: value}), self.request)
 
     def test_partial_current_publication_replays_only_exact_prepared_terminal(self):
         request_sha = refusal.digest(canonical(self.request) + b"\n")

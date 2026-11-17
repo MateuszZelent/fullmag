@@ -29,7 +29,7 @@ ABSENT_CONTROL_FILES = (
     "runtime-control/runtime-services/OWNER.lock",
 )
 ABSENT_ATTEMPT_FILES = (
-    "frontend-seed.json", "backend-build-receipt.json", "provenance.json",
+    "backend-build-receipt.json", "provenance.json",
     "storage-probe-log.json", "worker-cgroup-compose.json", "worker-cgroup-log.json",
     "handoff-log.json", "docker_worker_cgroup.py",
 )
@@ -73,7 +73,7 @@ def validate_shape(request):
     proof = request["failure"]
     require(isinstance(proof, dict) and set(proof) == {
         "error", "error_sha256", "parent", "certificate", "compose_sha256", "private_owner_sha256",
-        "frontend_inputs_sha256", "helper_log_sha256", "service_states", "engine_id", "active_sha256",
+        "frontend_inputs_sha256", "frontend_seed_sha256", "helper_log_sha256", "service_states", "engine_id", "active_sha256",
         "current_sha256", "verified_sha256", "absent_control_files", "absent_attempt_files",
         "state_files", "controllers"}, "Certificate mount refusal proof keys differ")
     validate_mount_error(proof["error"])
@@ -109,7 +109,7 @@ def validate_shape(request):
         and type(certificate["inode"]) is int and certificate["inode"] > 0
         and type(certificate["device"]) is int and certificate["device"] > 0,
         "Retained host certificate identity is invalid")
-    for key in ("compose_sha256", "private_owner_sha256", "frontend_inputs_sha256", "helper_log_sha256"):
+    for key in ("compose_sha256", "private_owner_sha256", "frontend_inputs_sha256", "frontend_seed_sha256", "helper_log_sha256"):
         require(isinstance(proof[key], str) and SHA.fullmatch(proof[key]), "Invalid refusal digest: " + key)
     for key in ("current_sha256", "verified_sha256"):
         require(proof[key] is None or isinstance(proof[key], str) and SHA.fullmatch(proof[key]),
@@ -347,6 +347,18 @@ def validate_service_state_pins(request, actual):
         == request["failure"]["service_states"], "Stopped service state changed after the OCI refusal")
 
 
+def validate_frontend_seed(seed_raw, inputs_raw, request):
+    """Metadata is seeded before Compose start; it is not API admission evidence."""
+    seeded, inputs = json.loads(seed_raw), json.loads(inputs_raw)
+    require(isinstance(inputs, dict) and isinstance(inputs.get("files"), list)
+        and inputs.get("source_root") == request["source_root"]
+        and inputs.get("host_port") == request["port"]
+        and isinstance(seeded, dict) and set(seeded) == {"state", "files"}
+        and seeded.get("state") == "seeded" and type(seeded.get("files")) is int
+        and seeded["files"] == len(inputs["files"]) > 0,
+        "Frontend seed does not match the pinned checkout, port and metadata files")
+
+
 def validate_helper_identity(actual, helper_id, pin):
     require(actual.get("Id") == helper_id and actual.get("State", {}).get("Running") is True
         and fingerprint(actual) == pin["fingerprint"] and actual.get("State", {}).get("StartedAt") == pin["started_at"],
@@ -424,6 +436,9 @@ def validate_failure(control, root, request, original, actual, state):
     for path, key in (("private/.owner.json", "private_owner_sha256"),
         ("frontend/development-inputs.json", "frontend_inputs_sha256")):
         require(digest(read_raw(control, path)) == proof[key], "Retained group evidence changed: " + path)
+    frontend_seed = read_raw(control, root + "/frontend-seed.json")
+    require(digest(frontend_seed) == proof["frontend_seed_sha256"], "Resume frontend seed changed")
+    validate_frontend_seed(frontend_seed, read_raw(control, "frontend/development-inputs.json"), request)
     require(json.loads(read_raw(control, "private/.owner.json"))
         == docker_group_storage.owner_manifest(control, source),
         "Private group storage owner is not authenticated")
@@ -591,6 +606,7 @@ def build_request(args):
         "certificate": certificate, "compose_sha256": digest(compose_raw),
         "private_owner_sha256": digest(read_raw(control, "private/.owner.json")),
         "frontend_inputs_sha256": digest(read_raw(control, "frontend/development-inputs.json")),
+        "frontend_seed_sha256": digest(read_raw(control, root + "/frontend-seed.json")),
         "helper_log_sha256": digest(_validate_helper_logged(helper_id).encode()),
         "service_states": {name: digest(canonical(actual[name]["State"])) for name in ("backend", "frontend")},
         "engine_id": docker_capture("info", "--format", "{{.ID}}").stdout.decode().strip(),
