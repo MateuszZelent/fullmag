@@ -1106,8 +1106,14 @@ Nie ma automatycznego globalnego GC BuildKit, starych obrazów ani nieaktywnych
 grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji i autoryzacji.
 Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
 
-`just docker-dev-control-checks <source>` uruchamia interpretowane regresje
-launcherów w istniejącym backendzie; nie kompiluje natywnych testów jednostkowych.
+`just docker-dev-control-checks <source>` w domyślnym zakresie uruchamia
+interpretowane regresje launcherów w istniejącym backendzie. Zakres
+`live-observation-contracts` kompiluje i wykonuje w tym samym backendzie testy
+kanału publikacji live z binarium `fullmag-api-accepted-worker`, pod istniejącą
+blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źródeł
+są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
+Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
+aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
 Sukces buildu nie stanowi kwalifikacji FDM/FEM/BORIS. Release, CI i kwalifikacja
 naukowa zachowują własne jawne zarządzane recepty zgodnie z AGENTS.md.
 

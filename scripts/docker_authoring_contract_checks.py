@@ -1,4 +1,4 @@
-"""Fixed authoring Rust regressions in the selected healthy Compose backend."""
+"""Fixed Rust source regressions in the selected healthy Compose backend."""
 from __future__ import annotations
 
 import hashlib
@@ -47,6 +47,15 @@ def _source_hashes(selected: Path) -> dict[str, str]:
 def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
     commands = {
         "authoring-contracts": (COMMAND,),
+        # Source-only tests keep native solver/runtime packages untouched.
+        # Disable debug output and incremental duplication in this private target.
+        "live-observation-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
+             'accepted_live_layout_tests'),
+        ),
         "stl-api-contracts": tuple(
             ('/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
              '-p', 'fullmag-api', '--bin', 'fullmag-api', name)

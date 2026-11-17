@@ -820,7 +820,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('authoring-contracts', 'stl-api-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('authoring-contracts', 'stl-api-contracts', 'live-observation-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -842,7 +842,7 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('authoring-contracts', 'stl-api-contracts'):
+    if args.scope in ('authoring-contracts', 'stl-api-contracts', 'live-observation-contracts'):
         from docker_authoring_contract_checks import run
         return run(control, selected, identity, scope=args.scope)
     if args.scope in ('frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
