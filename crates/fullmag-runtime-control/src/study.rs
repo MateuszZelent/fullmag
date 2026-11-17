@@ -30,6 +30,7 @@ pub struct AcceptedStudySnapshot {
 #[derive(Clone, Copy)]
 enum NativeFemPreparationKind {
     TimeDomain,
+    FrequencyResponse,
     AntennaExternalLeadInspection,
 }
 
@@ -124,6 +125,23 @@ impl AcceptedStudySnapshot {
         )
     }
 
+    /// Materialize a native FEM preparation receipt for the exact provided
+    /// equilibrium mesh of an accepted frequency-response step. This remains
+    /// a distinct preparation route from time-domain FEM.
+    pub fn materialize_fem_frequency_response_preparation_receipt(
+        &self,
+        preparation_id: impl Into<String>,
+        step_id: &str,
+        native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+    ) -> Result<PreparationReceipt> {
+        self.materialize_native_fem_preparation_receipt(
+            preparation_id,
+            step_id,
+            native,
+            NativeFemPreparationKind::FrequencyResponse,
+        )
+    }
+
     /// Prepare the combined conductor/lead H1 P1 mesh of a pinned inspection
     /// step. This does not certify current, Oersted fields, or LLG coupling.
     pub fn materialize_antenna_external_lead_inspection_preparation_receipt(
@@ -196,6 +214,16 @@ impl AcceptedStudySnapshot {
         let materialization = match kind {
             NativeFemPreparationKind::TimeDomain =>
                 PreparationMaterialization::from_fem_execution_plan_for_accepted_run(
+                    problem_fingerprint,
+                    source,
+                    problem.backend_policy.requested_backend,
+                    execution_plan,
+                    geometry_fingerprint,
+                    display_fingerprint,
+                    native,
+                )?,
+            NativeFemPreparationKind::FrequencyResponse =>
+                PreparationMaterialization::from_fem_frequency_response_execution_plan_for_accepted_run(
                     problem_fingerprint,
                     source,
                     problem.backend_policy.requested_backend,

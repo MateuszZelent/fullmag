@@ -4,6 +4,7 @@ mod accepted_fem_state;
 mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_fem_frequency_response_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_field_binary;
 mod accepted_field_materialization_worker;
