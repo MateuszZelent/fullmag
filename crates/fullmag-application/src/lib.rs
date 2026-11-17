@@ -97,6 +97,7 @@ pub use script_pipeline_acceptance::{bind_scene_study_authored_initial_state_por
 pub use preparation::{
     materialize_antenna_external_lead_inspection_preparation_from_problem,
     materialize_fdm_preparation_from_problem, materialize_fem_preparation_from_problem,
+    materialize_fem_frequency_response_preparation_from_problem,
     AcceptedRunPreparationSource, PreparationBinding, PreparationMaterializationError,
     PreparationReceipt, PreparationReceiptError, ACCEPTED_RUN_PREPARATION_SOURCE_SCHEMA,
     PREPARATION_BINDING_SCHEMA, PREPARATION_RECEIPT_SCHEMA,

@@ -512,6 +512,60 @@ pub fn materialize_fem_preparation_from_problem(
     .map_err(PreparationMaterializationError::from)
 }
 
+/// Materialize the native FEM mesh/space receipt for a live frequency-response
+/// problem with an explicitly provided M0. This is preparation evidence only;
+/// it does not certify equilibrium or start an FR solve.
+pub fn materialize_fem_frequency_response_preparation_from_problem(
+    preparation_id: impl Into<String>,
+    scene_revision: u64,
+    problem: &fullmag_ir::ProblemIR,
+    display_projection: &Value,
+    native: &fullmag_plan::NativeFemMeshSpaceEvidence,
+) -> Result<PreparationReceipt, PreparationMaterializationError> {
+    if !display_projection.is_object() {
+        return Err(PreparationMaterializationError::Contract(
+            "display projection must be a JSON object".into(),
+        ));
+    }
+    if scene_revision == 0 {
+        return Err(PreparationMaterializationError::Contract(
+            "scene_revision must be greater than zero".into(),
+        ));
+    }
+
+    let execution_plan = fullmag_plan::plan(problem)
+        .map_err(|error| PreparationMaterializationError::Planning(error.to_string()))?;
+    let problem_fingerprint = fingerprint_json(problem)?;
+    let geometry_projection = serde_json::json!({
+        "schema_version": "geometry_projection.v1",
+        "geometry": &problem.geometry,
+        "geometry_assets": &problem.geometry_assets,
+        "regions": &problem.regions,
+        "object_regions": &problem.object_regions,
+        "mesh_semantics": &problem.mesh_semantics,
+    });
+    let display_projection = serde_json::json!({
+        "schema_version": "display_projection.v1",
+        "payload": display_projection,
+    });
+    let materialization = PreparationMaterialization::from_fem_frequency_response_execution_plan(
+        problem_fingerprint,
+        scene_revision,
+        problem.backend_policy.requested_backend,
+        &execution_plan,
+        fingerprint_json(&geometry_projection)?,
+        fingerprint_json(&display_projection)?,
+        native,
+    )?;
+    PreparationReceipt::ready(
+        preparation_id,
+        materialization.plan,
+        materialization.certificates,
+        Vec::new(),
+    )
+    .map_err(PreparationMaterializationError::from)
+}
+
 /// Prepare a standalone antenna's combined conductor/lead mesh from the
 /// canonical plan. A ready receipt here certifies mesh/H1 space only.
 pub fn materialize_antenna_external_lead_inspection_preparation_from_problem(

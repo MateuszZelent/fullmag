@@ -541,9 +541,24 @@ fn publish_prepared_initial_state(
     read_model: &LiveScenePreparationReadModel,
 ) -> Result<(), ApiError> {
     if let Some(carrier) = prepare_initial_magnetization(&read_model.execution_plan)? {
+        let mut provenance = serde_json::json!({"source_kind": "prepared_initial_state"});
+        if let fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) =
+            &read_model.execution_plan.backend_plan
+        {
+            if matches!(
+                &plan.equilibrium,
+                fullmag_ir::EquilibriumSourceIR::Provided
+            ) {
+                provenance["equilibrium_source"] = "provided".into();
+                provenance["equilibrium_verified"] = false.into();
+            }
+        }
         carrier.publish(
-            snapshot, &read_model.preparation_id, &read_model.plan_fingerprint,
-            read_model.scene_revision, serde_json::json!({"source_kind": "prepared_initial_state"}),
+            snapshot,
+            &read_model.preparation_id,
+            &read_model.plan_fingerprint,
+            read_model.scene_revision,
+            provenance,
         )?;
     }
     Ok(())
@@ -578,6 +593,26 @@ pub(crate) fn prepare_initial_magnetization(
                     plan.mesh.nodes.len(),
                 ),
             ),
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan)
+                if matches!(
+                    &plan.equilibrium,
+                    fullmag_ir::EquilibriumSourceIR::Provided
+                ) =>
+            {
+                if plan.equilibrium_magnetization.len() != plan.mesh.nodes.len() {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_preparation_initial_state_invalid",
+                        "provided FEM frequency-response M0 does not match its solver mesh node count",
+                    ));
+                }
+                (
+                    plan.equilibrium_magnetization.clone(),
+                    0.0,
+                    crate::prepared_observation_bundle::prepared_fem_magnetization_layout(
+                        plan.mesh.nodes.len(),
+                    ),
+                )
+            }
             _ => return Ok(None),
         };
     if values.is_empty()
@@ -2644,11 +2679,6 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
 
         let receipt = match execution_plan.common.resolved_backend {
             fullmag_ir::BackendTarget::Fem => {
-                let fullmag_ir::BackendPlanIR::Fem(fem_plan) = &execution_plan.backend_plan else {
-                    return Err(ApiError::unprocessable(
-                        "native FEM preparation currently requires a time-domain FEM plan",
-                    ));
-                };
                 let native = native_fem_evidence.as_ref().ok_or_else(|| {
                     ApiError::with_status_and_code(
                         axum::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -2656,23 +2686,51 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
                         "native FEM preparation requires an admitted preparation lane",
                     )
                 })?;
-                if native.fe_order != fem_plan.fe_order {
-                    return Err(ApiError::unprocessable(
-                        "native FEM preparation evidence has a different finite-element order",
-                    ));
+                match &execution_plan.backend_plan {
+                    fullmag_ir::BackendPlanIR::Fem(fem_plan) => {
+                        if native.fe_order != fem_plan.fe_order {
+                            return Err(ApiError::unprocessable(
+                                "native FEM preparation evidence has a different finite-element order",
+                            ));
+                        }
+                        fullmag_application::materialize_fem_preparation_from_problem(
+                            input.preparation_id.clone(),
+                            input.scene_revision,
+                            &problem,
+                            &input.display_projection,
+                            native,
+                        )
+                        .map_err(|error| {
+                            ApiError::unprocessable(format!(
+                                "preparation materialization rejected: {error}"
+                            ))
+                        })?
+                    }
+                    fullmag_ir::BackendPlanIR::FemFrequencyResponse(response_plan) => {
+                        if native.fe_order != response_plan.fe_order {
+                            return Err(ApiError::unprocessable(
+                                "native FEM frequency-response preparation evidence has a different finite-element order",
+                            ));
+                        }
+                        fullmag_application::materialize_fem_frequency_response_preparation_from_problem(
+                            input.preparation_id.clone(),
+                            input.scene_revision,
+                            &problem,
+                            &input.display_projection,
+                            native,
+                        )
+                        .map_err(|error| {
+                            ApiError::unprocessable(format!(
+                                "FEM frequency-response preparation materialization rejected: {error}"
+                            ))
+                        })?
+                    }
+                    _ => {
+                        return Err(ApiError::unprocessable(
+                            "native FEM preparation requires a time-domain FEM or frequency-response plan",
+                        ));
+                    }
                 }
-                fullmag_application::materialize_fem_preparation_from_problem(
-                    input.preparation_id.clone(),
-                    input.scene_revision,
-                    &problem,
-                    &input.display_projection,
-                    native,
-                )
-                .map_err(|error| {
-                    ApiError::unprocessable(format!(
-                        "preparation materialization rejected: {error}"
-                    ))
-                })?
             }
             fullmag_ir::BackendTarget::Fdm => {
                 if native_fem_evidence.is_some() {
@@ -3675,6 +3733,45 @@ mod tests {
         }
     }
 
+    fn prepared_fem_frequency_response_read_model(
+        equilibrium: fullmag_ir::EquilibriumSourceIR,
+    ) -> (LiveScenePreparationReadModel, Vec<[f64; 3]>) {
+        let mut model = prepared_fem_read_model(true);
+        let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
+            unreachable!();
+        };
+        let values = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+        ];
+        let response_plan: fullmag_ir::FemFrequencyResponsePlanIR =
+            serde_json::from_value(json!({
+                "mesh_name": fem.mesh_name,
+                "mesh": fem.mesh,
+                "fe_order": fem.fe_order,
+                "hmax": fem.hmax,
+                "equilibrium_magnetization": values,
+                "material": fem.material,
+                "operator": {"kind": "linearized_llg", "include_demag": false},
+                "equilibrium": serde_json::to_value(equilibrium).unwrap(),
+                "normalization": "unit_l2",
+                "damping_policy": "include",
+                "excitation": {"field_au_per_m": [1.0, 0.0, 0.0], "phase_rad": 0.0},
+                "frequencies_hz": {"values_hz": [1.0e9]},
+                "enable_exchange": true,
+                "enable_demag": false,
+                "gyromagnetic_ratio": 2.211e5,
+                "precision": "double",
+                "exchange_bc": "neumann"
+            }))
+            .expect("valid provided-M0 FEM frequency-response fixture");
+        model.execution_plan.backend_plan =
+            fullmag_ir::BackendPlanIR::FemFrequencyResponse(response_plan);
+        (model, values)
+    }
+
     fn prepared_field_only_read_model() -> LiveScenePreparationReadModel {
         let mut model = prepared_fem_read_model(true);
         let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
@@ -4222,6 +4319,100 @@ mod tests {
         let bundle = snapshot.field_publication_bundles.get("m").expect("FEM m0 bundle");
         assert!(bundle.observation_frame.authored_initial_state.is_some());
         assert_eq!(bundle.domain_generation_id, generation);
+    }
+
+    #[test]
+    fn prepared_fem_frequency_response_publishes_exact_provided_m0_before_solve() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "prepared-fem-frequency-response-domain-session",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let (model, expected_m0) =
+            prepared_fem_frequency_response_read_model(fullmag_ir::EquilibriumSourceIR::Provided);
+        let fullmag_ir::BackendPlanIR::FemFrequencyResponse(response_plan) =
+            &model.execution_plan.backend_plan
+        else {
+            unreachable!();
+        };
+
+        let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
+        let mesh = mesh.expect("prepared FR plan must publish its exact solver topology");
+        assert_eq!(mesh.nodes, response_plan.mesh.nodes);
+        assert_eq!(mesh.cells, response_plan.mesh.cells);
+        let generation = mesh.generation_id.clone().unwrap();
+        let mut publication = request;
+        publication.metadata = Some(metadata.into());
+        publication.fem_mesh = Some(mesh);
+        crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
+
+        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+
+        let field = snapshot
+            .latest_fields
+            .get("m")
+            .expect("provided FR M0 must be visible before a solver run");
+        assert_eq!(field["values"], json!(expected_m0));
+        assert_eq!(field["layout"]["backend"], "fem");
+        assert_eq!(field["layout"]["location"], "node");
+        assert_eq!(
+            field["layout"]["node_count"],
+            response_plan.mesh.nodes.len()
+        );
+        assert_eq!(field["source_step"], 0);
+        assert_eq!(field["source_time_seconds"], 0.0);
+        assert_eq!(field["provenance"]["source_kind"], "prepared_initial_state");
+        assert_eq!(field["provenance"]["equilibrium_source"], "provided");
+        assert_eq!(field["provenance"]["equilibrium_verified"], false);
+
+        let frame: crate::schemas::common::AcceptedObservationFrameRef =
+            serde_json::from_value(field["observation_frame"].clone()).unwrap();
+        assert_eq!(frame.source_step, 0);
+        assert_eq!(frame.source_time_seconds, Some(0.0));
+        let origin = frame
+            .authored_initial_state
+            .as_ref()
+            .expect("initial M0 must carry the authored-state qualifier");
+        assert_eq!(origin.preparation_id, model.preparation_id);
+        assert_eq!(origin.plan_fingerprint, model.plan_fingerprint);
+        let bundle = snapshot
+            .field_publication_bundles
+            .get("m")
+            .expect("existing m field readers use the published bundle");
+        assert_eq!(bundle.observation_frame, frame);
+        assert_eq!(bundle.domain_generation_id, generation);
+        assert!(
+            !crate::field_store::serialize_fem_mesh_topology_binary_v2(
+                snapshot.fem_mesh.as_ref().unwrap()
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(snapshot.run.is_none());
+        assert!(snapshot.live_state.is_none());
+        assert!(snapshot.scalar_rows.is_empty());
+    }
+
+    #[test]
+    fn prepared_fem_frequency_response_does_not_relabel_artifact_equilibrium_as_authored_m0() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "prepared-fem-frequency-response-artifact-session",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let (model, _) =
+            prepared_fem_frequency_response_read_model(fullmag_ir::EquilibriumSourceIR::Artifact {
+                path: "equilibrium.json".into(),
+            });
+        let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
+        let mut publication = request;
+        publication.metadata = Some(metadata.into());
+        publication.fem_mesh = mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
+
+        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+
+        assert!(snapshot.latest_fields.get("m").is_none());
     }
 
     #[test]
