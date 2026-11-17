@@ -30,6 +30,9 @@ pub(crate) mod accepted_antenna_progress;
 #[path = "completed_inspection_recovery.rs"]
 pub(crate) mod completed_inspection_recovery;
 
+#[path = "accepted_frequency_response_lifecycle.rs"]
+pub(crate) mod frequency_response_lifecycle;
+
 #[path = "accepted_scalar_history.rs"]
 pub(crate) mod scalar_history;
 
@@ -48,6 +51,10 @@ mod accepted_live_layout_mask;
 #[cfg(test)]
 #[path = "accepted_live_layout_tests.rs"]
 mod accepted_live_layout_tests;
+
+#[cfg(test)]
+#[path = "accepted_frequency_response_receipt_tests.rs"]
+mod frequency_response_receipt_tests;
 
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
@@ -2154,6 +2161,16 @@ fn expected_output_binding(
     port: &StudyOutputPort,
 ) -> Result<(&'static str, &'static str, &'static str)> {
     match port.data_kind {
+        StudyPortDataKind::Artifact if port.port_id == "response" => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
+        StudyPortDataKind::Artifact if port.port_id.strip_prefix("response-frequency-")
+            .and_then(|suffix| suffix.parse::<u64>().ok())
+            .is_some_and(|index| port.port_id == format!("response-frequency-{index:06}")) => Ok((
+            "artifact", fullmag_application::FREQUENCY_RESPONSE_POINT_CODEC_ID,
+            fullmag_application::FREQUENCY_RESPONSE_CODEC_VERSION,
+        )),
         StudyPortDataKind::Artifact if port.port_id == "inspection" => Ok((
             "artifact", fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_ID,
             fullmag_application::ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION,
@@ -2965,6 +2982,11 @@ fn execute_accepted_worker_start_with_snapshot(
             case_id,
             interrupt_requested,
         );
+    }
+    if matches!(&accepted_step.execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::FemFrequencyResponse(_)) {
+        return frequency_response_lifecycle::execute(
+            store, accepted, start, accepted_step, study_step, case_id, interrupt_requested);
     }
     if study_step.outputs.iter().any(|port| port.data_kind == StudyPortDataKind::Artifact) {
         bail!("legacy solver steps cannot publish an inspection artifact");
@@ -4248,7 +4270,9 @@ fn apply_accepted_start_effect(
     }
     // Evaluate immutable terminal observables while this process still owns
     // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
-    if !control.interrupt_requested.load(Ordering::Acquire) {
+    if !control.interrupt_requested.load(Ordering::Acquire)
+        && !matches!(accepted_step.execution_plan.backend_plan, fullmag_ir::BackendPlanIR::FemFrequencyResponse(_))
+    {
         if accepted.run.specification.parameters.get("live_workspace").is_some() {
             let receipt = worker_execution_receipt_identity(start, &accepted_step, DEFAULT_ACCEPTED_CASE_ID)?;
             scalar_history::publish_scalar_history(

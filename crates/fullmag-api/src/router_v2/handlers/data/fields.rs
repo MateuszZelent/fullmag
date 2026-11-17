@@ -5859,13 +5859,21 @@ fn analysis_frequency_response_vector_response(
     let (out_n_comp, projected) = project_values(&raw_values, n_comp, &component)?;
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
+    let exact_scope = super::response_source_map::resolve_source_map(
+        snapshot, &artifact_dir, &frequency_point_path, generation.as_ref(), point_count,
+    )?.map(|indices| ResolvedFieldScope {
+        domain: ResolvedFieldScopeDomain::Magnetic,
+        kind: "magnetic_only".into(), id: None,
+        node_indices: indices.into_iter().map(|index| index as usize).collect(),
+        value_indices: Vec::new(), grid: None, carrier_hash: None,
+    });
     let AnalysisFieldVectorBinary {
         bytes: binary,
         topology_hash,
         indexing,
         node_index_count,
     } = serialize_analysis_field_vector_binary(
-        snapshot, field_id, out_n_comp, out_grid, &projected, None,
+        snapshot, field_id, out_n_comp, out_grid, &projected, exact_scope.as_ref(),
     )?;
     let content_digest = crate::router_v2::handlers::analysis::frequency_domain::response_field_content_digest_from_bytes(
         &artifact_dir,
@@ -6186,12 +6194,8 @@ fn response_sweep_linked_path(
     list_field: &str,
     generation: Option<&fullmag_runner::artifact_generation::GenerationCapture>,
 ) -> Result<Option<String>, ApiError> {
-    let Some((sweep, _)) = crate::router_v2::handlers::analysis::results::
-        read_result_artifact_snapshot_in_generation(
-            artifact_dir,
-            "response/magnetic_response_sweep.v2.json",
-            generation,
-        )?
+    let Some((sweep, _)) = crate::router_v2::handlers::analysis::frequency_domain::
+        read_preferred_response_sweep(artifact_dir, generation)?
     else {
         return Ok(None);
     };
@@ -6303,8 +6307,19 @@ fn response_field_data_plane_metadata_from_point_artifact(
         available_views,
         default_view,
         default_phase_rad,
-        source_mesh_identity: None,
-        component_basis: None,
+        source_mesh_identity: if point.get("schema_version").and_then(serde_json::Value::as_str) == Some("fullmag.fem.driven_response_point.v1") {
+            Some(serde_json::from_value(serde_json::json!({
+                "mesh_generation_id": point.get("source_mesh_generation_id"),
+                "topology_fingerprint": point.get("source_mesh_topology_fingerprint"),
+                "node_count": point.get("full_node_count"),
+                "indexing": "full_domain_node_order",
+            })).map_err(|e| ApiError::conflict(format!("response_field_source_mesh_identity_invalid: {e}")))?)
+        } else {
+            point.get("source_mesh_identity").cloned().map(serde_json::from_value).transpose()
+                .map_err(|e| ApiError::conflict(format!("response_field_source_mesh_identity_invalid: {e}")))?
+        },
+        component_basis: point.get("component_basis").or_else(|| point.pointer("/field/component_basis"))
+            .and_then(serde_json::Value::as_str).map(str::to_string),
         object_coverage: None,
     })
 }
@@ -11295,6 +11310,20 @@ mod tests {
             ),
             3
         );
+
+        // The accepted native map overrides marker-derived membership even
+        // when both maps have the same number of samples.
+        let exact_scope = super::ResolvedFieldScope {
+            domain: ResolvedFieldScopeDomain::Magnetic, kind: "magnetic_only".into(), id: None,
+            node_indices: vec![0, 4], value_indices: Vec::new(), grid: None, carrier_hash: None,
+        };
+        let exact = serialize_analysis_field_vector_binary(
+            &snapshot, "analysis:frequency-response:frequency-0000", 3, [2,1,1], &values, Some(&exact_scope),
+        ).expect("exact native sample mapping must be retained");
+        assert_eq!(exact.indexing, FieldVectorIndexing::ExplicitNodeIndices);
+        assert_eq!(exact.node_index_count, Some(2));
+        assert_eq!(u32::from_le_bytes(exact.bytes[node_indices_start..node_indices_start+4].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(exact.bytes[node_indices_start+4..node_indices_start+8].try_into().unwrap()), 4);
 
         let unmappable_values = vec![0.0; 6 * 3];
         let error = match serialize_analysis_field_vector_binary(

@@ -58,6 +58,40 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
              '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
              'accepted_live_layout_tests'),
         ),
+        "fem-response-preview-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api',
+             'live_scene_preparation::tests::prepared_fem_frequency_response'),
+        ),
+        "fem-response-preview-plan-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-plan', '--lib', 'fem_frequency_response_live_materialization'),
+        ),
+        "fem-response-reader-contracts": tuple(
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', name)
+            for name in ('response_source_map::tests', 'accepted_response_reader_tests',
+                         'analysis_field_vector_binary_uses_fmvp_v5_explicit_nodes_for_analysis_payload')
+        ),
+        "fem-response-receipt-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
+             'frequency_response_receipt_tests'),
+        ),
+        "fem-response-publisher-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runner', '--lib', 'accepted_artifacts::tests'),
+        ),
+        "fem-response-storage-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runner', '--lib', 'private_scratch_tests'),
+        ),
         "fem-response-worker-contracts": (
             ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
              '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
@@ -134,6 +168,15 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
                          'model::imported_surface::tests', 'stl', 'authoring_open_tests')
         ),
     }[scope]
+    if scope.startswith("fem-response-"):
+        # Source contracts need type checking and assertions, not optimized
+        # leaf binaries. Dependencies retain their existing profile and the
+        # installed native runtime package/target remains untouched.
+        options = ('--config', 'profile.backend-dev.package.fullmag-runner.opt-level=0',
+                   '--config', 'profile.backend-dev.package.fullmag-api.opt-level=0')
+        commands = tuple(command[:command.index('/root/.cargo/bin/cargo') + 2] + options
+                         + command[command.index('/root/.cargo/bin/cargo') + 2:]
+                         for command in commands)
     backend, document = codegen._running_service(control.project, 'backend', identity, selected)
     if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
         raise BuildControlError('Authoring checks require a healthy selected backend')

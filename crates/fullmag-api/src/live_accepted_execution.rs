@@ -2381,6 +2381,7 @@ fn prepare_live_accepted(
     let requested_gpu = requested_execution.device.eq_ignore_ascii_case("gpu");
     let mut run_budget = None;
     let mut deferred_fdm_gpu_bb = BTreeSet::new();
+    let mut deferred_response = BTreeSet::new();
     for entry in entries {
         let profile_requests_gpu = entry
             .execution_materialization()
@@ -2400,7 +2401,9 @@ fn prepare_live_accepted(
             ));
         }
         let gpu_requested = requested_gpu || profile_requests_gpu;
-        if gpu_requested && !bounded_gpu_scope(entry.problem()) {
+        if matches!(entry.problem().study, fullmag_ir::StudyIR::FrequencyResponse { .. }) {
+            deferred_response.insert(entry.step_id().to_owned());
+        } else if gpu_requested && !bounded_gpu_scope(entry.problem()) {
             if explicit_fdm_projected_bb(entry.problem()) {
                 // Geometry and operator eligibility belong to the lowered plan.
                 deferred_fdm_gpu_bb.insert(entry.step_id().to_owned());
@@ -2419,8 +2422,13 @@ fn prepare_live_accepted(
         });
     }
 
+    if deferred_response.len() > 1 {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_frequency_response_unsupported",
+            "a live study currently supports one published frequency-response sweep",
+        ));
+    }
     let mut requested_execution = requested_execution;
-    requested_execution.minimum_resources = run_budget;
 
     // Validate every lowered step before publishing RunIntent/CAS. A whole
     // startup Study must never leave an accepted durable run behind a later
@@ -2458,11 +2466,54 @@ fn prepare_live_accepted(
                 return Err(accepted_gpu_scope_error(&execution_step.step_id));
             }
         }
+        if let fullmag_ir::BackendPlanIR::FemFrequencyResponse(plan) = &execution_plan.backend_plan {
+            if !cfg!(feature = "fem-gpu") {
+                return Err(ApiError::unprocessable("native FEM frequency response is unavailable in this runtime"));
+            }
+            let problem = entries.iter().find(|entry| entry.step_id() == execution_step.step_id)
+                .map(|entry| entry.problem()).ok_or_else(|| ApiError::internal("missing immutable response input"))?;
+            let device = &requested_execution.device;
+            let unsupported = |error: String| ApiError::unprocessable_with_code(
+                "accepted_frequency_response_unsupported", error);
+            crate::accepted_fem_frequency_response_worker::validate_plan_scope(problem, execution_plan, device)
+                .map_err(|error| unsupported(error.to_string()))?;
+            let step = study.steps.iter_mut().find(|step| step.step_id == execution_step.step_id)
+                .ok_or_else(|| ApiError::internal("missing response step for output binding"))?;
+            let count = plan.frequencies_hz.values_hz.len();
+            if step.outputs.is_empty() {
+                use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
+                step.outputs = std::iter::once("response".to_owned())
+                    .chain((0..count).map(|index| format!("response-frequency-{index:06}")))
+                    .map(|port_id| StudyOutputPort { port_id, data_kind: StudyPortDataKind::Artifact })
+                    .collect();
+            }
+            crate::accepted_fem_frequency_response_worker::validate_declared_outputs(&step.outputs, count)
+                .map_err(|error| unsupported(error.to_string()))?;
+            let estimate = fullmag_runner::preflight_frequency_response_artifact_resources(plan, Default::default())
+                .map_err(|error| unsupported(error.to_string()))?;
+            let budget = run_budget.as_mut().ok_or_else(|| ApiError::internal("missing response resource budget"))?;
+            let multiply = |value: u64, factor| value.checked_mul(factor)
+                .ok_or_else(|| unsupported("frequency response reserve overflow".into()));
+            budget.memory_bytes = budget.memory_bytes.max(multiply(estimate.peak_working_bytes_upper_bound, 2)?)
+                .max(multiply(estimate.publisher_output_bytes_upper_bound, 8)?);
+            let staged_and_retained_bytes = multiply(estimate.native_output_bytes_upper_bound, 2)?
+                .checked_add(multiply(estimate.publisher_output_bytes_upper_bound, 4)?)
+                .and_then(|total| total.checked_add(estimate.scratch_bytes_upper_bound))
+                .ok_or_else(|| unsupported("frequency response storage reserve overflow".into()))?;
+            budget.storage_bytes = budget.storage_bytes.max(staged_and_retained_bytes);
+            deferred_response.remove(&execution_step.step_id);
+        }
         step_ids.push(execution_step.step_id.clone());
     }
     if let Some(step_id) = deferred_fdm_gpu_bb.first() {
         // A skipped or unresolved deferred step must not publish RunIntent/CAS.
         return Err(accepted_gpu_scope_error(step_id));
+    }
+    if let Some(step_id) = deferred_response.first() {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_frequency_response_unsupported",
+            format!("frequency-response step `{step_id}` has no supported native FEM plan"),
+        ));
     }
     if step_ids.is_empty() {
         return Err(ApiError::unprocessable_with_code(
@@ -2470,6 +2521,7 @@ fn prepare_live_accepted(
             "accepted study has no planned executable steps",
         ));
     }
+    requested_execution.minimum_resources = run_budget;
 
     // Keep the authored document identical to the execution_input pin. The
     // derived legacy profile belongs to the accepted Study, not the editable

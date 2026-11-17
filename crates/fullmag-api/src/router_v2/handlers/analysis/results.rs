@@ -1258,9 +1258,13 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
         )?);
     }
 
-    // Prefer v2, but preserve the legal v1 publisher when v2 is absent.
-    // A present malformed v2 remains an error, never a reason to use stale v1.
-    let response_snapshot = match read_result_artifact_snapshot_with_identity_in_generation(
+    // Prefer the compact v3 projection; preserve historical v2/v1 readers.
+    // A present malformed current version is an error, never a stale fallback.
+    let response_snapshot = if let Some((value, digest, byte_length)) = read_result_artifact_snapshot_with_identity_in_generation(
+        &artifact_dir, "response/magnetic_response_sweep.v3.json", generation.as_ref(),
+    )? {
+        Some(("response/magnetic_response_sweep.v3.json", value, digest, byte_length))
+    } else { match read_result_artifact_snapshot_with_identity_in_generation(
         &artifact_dir,
         "response/magnetic_response_sweep.v2.json",
         generation.as_ref(),
@@ -1271,7 +1275,7 @@ async fn load_result_indices(state: &Arc<AppState>) -> Result<ResultIndexCollect
             "response/magnetic_response_sweep.v1.json",
             generation.as_ref(),
         )?.map(|(value, digest, byte_length)| ("response/magnetic_response_sweep.v1.json", value, digest, byte_length)),
-    };
+    }};
     if let Some((source_artifact, value, digest, byte_length)) = response_snapshot {
         let payload = match decode_frequency_domain_artifact_payload(
             source_artifact,
