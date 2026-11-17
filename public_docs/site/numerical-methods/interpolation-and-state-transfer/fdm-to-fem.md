@@ -131,10 +131,7 @@ explicitly reported; no invisible nearest-neighbour or extrapolation fallback is
 (numerical-methods-fdm-to-fem-implementation-mapping)=
 ## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| Cross-backend transfer | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | chooses and reports transfer | runtime |
-| Vector transfer primitive | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | [`transfer_vector_field`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L284) | field interpolation and transfer result | engine |
+Cross-backend continuation dispatch in the CLI orchestrator and FDM-to-FEM vector-field interpolation in `fullmag-engine` are indexed in {ref}`numerical-methods-fdm-to-fem-source-code-index`.
 
 (numerical-methods-fdm-to-fem-validation)=
 ## Validation
@@ -154,23 +151,13 @@ operators. After transfer the target backend must rebuild all derived fields.
 - Standard trilinear interpolation reference for Cartesian grids.
 - Canonical continuation implementation is listed below.
 
-(numerical-methods-fdm-to-fem-source-code-index)=
-
 ## Control Room workflow
 
 Author the target FEM stage in Control Room and inspect the resolved continuation resource before
 execution. Only controls surfaced by the current stage draft are authorable; transfer counters and
 artifact provenance remain runtime evidence.
 
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Where this is implemented
-
-The source-code index below records the stable routing and interpolation declarations used by this
-page and its sidecar map.
-
+(numerical-methods-fdm-to-fem-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |

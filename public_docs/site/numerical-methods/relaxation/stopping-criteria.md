@@ -5,7 +5,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
-source_of_truth: docs/physics/0580-canonical-relaxation-equilibrium-contract.md
+source_of_truth: /physics/foundations/effective-field, /physics/foundations/micromagnetic-energy
 ---
 
 (public-docs-numerical-methods-relaxation-stopping-criteria)=
@@ -258,9 +258,7 @@ that the continuous functional has reached its global minimum.
 
 - W. F. Brown, Jr., *Micromagnetics*, Wiley, 1963.
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, DOI: [10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
-- Fullmag canonical equilibrium contract: [`0580-canonical-relaxation-equilibrium-contract.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0580-canonical-relaxation-equilibrium-contract.md).
-
-(numerical-methods-relaxation-stopping-source-code-index)=
+- Fullmag public physics contracts: {doc}`/physics/foundations/effective-field` and {doc}`/physics/foundations/micromagnetic-energy`.
 
 ## Control Room workflow
 
@@ -268,15 +266,7 @@ Use the stage editor to configure torque, optional energy and work-budget fields
 resolved completion reason and metrics. A direct minimizer must not receive an LLG physical-time
 limit.
 
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Where this is implemented
-
-The source-code index below records the public stop object, flat-stage normalization and shared
-accepted-state completion declarations used by this contract.
-
+(numerical-methods-relaxation-stopping-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

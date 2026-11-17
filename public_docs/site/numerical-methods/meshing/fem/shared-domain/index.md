@@ -14,8 +14,6 @@ source_of_truth: "Shared-domain asset pipeline, build report, semantic marker re
 (public-docs-numerical-methods-meshing-fem-shared-domain-index)=
 # FEM shared-domain assembly
 
-**Last changes: 12:31 24.08.2026**
-
 Shared-domain assembly turns object and universe authoring into one revisioned solver mesh. Its manifest must prove conformity, semantic ownership, actual build mode, topology and fallback status.
 
 ::::{admonition} Implementation status
@@ -261,7 +259,3 @@ assembly-and-conformity
 build-modes-and-fallbacks
 selectors-and-attributes
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.
