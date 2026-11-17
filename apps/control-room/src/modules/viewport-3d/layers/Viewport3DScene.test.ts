@@ -953,7 +953,10 @@ describe("Viewport3DScene scale helpers", () => {
       "viewport3DMeshSizeHighlightLayerEnabledFromBrowserConfig()",
     );
     expect(postProcessingSource).toContain(
-      "const enabled = available && !quantitativeDataVisible;",
+      "const postProcessingPolicy = resolveViewport3DPostProcessingPolicy({",
+    );
+    expect(postProcessingSource).toContain(
+      "viewport3dStore.setPostProcessingDataProtection(postProcessingPolicy.dataProtected);",
     );
   });
 

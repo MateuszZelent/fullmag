@@ -8,7 +8,6 @@ import {
   type MeshBasicMaterial,
   type MeshLambertMaterial,
   type MeshStandardMaterial,
-  type ShaderMaterial,
 } from "three";
 import {
   RENDER_POLICIES,
@@ -56,9 +55,11 @@ import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry
 import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyScalarShaderColorBuffer,
+  applyScalarSurfaceMaterialPolicy,
   createScalarSurfaceShaderMaterial,
   scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
+  type Viewport3DScalarSurfaceMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type {
   Viewport3DFieldRenderModel,
@@ -522,14 +523,15 @@ export function createMeshPartScalarShaderMaterials({
 }: {
   buffer: ScalarColorBuffer | null | undefined;
   enabled: boolean;
-  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength">;
+  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength"> &
+    Partial<Pick<Viewport3DMaterialProfile["magneticSurface"], "presentation">>;
   surfaceOpacity?: number;
   surfacePolicy?: ReturnType<typeof surfaceMaterialPolicyProps>;
   surfacePolicyFront?: ReturnType<typeof surfaceMaterialPolicyPropsFront> | null;
   tracker: Pick<Viewport3DResourceTracker, "track" | "release">;
 }): {
-  back: ShaderMaterial | null;
-  front: ShaderMaterial | null;
+  back: Viewport3DScalarSurfaceMaterial | null;
+  front: Viewport3DScalarSurfaceMaterial | null;
 } {
   if (!enabled || !buffer) {
     return { back: null, front: null };
@@ -541,6 +543,7 @@ export function createMeshPartScalarShaderMaterials({
       opacity: surfaceOpacity,
       shadeStrength: materialProfile.shadeStrength,
       toneMapped: materialProfile.toneMapped,
+      presentation: materialProfile.presentation,
     }),
   );
   const front = surfacePolicyFront
@@ -551,6 +554,7 @@ export function createMeshPartScalarShaderMaterials({
           opacity: surfaceOpacity,
           shadeStrength: materialProfile.shadeStrength,
           toneMapped: materialProfile.toneMapped,
+          presentation: materialProfile.presentation,
         }),
       )
     : null;
@@ -1020,6 +1024,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const scalarShaderVariantKey = scalarShaderBuffer
     ? scalarSurfaceShaderVariantKey(scalarShaderBuffer)
     : null;
+  const fieldPresentationEnabled = Boolean(materialProfile.magneticSurface.presentation);
 
   const scalarShaderMaterials = useMemo(
     () =>
@@ -1038,6 +1043,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [
       committedScalarColorState.pipeline,
       fieldColorLayersEnabled,
+      fieldPresentationEnabled,
       meshQualityColors,
       modalSurfaceActive,
       scalarShaderVariantKey,
@@ -1095,8 +1101,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
-      Object.assign(scalarShaderMaterial, surfacePolicy);
+      applyScalarSurfaceMaterialPolicy(scalarShaderMaterial, surfacePolicy);
       scalarShaderMaterial.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
     }
@@ -1106,9 +1113,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
       if (surfacePolicyFront) {
-        Object.assign(scalarShaderMaterialFront, surfacePolicyFront);
+        applyScalarSurfaceMaterialPolicy(scalarShaderMaterialFront, surfacePolicyFront);
       }
       scalarShaderMaterialFront.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
@@ -1122,6 +1130,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate,
     materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.presentation,
     scalarShaderMaterial,
     scalarShaderMaterialFront,
     surfaceOpacity,
@@ -1267,7 +1276,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
                 opacity={surfaceOpacity}
                 roughness={surfaceMaterialPlan.roughness}
                 toneMapped={surfaceMaterialPlan.toneMapped}
-                vertexColors={false}
+                vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
             ) : surfaceMaterialPlan.kind === "lambert" ? (
@@ -1311,7 +1320,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
                   opacity={surfaceOpacity}
                   roughness={surfaceMaterialPlan.roughness}
                   toneMapped={surfaceMaterialPlan.toneMapped}
-                  vertexColors={false}
+                  vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
               ) : surfaceMaterialPlan.kind === "lambert" ? (

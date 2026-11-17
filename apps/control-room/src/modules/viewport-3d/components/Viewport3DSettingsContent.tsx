@@ -237,7 +237,7 @@ export function Viewport3DSettingsContent({
                 value={appearance.renderMode}
               />
               <p className="fm-viewport-3d-settings__help">
-                Field colors stay faithful in both modes. Presentation materials and lighting affect uniform geometry.
+                Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.
               </p>
               <Choice
                 id="fm-view-lighting"
@@ -353,7 +353,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Anti-Aliasing" diagnostic={state.appearanceDiagnostics.antialias} />
 
               <TogglePreference
-                description="Contact and crevice shading for geometry. Protected field colors remain unchanged."
+                description="Contact and crevice shading, including on field-colored surfaces in Presentation."
                 id="fm-viewport-3d-effect-ambient-occlusion"
                 label="Ambient occlusion"
                 onCheckedChange={(enabled) => viewport3dStore.setEffectAmbientOcclusion(enabled)}
@@ -362,7 +362,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Ambient occlusion" diagnostic={state.appearanceDiagnostics.ambientOcclusion} />
 
               <TogglePreference
-                description="Glow for presentation geometry; quantitative field colors remain unchanged."
+                description="Glow for Presentation geometry and field-colored surfaces. Scientific preserves exact field colors."
                 id="fm-viewport-3d-effect-bloom"
                 label="Bloom (Glow)"
                 onCheckedChange={(enabled) => viewport3dStore.setEffectBloom(enabled)}
@@ -371,7 +371,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Bloom" diagnostic={state.appearanceDiagnostics.bloom} />
 
               <TogglePreference
-                description="Filtered shadows for presentation geometry. Interactive Lite does not include shadows."
+                description="Filtered shadows for Presentation geometry and field-colored surfaces. Interactive Lite does not include shadows."
                 disabled={appearance.renderMode !== "presentation"}
                 id="fm-view-shadows"
                 label="Soft shadows"

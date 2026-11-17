@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -175,31 +177,33 @@ describe("Viewport3DSettingsContent", () => {
     }
   });
 
-  it("keeps presentation materials separate and reports protected post-processing as inactive", async () => {
+  it("keeps Presentation effects available and reports field protection in Scientific", async () => {
     viewport3dStore.setAppearance({ renderMode: "presentation" });
     viewport3dStore.setEffectAmbientOcclusion(true);
     viewport3dStore.setEffectBloom(true);
-    viewport3dStore.setPostProcessingDataProtection(true);
+    viewport3dStore.setPostProcessingDataProtection(false);
 
     const appearance = await mountContent("appearance");
     try {
       expect(elementById(appearance.container, "fm-view-roughness")).toBeDefined();
       expect(elementById(appearance.container, "fm-view-metalness")).toBeDefined();
-      expect(appearance.container.textContent).toContain("Field colors stay faithful in both modes");
+      expect(appearance.container.textContent).toContain(
+        "Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.",
+      );
     } finally {
       await appearance.cleanup();
     }
 
     const quality = await mountContent("quality");
     try {
-      expect(quality.container.textContent).toContain("Quantitative field colors are protected");
+      expect(quality.container.textContent).not.toContain("Quantitative field colors are protected");
       expect(
         findElements(quality.container, (element) =>
           element.getAttribute("role") === "status" &&
           element.textContent.includes("Ambient occlusion") &&
           element.textContent.includes("inactive"),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       const aoSwitch = findElement(
         quality.container,
         (element) => element.getAttribute("role") === "switch" && element.getAttribute("aria-label") === "Ambient occlusion",
@@ -208,6 +212,39 @@ describe("Viewport3DSettingsContent", () => {
       expect(aoSwitch.getAttribute("aria-checked")).toBe("true");
     } finally {
       await quality.cleanup();
+    }
+
+    viewport3dStore.setAppearance({ renderMode: "scientific" });
+    viewport3dStore.setPostProcessingDataProtection(true);
+    const scientificQuality = await mountContent("quality");
+    try {
+      expect(scientificQuality.container.textContent).toContain("Quantitative field colors are protected");
+      expect(
+        findElements(scientificQuality.container, (element) =>
+          element.getAttribute("role") === "status" &&
+          element.textContent.includes("Ambient occlusion") &&
+          element.textContent.includes("inactive"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await scientificQuality.cleanup();
+    }
+  });
+
+  it("explains the field-color contract in both settings surfaces", async () => {
+    const appearance = await mountContent("appearance");
+    const dialog = readFileSync(
+      new URL("./Viewport3DSettingsDialog.tsx", import.meta.url),
+      "utf8",
+    );
+
+    try {
+      const explanation = "Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.";
+      expect(appearance.container.textContent).toContain(explanation);
+      expect(dialog).toContain(explanation);
+      expect(dialog).not.toContain("field colors remain independent of lighting in both modes");
+    } finally {
+      await appearance.cleanup();
     }
   });
 

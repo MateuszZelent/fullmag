@@ -1,0 +1,30 @@
+# Oświetlenie powierzchni pola w Presentation
+
+**Cel i zatwierdzony projekt:** kolorowana magnetyzacją powierzchnia w istniejącym Presentation reaguje na światła/HDRI, rzuca i odbiera miękkie cienie oraz korzysta z AO. Scientific zachowuje dokładne kolory i wyłącza efekty zmieniające te kolory. Użytkownik zatwierdził ten podział 2026-11-17. Jasność w Presentation jest prezentacyjna; UI musi to jasno komunikować.
+
+**Architektura:** zachowujemy interpolację pola, palety, projekcję zespoloną i topologię. W Presentation kolory pola zasilają materiał MeshStandardMaterial przez onBeforeCompile; korzystamy z istniejących świateł, HDRI, cieni i kompozytora. Scientific zachowuje obecny ShaderMaterial. Zmiana materiału nie przebudowuje topologii. FDM z kolorami instancji korzysta z materiału standardowego.
+
+**Rozważone podejścia:** samo zwiększenie świateł nie działa na obecne materiały unlit; globalne cieniowanie zmieniłoby Scientific; wybrano istniejący Presentation z cieniowanymi kolorami pola. Bez nowych zależności ani zmian fizyki.
+
+**Wykonanie:** agent główny odpowiada za adapter materiału, FEM, testy shaderów oraz managed runtime/browser. Jeden bounded worker Luna max odpowiada za profile materiałowe, FDM, ochronę postprocessingu i teksty ustawień z testami. Wspólny kontrakt: magneticSurface.presentation: { roughness: number; metalness: number; shadows: boolean } | null; shadeStrength 1 dla oświetlonego Presentation, 0 w Scientific.
+
+## Kroki i kryteria odbioru
+
+- [x] Test regresji: pola w Presentation mają materiał PBR, a Scientific pozostaje unlit; przełączenie nie gubi uniformów, palety, opacity ani projekcji zespolonej.
+- [x] Adapter shaderów pola do standardowego materiału Three.js, podpięcie do MeshPartLayer oraz fallback powierzchni.
+- [x] Profile/cienie/FDM oraz AO w Presentation; Scientific nadal blokuje zmiany kolorów. UI objaśnia różnicę.
+- [x] Uruchomienie wyłącznie we własnej grupie Compose fullmag-worktree-fullmag-2a179130f8a085e4. Testy źródeł mogą być lekką diagnostyką, build i managed runtime wyłącznie przez launcher.
+- [ ] Typecheck, lint bez ostrzeżeń, testy frontendu i przeglądarka: widoczny canvas, żywy WebGL, niezerowy drawing buffer. Porównanie Scientific/Presentation na geometrii buckyballa i jednolitym +X, zmiana światła, AO/cieni, powrót do Scientific i brak nieuzasadnionych przebudów topologii.
+- [ ] Review, commit, push, PR/CI, merge i weryfikacja integracji; cleanup tylko po potwierdzeniu właściciela i braku konsumentów. Blokady zapisać w rejestrze.
+
+## Ryzyka do sprawdzenia
+
+Mikrometryczne współrzędne i precyzja cieni/AO; istniejące tryby scalar/orientation/complex/tensor; przełączenie renderMode po kompilacji shaderów; clipping i opacity; referencje materiałów i ich zwalnianie; brak przebudowy geometrii podczas animacji pola. Dotychczasowy runtime na 3350 pozostaje odrębnym aktywnym worktree z cudzymi zmianami.
+
+## Dowody i decyzje
+
+Punkt startowy: e5ddb57fd1db4cff8baf507ac961b114670b03e9. Rejestr: viewport-field-lighting-20261117, owner codex-01a1e864, worktree fullmag-2a179130f8a085e4. Modern Web Guidance: zapytania o 3D/WebGL nie dostarczyły pasującego przewodnika o oświetleniu; apply-webgl-shaders dotyczy eksperymentalnego canvas-html, którego nie używamy. Context7: monthly quota exceeded; aktualna dokumentacja Three.js pobrana bezpośrednio z oficjalnej strony.
+
+Checkpoint 2026-11-17: kontrola typów i lint bez ostrzeżeń przeszły; pełny Vitest (z FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source) zakończył się 9793 PASS w 947 plikach. Testy regresji adaptera oraz invalidacji wariantu opacity/side miały rzeczywisty RED→GREEN. Niezależne review Sol medium znalazło P2 dotyczące OPAQUE/DOUBLE_SIDED po zmianie opacity; poprawka applyScalarSurfaceMaterialPolicy i jej test zostały zaakceptowane przy ponownym odczycie. Nie powtarzano pełnego review.
+
+Managed DEV: attempt 29aad59475c44dc8a82e86660d43f233, config_sha256 29c26b9071462d665a0ff080f54fa73f3a3ef0401dea87811492d8cdbff34804, state succeeded, port 3365. Pierwszy start odrzuciła wyczerpana pula sieci; failure-only reconciler potwierdził terminal failed-confirmed przed kolejnym startem z jawną podsiecią 10.234.96.0/24. Zachowano dowody oryginalnej próby i nie usuwano obcych sieci. Chromium 151 testuje renderer z tego worktree na odczytanej siatce buckyballa; proxy blokuje mutacje i modyfikuje wyłącznie testowe ustawienia widoku, zachowując wartości pola. Pierwsze klatki: Scientific czerwony kanał p05=p95=255, Presentation p05=143/p95=255, ta sama geometria 196126 wierzchołków, HDRI oraz cast/receiveShadow aktywne. Test kierunku światła i pełnego round-trip w toku; brak kwalifikacji wydajności sprzętowego GPU lub fizyki.

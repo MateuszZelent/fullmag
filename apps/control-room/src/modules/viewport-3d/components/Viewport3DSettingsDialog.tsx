@@ -92,8 +92,8 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             <Range id="fm-view-grid-contrast" label="Grid contrast" value={a.gridOpacity} min={0.25} max={2} step={0.05} onChange={(gridOpacity) => viewport3dStore.setAppearance({ gridOpacity })} />
           </SettingsSection>
           <SettingsSection title="Geometry lighting" onReset={() => onCommand("viewport-3d.reset-appearance-lighting")}>
-            <Choice id="fm-view-render-mode" label="Visualization mode" value={a.renderMode} options={[["scientific", "Scientific — faithful field colors"], ["presentation", "Presentation — PBR and studio HDRI"]]} onChange={(v) => { viewport3dStore.setAppearance({ renderMode: v as typeof a.renderMode }); if (v === "presentation") viewport3dStore.setEffectAmbientOcclusion(true); }} />
-            <p>Scientific field colors remain independent of lighting in both modes. Presentation materials apply to uniform geometry.</p>
+            <Choice id="fm-view-render-mode" label="Visualization mode" value={a.renderMode} options={[["scientific", "Scientific — exact field colors"], ["presentation", "Presentation — PBR and studio HDRI"]]} onChange={(v) => { viewport3dStore.setAppearance({ renderMode: v as typeof a.renderMode }); if (v === "presentation") viewport3dStore.setEffectAmbientOcclusion(true); }} />
+            <p>Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.</p>
             <Choice id="fm-view-lighting" label="Geometry appearance" value={a.lightingMode} options={[["studio", "Studio"], ["flat", "Flat"]]} onChange={(v) => viewport3dStore.setAppearance({ lightingMode: v as typeof a.lightingMode })} />
             <Choice id="fm-view-light-space" label="Lighting reference" value={a.lightingSpace} options={[["camera", "Follow camera"], ["world", "Lock to world"]]} disabled={a.lightingMode === "flat"} onChange={(v) => viewport3dStore.setAppearance({ lightingSpace: v as typeof a.lightingSpace })} />
             <Range id="fm-view-light-strength" label="Light intensity" value={a.lightingIntensity} min={0} max={2} step={0.05} disabled={a.lightingMode === "flat"} onChange={(lightingIntensity) => viewport3dStore.setAppearance({ lightingIntensity })} />
@@ -120,7 +120,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           <EffectToggle
             id="fm-viewport-3d-effect-ambient-occlusion"
             label="Ambient occlusion"
-            description="Contact and crevice shading for geometry. Disabled where it would alter quantitative field colors."
+            description="Contact and crevice shading, including on field-colored surfaces in Presentation."
             enabled={effectAmbientOcclusion}
             onToggle={(v) => viewport3dStore.setEffectAmbientOcclusion(v)}
           />
@@ -128,7 +128,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           <EffectToggle
             id="fm-viewport-3d-effect-bloom"
             label="Bloom (Glow)"
-            description="Presentation effect for geometry; unavailable for quantitative field colors."
+            description="Glow for Presentation geometry and field-colored surfaces. Scientific preserves exact field colors."
             enabled={effectBloom}
             onToggle={(v) => viewport3dStore.setEffectBloom(v)}
           />

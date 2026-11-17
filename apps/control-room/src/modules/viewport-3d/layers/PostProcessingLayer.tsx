@@ -16,6 +16,20 @@ import { registerViewport3DCapturePipeline, type Viewport3DComposedCaptureFrame 
 import { Viewport3DAlphaToneMapping } from "./Viewport3DAlphaToneMapping";
 import { enableViewport3DHudRaycasting, VIEWPORT_3D_HUD_LAYER } from "../viewport3dHudLayer";
 
+export function resolveViewport3DPostProcessingPolicy({
+  available,
+  quantitativeDataVisible,
+  renderMode,
+}: {
+  available: boolean;
+  quantitativeDataVisible: boolean;
+  renderMode: "scientific" | "presentation";
+}): { dataProtected: boolean; enabled: boolean } {
+  const dataProtected =
+    renderMode === "scientific" && quantitativeDataVisible;
+  return { dataProtected, enabled: available && !dataProtected };
+}
+
 /** Owns the same demand-driven draw pipeline for the viewport and high-resolution PNG. */
 export function PostProcessingLayer({ quantitativeDataVisible = false, sceneSpan = 1 }: {
   quantitativeDataVisible?: boolean;
@@ -26,7 +40,12 @@ export function PostProcessingLayer({ quantitativeDataVisible = false, sceneSpan
   const raycaster = useThree((state) => state.raycaster);
   const getThree = useThree((state) => state.get);
   const available = viewport3DPostProcessingEnabledFromBrowserConfig();
-  const enabled = available && !quantitativeDataVisible;
+  const postProcessingPolicy = resolveViewport3DPostProcessingPolicy({
+    available,
+    quantitativeDataVisible,
+    renderMode: appearance.renderMode,
+  });
+  const enabled = postProcessingPolicy.enabled;
   const qualityProfileId = resolveViewport3DQualityProfileId(visualProfileId, captureReturnProfileId);
   const quality = resolveViewport3DPresentationQuality(qualityProfileId);
   const ao = enabled && quality.aoEnabled && widgets.effectAmbientOcclusion;
@@ -48,10 +67,10 @@ export function PostProcessingLayer({ quantitativeDataVisible = false, sceneSpan
     return enableViewport3DHudRaycasting(raycaster);
   }, [raycaster]);
   useEffect(() => {
-    viewport3dStore.setPostProcessingDataProtection(quantitativeDataVisible);
+    viewport3dStore.setPostProcessingDataProtection(postProcessingPolicy.dataProtected);
     viewport3dStore.setPostProcessingAvailable(available);
     return () => viewport3dStore.setPostProcessingDataProtection(false);
-  }, [available, quantitativeDataVisible]);
+  }, [available, postProcessingPolicy.dataProtected]);
   useEffect(() => { invalidate(); }, [invalidate, ao, bloom, toneMapping, antialias, quality.aoHalfRes, appearance.aoRadius, appearance.aoIntensity]);
 
   const renderBase = useCallback(() => {

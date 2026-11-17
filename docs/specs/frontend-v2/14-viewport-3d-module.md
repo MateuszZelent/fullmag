@@ -227,10 +227,10 @@ reserved HUD rectangles. Orientation widgets and reference text use a dedicated
 render layer within the same scene and renderer, composited after geometry
 effects. Picking must continue to include interactive orientation widgets.
 
-Quantitative field colors are always unlit and un-tonemapped. Studio lighting
-controls apply only to uniform solid geometry; no appearance or quality-profile
-choice may modulate scientific field colors.
-Global AO/Bloom are suppressed while scientific field buffers are displayed;
+In Scientific mode, quantitative field colors are unlit and un-tonemapped.
+Presentation explicitly shades field surfaces as well as uniform geometry;
+its surface brightness is visual and must not be used to read the HSL Z component.
+Global AO/Bloom are suppressed while field buffers are displayed in Scientific;
 requested and effective states and the protection reason remain visible. AO
 radius is a fraction of the scene span, not a fixed number of meters. No effect
 may silently change the color legend or trigger a topology rebuild/field fetch.
@@ -263,14 +263,20 @@ Required verification:
 
 The existing single viewport exposes two independent preferences: visualization
 mode and render quality. Scientific mode is the default, including migrated
-preferences. Presentation mode uses MeshStandardMaterial on uniform geometry,
+preferences. Presentation mode uses MeshStandardMaterial on uniform geometry
+and field-colored surfaces,
 a locally generated linear HDR studio panorama filtered through PMREM, and
 filtered directional shadows. Roughness and metalness are visual preferences,
 not solver material parameters. No remote asset request is required.
 
-Quantitative surfaces and glyphs retain their unlit palette and bypass tone
-mapping in both modes. AO, bloom and presentation tone mapping are suppressed
-while quantitative data are visible. Interactive Lite disables AO/shadows;
+Scientific surfaces and glyphs retain their unlit palette and bypass tone
+mapping. AO, bloom and presentation tone mapping are suppressed while field data
+are visible in Scientific. Presentation field surfaces use the same scalar/vector
+interpolation and palettes as Scientific as their PBR base color; shadows and
+AO may change displayed brightness. Glyphs and legends remain unlit, with HUD
+annotations composited after effects. UI explains that exact color reading uses
+Scientific. Changing modes does not change field values or rebuild topology.
+Interactive Lite disables AO/shadows;
 Interactive and Balanced use half-resolution AO and progressively larger
 shadow maps; Figure uses full-resolution AO and 2048 shadow maps. One-shot
 PNG retains the selected profile and data/glyph budget rather than forcing
