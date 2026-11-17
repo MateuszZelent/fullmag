@@ -291,10 +291,22 @@ filtered directional shadows. Roughness and metalness are visual preferences,
 not solver material parameters. No remote asset request is required.
 
 The Scientific/Presentation choice is always visible above the 3D View settings
-tabs as a labelled two-option control. Quality profiles (Interactive Lite,
-Interactive, Balanced, Figure) stay in Quality and independently choose detail
-and rendering cost. Selecting a visualization mode never changes the quality
-profile; selecting quality never changes the visualization mode.
+tabs as a labelled two-option control. Quality profiles (Fast, Standard,
+Detailed, Figure) stay in Quality and choose detail and rendering cost.
+Their persisted identifiers remain `interactive-lite`, `interactive`,
+`balanced`, and `figure`. Selecting a visualization mode never changes the
+quality profile; selecting quality never changes the visualization mode.
+
+Figure renders at 2 pixels per CSS pixel on both standard- and high-density
+displays, improving edge sampling even at 100% display scaling. This requires
+four times the live pixel count of a native-density 1x image. Other profiles
+retain their existing native-density caps (1x, 1.25x, and 1.5x). Selecting
+Figure in Presentation applies Studio lighting, soft shadows, and ambient
+occlusion together. Entering Presentation with Figure already selected also
+applies that preset. Individual effect controls remain editable afterward;
+unrelated appearance changes and PNG capture do not reapply the preset.
+Other profiles preserve effect switches. Scientific continues to protect
+quantitative field colors regardless of the selected quality.
 
 Scientific surfaces and glyphs retain their unlit palette and bypass tone
 mapping. AO, bloom and presentation tone mapping are suppressed while field data
@@ -303,8 +315,8 @@ interpolation and palettes as Scientific as their PBR base color; shadows and
 AO may change displayed brightness. Glyphs and legends remain unlit, with HUD
 annotations composited after effects. UI explains that exact color reading uses
 Scientific. Changing modes does not change field values or rebuild topology.
-Interactive Lite disables AO/shadows;
-Interactive and Balanced use half-resolution AO and progressively larger
+Fast disables AO/shadows;
+Standard and Detailed use half-resolution AO and progressively larger
 shadow maps; Figure uses full-resolution AO and 2048 shadow maps. One-shot
 PNG retains the selected profile and data/glyph budget rather than forcing
 a higher-cost capture profile.

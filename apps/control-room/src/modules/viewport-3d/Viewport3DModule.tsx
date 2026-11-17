@@ -2882,7 +2882,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         <Viewport3DToolbar
           onCommand={onViewCommand}
           projection={sceneProps.cameraProjection}
-          qualityProfileId={sceneProps.visualProfileId}
+          qualityProfileId={canvasContextProfileId}
           settingsOpen={inspectorDestination.context === "view"}
           inspectEnabled={sceneProps.inspectEnabled}
           layersContent={<div className="fm-viewport-3d__layers">
