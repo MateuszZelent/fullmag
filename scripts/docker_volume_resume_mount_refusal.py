@@ -37,6 +37,7 @@ STATE_FILES = (".fullmag-linux-native-owner.json", ".linux-native-sentinel", "li
 CONTROLLERS = (
     "docker_volume_reconcile.py", "docker_volume_resume_mount_refusal.py",
     "docker_volume_resume_layout_refusal.py",
+    "docker_stopped_network.py",
     "docker_volume_activation_reconcile.py", "docker_build_control.py",
     "docker_volume_dev.py", "docker_volume_development_interrupted.py",
     "docker_group_storage.py", "docker_dev_host.py", "linux_native_host.py",

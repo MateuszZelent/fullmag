@@ -143,6 +143,12 @@ class ResumeMountRefusalTests(unittest.TestCase):
         refusal.validate_shape(self.request)
         reconcile.validate_request(self.request)
 
+    def test_request_requires_the_stopped_bridge_observer_source_pin(self):
+        changed = copy.deepcopy(self.request)
+        changed["failure"]["controllers"].pop("docker_stopped_network.py", None)
+        with self.assertRaises(BuildControlError):
+            refusal.validate_shape(changed)
+
     def test_wrong_mount_target_and_other_oci_errors_refuse(self):
         for value in (self.error.replace("/run/fullmag/linux-native-host.json", "/run/fullmag/other.json"),
                       self.error.replace('rootfs at "/run/fullmag/linux-native-host.json"',
