@@ -1114,6 +1114,13 @@ blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źród
 są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
 Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
 aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
+Zakres `fem-live-control-contracts` sprawdza przekazanie żądania Stop przez
+obserwatora do wykonawcy FEM na granicy zaakceptowanego kroku. Obejmuje sygnał
+ustawiony przed callbackiem lub przez sam callback, publikację kroku przed Stop
+oraz zachowanie Continue/Pause/Stop bez sygnału. Są to testy źródłowe przekazania
+sterowania; nie potwierdzają zatrzymania działającego procesu, zbieżności ani
+publikacji accepted checkpointu po anulowaniu.
+
 Zakres `fem-preparation-contracts` sprawdza przekazanie importowanego STL
 z osobnego katalogu źródeł do przygotowanej siatki; po kompilacji ogranicza
 czas wykonania wskazanego testu do 60 sekund. `stl-classification-contracts`

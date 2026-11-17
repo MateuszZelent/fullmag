@@ -271,6 +271,10 @@ jobs:
 
       - name: Run CPU direct-minimizer precision-floor and accepted-state contracts
         run: cargo test --locked -p fullmag-runner direct_minimizer_reference::tests --lib
+      - name: Run FEM live Stop handoff contracts
+        run: |
+          cargo test --locked -p fullmag-runner fem_live_control_tests --lib
+          cargo test --locked -p fullmag-runner fdm_multilayer_interrupt_publishes_accepted_update_before_stop --lib
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 

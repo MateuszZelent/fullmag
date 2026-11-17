@@ -4778,6 +4778,29 @@ fn live_step_action_with_interrupt<T>(
     }
 }
 
+fn with_interruptible_fem_live_consumer<R>(
+    live: types::LiveStepConsumer<'_>,
+    execute: impl for<'consumer> FnOnce(types::LiveStepConsumer<'consumer>) -> R,
+) -> R {
+    let types::LiveStepConsumer {
+        grid, field_every_n, initial_snapshot, display_selection,
+        interrupt_requested, on_step,
+    } = live;
+    // The native step loops consume callback actions at accepted boundaries.
+    // Forward the shared Stop flag even when the observer only publishes data.
+    let mut interruptible_on_step = |update| {
+        live_step_action_with_interrupt(update, on_step, interrupt_requested)
+    };
+    execute(types::LiveStepConsumer {
+        grid,
+        field_every_n,
+        initial_snapshot,
+        display_selection,
+        interrupt_requested,
+        on_step: &mut interruptible_on_step,
+    })
+}
+
 fn run_planned_problem_with_live_preview_artifact_context(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -4932,39 +4955,42 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 dispatch::fem_engine_label(resolution.engine),
                 resolution.fallback.as_ref().map(|f| &f.reason),
             );
-            let live = Some(types::LiveStepConsumer {
+            let live = types::LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n,
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut on_step,
-            });
-            let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context_in_mode(
-                    fem_engine_kind(resolution.engine),
-                    fem,
-                    fem_stage_context.as_ref().expect("FEM stage context"),
-                    until_seconds,
-                    &runtime_outputs,
-                    live,
-                    artifact_writer.clone(),
-                    Some(&physics_execution_context),
-                    plan.common.execution_mode,
-                )
-            } else {
-                dispatch::execute_fem_with_context_in_mode(
-                    resolution.engine,
-                    fem,
-                    fem_stage_context.as_ref().expect("FEM stage context"),
-                    until_seconds,
-                    &runtime_outputs,
-                    live,
-                    artifact_writer.clone(),
-                    Some(&physics_execution_context),
-                    plan.common.execution_mode,
-                )
-            }?;
+            };
+            let mut executed = with_interruptible_fem_live_consumer(live, |live| {
+                let live = Some(live);
+                if fem.relaxation.is_some() {
+                    fem::relax::execute_fem_relax_with_context_in_mode(
+                        fem_engine_kind(resolution.engine),
+                        fem,
+                        fem_stage_context.as_ref().expect("FEM stage context"),
+                        until_seconds,
+                        &runtime_outputs,
+                        live,
+                        artifact_writer.clone(),
+                        Some(&physics_execution_context),
+                        plan.common.execution_mode,
+                    )
+                } else {
+                    dispatch::execute_fem_with_context_in_mode(
+                        resolution.engine,
+                        fem,
+                        fem_stage_context.as_ref().expect("FEM stage context"),
+                        until_seconds,
+                        &runtime_outputs,
+                        live,
+                        artifact_writer.clone(),
+                        Some(&physics_execution_context),
+                        plan.common.execution_mode,
+                    )
+                }
+            })?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
@@ -7138,6 +7164,9 @@ pub fn run_eigen_k_worker_request_file(
 ) -> Result<(), RunError> {
     fem::eigen_k_worker::run_request_file(request_path)
 }
+
+#[cfg(test)]
+mod fem_live_control_tests;
 
 #[cfg(test)]
 mod tests {
