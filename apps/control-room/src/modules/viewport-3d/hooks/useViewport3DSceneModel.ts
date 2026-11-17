@@ -3995,7 +3995,10 @@ export function useViewport3DSceneModel({
     selection.kind === "mesh.quality" ||
     selection.ref?.type === "mesh-quality-element";
   const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
-  const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);
+  const tet4FmmqQualitySupported = useMemo(
+    () => topologySupportsTet4FmmqQuality(topology.data),
+    [topology.data],
+  );
   const meshQualityData = useViewport3DMeshQualityData(
     Boolean(
       liveViewportResourcesEnabled &&

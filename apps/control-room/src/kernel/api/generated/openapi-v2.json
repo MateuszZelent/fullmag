@@ -48347,6 +48347,17 @@
           "wireframe_color": {
             "type": "string"
           },
+          "wireframe_geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope",
+                "description": "Optional independent FEM wireframe extent; absent means legacy/default surface edges."
+              }
+            ]
+          },
           "wireframe_opacity": {
             "format": "double",
             "type": "number"
@@ -48889,6 +48900,16 @@
               },
               {
                 "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "wireframe_geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
               }
             ]
           }

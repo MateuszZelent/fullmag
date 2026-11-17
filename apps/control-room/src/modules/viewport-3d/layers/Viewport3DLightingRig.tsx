@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   DirectionalLight,
+  LineSegments,
   Mesh,
   MeshStandardMaterial,
   PCFShadowMap,
@@ -160,7 +161,12 @@ export function Viewport3DLightingRig({
       const { scene, camera } = getThree();
       const pbrMaterials: Array<{ roughness: number; metalness: number; color: string; opacity: number }> = [];
       const fieldMaterials: Array<{ kind: string; geometry: string; material: string; normals: number; castShadow: boolean; receiveShadow: boolean }> = [];
+      const wireframes: Array<{ geometry: string; fullGeometry: string; interactionGeometry: string | null; indices: number }> = [];
       scene.traverseVisible((object) => {
+        if (object instanceof LineSegments && object.userData.viewportInteractionWireframe) {
+          wireframes.push({ geometry: object.geometry.uuid, fullGeometry: object.userData.fullGeometry,
+            interactionGeometry: object.userData.interactionGeometry, indices: object.geometry.getIndex()?.count ?? 0 });
+        }
         if (!(object instanceof Mesh)) return;
         for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
           if (material instanceof Viewport3DFieldPresentationMaterial || (material instanceof ShaderMaterial && material.name === "FullmagScalarSurfaceShaderMaterial")) {
@@ -174,6 +180,7 @@ export function Viewport3DLightingRig({
         environmentIntensity: scene.environmentIntensity,
         pbrMaterials,
         fieldMaterials,
+        wireframes,
       } };
     };
     window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__ = readAudit;

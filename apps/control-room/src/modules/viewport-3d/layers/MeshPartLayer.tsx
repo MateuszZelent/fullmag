@@ -41,6 +41,7 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   type Viewport3DScalarColorUploadResult,
   useViewport3DScalarColorUpload,
@@ -674,7 +675,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   });
 
   const edgeIndices = resolveMeshPartWireframeEdgeIndices(
-    renderSettings.geometryScope,
+    renderSettings.wireframeGeometryScope ?? "surface",
     partModel,
     renderSettings.wireframeVisible,
   );
@@ -693,7 +694,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -1347,16 +1348,18 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={partModel.edgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.bounds.visible ? (
         <BoundsBox

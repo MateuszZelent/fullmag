@@ -9,6 +9,12 @@ owner: fullmag-public-docs
 (public-docs-frontend-visualization-viewport-3d-and-studio)=
 # 3D WebGL Viewport, Projections & Studio Rendering
 
+In the FEM visualization Inspector, **Wireframe mesh** defaults to **Surface
+mesh**. Choose **Full volume mesh** to inspect interior element edges. This
+selection affects wireframe edges independently of vector and point sampling.
+While zooming or rotating, a lighter surface preview keeps navigation responsive;
+the selected edge detail returns when the camera stops.
+
 `Viewport3DModule` (`apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx`) and
 `Viewport3DCanvas` render the unified 3D scene across both structured FDM grids and unstructured
 FEM tetrahedral/prism meshes using **Three.js** and **@react-three/fiber**. All camera,

@@ -7408,6 +7408,7 @@ async fn visualization_state_exposes_effective_scene_object_targets() {
     assert_eq!(target["settings"]["visible"], true);
     assert_eq!(target["settings"]["surface_visible"], true);
     assert_eq!(target["settings"]["wireframe_visible"], false);
+    assert_eq!(target["settings"]["wireframe_geometry_scope"], "surface");
     assert_eq!(target["settings"]["render_mode"], "surface");
 }
 
@@ -7459,6 +7460,9 @@ async fn visualization_state_exposes_one_canonical_airbox_and_only_orphan_part_f
     let json = body_json(response).await;
     assert_eq!(json["targets"]["airbox"]["scope"], "airbox");
     assert_eq!(json["targets"]["airbox"]["scope_id"], "airbox");
+    assert!(json["targets"]["airbox"]["settings"]
+        .get("wireframe_geometry_scope")
+        .is_none());
     assert_eq!(
         json["targets"]["objects"]
             .as_array()
@@ -7548,7 +7552,8 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "points": { "visible": false, "opacity": 0.75 },
                                     "vectors": { "visible": false },
                                     "opacity": 0.55,
-                                    "geometry_scope": "surface"
+                                    "geometry_scope": "surface",
+                                    "wireframe_geometry_scope": "full"
                                 },
                                 "style": {
                                     "scalar_color_palette": "inferno",
@@ -7606,6 +7611,10 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
     assert_eq!(
+        json["overrides"][0]["display"]["wireframe_geometry_scope"],
+        "full"
+    );
+    assert_eq!(
         json["overrides"][0]["style"]["scalar_color_palette"],
         "inferno"
     );
@@ -7636,6 +7645,14 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
         "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["geometry_scope"],
+        "surface"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["wireframe_geometry_scope"],
+        "full"
     );
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["surface_opacity"],
@@ -49158,7 +49175,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationStateResource missing v2 field `{required}`"
         );
     }
-
     for compatibility_field in [
         "active_quantity_id",
         "view_mode",
@@ -49193,6 +49209,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "surface_opacity",
         "wireframe_visible",
         "wireframe_opacity",
+        "wireframe_geometry_scope",
         "point_color",
         "point_opacity",
         "points_visible",
@@ -49211,7 +49228,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationResolvedTargetSettings missing field `{required}`"
         );
     }
-
     for required in [
         "scope", "scope_id", "visible", "display", "style", "quantity",
     ] {
@@ -49229,6 +49245,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vectors",
         "opacity",
         "geometry_scope",
+        "wireframe_geometry_scope",
     ] {
         assert!(
             override_display_props.contains(required),

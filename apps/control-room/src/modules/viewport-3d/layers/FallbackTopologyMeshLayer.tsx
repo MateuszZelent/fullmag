@@ -33,6 +33,7 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
@@ -146,7 +147,7 @@ export function FallbackTopologyMeshLayer({
   });
 
   const edgeIndices =
-    renderSettings.geometryScope === "full"
+    renderSettings.wireframeGeometryScope === "full"
       ? topologyModel?.fallbackVolumeEdgeIndices ?? null
       : topologyModel?.fallbackSurfaceEdgeIndices ?? null;
   const createEdgeGeometry = useCallback(() => {
@@ -164,7 +165,7 @@ export function FallbackTopologyMeshLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `fallback-topology-wireframe:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `fallback-topology-wireframe:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -395,6 +396,7 @@ export function FallbackTopologyMeshLayer({
       onVisibleColorScale={onVisibleColorScale}
       vectorColorScale={vectorColorScale}
       edgeGeometry={edgeGeometry}
+      surfaceEdgeIndices={topologyModel?.fallbackSurfaceEdgeIndices}
       geometry={geometry}
       hasScalarColors={hasScalarColors}
       materialProfile={materialProfile}
@@ -422,6 +424,7 @@ function FallbackTopologyMeshPrimitives({
   onVisibleColorScale,
   vectorColorScale,
   edgeGeometry,
+  surfaceEdgeIndices,
   geometry,
   hasScalarColors,
   materialProfile,
@@ -445,6 +448,7 @@ function FallbackTopologyMeshPrimitives({
   onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
   vectorColorScale: Viewport3DVisibleColorScale | null;
   edgeGeometry: BufferGeometry | null;
+  surfaceEdgeIndices?: Uint32Array | null;
   geometry: BufferGeometry | null;
   hasScalarColors: boolean;
   materialProfile: Viewport3DMaterialProfile;
@@ -505,16 +509,18 @@ function FallbackTopologyMeshPrimitives({
         </mesh>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={surfaceEdgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.points.visible && pointGeometry ? (
         <points

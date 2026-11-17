@@ -260,6 +260,7 @@ import {
   VisualizationWireframeSection,
   VisualizationVectorsSection,
   VisualizationGeometryScopeSection,
+  VisualizationWireframeGeometryScopeSection,
   VisualizationOverridesSection,
   ColorField,
   VisualizationRadioGroup,
@@ -757,6 +758,7 @@ function useObjectVisualizationPanelState(
   const sections = settings && effectiveSettings
     ? buildVisualizationPanelSections({
     artifactInspection,
+        lane,
         effectiveSettings: renderResolution?.finalSettings ?? effectiveSettings,
         settings,
         target: resolvedTarget ?? undefined,
@@ -1169,6 +1171,7 @@ function useObjectVisualizationPanelState(
           : "Ready";
 
   return {
+    lane,
     visualizationState,
     meshState,
     artifactInspection,
@@ -1465,6 +1468,7 @@ function ObjectVisualizationPanelView({
     feedback,
     fdmNotice,
     fdmTarget,
+    lane,
     fieldCatalog,
     quantityCatalog,
     hasTargetOverride,
@@ -1742,6 +1746,14 @@ function ObjectVisualizationPanelView({
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
       /> : null}
+      {lane === "fem" && capabilities.showWireframeGeometryScopeControl ? (
+        <VisualizationWireframeGeometryScopeSection
+          passControlsDisabled={passControlsDisabled}
+          isFieldPending={isFieldPending}
+          patch={patch}
+          settings={settings}
+        />
+      ) : null}
       {renderWarning ? (
         <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
       ) : null}
