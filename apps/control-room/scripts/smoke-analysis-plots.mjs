@@ -976,6 +976,7 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
       requestPath &&
       (
         requestPath === CURRENT_RUN_FIXTURE_PATH ||
+        requestPath === "/v2/sessions/current/diagnostics/performance" ||
         requestPath.startsWith("/v2/sessions/current/analysis/")
       )
     ) {
@@ -2394,6 +2395,26 @@ async function installAnalysisDatasetFixtureRoutes(page, frequencyDomainFixture 
     if (referenceImportEnabled && url.pathname === DATA_OBSERVATION_FRAMES_FIXTURE_PATH) {
       await route.fulfill({
         body: JSON.stringify({ frames: [], next_cursor: null, run_id: REFERENCE_FIXTURE_RUN_ID }),
+        contentType: "application/json",
+        headers: cors,
+        status: 200,
+      });
+      return;
+    }
+    if (url.pathname === "/v2/sessions/current/diagnostics/performance") {
+      // A published fixture run has no native worker performance samples.
+      await route.fulfill({
+        body: JSON.stringify({
+          elapsed_monotonic_ns: 0,
+          gpu_scope: "unavailable",
+          points: [],
+          reason: "Analysis fixture does not run a native worker.",
+          revision: `analysis-performance-${revision}`,
+          rows_dropped: 0,
+          sample_sequence: 0,
+          state: "unavailable",
+          unique_step_callback_records: 0,
+        }),
         contentType: "application/json",
         headers: cors,
         status: 200,
