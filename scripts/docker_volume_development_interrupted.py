@@ -672,15 +672,24 @@ def validate_original(original, document, r, control, source):
                 "Initial Linux runtime images differ")
         return
     require(original.get("schema") == "fullmag.docker-build-operation.v1"
-        and original.get("phase") == "development" and original.get("state") == "starting"
+        and original.get("phase") == "development"
+        and original.get("state") in {"starting", "starting-services"}
         and original.get("attempt") == r["attempt"] and original.get("compose_project") == control.project
         and original.get("control_volume") == control.volume
         and original.get("helper_container") == "fullmag-control-" + r["attempt"], "Original operation differs")
     require(original.get("inputs", {}).get("source_root") == str(source)
         and r["source_root"] == str(source) and r["compose_project"] == control.project,
         "Source or project differs")
-    require(original.get("config_sha256") is None and "backend_started_at" not in original,
-        "Publication was already observed")
+    require(original.get("config_sha256") is None, "Publication was already observed")
+    if original["state"] == "starting":
+        require("backend_started_at" not in original, "Publication was already observed")
+    else:
+        for service in ("backend", "frontend"):
+            require(original.get(service + "_container") == r["containers"][service]["id"],
+                    "Service checkpoint container differs: " + service)
+            started_at = original.get(service + "_started_at")
+            require(isinstance(started_at, str) and bool(started_at) and len(started_at) <= 64,
+                    "Service checkpoint start time is invalid: " + service)
     require(document.get("name") == control.project and set(document.get("services", {})) == {"backend", "frontend"},
         "Retained Compose differs")
     require(document["services"]["backend"].get("environment", {}).get("FULLMAG_STARTUP_ENABLED") != "1",
@@ -688,6 +697,23 @@ def validate_original(original, document, r, control, source):
     require(original["inputs"]["image_id"] == r["containers"]["backend"]["image"], "Backend image differs")
     for service, pin in r["containers"].items():
         require(document["services"][service]["image"] == pin["image"], "Service image differs")
+
+
+def validate_service_started_at(actual, service, original):
+    """Bind a started-services checkpoint to the exact retained container starts."""
+    if original.get("state") != "starting-services":
+        return
+    require(service in ("backend", "frontend"), "Unknown service in startup checkpoint")
+    require(actual.get("Id") == original.get(service + "_container"),
+            "Service checkpoint container differs: " + service)
+    require(actual.get("State", {}).get("StartedAt") == original.get(service + "_started_at"),
+            "Service checkpoint start time differs: " + service)
+
+
+def validate_no_handoff_or_api(raw_logs):
+    require(b"phase=start state=handoff" not in raw_logs
+            and b"phase=api state=exec" not in raw_logs,
+            "Package handoff or API execution was observed")
 
 
 def validate_container(actual, pin, service, project, *, interrupted_resume=False, gate_failure=False):
@@ -904,6 +930,8 @@ def observe(control, source, r, result=None, helper_name=None):
         validate_container(actual, r["containers"][service], service, control.project,
                            interrupted_resume=r["schema"] == RESUME_SCHEMA,
                            gate_failure=r["schema"] == GATE_FAILURE_SCHEMA)
+        if r["schema"] == SCHEMA:
+            validate_service_started_at(actual, service, original)
         if r["schema"] in {GATE_FAILURE_SCHEMA, PUBLICATION_SCHEMA}:
             validate_gate_container_mounts(actual, service, document, state)
         if r["schema"] == GATE_FAILURE_SCHEMA and service == "backend":
@@ -949,9 +977,8 @@ def observe(control, source, r, result=None, helper_name=None):
         and digest(raw_logs) == r["backend_log_sha256"], "Backend log changed or exceeds its pin")
     if r["schema"] == GATE_FAILURE_SCHEMA:
         validate_gate_log(raw_logs)
-    else:
-        require(r["schema"] in RESUME_SCHEMAS or b"phase=start state=handoff" not in raw_logs,
-                "Package handoff was observed")
+    elif r["schema"] not in RESUME_SCHEMAS:
+        validate_no_handoff_or_api(raw_logs)
     running = docker_capture("ps", "--no-trunc", "--format", "{{.ID}}").stdout.decode().split()
     retained_volumes, retained_state_root = _protected_retained_mounts(
         original, document, r, volumes, state_root=state if r["schema"] == GATE_FAILURE_SCHEMA else None)
@@ -1085,6 +1112,87 @@ def build_publication_request(control, source, attempt, base_attempt):
             "opis": "Zapisano żądanie w wolumenie control; nie zmieniono receiptów operacji ani runtime"}
 
 
+def build_interrupted_request(control, source, attempt):
+    """Pin an initial pre-handoff development interruption; do not reconcile it."""
+    import docker_volume_dev as dev
+    require(TOKEN.fullmatch(attempt), "Canonical development attempt pin required")
+    root = "development/attempts/" + attempt
+    raw = read_raw(control, root + "/unknown-receipt.json", optional=True)
+    if raw is None:
+        raw = read_raw(control, root + "/receipt.json")
+    original = json.loads(raw)
+    compose_raw = read_raw(control, root + "/compose.json")
+    document = json.loads(compose_raw)
+
+    ids = docker_capture("ps", "--all", "--no-trunc", "--filter",
+                         "label=com.docker.compose.project=" + control.project,
+                         "--format", "{{.ID}}").stdout.decode().split()
+    require(len(ids) == 2 and len(set(ids)) == 2,
+            "Exactly two application service containers required")
+    actuals = json.loads(docker_capture("inspect", *ids).stdout)
+    actual = {}
+    for row in actuals:
+        service = row.get("Config", {}).get("Labels", {}).get("com.docker.compose.service")
+        require(service in ("backend", "frontend") and service not in actual,
+                "Unexpected or duplicate service container")
+        actual[service] = row
+    require(set(actual) == {"backend", "frontend"}, "Both exact application services are required")
+
+    state_value = original.get("state_root")
+    require(isinstance(state_value, str) and bool(state_value), "Original storage root is missing")
+    state = Path(state_value)
+    dev._retained_certificate(state, document)
+    certificate_raw = dev._session_host().read_owned_regular(dev._certificate_path(state))
+
+    def optional_digest(path):
+        value = read_raw(control, path, optional=True)
+        return digest(value) if value is not None else None
+
+    r = {
+        "schema": SCHEMA,
+        "attempt": attempt,
+        "source_root": str(source),
+        "source_revision": subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True
+        ).stdout.decode().strip(),
+        "compose_project": control.project,
+        "engine_id": docker_capture("info", "--format", "{{.ID}}").stdout.decode().strip(),
+        "observed_at": time.time(),
+        "receipt_sha256": digest(raw),
+        "compose_sha256": digest(compose_raw),
+        "active_sha256": digest(read_raw(control, "active")),
+        "current_sha256": optional_digest("development/current.json"),
+        "verified_sha256": optional_digest("development/verified.json"),
+        "helper_absence_sha256": _probe_helper_absence(original.get("helper_container")),
+        "backend_log_sha256": "",
+        "controller_sha256": digest(Path(__file__).read_bytes()),
+        "storage_certificate_sha256": digest(certificate_raw),
+        "containers": {
+            service: {"id": row["Id"], "image": row["Image"], "fingerprint": fingerprint(row),
+                      "state_sha256": digest(canonical(row["State"]))}
+            for service, row in actual.items()
+        },
+        "controller_inputs": {
+            name: digest((source / "scripts" / name).read_bytes()) for name in CONTROLLERS
+        },
+        "attempt_documents": {
+            name: digest(read_raw(control, root + "/" + name)) for name in (
+                "backend-cache.json", "group-ledger.json", "frontend-seed.json", "cache-maintenance-compose.json"
+            )
+        },
+    }
+    logs = docker_capture("logs", actual["backend"]["Id"])
+    r["backend_log_sha256"] = digest(logs.stdout + logs.stderr)
+    validate_request(r)
+    observe(control, source, r)
+
+    payload = canonical(r) + b"\n"
+    path = "verification/development-interrupted/" + attempt + "/" + digest(payload) + "/request.json"
+    write_immutable(control, path, payload)
+    return {"state": "request-pinned", "request": path, "request_sha256": digest(payload),
+            "opis": "Zapisano żądanie w wolumenie control; bez zmian receiptów, active, owner ani runtime"}
+
+
 def reconcile(args):
     from docker_dev import _select_source, _compose_identity
     source, layout = _select_source(Path(args.source_root).resolve(strict=True), args.source_root)
@@ -1141,16 +1249,18 @@ def reconcile(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", required=True)
-    parser.add_argument("--request")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--request")
     parser.add_argument("--request-sha256")
-    parser.add_argument("--build-publication-request", action="store_true")
+    mode.add_argument("--build-publication-request", action="store_true")
+    mode.add_argument("--build-interrupted-request", action="store_true")
     parser.add_argument("--attempt")
     parser.add_argument("--base-attempt")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(); args.preview = not args.apply
     if args.build_publication_request:
         require(args.attempt is not None and args.base_attempt is not None
-                and not args.apply and args.request is None and args.request_sha256 is None,
+                and not args.apply and args.request_sha256 is None,
                 "Request builder requires only source and two attempt pins")
         from docker_dev import _select_source, _compose_identity
         source, layout = _select_source(Path(args.source_root).resolve(strict=True), args.source_root)
@@ -1158,6 +1268,16 @@ def main():
         cfg = toolchain_configuration(source, identity)
         control = BuildControl(identity, cfg["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"])
         print(json.dumps(build_publication_request(control, source, args.attempt, args.base_attempt)))
+    elif args.build_interrupted_request:
+        require(args.attempt is not None and args.base_attempt is None
+                and not args.apply and args.request_sha256 is None,
+                "Initial development request builder requires only source and one attempt pin")
+        from docker_dev import _select_source, _compose_identity
+        source, layout = _select_source(Path(args.source_root).resolve(strict=True), args.source_root)
+        identity = _compose_identity(layout)
+        cfg = toolchain_configuration(source, identity)
+        control = BuildControl(identity, cfg["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"])
+        print(json.dumps(build_interrupted_request(control, source, args.attempt)))
     else:
         require(args.request is not None and args.request_sha256 is not None
                 and args.attempt is None and args.base_attempt is None, "Pinned request and digest required")
