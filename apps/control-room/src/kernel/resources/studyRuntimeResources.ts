@@ -3008,7 +3008,8 @@ export const RUN_PERFORMANCE_RETRY_POLICY: ResourceRetryPolicy = {
   // Only the explicitly typed busy conflict gains a retry path.
   deadlineMs: 30_000,
   maxAttempts: 3,
-  retryAfterMs: 250,
+  maxConflictAttempts: 41,
+  retryAfterMs: 500,
   retryableConflictReasonCodes: ["performance_observation_busy"],
 };
 

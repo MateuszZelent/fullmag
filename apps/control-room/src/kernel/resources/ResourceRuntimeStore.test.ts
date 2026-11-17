@@ -8,6 +8,7 @@ import {
 import {
   createResourcePartialLoadError,
   ResourceRuntimeStore,
+  resolveResourceRetryDecision,
 } from "./ResourceRuntimeStore";
 import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
@@ -719,6 +720,66 @@ describe("ResourceRuntimeStore", () => {
       expect(store.getSnapshot(request.resourceKey)).toMatchObject({
         data: "current performance", status: "ready",
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the extended retry cap only for allowlisted conflicts", () => {
+    const policy = {
+      maxAttempts: 3,
+      maxConflictAttempts: 41,
+      retryableConflictReasonCodes: ["performance_observation_busy"],
+    };
+    const busyConflict = Object.assign(new Error("busy"), {
+      code: "performance_observation_busy",
+      status: 409,
+    });
+
+    expect(resolveResourceRetryDecision(busyConflict, policy, 3).retry).toBe(true);
+    expect(resolveResourceRetryDecision(
+      busyConflict,
+      { maxAttempts: 3, maxConflictAttempts: 41 },
+      1,
+    ).retry).toBe(false);
+
+    const serverFailure = Object.assign(new Error("server failure"), { status: 503 });
+    expect(resolveResourceRetryDecision(serverFailure, policy, 2).retry).toBe(true);
+    expect(resolveResourceRetryDecision(serverFailure, policy, 3).retry).toBe(false);
+  });
+
+  it("keeps deadline retries capped by maxAttempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+      const pending = store.ensureLoad({
+        externalRevision: "attempt-1",
+        load,
+        resourceKey: "diagnostics/performance|timeout-budget",
+        retryPolicy: {
+          deadlineMs: 10,
+          maxAttempts: 3,
+          maxConflictAttempts: 41,
+          retryAfterMs: 1,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
     } finally {
       vi.useRealTimers();
     }

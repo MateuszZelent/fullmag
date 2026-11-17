@@ -1962,8 +1962,43 @@ describe("run performance resource loading budget", () => {
       expect(signals[0]?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(500);
       await pending;
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(RUN_PERFORMANCE_RETRY_POLICY.retryAfterMs ?? 500);
       expect(load).toHaveBeenCalledTimes(2);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries eight typed busy conflicts at 500 ms before performance becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        calls += 1;
+        if (calls <= 8) {
+          return Promise.reject(new ControlRoomApiError(
+            "observation busy", 409, null, "performance_observation_busy",
+          ));
+        }
+        return Promise.resolve("ready");
+      });
+      const resourceKey = "diagnostics/performance|busy-then-ready";
+      const pending = store.ensureLoad({
+        resourceKey, load, externalRevision: "attempt-1",
+        retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
+      } as never);
+      await pending;
+      for (let expectedCalls = 2; expectedCalls <= 9; expectedCalls += 1) {
+        await vi.advanceTimersByTimeAsync(500);
+        await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(expectedCalls));
+      }
+      expect(load).toHaveBeenCalledTimes(9);
+      expect(signals).toHaveLength(9);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
       expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
     } finally {
       vi.useRealTimers();

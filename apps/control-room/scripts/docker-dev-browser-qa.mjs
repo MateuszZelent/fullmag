@@ -1714,6 +1714,8 @@ const requireRunPerformanceInteger = (value, label) => {
 
 const RUN_PERFORMANCE_MAX_SNAPSHOTS = 8;
 const RUN_PERFORMANCE_MAX_OBSERVATION_MS = 20_000;
+// Spread the bounded reads across the observation window, including busy reads.
+const RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS = 2_500;
 const RUN_PERFORMANCE_REQUEST_TIMEOUT_MS = 1_000;
 
 const readRunPerformanceApiContext = async (page, expectedSession) => {
@@ -2009,12 +2011,21 @@ const runAutomaticPerformanceBrowserQa = async (page, expectedSession) => {
         break;
       }
     }
-    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS && Date.now() + 750 < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS &&
+        Date.now() + RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS));
     }
   }
   if (!selectedMetric || panelMatches.length === 0) {
-    throw new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    const error = new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    error.partialProof = {
+      state: "not-verified",
+      window_ms: Date.now() - (deadline - RUN_PERFORMANCE_MAX_OBSERVATION_MS),
+      api_requests: apiContext.requests,
+      api_snapshots: apiSnapshots,
+      panel: await observeRunPerformancePanel(panel),
+    };
+    throw error;
   }
   const refreshedPair = panelMatches.find((first, index) => panelMatches.slice(index + 1).some((second) =>
     first.api.state === "running" && second.api.state === "running" &&

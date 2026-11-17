@@ -30,6 +30,8 @@ function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | unde
 export interface ResourceRetryPolicy {
   deadlineMs?: number;
   maxAttempts?: number;
+  /** Retry cap for explicitly allowlisted transient conflicts only. */
+  maxConflictAttempts?: number;
   retryAfterMs?: number;
   retry_after_ms?: number;
   retryableReasonCodes?: readonly string[];
@@ -231,7 +233,10 @@ export function resolveResourceRetryDecision(
     return { delayMs: 0, reasonCode, retry: false };
   }
 
-  const maxAttempts = boundedPositiveNumber(policy.maxAttempts, 3);
+  const maxAttempts = boundedPositiveNumber(
+    transientConflict ? policy.maxConflictAttempts : undefined,
+    boundedPositiveNumber(policy.maxAttempts, 3),
+  );
   if (attempt >= maxAttempts) {
     return { delayMs: 0, reasonCode, retry: false };
   }
