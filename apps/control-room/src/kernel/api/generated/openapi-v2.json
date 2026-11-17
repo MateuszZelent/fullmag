@@ -19776,6 +19776,103 @@
         ],
         "type": "object"
       },
+      "ImportedSourceSurfaceQuery": {
+        "properties": {
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "source_sha256"
+        ],
+        "type": "object"
+      },
+      "ImportedSourceSurfaceResource": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "coordinate_frame": {
+            "type": "string"
+          },
+          "coordinate_unit": {
+            "type": "string"
+          },
+          "node_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "scale_to_metres": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_eligible": {
+            "description": "This surface is source geometry, not a generated or validated volume mesh.",
+            "type": "boolean"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "surface_id": {
+            "type": "string"
+          },
+          "topology_format": {
+            "type": "string"
+          },
+          "triangle_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "purpose",
+          "object_id",
+          "scene_revision",
+          "surface_id",
+          "source_sha256",
+          "coordinate_frame",
+          "coordinate_unit",
+          "scale_to_metres",
+          "node_count",
+          "triangle_count",
+          "bounds_min",
+          "bounds_max",
+          "solver_eligible",
+          "topology_format"
+        ],
+        "type": "object"
+      },
       "InactiveSelectionPolicySchema": {
         "enum": [
           "warn_and_intersect",
@@ -40269,6 +40366,12 @@
           },
           "asset_id": {
             "type": "string"
+          },
+          "content_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session_id": {
             "type": "string"
@@ -70124,6 +70227,101 @@
           },
           "404": {
             "description": "No active workspace, scene document, object, or region"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/source-surface": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_objects_object_id_source_surface",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportedSourceSurfaceResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Source or object unavailable"
+          },
+          "409": {
+            "description": "Source or scene changed"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/source-surface/topology": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_objects_object_id_source_surface_topology",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scene_revision",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_sha256",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Source-only FMMT v2: zero cells, triangular facets"
+          },
+          "206": {
+            "description": "Binary range"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "409": {
+            "description": "Stale scene or source"
           }
         },
         "tags": [

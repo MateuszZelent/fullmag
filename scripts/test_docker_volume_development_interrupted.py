@@ -1,5 +1,7 @@
 """Failure-only development recovery contract, without Docker or compiled tests."""
 import copy
+from contextlib import contextmanager, ExitStack
+import io
 import json
 from pathlib import Path
 import sys
@@ -112,11 +114,209 @@ class InterruptedDevelopmentTests(unittest.TestCase):
             }
         return request, original, document
 
+    def starting_services_fixture(self):
+        request = copy.deepcopy(self.request)
+        original = copy.deepcopy(self.original)
+        actual = copy.deepcopy(self.actual)
+        original["state"] = "starting-services"
+        started_at = {
+            "backend": "2026-11-16T11:28:41.805481932Z",
+            "frontend": "2026-11-16T11:28:42.396691227Z",
+        }
+        for service, row in actual.items():
+            row["State"]["StartedAt"] = started_at[service]
+            original[service + "_container"] = row["Id"]
+            original[service + "_started_at"] = row["State"]["StartedAt"]
+            request["containers"][service] = {
+                "id": row["Id"], "image": row["Image"], "fingerprint": fingerprint(row),
+                "state_sha256": digest(canonical(row["State"])),
+            }
+        return request, original, self.document, actual
+
+    @contextmanager
+    def interrupted_builder_mocks(self, *, observe_error=None):
+        request, original, document, actual = self.starting_services_fixture()
+        with tempfile.TemporaryDirectory() as source_dir:
+            source = Path(source_dir)
+            scripts = source / "scripts"
+            scripts.mkdir()
+            for name in recovery.CONTROLLERS:
+                (scripts / name).write_text("# " + name + "\n")
+            request["source_root"] = str(source)
+            original["inputs"]["source_root"] = str(source)
+            original["state_root"] = str(self.state_root)
+            control = types.SimpleNamespace(project="own", volume="own-control", namespace="")
+            root = "development/attempts/" + request["attempt"]
+            receipt_raw = canonical(original)
+            compose_raw = canonical(document)
+            active_raw = (request["attempt"] + "\n").encode()
+            attempt_documents = {name: canonical({"name": name}) for name in (
+                "backend-cache.json", "group-ledger.json", "frontend-seed.json", "cache-maintenance-compose.json")}
+            documents = {
+                root + "/receipt.json": receipt_raw,
+                root + "/compose.json": compose_raw,
+                "active": active_raw,
+                **{root + "/" + name: raw for name, raw in attempt_documents.items()},
+            }
+            cert_raw = b"pinned storage certificate\n"
+            cert_path = self.state_root / "test-storage-certificate.json"
+            cert_path.write_bytes(cert_raw)
+            host = types.SimpleNamespace(read_owned_regular=mock.Mock(return_value=cert_raw))
+            docker_module = types.SimpleNamespace(
+                _certificate_path=mock.Mock(return_value=cert_path),
+                _retained_certificate=mock.Mock(return_value={"state": "retained"}),
+                _session_host=mock.Mock(return_value=host),
+            )
+            logs_raw = b"backend build stopped before handoff\n"
+
+            def fake_read_raw(_control, path, optional=False):
+                if path in documents:
+                    return documents[path]
+                if optional:
+                    return None
+                raise AssertionError("unexpected control-volume read: " + path)
+
+            def fake_docker_capture(*args):
+                if args[0] == "info":
+                    output = b"pinned-engine\n"
+                elif args[0] == "ps":
+                    output = ("\n".join(row["Id"] for row in actual.values()) + "\n").encode()
+                elif args[0] == "inspect":
+                    output = json.dumps(list(actual.values())).encode()
+                elif args[0] == "logs":
+                    output = logs_raw
+                else:
+                    raise AssertionError("unexpected Docker observation: " + repr(args))
+                return types.SimpleNamespace(stdout=output, stderr=b"", returncode=0)
+
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(sys.modules, {"docker_volume_dev": docker_module}))
+                stack.enter_context(mock.patch.object(recovery, "read_raw", side_effect=fake_read_raw))
+                stack.enter_context(mock.patch.object(recovery, "docker_capture", side_effect=fake_docker_capture))
+                stack.enter_context(mock.patch.object(recovery, "_probe_helper_absence", return_value="d" * 64))
+                stack.enter_context(mock.patch.object(recovery.subprocess, "run",
+                    return_value=types.SimpleNamespace(stdout=("c" * 40 + "\n").encode())))
+                stack.enter_context(mock.patch.object(recovery.time, "time", return_value=1795000000.5))
+                observe = stack.enter_context(mock.patch.object(
+                    recovery, "observe", side_effect=observe_error if observe_error else None))
+                write = stack.enter_context(mock.patch.object(recovery, "write_immutable"))
+                reconcile = stack.enter_context(mock.patch.object(recovery, "reconcile"))
+                yield {
+                    "control": control, "source": source, "observe": observe, "write": write,
+                    "reconcile": reconcile, "actual": actual, "original": original,
+                    "certificate_sha256": digest(cert_raw), "logs_sha256": digest(logs_raw),
+                }
+
     def test_valid_contract(self):
         recovery.validate_request(self.request)
         recovery.validate_original(self.original, self.document, self.request, self.control, self.source)
         for k, a in self.actual.items():
             recovery.validate_container(a, self.request["containers"][k], k, "own")
+
+    def test_legacy_starting_checkpoint_keeps_its_original_guard(self):
+        original = copy.deepcopy(self.original)
+        original["backend_container"] = self.request["containers"]["backend"]["id"]
+        original["frontend_container"] = self.request["containers"]["frontend"]["id"]
+        recovery.validate_original(original, self.document, self.request, self.control, self.source)
+
+    def test_starting_services_checkpoint_is_accepted_and_pins_both_instances(self):
+        request, original, document, actual = self.starting_services_fixture()
+        recovery.validate_request(request)
+        recovery.validate_original(original, document, request, self.control, self.source)
+        for service, row in actual.items():
+            recovery.validate_container(row, request["containers"][service], service, "own")
+            recovery.validate_service_started_at(row, service, original)
+
+    def test_starting_services_checkpoint_rejects_instance_and_start_time_drift(self):
+        request, original, document, actual = self.starting_services_fixture()
+        for key in ("backend_container", "frontend_container"):
+            changed = copy.deepcopy(original)
+            changed[key] = "9" * 64
+            with self.subTest(key=key), self.assertRaises(BuildControlError):
+                recovery.validate_original(changed, document, request, self.control, self.source)
+
+        changed_times = {
+            "backend": "2026-11-16T11:28:41.805481933Z",
+            "frontend": "2026-11-16T11:28:42.396691228Z",
+        }
+        for service, started_at in changed_times.items():
+            changed = copy.deepcopy(actual[service])
+            changed["State"]["StartedAt"] = started_at
+            changed_pin = copy.deepcopy(request["containers"][service])
+            changed_pin["state_sha256"] = digest(canonical(changed["State"]))
+            recovery.validate_container(changed, changed_pin, service, "own")
+            with self.subTest(service=service), self.assertRaises(BuildControlError):
+                recovery.validate_service_started_at(changed, service, original)
+
+    def test_starting_services_checkpoint_requires_exact_state_and_both_start_times(self):
+        request, original, document, _ = self.starting_services_fixture()
+        for key, value in (("state", "starting"), ("state", "publishing"),
+                           ("config_sha256", "0" * 64), ("frontend_started_at", None)):
+            changed = copy.deepcopy(original)
+            changed[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(BuildControlError):
+                recovery.validate_original(changed, document, request, self.control, self.source)
+
+    def test_interrupted_request_builder_pins_observations_before_immutable_publication(self):
+        with self.interrupted_builder_mocks() as fixture:
+            result = recovery.build_interrupted_request(
+                fixture["control"], fixture["source"], self.request["attempt"])
+            self.assertEqual(result["state"], "request-pinned")
+            fixture["observe"].assert_called_once()
+            fixture["write"].assert_called_once()
+            fixture["reconcile"].assert_not_called()
+            _, request_path, payload = fixture["write"].call_args.args
+            request = json.loads(payload)
+            recovery.validate_request(request)
+            self.assertEqual(request["schema"], recovery.SCHEMA)
+            self.assertEqual(request["storage_certificate_sha256"], fixture["certificate_sha256"])
+            self.assertEqual(request["backend_log_sha256"], fixture["logs_sha256"])
+            self.assertTrue(request_path.startswith("verification/development-interrupted/"))
+            self.assertTrue(request_path.endswith("/request.json"))
+            for service, row in fixture["actual"].items():
+                self.assertEqual(request["containers"][service]["id"], row["Id"])
+                self.assertEqual(request["containers"][service]["state_sha256"],
+                                 digest(canonical(row["State"])))
+
+    def test_interrupted_request_builder_does_not_publish_when_observation_fails(self):
+        with self.interrupted_builder_mocks(observe_error=BuildControlError("guard rejected")) as fixture:
+            with self.assertRaisesRegex(BuildControlError, "guard rejected"):
+                recovery.build_interrupted_request(
+                    fixture["control"], fixture["source"], self.request["attempt"])
+            fixture["write"].assert_not_called()
+            fixture["reconcile"].assert_not_called()
+
+    def test_initial_interruption_rejects_handoff_and_api_logs(self):
+        recovery.validate_no_handoff_or_api(b"build stopped before package handoff\n")
+        for marker in (b"phase=start state=handoff", b"phase=api state=exec"):
+            with self.subTest(marker=marker), self.assertRaises(BuildControlError):
+                recovery.validate_no_handoff_or_api(b"backend-dev: " + marker + b"\n")
+
+    def test_cli_rejects_mixed_request_builder_and_reconciliation_modes(self):
+        argv = ["docker_volume_development_interrupted.py", "--source-root", str(self.source),
+                "--build-interrupted-request", "--attempt", self.request["attempt"],
+                "--request", "verification/request.json", "--request-sha256", "a" * 64]
+        error = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch("sys.stderr", error), self.assertRaises(SystemExit):
+            recovery.main()
+        self.assertIn("not allowed with argument", error.getvalue())
+        self.assertNotIn("unrecognized arguments", error.getvalue())
+
+        for extra in (("--apply",), ("--request-sha256", "a" * 64), ("--base-attempt", "a" * 32)):
+            argv = ["docker_volume_development_interrupted.py", "--source-root", str(self.source),
+                    "--build-interrupted-request", "--attempt", self.request["attempt"], *extra]
+            with self.subTest(extra=extra), mock.patch.object(sys, "argv", argv), \
+                    self.assertRaises(BuildControlError):
+                recovery.main()
+
+        argv = ["docker_volume_development_interrupted.py", "--source-root", str(self.source),
+                "--build-interrupted-request", "--build-publication-request", "--attempt", self.request["attempt"],
+                "--base-attempt", "a" * 32]
+        error = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch("sys.stderr", error), self.assertRaises(SystemExit):
+            recovery.main()
+        self.assertIn("not allowed with argument", error.getvalue())
+        self.assertNotIn("unrecognized arguments", error.getvalue())
 
     def test_only_fail_only_gate_recovery_is_independent_of_foreign_host_clients(self):
         with mock.patch.object(recovery,'host_clients',side_effect=BuildControlError('foreign builder')) as scanner:

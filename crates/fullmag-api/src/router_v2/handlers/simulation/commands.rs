@@ -2060,6 +2060,18 @@ fn scene_geometry_entry(
 ) -> Result<GeometryEntryIR, ApiError> {
     let params = &geometry.geometry_params;
     match geometry.geometry_kind.as_str() {
+        "ImportedGeometry" => {
+            let parameters = fullmag_authoring::imported_stl_parameters(params)
+                .map_err(ApiError::bad_request)?;
+            if parameters.surface_only {
+                return Err(ApiError::bad_request("STL surface preview cannot be used as a volume FEM mesh"));
+            }
+            Ok(GeometryEntryIR::ImportedGeometry {
+                name: geometry_name.to_string(), source: parameters.source,
+                format: "stl".to_string(),
+                scale: fullmag_ir::ImportedGeometryScaleIR::Anisotropic(parameters.scale),
+            })
+        },
         "Box" => Ok(GeometryEntryIR::Box {
             name: geometry_name.to_string(),
             size: vec3_param(params, "size")

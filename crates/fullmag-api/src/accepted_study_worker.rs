@@ -42,6 +42,13 @@ use accepted_worker_execution_receipt::{
     WORKER_EXECUTION_STARTED_RECEIPT,
 };
 
+#[path = "accepted_live_layout_mask.rs"]
+mod accepted_live_layout_mask;
+
+#[cfg(test)]
+#[path = "accepted_live_layout_tests.rs"]
+mod accepted_live_layout_tests;
+
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
@@ -114,6 +121,10 @@ pub(crate) struct AcceptedLiveMagnetizationRef {
     /// Exact study layout of the pinned execution plan.
     pub(crate) layout: serde_json::Value,
     pub(crate) space_fingerprint: String,
+    /// Large FEM P1 support is stored in an immutable sidecar; readers hydrate
+    /// it before returning the canonical layout to projection consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_support_mask: Option<accepted_live_layout_mask::FemSupportMaskRef>,
     /// Present only for native FEM local-node AoS payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fem_local_node_map: Option<fullmag_runner::LiveFemLocalNodeMapIdentity>,
@@ -300,11 +311,14 @@ impl AcceptedLiveObservationWriter {
             return;
         }
         let mut staged_magnetization = None;
+        let mut field_publication_error = None;
         if field_due {
             match self.write_magnetization(update) {
                 Ok(Some(reference)) => staged_magnetization = Some(reference),
                 Ok(None) => {}
-                Err(error) => self.report_failure(&error),
+                Err(error) => {
+                    field_publication_error = Some(error);
+                }
             }
         }
         let previous_magnetization = staged_magnetization
@@ -318,12 +332,58 @@ impl AcceptedLiveObservationWriter {
         } else {
             self.last_stats.clone().unwrap_or_else(|| stats.clone())
         };
+        if let Some(error) = field_publication_error {
+            let previous = self.current_magnetization.take();
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = previous {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = previous;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
+            return;
+        }
         if let Err(error) = self.write_header(&header_stats) {
+            let rollback_magnetization = if staged_magnetization.is_some() {
+                self.current_magnetization.take();
+                previous_magnetization
+            } else {
+                self.current_magnetization.take()
+            };
             if let Some(staged) = staged_magnetization.as_ref() {
-                self.current_magnetization = previous_magnetization;
                 let _ = fs::remove_file(self.attempt_output_dir.join(&staged.file_name));
             }
-            self.report_failure(&error);
+            // A field/support failure must not pin the scalar cursor at an old
+            // step. Publish this update without m, retaining the old payload
+            // only if the scalar-only header also cannot be written.
+            self.current_magnetization = None;
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = rollback_magnetization {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = rollback_magnetization;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
             return;
         }
         self.last_scalar_write = Some(now);
@@ -483,6 +543,7 @@ impl AcceptedLiveObservationWriter {
             content_sha256: fullmag_application::study_artifact_content_sha256(&bytes),
             layout: domain.layout.clone(),
             space_fingerprint: domain.space_fingerprint.clone(),
+            active_support_mask: None,
             fem_local_node_map,
             fields,
         }))
@@ -490,6 +551,14 @@ impl AcceptedLiveObservationWriter {
 
     fn write_header(&mut self, stats: &fullmag_runner::StepStats) -> Result<()> {
         let sequence = self.sequence.saturating_add(1);
+        let (magnetization, pending_support_mask) = match self.current_magnetization.as_ref() {
+            Some(reference) => {
+                let (reference, pending) =
+                    accepted_live_layout_mask::compact_reference_for_header(reference)?;
+                (Some(reference), pending)
+            }
+            None => (None, None),
+        };
         let header = AcceptedLiveObservationHeader {
             schema_version: ACCEPTED_LIVE_OBSERVATION_SCHEMA.to_owned(),
             run_id: self.run_id.clone(),
@@ -505,11 +574,18 @@ impl AcceptedLiveObservationWriter {
                 .unwrap_or(0),
             stats: Some(stats.clone()),
             operation_progress: None,
-            magnetization: self.current_magnetization.clone(),
+            magnetization,
         };
         let bytes = serde_json::to_vec(&header).context("serialize live observation header")?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > ACCEPTED_LIVE_HEADER_MAX_BYTES {
             bail!("live observation header exceeds its bounded size");
+        }
+        if let Some(pending) = pending_support_mask {
+            accepted_live_layout_mask::publish_immutable_mask(
+                &self.attempt_output_dir,
+                &pending.reference,
+                &pending.bytes,
+            )?;
         }
         write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_OBSERVATION_FILE, &bytes)?;
         self.sequence = sequence;
@@ -766,7 +842,7 @@ pub(crate) fn read_accepted_live_observation(
         // The worker may have removed the sidecar after the solver returned.
         Err(_) => return Ok(None),
     };
-    let header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
+    let mut header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
         .context("decode accepted live observation header")?;
     if header.schema_version != ACCEPTED_LIVE_OBSERVATION_SCHEMA
         || header.run_id != run_id
@@ -778,6 +854,9 @@ pub(crate) fn read_accepted_live_observation(
         bail!("accepted live observation identity differs from its task attempt");
     }
     accepted_antenna_progress::validate_header_payload(&header)?;
+    if let Some(reference) = header.magnetization.as_mut() {
+        accepted_live_layout_mask::hydrate_reference_layout(&attempt_dir, reference)?;
+    }
     let mut magnetization_values = None;
     let mut fields = Vec::new();
     if let Some(reference) = header.magnetization.as_ref() {

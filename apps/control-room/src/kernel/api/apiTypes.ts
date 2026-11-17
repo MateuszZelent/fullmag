@@ -1453,3 +1453,6 @@ export interface WorkspaceRootWire {
   readonly recursive: boolean;
   readonly enabled: boolean;
 }
+
+export type ImportedSourceSurfaceResource = components["schemas"]["ImportedSourceSurfaceResource"];
+export type ImportedSourceSurfaceQuery = components["schemas"]["ImportedSourceSurfaceQuery"];

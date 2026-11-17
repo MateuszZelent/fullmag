@@ -22,8 +22,18 @@ describe("classifyImportFile", () => {
     }
   });
 
-  it("refuses a known format without an importer, naming it and the reason", () => {
-    for (const [file, label] of [["sim.mif", "OOMMF"], ["model.mph", "COMSOL"], ["geom.stl", "Mesh"]] as const) {
+  it("supports STL and refuses formats that do not have an importer", () => {
+    expect(classifyImportFile("part.STL")).toMatchObject({
+      kind: "supported",
+      format: { id: "stl" },
+    });
+    expect(IMPORT_ACCEPT).toContain(".stl");
+    for (const [file, label] of [
+      ["sim.mif", "OOMMF"],
+      ["model.mph", "COMSOL"],
+      ["geom.vtk", "Other mesh formats"],
+      ["geom.msh", "Other mesh formats"],
+    ] as const) {
       const result = classifyImportFile(file);
       expect(result.kind, file).toBe("unsupported");
       if (result.kind === "unsupported") {

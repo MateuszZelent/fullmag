@@ -1,0 +1,151 @@
+"""Fixed Rust source regressions in the selected healthy Compose backend."""
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+from docker_build_control import BuildControlError, docker_capture
+import docker_dev_codegen as codegen
+
+COMMAND = ('/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+           '-p', 'fullmag-authoring', '--lib')
+
+# A separate private target prevents unit-test compilation from changing the
+# published runtime package. The backend's normal build lock serializes Cargo.
+CHECK_SCRIPT = r'''import fcntl, os, pathlib, stat, subprocess, sys
+root = pathlib.Path('/build')
+fd = os.open(root / '.fullmag-backend-runtime.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o660)
+try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise RuntimeError('invalid backend build lock')
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    temp = root / 'verification' / 'authoring-contracts' / 'tmp'
+    temp.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ)
+    if environment.get('CARGO_HOME') != '/build/cargo':
+        raise RuntimeError('authoring checks require the admitted private Cargo home')
+    environment.update(CARGO_TARGET_DIR='/build/verification/authoring-contracts/target',
+                       TMPDIR=str(temp), CARGO_BUILD_JOBS='2')
+    result = subprocess.call(sys.argv[1:], cwd='/opt/fullmag/source', env=environment)
+finally:
+    os.close(fd)
+sys.exit(result)
+'''
+
+
+def _source_hashes(selected: Path) -> dict[str, str]:
+    paths = [selected / name for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
+                                         'scripts/docker_authoring_contract_checks.py')]
+    for directory in ('crates', '.cargo'):
+        paths.extend(path for path in (selected / directory).rglob('*')
+                     if path.is_file() and path.suffix in ('.rs', '.toml'))
+    for directory in ('packages/fullmag-py/src', 'packages/fullmag-py/tests'):
+        paths.extend(path for path in (selected / directory).rglob('*.py') if path.is_file())
+    return {str(path.relative_to(selected)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(paths)}
+
+
+def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
+    commands = {
+        "authoring-contracts": (COMMAND,),
+        # Source-only tests keep native solver/runtime packages untouched.
+        # Disable debug output and incremental duplication in this private target.
+        "live-observation-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api-accepted-worker',
+             'accepted_live_layout_tests'),
+        ),
+        "fem-live-control-contracts": tuple(
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runner', '--lib', name)
+            for name in ('fem_live_control_tests',
+                         'fdm_multilayer_interrupt_publishes_accepted_update_before_stop')
+        ),
+        "fem-preparation-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'imported_geometry_sources::tests'),
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0',
+             'CARGO_PROFILE_BACKEND_DEV_DEBUG=0', '/usr/bin/timeout', '--kill-after=5', '60',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api',
+             'script::tests::accepted_fem_preparation_resolves_imported_asset_from_source_root',
+             '--', '--exact', '--nocapture'),
+        ),
+        "stl-classification-contracts": (
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_stl_shell_domains.py', '-v'),
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_frozen_boundary_stl_export.py', '-v'),
+        ),
+        "stl-meshing-contracts": tuple(
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests', '-p', module, '-v')
+            for module in ('test_meshing.py', 'test_stl_shell_domains.py',
+                           'test_frozen_boundary_stl_export.py')
+        ),
+        "stl-api-contracts": tuple(
+            ('/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', name)
+            for name in ('imported_geometry_sources::tests',
+                         'model::imported_surface::tests', 'stl', 'authoring_open_tests')
+        ),
+    }[scope]
+    backend, document = codegen._running_service(control.project, 'backend', identity, selected)
+    if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
+        raise BuildControlError('Authoring checks require a healthy selected backend')
+    mounts = {mount['Destination']: mount for mount in document.get('Mounts', [])}
+    if any(mounts.get(destination, {}).get('Type') != 'volume'
+           or mounts[destination].get('Name') != control.volume
+           for destination in ('/build', '/opt/fullmag/control')):
+        raise BuildControlError('Authoring checks require the selected private build/control volume')
+    before = _source_hashes(selected)
+    inputs = {'scope': scope, 'container_id': backend,
+              'image_id': document['Image'], 'source_hashes': before,
+              'commands': [list(command) for command in commands]}
+    with control.operation('verification', inputs) as operation:
+        root = operation['root']
+        operation['receipt'].update(inputs, state='running', qualification='source tests only')
+        control.write(root + '/receipt.json', operation['receipt'])
+        outputs = []
+        exit_code = 0
+        for command in commands:
+            operation['daemon_pending'] = True
+            result = docker_capture('exec', backend, '/usr/local/bin/python3', '-B', '-c',
+                                    CHECK_SCRIPT, *command, allow_failure=True, timeout=1800)
+            operation['daemon_pending'] = False
+            output = result.stdout.decode('utf-8', 'replace')
+            if (result.returncode == 0 and '/root/.cargo/bin/cargo' in command
+                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
+                raise BuildControlError('Selected Rust test harness did not execute tests')
+            if result.returncode == 0 and 'unittest' in command:
+                diagnostic = result.stderr.decode('utf-8', 'replace')
+                if 'Ran ' not in diagnostic or 'Ran 0 tests' in diagnostic:
+                    raise BuildControlError('Selected Python test harness did not execute tests')
+            outputs.append((result.stdout, result.stderr))
+            if result.returncode:
+                exit_code = result.returncode
+                break
+        control.write_bytes(root + '/stdout.log', b'\n'.join(value[0] for value in outputs))
+        control.write_bytes(root + '/stderr.log', b'\n'.join(value[1] for value in outputs))
+        after_backend, after = codegen._running_service(control.project, 'backend', identity, selected)
+        if after_backend != backend or after['State']['StartedAt'] != document['State']['StartedAt']:
+            raise BuildControlError('Backend identity changed during authoring tests')
+        if _source_hashes(selected) != before:
+            raise BuildControlError('Authoring inputs changed during tests')
+        operation['receipt'].update(state='succeeded' if exit_code == 0 else 'failed-confirmed',
+                                    exit_code=exit_code)
+        control.write(root + '/receipt.json', operation['receipt'])
+        for stdout, stderr in outputs:
+            print(stdout.decode('utf-8', 'replace')[-24000:] + stderr.decode('utf-8', 'replace')[-8000:])
+        print('Source check receipt: ' + root + '/receipt.json')
+        return exit_code

@@ -1,3 +1,5 @@
+import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
+import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
@@ -2582,6 +2584,13 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    sourceSurface: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<ImportedSourceSurfaceResource>(MODEL_OBJECT_SOURCE_SURFACE_PATH, options,
+        { path: { object_id: objectId } }),
+    sourceSurfaceTopology: (objectId: string, query: ImportedSourceSurfaceQuery, options?: BinaryRequestOptions) =>
+      this.requestTopology(MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH, options,
+        { object_id: objectId }, { ...query }),
+
     frozenSpins: {
       list: (options?: RequestOptions) =>
         this.requestJson<FrozenSpinsCollectionResource>(

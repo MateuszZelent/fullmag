@@ -1937,7 +1937,8 @@ fn prepare_live_accepted(
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     // Script-backed scenes retain relative native mesh references after the
     // startup request. Resolve them with the same original asset parent.
-    let asset_root = if scene.study.fem_domain_mesh.is_some() {
+    let has_pinned_stl_sources = scene.objects.iter().any(|object| object.geometry.source_asset.is_some());
+    let asset_root = if scene.study.fem_domain_mesh.is_some() || has_pinned_stl_sources {
         asset_root.or_else(|| source_script_path.as_deref().and_then(Path::parent))
     } else {
         asset_root

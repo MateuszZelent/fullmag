@@ -30,9 +30,13 @@ function sessionScopeKeyFromResourceKey(resourceKey: ResourceKey): string | unde
 export interface ResourceRetryPolicy {
   deadlineMs?: number;
   maxAttempts?: number;
+  /** Retry cap for explicitly allowlisted transient conflicts only. */
+  maxConflictAttempts?: number;
   retryAfterMs?: number;
   retry_after_ms?: number;
   retryableReasonCodes?: readonly string[];
+  /** Explicit transient 409 codes; all other conflicts remain non-retryable. */
+  retryableConflictReasonCodes?: readonly string[];
 }
 
 export interface ResourceRetryDecision {
@@ -217,15 +221,22 @@ export function resolveResourceRetryDecision(
     status === 503 ||
     status === 504;
   const transientNotFound = status === 404 && reasonCode !== null && reasonAllowed;
-  const retryable =
+  const transientConflict =
+    status === 409 && reasonCode !== null &&
+    policy.retryableConflictReasonCodes?.includes(reasonCode) === true;
+  const retryable = transientConflict || (
     status !== 409 &&
     reasonAllowed &&
-    (transientNotFound || (status !== 404 && retryableStatus));
+    (transientNotFound || (status !== 404 && retryableStatus))
+  );
   if (!retryable) {
     return { delayMs: 0, reasonCode, retry: false };
   }
 
-  const maxAttempts = boundedPositiveNumber(policy.maxAttempts, 3);
+  const maxAttempts = boundedPositiveNumber(
+    transientConflict ? policy.maxConflictAttempts : undefined,
+    boundedPositiveNumber(policy.maxAttempts, 3),
+  );
   if (attempt >= maxAttempts) {
     return { delayMs: 0, reasonCode, retry: false };
   }

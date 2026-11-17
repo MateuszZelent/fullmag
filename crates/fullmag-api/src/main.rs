@@ -5352,6 +5352,9 @@ fn import_asset_into_dir(
         .decode(&req.content_base64)
         .map_err(|error| ApiError::bad_request(format!("invalid base64 payload: {}", error)))?;
 
+    // Parse before publishing either the file or its manifest. A malformed
+    // upload must not leave an orphaned, unvalidated source in the workspace.
+    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     std::fs::create_dir_all(&imports_dir)?;
 
     let asset_id = format!("asset-{}", uuid_v4_hex());
@@ -5359,9 +5362,8 @@ fn import_asset_into_dir(
     let stored_path = imports_dir.join(&stored_name);
     let artifact_ref = format!("imports/{stored_name}");
     std::fs::write(&stored_path, &bytes)?;
-
-    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     let response = SessionAssetImportResponse {
+        content_sha256: Some(format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes))),
         asset_id: asset_id.clone(),
         session_id: session_id.to_string(),
         artifact_ref,
@@ -7381,3 +7383,5 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         _ => None,
     }
 }
+
+mod imported_geometry_sources;

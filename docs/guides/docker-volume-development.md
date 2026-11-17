@@ -439,6 +439,31 @@ próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy ro
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
 Przed pierwszym admission awaria samego buildu może zachować ten sam root sesji. Wymaga to dokładnego bootstrap certyfikatu, jednej potwierdzonej awarii przypiętej do bieżącego `Docker StartedAt` oraz braku handoff, publikacji pakietu i storage probe. Dowód wskazuje bezpośredni terminal tej próby development albo związany terminal resume; bieżąca inkarnacja kontenera musi być zgodna. Launcher ponawia cały dowód pod blokadą przed odtworzeniem usług. Nie ustawia `restart_verified`, nie zmienia ownera i nie powtarza Solve; nowe API nadal wymaga zwykłego admission. Brak lub zmiana dowodu blokuje tę ścieżkę.
 
+Przerwanie początkowego startu przed handoff pakietu można zamknąć przez
+`scripts/docker_volume_development_interrupted.py`. Checkpoint
+`starting-services` wymaga zgodnych ID oraz `StartedAt` obu zatrzymanych usług;
+zachowany wariant `starting` zachowuje wcześniejszy kontrakt. Builder
+`--build-interrupted-request --attempt <development-attempt>` zbiera piny z
+wybranej grupy i zapisuje immutable request w jej control volume dopiero po
+pełnej obserwacji. Wymagany jest brak starego helpera oraz dowodów handoff/API.
+Wywołanie z `--request <control-relative-path> --request-sha256 <sha256>`
+domyślnie wykonuje preview; jawne `--apply` zatwierdza wyłącznie
+`failed-confirmed` pod blokadą i CAS. Receipty zachowują nieznany status wyjścia
+producenta, a dalszy start lub odtworzenie usług przechodzi własne bramki.
+
+Jeżeli późniejsze resume zatrzyma się przed PID1 na błędzie OCI `not a directory`
+przy montowaniu `/run/fullmag/linux-native-host.json`, builder
+`scripts/docker_volume_resume_mount_refusal.py --source-root <checkout>
+--attempt <resume-attempt> --port <port>` obsługuje wyłącznie ten przypadek po
+potwierdzonym przerwaniu początkowego startu przed handoff. Wymaga niezmienionych
+zatrzymanych usług, działającego oryginalnego helpera i jego blokady, poprawnego
+certyfikatu na hoście oraz pustego stanu poza certyfikatem, ownerem i sentinelem.
+Zapisany request i SHA przekazuje się do `docker_volume_reconcile.py` najpierw z
+`--preview`, następnie bez tej flagi. Publikacja zachowuje rzeczywisty błąd OCI
+i ostatnie `verified`; tylko oryginalny helper zwalnia `active`. Nie naprawia
+mountu ani nie uruchamia usług. Następny krok to osobno walidowane
+`recreate-volume --fresh-state`, zachowujące poprzedni root stanu.
+
 Bezpośredni CLI `recreate-volume` obsługuje również powtarzane
 `--include-untracked`. Jawne opcje przypinają kompletną listę plików nowej
 konfiguracji; brak opcji zachowuje listę poprzedniej próby. Obowiązują te same
@@ -1081,8 +1106,28 @@ Nie ma automatycznego globalnego GC BuildKit, starych obrazów ani nieaktywnych
 grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji i autoryzacji.
 Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
 
-`just docker-dev-control-checks <source>` uruchamia interpretowane regresje
-launcherów w istniejącym backendzie; nie kompiluje natywnych testów jednostkowych.
+`just docker-dev-control-checks <source>` w domyślnym zakresie uruchamia
+interpretowane regresje launcherów w istniejącym backendzie. Zakres
+`live-observation-contracts` kompiluje i wykonuje w tym samym backendzie testy
+kanału publikacji live z binarium `fullmag-api-accepted-worker`, pod istniejącą
+blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źródeł
+są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
+Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
+aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
+Zakres `fem-live-control-contracts` sprawdza przekazanie żądania Stop przez
+obserwatora do wykonawcy FEM na granicy zaakceptowanego kroku. Obejmuje sygnał
+ustawiony przed callbackiem lub przez sam callback, publikację kroku przed Stop
+oraz zachowanie Continue/Pause/Stop bez sygnału. Są to testy źródłowe przekazania
+sterowania; nie potwierdzają zatrzymania działającego procesu, zbieżności ani
+publikacji accepted checkpointu po anulowaniu.
+
+Zakres `fem-preparation-contracts` sprawdza przekazanie importowanego STL
+z osobnego katalogu źródeł do przygotowanej siatki; po kompilacji ogranicza
+czas wykonania wskazanego testu do 60 sekund. `stl-classification-contracts`
+sprawdza powłoki, ownerów komponentów oraz eksport granic, a
+`stl-meshing-contracts` obejmuje dodatkowo pełny zestaw testów meshera.
+Receipty tych zakresów wiążą także hashe wykonywanych źródeł i testów Pythona.
+
 Sukces buildu nie stanowi kwalifikacji FDM/FEM/BORIS. Release, CI i kwalifikacja
 naukowa zachowują własne jawne zarządzane recepty zgodnie z AGENTS.md.
 

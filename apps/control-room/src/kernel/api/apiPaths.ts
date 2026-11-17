@@ -1241,3 +1241,10 @@ export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
 export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");
+
+export const MODEL_OBJECT_SOURCE_SURFACE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface",
+);
+export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
+);

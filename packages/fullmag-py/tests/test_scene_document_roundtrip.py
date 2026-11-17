@@ -1,4 +1,8 @@
+import builtins
+import tempfile
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import fullmag as fm
 from fullmag.runtime.scene_document import (
@@ -93,6 +97,131 @@ body.mesh(maximum_element_size=20e-9, algorithm_3d=1, order=1)
         + "a" * 64
         + '", build_requested=True)'
     ) in rendered
+
+
+class TestSharedDomainMeshSceneRoundtrip(unittest.TestCase):
+    def test_scene_document_round_trips_shared_domain_mesh_without_loading_mesh_asset(
+        self,
+    ) -> None:
+        domain_mesh_source = "/user-data/fullmag-domain-roundtrip/relax.mesh.json"
+        domain_mesh_path = Path(domain_mesh_source)
+        with tempfile.TemporaryDirectory(prefix="fullmag-domain-roundtrip-") as temp_dir:
+            tmp_path = Path(temp_dir)
+            source = tmp_path / "explicit_domain_mesh.py"
+            source.write_text(
+                f"""import fullmag as fm
+study = fm.study('explicit-domain-mesh')
+study.engine('fem')
+study.domain_mesh(
+    source={domain_mesh_source!r},
+    region_markers={{'left': 1, 'right': 2}},
+    object_region_markers={{'left:core': 3}},
+)
+left = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name='left')
+left.Ms = 800e3
+left.Aex = 13e-12
+left.m = fm.texture.uniform(1, 0, 0)
+right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name='right')
+right.Ms = 800e3
+right.Aex = 13e-12
+right.m = fm.texture.uniform(1, 0, 0)
+study.run(1e-12)
+""",
+                encoding="utf-8",
+            )
+
+            path_open = Path.open
+
+            def guarded_path_open(path: Path, *args, **kwargs):
+                if path == domain_mesh_path:
+                    raise AssertionError(
+                        "lightweight scene capture opened the shared-domain mesh"
+                    )
+                return path_open(path, *args, **kwargs)
+
+            builtin_open = builtins.open
+
+            def guarded_builtin_open(file, *args, **kwargs):
+                try:
+                    is_domain_mesh = Path(file) == domain_mesh_path
+                except (TypeError, ValueError):
+                    is_domain_mesh = False
+                if is_domain_mesh:
+                    raise AssertionError(
+                        "lightweight scene capture opened the shared-domain mesh"
+                    )
+                return builtin_open(file, *args, **kwargs)
+
+            with patch.object(Path, "open", guarded_path_open), patch.object(
+                builtins, "open", guarded_builtin_open
+            ):
+                loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+                expected_mode = "explicit_shared_domain_mesh"
+                expected_regions = [
+                    {"geometry_name": "left", "marker": 1},
+                    {"geometry_name": "right", "marker": 2},
+                ]
+                expected_object_regions = [{"geometry_name": "left:core", "marker": 3}]
+                captured = loaded.problem.runtime_metadata["mesh_workflow"]
+                self.assertEqual(captured["domain_mesh_mode"], expected_mode)
+                self.assertEqual(captured["domain_mesh_source"], domain_mesh_source)
+                self.assertEqual(captured["domain_region_markers"], expected_regions)
+                self.assertEqual(
+                    captured["domain_object_region_markers"], expected_object_regions
+                )
+
+                draft = export_builder_draft(loaded)
+                scene = build_scene_document_from_builder(draft)
+                shared_domain_mesh = scene["study"]["shared_domain_mesh"]
+                self.assertEqual(shared_domain_mesh.get("domain_mesh_mode"), expected_mode)
+                self.assertEqual(
+                    shared_domain_mesh.get("domain_mesh_source"), domain_mesh_source
+                )
+                self.assertEqual(
+                    shared_domain_mesh.get("domain_region_markers"), expected_regions
+                )
+                self.assertEqual(
+                    shared_domain_mesh.get("domain_object_region_markers"),
+                    expected_object_regions,
+                )
+
+                overrides = builder_overrides_from_scene_document(scene)
+                self.assertEqual(overrides["mesh"].get("domain_mesh_mode"), expected_mode)
+                self.assertEqual(
+                    overrides["mesh"].get("domain_mesh_source"), domain_mesh_source
+                )
+                self.assertEqual(
+                    overrides["mesh"].get("domain_region_markers"), expected_regions
+                )
+                self.assertEqual(
+                    overrides["mesh"].get("domain_object_region_markers"),
+                    expected_object_regions,
+                )
+
+                canonical = render_scene_document_as_script(scene)
+                self.assertIn(
+                    f'study.domain_mesh(source="{domain_mesh_source}", '
+                    'region_markers={"left": 1, "right": 2}, '
+                    'object_region_markers={"left:core": 3})',
+                    canonical,
+                )
+                canonical_path = tmp_path / "explicit_domain_mesh_canonical.py"
+                canonical_path.write_text(canonical, encoding="utf-8")
+                reloaded = fm.load_problem_from_script(
+                    canonical_path, lightweight_assets=True
+                )
+                reloaded_workflow = reloaded.problem.runtime_metadata["mesh_workflow"]
+                self.assertEqual(reloaded_workflow["domain_mesh_mode"], expected_mode)
+                self.assertEqual(
+                    reloaded_workflow["domain_mesh_source"], domain_mesh_source
+                )
+                self.assertEqual(
+                    reloaded_workflow["domain_region_markers"], expected_regions
+                )
+                self.assertEqual(
+                    reloaded_workflow["domain_object_region_markers"],
+                    expected_object_regions,
+                )
 
 
 def test_pinned_mesh_scene_keeps_authored_default_per_object_algorithm() -> None:
@@ -247,3 +376,7 @@ def test_scene_round_trip_preserves_authored_global_mesh_order(tmp_path: Path) -
         reloaded = load_problem_from_script(exported, lightweight_assets=True)
         rebuilt = build_scene_document_from_builder(export_builder_draft(reloaded))
         assert builder_overrides_from_scene_document(rebuilt)["mesh"]["order"] == order
+
+
+if __name__ == "__main__":
+    unittest.main()

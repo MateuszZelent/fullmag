@@ -295,6 +295,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_authoring_object_region),
         )
         .route(
+            "/v2/sessions/current/model/objects/:object_id/source-surface",
+            get(handlers::model::imported_surface::get_imported_source_surface),
+        )
+        .route(
+            "/v2/sessions/current/model/objects/:object_id/source-surface/topology",
+            get(handlers::model::imported_surface::get_imported_source_surface_topology),
+        )
+        .route(
             "/v2/sessions/current/model/objects/:object_id/geometry",
             patch(handlers::model::patch_authoring_object_geometry),
         )

@@ -2201,6 +2201,20 @@ def _terminal_session_scope_header(session: Mapping[str, object]) -> str:
     )
 
 
+def _validate_terminal_footer_sample_step(step: Mapping[str, object], expected_step: str) -> None:
+    descriptions = {
+        "Step": "Latest step",
+        "Sample step": "Step of the displayed telemetry sample",
+    }
+    label = step.get("label")
+    detail = descriptions.get(label) if isinstance(label, str) else None
+    if (step.get("visible") is not True or detail is None
+            or step.get("detail") != detail or step.get("value") != expected_step
+            or step.get("unit") != "steps" or not isinstance(step.get("title"), str)
+            or not step["title"].startswith(f"{label}: {expected_step} steps\n{detail}\n")):
+        raise BuildControlError("Visible Footer Step does not match authoritative source_step")
+
+
 def _validate_terminal_telemetry_snapshot(
     value: object,
     session: Mapping[str, object],
@@ -2305,11 +2319,7 @@ def _validate_terminal_telemetry_snapshot(
     )
     expected_step = f"{api['source_step']:,}"
     expected_energy = _format_terminal_footer_energy(energy_values[0])
-    if (step.get("visible") is not True or step.get("label") != "Step"
-            or step.get("detail") != "Latest step" or step.get("value") != expected_step
-            or step.get("unit") != "steps" or not isinstance(step.get("title"), str)
-            or not step["title"].startswith(f"Step: {expected_step} steps\nLatest step\n")):
-        raise BuildControlError("Visible Footer Step does not match authoritative source_step")
+    _validate_terminal_footer_sample_step(step, expected_step)
     expected_energy_title = f"Energy: {expected_energy} J\nTotal\nSession summary"
     if (energy.get("visible") is not True or energy.get("label") != "Energy"
             or energy.get("detail") != "Total" or energy.get("subdetail") != "Session summary"

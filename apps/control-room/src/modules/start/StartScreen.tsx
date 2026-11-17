@@ -251,6 +251,44 @@ export function StartScreen({ kernel }: ModuleProps) {
       `Could not open ${file.name}`,
     );
 
+  const importStl = async (
+    file: File,
+    units: "m" | "mm" | "um" | "nm",
+    scale: number,
+  ): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "geometry.import-stl",
+      createCommandContext("menu", kernel, {
+        input: { file, scale, units },
+        sourceDetail: "start-screen",
+      }),
+    );
+    if (result.status === "completed") {
+      homeView.close();
+      return null;
+    }
+    return result.message ?? "The STL surface could not be imported.";
+  };
+
+  const createFemWorkspace = async (): Promise<string | null> => {
+    const result = await kernel.commands.execute(
+      "workspace.new-problem",
+      createCommandContext("menu", kernel, {
+        input: { solver: "FEM" },
+        sourceDetail: "start-screen",
+      }),
+    );
+    return result.status === "failed"
+      ? (result.message ?? "Could not open FEM workspace setup.")
+      : null;
+  };
+
+  const stlWorkspaceState = sessionIdentity !== null
+    ? "active"
+    : sessions.state === "no-session"
+      ? "none"
+      : "unconfirmed";
+
   const openRecent = async (entry: RecentEntry): Promise<string | null> => {
     if (entry.status === "missing") {
       return `${entry.name} is no longer at ${entry.path}. Rebuild the index or remove it from the list.`;
@@ -555,9 +593,12 @@ export function StartScreen({ kernel }: ModuleProps) {
           ) : section === "import" ? (
             <ImportSection
               onOpenFile={openFile}
+              onCreateFemWorkspace={createFemWorkspace}
+              onImportStl={importStl}
               projectCreator={projectCreator}
               scriptSaver={scriptSaver}
               openDisabledReason={browseDisabledReason}
+              stlWorkspaceState={stlWorkspaceState}
             />
           ) : section === "docs" ? (
             <DocsSection />

@@ -437,6 +437,7 @@ import {
   useViewport3DPartFieldVectors,
   useViewport3DQuantityFieldVectors,
   useViewport3DScene,
+  useViewport3DImportedSurfaces,
   useViewport3DSharedDomainManifest,
   type Viewport3DAirboxFieldVectorPartState,
   useViewport3DUniverse,
@@ -3386,6 +3387,7 @@ export function useViewport3DSceneModel({
   );
   const domainMeta = useViewport3DDomainMeta(liveViewportResourcesEnabled);
   const scene = useViewport3DScene(liveViewportResourcesEnabled);
+  const importedSurfaces = useViewport3DImportedSurfaces(scene.data, liveViewportResourcesEnabled);
   const sceneObjectIds = useMemo(
     () => visualizationSceneObjectIds(scene.data),
     [scene.data],
@@ -3700,12 +3702,14 @@ export function useViewport3DSceneModel({
     const committed = buildViewport3DPrimitiveRenderModel(
       scene.data,
       sharedDomainManifest.data,
+      importedSurfaces.data?.sources,
     );
     return {
       ...committed,
+      diagnostics: [...(committed.diagnostics ?? []), ...(importedSurfaces.data?.diagnostics ?? [])],
       draftOverlay: primitiveDraftOverlay,
     };
-  }, [primitiveDraftOverlay, scene.data, sharedDomainManifest.data]);
+  }, [primitiveDraftOverlay, scene.data, sharedDomainManifest.data, importedSurfaces.data]);
   const objectTransformsById = useMemo(() => {
     const sceneRecord = asJsonRecord(scene.data);
     const transforms = new Map<string, unknown>();

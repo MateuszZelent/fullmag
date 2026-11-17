@@ -306,6 +306,18 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
                 false,
                 GeometrySupportStatus::Production,
             ),
+            // Closed local STL volumes are executable FEM authoring inputs.
+            // Workload/runtime qualification remains distinct from this flag.
+            primitive(
+                "imported_geometry",
+                "Imported STL",
+                "import",
+                true,
+                false,
+                true,
+                false,
+                GeometrySupportStatus::Preview,
+            ),
             primitive(
                 "microstrip_antenna_layout",
                 "Microstrip Antenna Layout",
@@ -692,13 +704,15 @@ fn validate_object_geometry(
             &["realize_geometry", "build_mesh", "run_solver"],
         ));
     }
-    validate_geometry_node(
-        &object.geometry,
-        backend_target,
-        &object.id,
-        &object_path,
-        diagnostics,
-    );
+    if object.geometry.geometry_kind == "ImportedGeometry"
+        && *backend_target == GeometryBackendTarget::Fem
+    {
+        validate_imported_stl_geometry(&object.geometry, &object.id, &object_path, diagnostics);
+    } else {
+        validate_geometry_node(
+            &object.geometry, backend_target, &object.id, &object_path, diagnostics,
+        );
+    }
     validate_tiny_features(scene, object, &object_path, diagnostics);
     if let (Some((bounds_min, bounds_max)), Some(universe)) = (
         derive_object_bounds(object),
@@ -839,6 +853,28 @@ fn validate_tiny_features(
             Some(object_path.to_string()),
             &["build_mesh"],
         ));
+    }
+}
+
+fn validate_imported_stl_geometry(
+    geometry: &SceneGeometry,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match crate::imported_stl_parameters(&geometry.geometry_params) {
+        Ok(parameters) if !parameters.surface_only => {},
+        Ok(_) => diagnostics.push(error(
+            "GEOMETRY_IMPORTED_SURFACE_ONLY",
+            "STL source surface is available for preview; volume='full' is required for FEM meshing.".to_string(),
+            Some(object_id.to_string()), Some(path.to_string()),
+            &["build_mesh", "run_solver"],
+        )),
+        Err(message) => diagnostics.push(error(
+            "GEOMETRY_IMPORTED_SOURCE_INVALID", message,
+            Some(object_id.to_string()), Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
     }
 }
 
@@ -1898,6 +1934,16 @@ mod tests {
     };
     use serde_json::json;
 
+    #[test]
+    fn stl_capability_exposes_fem_without_claiming_fdm_boolean_or_production_support() {
+        let capabilities = geometry_capabilities(1);
+        let stl = capabilities.primitive_capabilities.iter()
+            .find(|capability| capability.id == "imported_geometry").unwrap();
+        assert!(stl.fem && stl.dsl);
+        assert!(!stl.fdm && !stl.boolean);
+        assert_eq!(stl.status, GeometrySupportStatus::Preview);
+    }
+
     fn scene_with_object(geometry: SceneGeometry) -> SceneDocument {
         SceneDocument {
             revision: 7,
@@ -1979,9 +2025,29 @@ mod tests {
     }
 
     #[test]
+    fn imported_stl_is_a_real_fem_source_without_an_explicit_mesh_waiver() {
+        let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
+            geometry_kind: "ImportedGeometry".to_string(),
+            geometry_params: json!({"source": "body.stl", "scale": 1e-6, "volume": "full"}),
+            bounds_min: Some([0.0; 3]), bounds_max: Some([1e-6; 3]),
+        });
+        scene.objects[0].tags.clear();
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_none());
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fdm).is_some());
+        scene.objects[0].geometry.geometry_params["volume"] = json!("surface");
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        let diagnostic = validation.diagnostics.iter().find(|row| row.code == "GEOMETRY_IMPORTED_SURFACE_ONLY").unwrap();
+        assert!(!diagnostic.blocks.iter().any(|block| block == "realize_geometry"));
+        assert!(diagnostic.blocks.iter().any(|block| block == "build_mesh"));
+        assert!(geometry_blocks_solver_run(&scene, GeometryBackendTarget::Fem).is_some());
+    }
+
+    #[test]
     fn auxiliary_geometry_preserves_mesh_body_without_magnetic_references() {
         for role in ["antenna", "conductor", "geometry"] {
             let mut scene = scene_with_object(SceneGeometry {
+                source_asset: None,
                 geometry_kind: "Box".to_string(),
                 geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
                 bounds_min: None,
@@ -2017,6 +2083,7 @@ mod tests {
     #[test]
     fn auxiliary_geometry_rejects_explicit_dangling_magnetic_references() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
             bounds_min: None,
@@ -2033,6 +2100,7 @@ mod tests {
     #[test]
     fn box_scene_realizes_with_bounds_and_dirty_state() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 2.0, 3.0] }),
             bounds_min: None,
@@ -2050,6 +2118,7 @@ mod tests {
     #[test]
     fn arch_waveguide_scene_realizes_with_python_ir_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "ArchWaveguide".to_string(),
             geometry_params: json!({
                 "length": 400e-9,
@@ -2084,6 +2153,7 @@ mod tests {
     #[test]
     fn microstrip_scene_derives_bounds_from_stations_not_stale_stored_bounds() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
                 "length_m": 1e-6,
@@ -2125,6 +2195,7 @@ mod tests {
     #[test]
     fn microstrip_scene_rejects_unordered_stations_and_nonrigid_transform() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "MicrostripAntennaLayout".to_string(),
             geometry_params: json!({
                 "length_m": 1e-6,
@@ -2178,6 +2249,7 @@ mod tests {
     #[test]
     fn cpw_scene_uses_all_station_bounds_and_rejects_fdm() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "CPWAntennaLayout".to_string(),
             geometry_params: cpw_params(),
             bounds_min: Some([-1.0; 3]), bounds_max: Some([1.0; 3]),
@@ -2226,6 +2298,7 @@ mod tests {
     #[test]
     fn unsupported_csg_blocks_mesh_build() {
         let scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Csg".to_string(),
             geometry_params: json!({ "op": "union", "children": [] }),
             bounds_min: None,
@@ -2238,6 +2311,7 @@ mod tests {
     #[test]
     fn workspace_body_ids_are_stable_when_object_order_changes() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
             bounds_min: None,
@@ -2270,6 +2344,7 @@ mod tests {
     #[test]
     fn rotated_box_bounds_are_conservative_world_aabb() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [2.0, 4.0, 2.0] }),
             bounds_min: None,
@@ -2288,6 +2363,7 @@ mod tests {
     #[test]
     fn duplicate_region_and_overlap_emit_diagnostics() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 1.0] }),
             bounds_min: None,
@@ -2314,6 +2390,7 @@ mod tests {
     #[test]
     fn tiny_feature_below_mesh_size_warns() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".to_string(),
             geometry_params: json!({ "size": [1.0, 1.0, 0.1] }),
             bounds_min: None,
@@ -2330,6 +2407,7 @@ mod tests {
     #[test]
     fn manual_universe_outside_blocks_mesh_and_solver_but_auto_does_not() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [2.0, 2.0, 2.0]}),
             bounds_min: None,
@@ -2372,6 +2450,7 @@ mod tests {
     #[test]
     fn manual_universe_requires_finite_positive_size_even_without_geometry() {
         let mut scene = scene_with_object(SceneGeometry {
+            source_asset: None,
             geometry_kind: "Box".into(),
             geometry_params: json!({"size": [1.0, 1.0, 1.0]}),
             bounds_min: None,

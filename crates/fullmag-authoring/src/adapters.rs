@@ -219,6 +219,7 @@ pub fn scene_document_to_script_builder(
             }
 
             Ok(ScriptBuilderGeometryEntry {
+                source_asset: object.geometry.source_asset.clone(),
                 name: builder_geometry_name_for_object(object),
                 region_name: object.region_name.clone(),
                 geometry_kind: object.geometry.geometry_kind.clone(),
@@ -503,6 +504,7 @@ pub fn scene_document_to_script_builder_overrides(
             "role": object.role,
             "visualization_hint": object.visualization_hint,
             "geometry_kind": object.geometry.geometry_kind,
+            "source_asset": object.geometry.source_asset,
             "geometry_params": geometry_params,
             "bounds_min": object.geometry.bounds_min,
             "bounds_max": object.geometry.bounds_max,
@@ -992,6 +994,9 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
         Value::String(geo.geometry_kind.clone()),
     );
     map.insert("geometry_params".to_string(), geo.geometry_params.clone());
+    if let Some(reference) = &geo.source_asset {
+        map.insert("source_asset".to_string(), serde_json::to_value(reference).unwrap());
+    }
     map.insert("visualization_hint".to_string(), serde_json::json!(geo.visualization_hint));
     map.insert(
         "bounds_min".to_string(),
@@ -1386,6 +1391,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         name: geometry.name.clone(),
         role: "magnet".to_string(),
         geometry: SceneGeometry {
+            source_asset: geometry.source_asset.clone(),
             geometry_kind: geometry.geometry_kind.clone(),
             geometry_params,
             bounds_min: geometry.bounds_min,
@@ -2633,6 +2639,27 @@ mod tests {
         assert!(scene_document_to_script_builder(&scene).is_err());
     }
 
+    #[test]
+    fn imported_source_asset_survives_scene_builder_and_overrides() {
+        let original = scene_document_from_script_builder(&sample_builder());
+        let mut encoded = serde_json::to_value(&original).unwrap();
+        let reference = serde_json::json!({
+            "asset_id": "asset-stl-source",
+            "content_sha256": "a".repeat(64),
+            "archive_path": "project/assets/geometry/source.stl"
+        });
+        encoded["objects"][0]["geometry"]["source_asset"] = reference.clone();
+        let scene: SceneDocument = serde_json::from_value(encoded).unwrap();
+        let builder = scene_document_to_script_builder(&scene).unwrap();
+        let builder_value = serde_json::to_value(&builder).unwrap();
+        assert_eq!(builder_value["geometries"][0]["source_asset"], reference);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["source_asset"], reference);
+        let restored = scene_document_from_script_builder(&builder);
+        let restored_value = serde_json::to_value(restored).unwrap();
+        assert_eq!(restored_value["objects"][0]["geometry"]["source_asset"], reference);
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
@@ -2704,6 +2731,10 @@ mod tests {
                 adaptive_max_passes: 2,
                 adaptive_error_tolerance: "1e-3".to_string(),
                 order: None,
+                domain_mesh_mode: None,
+                domain_mesh_source: None,
+                domain_region_markers: None,
+                domain_object_region_markers: None,
             },
             universe: Some(ScriptBuilderUniverseState {
                 mode: "auto".to_string(),
@@ -2786,6 +2817,7 @@ mod tests {
                 sample_index: Some(0),
             }),
             geometries: vec![ScriptBuilderGeometryEntry {
+                source_asset: None,
                 name: "flower".to_string(),
                 region_name: Some("core".to_string()),
                 geometry_kind: "ImportedGeometry".to_string(),
