@@ -158,10 +158,10 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
         const chrome = root.querySelector('.fm-footer__bar');
         const navigation = root.querySelector('[aria-label="Telemetry views"]');
         const bounds = root.getBoundingClientRect();
-        const visible = [...root.querySelectorAll('.fm-footer-telemetry__metric-summary')].filter((summary) => {
-          const value = summary.querySelector('.fm-footer-telemetry__metric-value').getBoundingClientRect();
+        const visible = [...root.querySelectorAll('.fm-footer-telemetry__metric')].filter((metric) => {
+          const value = metric.querySelector('.fm-footer-telemetry__metric-value').getBoundingClientRect();
           const x = (value.left + value.right) / 2, y = (value.top + value.bottom) / 2;
-          return value.top >= bounds.top && value.bottom <= bounds.bottom && summary.contains(document.elementFromPoint(x, y));
+          return value.top >= bounds.top && value.bottom <= bounds.bottom && metric.contains(document.elementFromPoint(x, y));
         });
         return { height: bounds.height, visible_values: visible.length, navigation_in_header: chrome.contains(navigation) };
       });
@@ -213,12 +213,13 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
         return bottom > top && node.contains(document.elementFromPoint(x, (top + bottom) / 2));
       });
       if (!reachable) throw new Error("Last metric is clipped or covered in a low footer");
-      const summary = lastMetric.locator("summary");
-      await summary.press("Enter");
-      await lastMetric.locator(".fm-footer-telemetry__metric-detail").waitFor({ state: "visible", timeout });
-      await summary.press("Enter");
-      await lastMetric.locator(".fm-footer-telemetry__metric-detail").waitFor({ state: "hidden", timeout });
-      lowPanel.keyboard_details = "open/close verified";
+      // Method notes are a contextual tooltip: keyboard focus opens it, Escape closes it.
+      const tooltip = page.locator(".fm-footer-telemetry__tooltip");
+      await lastMetric.focus();
+      await tooltip.waitFor({ state: "visible", timeout });
+      await page.keyboard.press("Escape");
+      await tooltip.waitFor({ state: "hidden", timeout });
+      lowPanel.keyboard_details = "tooltip focus/escape verified";
     } else throw new Error("Telemetry fixture omitted the metrics container");
     await assertNoResourceFailures();
   } catch (error) {

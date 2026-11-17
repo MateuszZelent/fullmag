@@ -9,21 +9,51 @@
   color: var(--fm-text-primary);
 }
 
-/* ── Compact status strip ── */
+/* ── Status summary (dock header slot, or in-panel fallback) ── */
 
 .fm-footer-telemetry__strip {
   display: flex;
   align-items: center;
-  gap: var(--fm-space-2);
-  min-height: 32px;
-  flex-wrap: wrap;
+  gap: var(--fm-space-3);
+  min-height: 24px;
   min-width: 0;
   flex-shrink: 0;
-  overflow: visible;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
-  padding-inline: var(--fm-inspector-padding-inline);
-  padding-block: var(--fm-space-1);
+  padding: 2px var(--fm-space-3);
+}
+
+.fm-footer-telemetry__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__status-title {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+  text-overflow: ellipsis;
+}
+
+.fm-footer-telemetry__status-online {
+  overflow: hidden;
+  color: var(--fm-text-tertiary);
+  text-overflow: ellipsis;
+}
+
+.fm-footer-telemetry__notice {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-footer-telemetry__strip-dot {
@@ -37,6 +67,7 @@
 
 .fm-footer-telemetry__strip-dot[data-state="running"] {
   background: var(--fm-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-success) 22%, transparent);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="paused"] {
@@ -132,7 +163,10 @@
   }
 }
 
-/* ── Metrics instrument ── */
+/* ── Metrics readouts ──
+ * One continuous grid: groups flow into each other instead of spending a row
+ * per heading. Group identity is the 2px leading marker; names and method
+ * notes are in the tooltip. Density follows the dock height. */
 
 .fm-footer-telemetry__metrics {
   container-type: size;
@@ -143,194 +177,178 @@
 
 .fm-footer-telemetry__metrics-grid {
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 136px), 1fr));
+  align-content: start;
+  gap: 1px;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--fm-space-3);
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--fm-space-2) var(--fm-space-3);
+  background: var(--fm-border-subtle);
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
 .fm-footer-telemetry__group {
-  --fm-metric-color: var(--fm-accent);
-  min-width: 0;
-}
-
-.fm-footer-telemetry__group-title {
-  display: flex;
-  align-items: center;
-  gap: var(--fm-space-2);
-  margin: 0 0 var(--fm-space-1);
-  color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  text-transform: uppercase;
-}
-
-.fm-footer-telemetry__group-marker {
-  width: 12px;
-  height: 2px;
-  flex: 0 0 auto;
-  border-radius: var(--fm-radius-pill);
-  background: var(--fm-metric-color);
-}
-
-.fm-footer-telemetry__group-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 188px), 1fr));
-  gap: var(--fm-space-1);
-  min-width: 0;
+  display: contents;
 }
 
 .fm-footer-telemetry__metric {
   --fm-metric-color: var(--fm-accent);
-  min-width: 0;
-  align-self: start;
-  border: 1px solid var(--fm-border-default);
-  border-inline-start: 2px solid var(--fm-metric-color);
-  border-radius: var(--fm-radius-sm);
-  background: var(--fm-bg-panel-raised);
-}
-
-.fm-footer-telemetry__metric-summary {
+  position: relative;
   display: flex;
-  min-height: 40px;
-  align-items: center;
-  gap: var(--fm-space-2);
-  padding: var(--fm-space-2);
-  cursor: pointer;
-  list-style: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 38px;
+  background: var(--fm-bg-panel);
+  padding: 3px var(--fm-space-2) 3px calc(var(--fm-space-2) + 2px);
+  cursor: default;
+  outline: none;
 }
 
-.fm-footer-telemetry__metric-summary::-webkit-details-marker { display: none; }
-.fm-footer-telemetry__metric-summary::after { content: "+"; color: var(--fm-text-secondary); flex: 0 0 auto; }
-.fm-footer-telemetry__metric[open] > .fm-footer-telemetry__metric-summary::after { content: "−"; }
-.fm-footer-telemetry__metric[open] > .fm-footer-telemetry__metric-summary { border-bottom: 1px solid var(--fm-border-default); }
+.fm-footer-telemetry__metric::before {
+  content: "";
+  position: absolute;
+  inset-block: 5px;
+  inset-inline-start: 0;
+  width: 2px;
+  border-radius: 0 var(--fm-radius-pill) var(--fm-radius-pill) 0;
+  background: var(--fm-metric-color);
+}
+
+.fm-footer-telemetry__metric:hover {
+  background: var(--fm-bg-hover);
+}
+
+.fm-footer-telemetry__metric:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
+}
 
 .fm-footer-telemetry__metric-label {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--fm-space-2);
   min-width: 0;
+  overflow: hidden;
   color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-control);
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.fm-footer-telemetry__metric-label > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.fm-footer-telemetry__metric-label svg {
-  flex-shrink: 0;
-  color: var(--fm-metric-color);
+  font-size: var(--fm-font-size-help);
+  font-weight: var(--fm-font-weight-medium);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-footer-telemetry__metric-value {
-  flex: 0 1 auto;
-  max-width: 65%;
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
+  gap: 3px;
   min-width: 0;
-  gap: var(--fm-space-1);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-lg);
-  font-weight: 700;
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-semibold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.015em;
-  line-height: 1.35;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
-.fm-footer-telemetry__metric-value > span:first-child {
+.fm-footer-telemetry__metric-number {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fm-footer-telemetry__metric-unit {
-  color: var(--fm-text-secondary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 600;
   flex-shrink: 0;
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: var(--fm-font-weight-medium);
   letter-spacing: 0;
 }
 
-.fm-footer-telemetry__metric-detail {
-  padding: var(--fm-space-2);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 500;
-  line-height: 1.4;
+/* Category color is limited to the marker; surfaces remain neutral. */
+.fm-footer-telemetry__metric[data-group="runtime"],
+.fm-footer-telemetry__tooltip[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
+.fm-footer-telemetry__metric[data-group="solver"],
+.fm-footer-telemetry__tooltip[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
+.fm-footer-telemetry__metric[data-group="magnetization"],
+.fm-footer-telemetry__tooltip[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
+.fm-footer-telemetry__metric[data-group="energy"],
+.fm-footer-telemetry__tooltip[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
+
+/* Low dock: one line per readout, label left and value right. */
+@container footer-metrics (height < 84px) {
+  .fm-footer-telemetry__metrics-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr));
+  }
+
+  .fm-footer-telemetry__metric {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--fm-space-2);
+    min-height: 24px;
+    padding-block: 2px;
+  }
+
+  .fm-footer-telemetry__metric::before { inset-block: 4px; }
+  .fm-footer-telemetry__metric-label { flex: 0 1 auto; }
+  .fm-footer-telemetry__metric-value { flex: 0 1 auto; font-size: var(--fm-font-size-sm); }
 }
 
-.fm-footer-telemetry__metric-detail span {
-  min-width: 0;
+/* Tall dock: readouts gain size instead of stretching empty cards. */
+@container footer-metrics (height >= 168px) and (width >= 640px) {
+  .fm-footer-telemetry__metrics-grid {
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  }
+
+  .fm-footer-telemetry__metric { min-height: 48px; gap: 2px; }
+  .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-lg); }
+}
+
+/* ── Contextual tooltip ── */
+
+.fm-footer-telemetry__tooltip {
+  --fm-metric-color: var(--fm-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 320px;
+  border-top: 2px solid var(--fm-metric-color);
+}
+
+.fm-footer-telemetry__tooltip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-3);
+}
+
+.fm-footer-telemetry__tooltip-label {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-footer-telemetry__tooltip-group {
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-footer-telemetry__tooltip-value {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-sm);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
-/* Category color is limited to a thin marker; surfaces remain neutral. */
-.fm-footer-telemetry__group[data-group="runtime"],
-.fm-footer-telemetry__metric[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
-.fm-footer-telemetry__group[data-group="solver"],
-.fm-footer-telemetry__metric[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
-.fm-footer-telemetry__group[data-group="magnetization"],
-.fm-footer-telemetry__metric[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
-.fm-footer-telemetry__group[data-group="energy"],
-.fm-footer-telemetry__metric[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
-
-@container footer-metrics (width <= 480px) {
-  .fm-footer-telemetry__metrics-grid {
-    gap: var(--fm-space-2);
-    padding-inline: var(--fm-space-2);
-  }
-
-  .fm-footer-telemetry__group-metrics {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  }
-}
-
-@container footer-metrics (height <= 112px) {
-  .fm-footer-telemetry__metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-    align-content: start;
-    align-items: start;
-    gap: var(--fm-space-1);
-    padding: 0 var(--fm-space-2);
-  }
-  .fm-footer-telemetry__group,
-  .fm-footer-telemetry__group-metrics { display: contents; }
-  .fm-footer-telemetry__group-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-  .fm-footer-telemetry__metric-summary {
-    min-height: 24px;
-    padding: 1px var(--fm-space-2);
-  }
-  .fm-footer-telemetry__metric-label,
-  .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-control); }
+.fm-footer-telemetry__tooltip-detail {
+  color: var(--fm-text-secondary);
+  overflow-wrap: anywhere;
 }
 
 /* Field samples describe only numerical field evaluation, not publication. */

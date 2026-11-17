@@ -207,9 +207,24 @@
   text-align: center;
 }
 
+/* Telemetry header slots: run status (portal) beside the Overview/Antenna switch.
+ * The status yields width first, so the tab strip keeps its space. */
+.fm-footer__telemetry-header {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--fm-space-3);
+  min-width: 0;
+}
+.fm-footer__telemetry-header[hidden] { display: none; }
+.fm-footer__telemetry-status { display: flex; flex: 0 1 auto; min-width: 0; max-width: 320px; }
+.fm-footer__telemetry-status:empty { display: none; }
 .fm-footer__telemetry-navigation { flex: 0 0 auto; min-width: 0; }
-.fm-footer__telemetry-navigation[hidden] { display: none; }
 .fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-2); }
 @container footer (width < 760px) {
   .fm-footer__telemetry-navigation .fm-tabs-trigger { padding-inline: var(--fm-space-1); font-size: var(--fm-font-size-help); }
+  .fm-footer__telemetry-status .fm-footer-telemetry__status-online { display: none; }
+}
+@container footer (width < 560px) {
+  .fm-footer__telemetry-status .fm-footer-telemetry__status-title { display: none; }
 }
