@@ -94,6 +94,12 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(BuildControlError):
                 subject.build_record(native)
 
+    def test_go_nanoseconds_keep_existing_microsecond_record_semantics(self):
+        for zone in ("Z", "+01:00", "-03:30"):
+            with self.subTest(zone=zone):
+                self.assertEqual(subject.timestamp("2026-11-17T06:02:07.402715263" + zone),
+                                 subject.timestamp("2026-11-17T06:02:07.402715" + zone))
+
     def history_fake(self, *, rows=None, active=None, builders=None, record=None):
         if rows is None:
             rows = [{"ref": "builder/node/" + "b" * 25, "created_at": "1970-01-01T00:16:50Z",

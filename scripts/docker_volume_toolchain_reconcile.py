@@ -38,6 +38,11 @@ def pairs(rows, label):
 
 def timestamp(value):
     require(isinstance(value, str), "BuildKit timestamp is absent")
+    # Go emits RFC3339Nano. Keep the microsecond precision already used by
+    # Python 3.11+ receipts while accepting the same records on Python 3.10.
+    nano = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.)(\d{7,9})(Z|[+-]\d{2}:\d{2})", value)
+    if nano:
+        value = nano[1] + nano[2][:6] + nano[3]
     try:
         result = datetime.fromisoformat(value.replace("Z", "+00:00"))
         require(result.utcoffset() is not None, "BuildKit timestamp lacks a timezone")
