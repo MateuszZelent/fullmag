@@ -198,7 +198,7 @@ const readFooterMetrics = async (page, expectedStep, expectedEnergy, timeout) =>
       ?.textContent?.trim() ?? "";
     const renderedValue = (card) => card.querySelector(".fm-footer-telemetry__metric-value > span")
       ?.textContent?.trim() ?? "";
-    const step = cards.find((card) => label(card) === "Step" && detail(card)[0] === "Latest step");
+    const step = cards.find((card) => ((label(card) === "Step" && detail(card)[0] === "Latest step") || (label(card) === "Sample step" && detail(card)[0] === "Step of the displayed telemetry sample")));
     const energy = cards.find((card) => label(card) === "Energy" && detail(card)[0] === "Total");
     return Boolean(step && energy && renderedValue(step) === value.step &&
       renderedValue(energy) === value.energy && detail(energy)[1] === "Session summary");
@@ -231,7 +231,7 @@ const readFooterMetrics = async (page, expectedStep, expectedEnergy, timeout) =>
         rect.top < viewportHeight && rect.right > 0 && rect.left < viewportWidth &&
         hit && card.contains(hit));
     };
-    const step = cards.find((card) => label(card) === "Step" && details(card)[0] === "Latest step");
+    const step = cards.find((card) => ((label(card) === "Step" && details(card)[0] === "Latest step") || (label(card) === "Sample step" && details(card)[0] === "Step of the displayed telemetry sample")));
     const energy = cards.find((card) => label(card) === "Energy" && details(card)[0] === "Total");
     if (!step || !energy) throw new Error("Footer Step or Total energy metric is missing");
     step.scrollIntoView({ block: "nearest", inline: "nearest" });
