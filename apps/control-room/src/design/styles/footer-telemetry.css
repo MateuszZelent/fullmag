@@ -1,6 +1,8 @@
+/* Column flex: the status strip is optional (it moves to the dock header), so
+ * the metrics must own the remaining height whatever comes before them. */
 .fm-footer-telemetry {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-width: 0;
   min-height: 64px;
@@ -171,6 +173,7 @@
 .fm-footer-telemetry__metrics {
   container-type: size;
   container-name: footer-metrics;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
 }
@@ -180,13 +183,11 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 136px), 1fr));
   align-content: start;
-  gap: 1px;
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--fm-border-subtle);
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
@@ -205,6 +206,10 @@
   gap: 1px;
   min-width: 0;
   min-height: 38px;
+  /* Hairline cell edges instead of a gap over a filled grid background: the
+   * unused part of the last row and the area below it stay panel-coloured. */
+  border-block-end: 1px solid var(--fm-border-subtle);
+  border-inline-end: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);
   padding: 3px var(--fm-space-2) 3px calc(var(--fm-space-2) + 2px);
   cursor: default;

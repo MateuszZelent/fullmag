@@ -5,8 +5,9 @@
 .fm-run-progress {
   container: run-progress / inline-size;
   --fm-run-tone: var(--fm-text-muted);
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  /* Column flex, not grid rows: ribbon, failure and notices are conditional. */
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -217,6 +218,7 @@
 /* ── Body: steps beside activity, stacked when narrow ── */
 
 .fm-run-progress__body {
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 34%);
   min-width: 0;
@@ -369,7 +371,8 @@
 .fm-run-progress__row[data-state="pending"] .fm-run-progress__step-title { color: var(--fm-text-secondary); }
 
 .fm-run-progress__step-subtitle {
-  flex: 0 1 auto;
+  /* Gives way long before the title does. */
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--fm-text-tertiary);
@@ -548,6 +551,7 @@
 }
 
 .fm-run-progress__mesh-details {
+  flex: 0 1 auto;
   max-height: 50%;
   min-height: 0;
   overflow: auto;
@@ -557,9 +561,10 @@
 /* ── Responsive ── */
 
 @container run-progress (width < 900px) {
+  /* Block flow, not auto grid rows: a height-bound grid would let the rows
+   * shrink and the activity log overlap the step table. */
   .fm-run-progress__body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto;
+    display: block;
     overflow: auto;
   }
   .fm-run-progress__steps-scroll { overflow: visible; }
@@ -572,6 +577,7 @@
   .fm-run-progress__steps thead th:nth-child(1) { width: 44%; }
   .fm-run-progress__steps thead th:nth-child(2) { width: 30%; }
   .fm-run-progress__clock { gap: var(--fm-space-2); }
+  .fm-run-progress__metric-target { display: none; }
 }
 
 @container run-progress (width < 460px) {
