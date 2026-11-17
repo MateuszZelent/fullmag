@@ -71,7 +71,7 @@ def test_direct_compose_keeps_native_fem_release_for_backend_dev():
 
 @pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
                     reason="The extracted Makefile recipe is a Linux-container regression")
-def test_adaptive_rk_pair_is_forwarded_and_is_the_only_multi_contract_selector(tmp_path):
+def test_native_contract_guard_accepts_only_closed_pair_and_exact_poisson_adaptive_rk_triple(tmp_path):
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
     recipe_end = makefile.index("\nshow-cli-path:", recipe_start)
@@ -98,12 +98,30 @@ def test_adaptive_rk_pair_is_forwarded_and_is_the_only_multi_contract_selector(t
 
     backend = (ROOT / "docker/all-in-one/backend_dev.py").read_text(encoding="utf-8")
     assert 'environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = ",".join(required_contracts)' in backend
+    assert run_guard("").returncode == 0
+    for selector in ("fem-demag-poisson", "fem-adaptive-dt", "fem-rk-explicit"):
+        assert run_guard(selector).returncode == 0, selector
     assert run_guard("fem-adaptive-dt,fem-rk-explicit").returncode == 0
     assert run_guard("fem-rk-explicit,fem-adaptive-dt").returncode == 0
     for selector in (
-        "fem-demag-poisson,fem-cuda-activity-trace",
+        "fem-demag-poisson,fem-adaptive-dt,fem-rk-explicit",
+        "fem-demag-poisson,fem-rk-explicit,fem-adaptive-dt",
+        "fem-adaptive-dt,fem-demag-poisson,fem-rk-explicit",
         "fem-adaptive-dt,fem-rk-explicit,fem-demag-poisson",
+        "fem-rk-explicit,fem-demag-poisson,fem-adaptive-dt",
+        "fem-rk-explicit,fem-adaptive-dt,fem-demag-poisson",
+    ):
+        assert run_guard(selector).returncode == 0, selector
+    for selector in (
+        "fem-demag-poisson,fem-cuda-activity-trace",
+        "fem-demag-poisson,fem-adaptive-dt",
+        "fem-demag-poisson,fem-rk-explicit",
+        "fem-demag-poisson,fem-adaptive-dt,fem-cuda-activity-trace",
+        "fem-demag-poisson,fem-rk-explicit,fem-cuda-activity-trace",
+        "fem-adaptive-dt,fem-rk-explicit,fem-cuda-activity-trace",
+        "fem-demag-poisson,fem-adaptive-dt,fem-rk-explicit,fem-cuda-activity-trace",
         "fem-adaptive-dt,fem-adaptive-dt",
+        "fem-arbitrary-target,fem-adaptive-dt,fem-rk-explicit",
     ):
         assert run_guard(selector).returncode == 2, selector
 
@@ -114,7 +132,8 @@ def test_adaptive_rk_pair_is_forwarded_and_is_the_only_multi_contract_selector(t
                                         "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                         "fem-cpu-pgbb-reuse", "fem-cuda-bb-exchange-mass",
                                         "fem-cuda-snapshot", "fem-adaptive-dt", "fem-rk-explicit",
-                                        "fem-adaptive-dt,fem-rk-explicit"])
+                                        "fem-adaptive-dt,fem-rk-explicit",
+                                        "fem-demag-poisson,fem-adaptive-dt,fem-rk-explicit"])
 def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path, contract_id):
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
@@ -281,12 +300,15 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     assert result.returncode == 7
     assert not packaged_library.exists()
 
-    if contract_id == "fem-adaptive-dt,fem-rk-explicit":
+    if contract_id in (
+        "fem-adaptive-dt,fem-rk-explicit",
+        "fem-demag-poisson,fem-adaptive-dt,fem-rk-explicit",
+    ):
         second_target_failure_root = tmp_path / "second-target-failure"
         second_target_failure_root.mkdir()
         result, packaged_library, cmake_log = run_build(
             second_target_failure_root, selector=contract_id,
-            fail_target="fem_rk_explicit_contract",
+            fail_target=targets[-1],
         )
         assert result.returncode == 7
         assert cmake_log.read_text(encoding="utf-8").splitlines() == [

@@ -150,6 +150,28 @@ a wynik w `terminal.json` w tym samym katalogu wolumenu. SHA konfiguracji to
 SHA256 kanonicznego JSON (`docker_build_control.canonical`), nie pliku z newline.
 Nie kopiuj tych plików do hostowego `storage/builds`.
 
+### Wspólna kwalifikacja natywnej biblioteki FEM
+
+Opcja `--native-contract` zarządzanego launchera może wskazać jeden kontrakt,
+parę `fem-adaptive-dt` i `fem-rk-explicit` albo dokładnie tę parę wraz z
+`fem-demag-poisson`. Kolejność selektorów jest dowolna; duplikaty i pozostałe
+kombinacje wielu kontraktów są odrzucane.
+
+Przykład dla wybranego checkoutu i wolnego portu:
+
+```sh
+python3 -B scripts/docker_dev.py --repo-root "<source>" up \
+  --source-root "<source>" --port 3197 --gpu-access required \
+  --native-contract fem-demag-poisson \
+  --native-contract fem-adaptive-dt --native-contract fem-rk-explicit
+```
+
+Backend kompiluje wskazane testy i wykonuje je przed publikacją jednego pakietu.
+Receipt wiąże każdy wynik z tą samą migawką źródeł oraz hashem biblioteki buildu
+i pakietu. Brak testu, błąd lub zmiana biblioteki blokują publikację. Nie jest to
+uruchamianie dodatkowych testów na już opublikowanym pakiecie ani dowód parytetu
+SP4 lub przyspieszenia solvera; te wymagają osobnych pomiarów runtime.
+
 ## Wyniki obok skryptu
 
 Po jawnej zgodzie na zapis wybranego podkatalogu ustaw w `.env` głównego

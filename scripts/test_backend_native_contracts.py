@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -444,11 +445,82 @@ class BackendNativeContractsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pair"):
             normalize_contracts([FEM_DEMAG_POISSON, "fem-cuda-activity-trace"])
         with self.assertRaisesRegex(ValueError, "pair"):
-            normalize_contracts([
-                "fem-adaptive-dt", "fem-rk-explicit", FEM_DEMAG_POISSON,
-            ])
+            normalize_contracts([FEM_DEMAG_POISSON, "fem-adaptive-dt"])
+        with self.assertRaisesRegex(ValueError, "pair"):
+            normalize_contracts([FEM_DEMAG_POISSON, "fem-rk-explicit"])
         with self.assertRaisesRegex(ValueError, "sequence"):
             normalize_contracts(FEM_DEMAG_POISSON)
+
+    def test_normalize_contracts_allows_only_exact_poisson_adaptive_rk_triple(self) -> None:
+        expected = {FEM_DEMAG_POISSON, "fem-adaptive-dt", "fem-rk-explicit"}
+        for requested in itertools.permutations(expected):
+            with self.subTest(requested=requested):
+                self.assertEqual(normalize_contracts(requested), requested)
+        for requested in (
+            (FEM_DEMAG_POISSON, "fem-adaptive-dt", "fem-cuda-activity-trace"),
+            (FEM_DEMAG_POISSON, "fem-rk-explicit", "fem-cuda-activity-trace"),
+            ("fem-adaptive-dt", "fem-rk-explicit", "fem-cuda-activity-trace"),
+            (FEM_DEMAG_POISSON, "fem-adaptive-dt", "fem-rk-explicit", "fem-cuda-activity-trace"),
+        ):
+            with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, "pair"):
+                normalize_contracts(requested)
+
+    def test_exact_poisson_adaptive_rk_receipt_binds_all_contracts_to_one_package_and_snapshot(self) -> None:
+        requested = [FEM_DEMAG_POISSON, "fem-adaptive-dt", "fem-rk-explicit"]
+        for name in ("fem_adaptive_dt_contract", "fem_rk_explicit_contract"):
+            (self.build_fem / name).write_bytes((name + " executable").encode())
+        runner, calls = self._runner(outcomes=[0] * 6)
+        with runner:
+            report = self._run(requested)
+
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(report["source_snapshot_sha256"], SNAPSHOT)
+        self.assertEqual(set(report["contracts"]), set(requested))
+        compile_roots = {
+            contract["compile"]["argv"][2]
+            for contract in report["contracts"].values()
+        }
+        build_hashes = {
+            contract["libraries"]["build"]["sha256"]
+            for contract in report["contracts"].values()
+        }
+        package_hashes = {
+            contract["libraries"]["package"]["sha256"]
+            for contract in report["contracts"].values()
+        }
+        self.assertEqual(compile_roots, {str(self.native_root)})
+        self.assertEqual(len(build_hashes), 1)
+        self.assertEqual(build_hashes, package_hashes)
+        self.assertTrue(receipt_satisfies(
+            report, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+
+        missing = json.loads(json.dumps(report))
+        del missing["contracts"]["fem-adaptive-dt"]
+        self.assertFalse(receipt_satisfies(
+            missing, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+        failed = json.loads(json.dumps(report))
+        failed["contracts"]["fem-rk-explicit"]["state"] = "failed"
+        failed["contracts"]["fem-rk-explicit"]["test"].update(
+            state="failed", exit_code=9,
+        )
+        self.assertFalse(receipt_satisfies(
+            failed, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+        mismatch = json.loads(json.dumps(report))
+        mismatch["contracts"]["fem-demag-poisson"]["libraries"]["package"]["sha256"] = "b" * 64
+        self.assertFalse(receipt_satisfies(
+            mismatch, requested=requested, source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root,
+        ))
+        self.assertFalse(receipt_satisfies(
+            report, requested=requested, source_snapshot_sha256="c" * 64,
+            package_root=self.package_root,
+        ))
 
     def test_prepare_entrypoint_uses_only_managed_environment(self) -> None:
         environment = {
@@ -471,24 +543,30 @@ class BackendNativeContractsTests(unittest.TestCase):
             self.assertEqual(native_contracts._main(["prepare"]), 1)
             self.assertEqual(prepare.call_count, 1)
 
-    def test_prepare_entrypoint_splits_the_closed_pair_selector(self) -> None:
+    def test_prepare_entrypoint_splits_closed_multi_contract_selectors(self) -> None:
         environment = {
             "FULLMAG_DIRECT_COMPOSE": "1",
-            "FULLMAG_INTERNAL_NATIVE_CONTRACTS": "fem-adaptive-dt,fem-rk-explicit",
             "FULLMAG_FEM_NATIVE_BUILD_ROOT": str(self.native_root),
             "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": str(self.root / "preparation"),
             "FULLMAG_SOURCE_SNAPSHOT_SHA256": SNAPSHOT,
             "CARGO_BUILD_JOBS": "3",
         }
         prepared = {"evidence": {"report_path": "attempt-fixture/report.json"}}
-        with patch.dict(os.environ, environment, clear=True), patch.object(
-            native_contracts, "prepare_contracts", return_value=prepared,
-        ) as prepare, patch("sys.stdout", new=io.StringIO()), patch("sys.stderr", new=io.StringIO()):
-            self.assertEqual(native_contracts._main(["prepare"]), 0)
-        self.assertEqual(
-            prepare.call_args.kwargs["requested"],
-            ["fem-adaptive-dt", "fem-rk-explicit"],
-        )
+        for selector in (
+            "fem-adaptive-dt,fem-rk-explicit",
+            "fem-demag-poisson,fem-adaptive-dt,fem-rk-explicit",
+        ):
+            with self.subTest(selector=selector), patch.dict(
+                os.environ,
+                {**environment, "FULLMAG_INTERNAL_NATIVE_CONTRACTS": selector},
+                clear=True,
+            ), patch.object(
+                native_contracts, "prepare_contracts", return_value=prepared,
+            ) as prepare, patch("sys.stdout", new=io.StringIO()), patch("sys.stderr", new=io.StringIO()):
+                self.assertEqual(native_contracts._main(["prepare"]), 0)
+                self.assertEqual(
+                    prepare.call_args.kwargs["requested"], selector.split(","),
+                )
 
     def test_success_runs_fixed_compile_then_test_and_binds_installed_library(self) -> None:
         runner, calls = self._runner()

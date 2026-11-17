@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import hashlib
+import itertools
 import json
 import os
 import subprocess
@@ -92,7 +93,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                         changed["document"], changed["actual"], "frontend", {}
                     )
 
-    def test_native_contract_allowlist_keeps_single_ids_and_one_closed_pair(self):
+    def test_native_contract_allowlist_keeps_single_ids_and_closed_combinations(self):
         self.assertEqual(
             docker_volume_dev._native_contracts(["fem-cuda-bb-exchange-mass"]),
             ("fem-cuda-bb-exchange-mass",),
@@ -117,11 +118,25 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
             docker_volume_dev._native_contracts(["fem-rk-explicit", "fem-adaptive-dt"]),
             ("fem-adaptive-dt", "fem-rk-explicit"),
         )
+        expected_triple = {
+            "fem-demag-poisson", "fem-adaptive-dt", "fem-rk-explicit",
+        }
+        for values in itertools.permutations(expected_triple):
+            with self.subTest(values=values):
+                self.assertEqual(
+                    docker_volume_dev._native_contracts(list(values)),
+                    tuple(sorted(expected_triple)),
+                )
         for values in (
             ["fem-arbitrary-target"],
             ["fem-cuda-activity-trace", "fem-demag-poisson"],
+            ["fem-demag-poisson", "fem-adaptive-dt"],
+            ["fem-demag-poisson", "fem-rk-explicit"],
             ["fem-adaptive-dt", "fem-cuda-activity-trace"],
+            ["fem-demag-poisson", "fem-adaptive-dt", "fem-cuda-activity-trace"],
+            ["fem-demag-poisson", "fem-rk-explicit", "fem-cuda-activity-trace"],
             ["fem-adaptive-dt", "fem-rk-explicit", "fem-cuda-activity-trace"],
+            ["fem-demag-poisson", "fem-adaptive-dt", "fem-rk-explicit", "fem-cuda-activity-trace"],
             ["fem-cuda-activity-trace", "fem-cuda-activity-trace"],
             ["fem-adaptive-dt", "fem-adaptive-dt"],
             "fem-cuda-activity-trace",

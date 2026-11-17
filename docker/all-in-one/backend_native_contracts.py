@@ -25,6 +25,8 @@ FEM_CUDA_ACTIVITY_TRACE = "fem-cuda-activity-trace"
 FEM_ADAPTIVE_DT = "fem-adaptive-dt"
 FEM_RK_EXPLICIT = "fem-rk-explicit"
 _ADAPTIVE_RK_PAIR = frozenset((FEM_ADAPTIVE_DT, FEM_RK_EXPLICIT))
+_POISSON_ADAPTIVE_RK_TRIPLE = frozenset((FEM_DEMAG_POISSON, FEM_ADAPTIVE_DT, FEM_RK_EXPLICIT))
+_ALLOWED_MULTI_CONTRACTS = frozenset((_ADAPTIVE_RK_PAIR, _POISSON_ADAPTIVE_RK_TRIPLE))
 CONTRACT_TARGETS = {
     "fem-cuda-snapshot": "fem_cuda_snapshot_contract",
     "fem-cuda-bb-exchange-mass": "fem_cuda_bb_exchange_mass_contract",
@@ -85,8 +87,10 @@ def normalize_contracts(requested: Sequence[str] | None) -> tuple[str, ...]:
             raise ValueError(f"duplicate native contract: {value}")
         seen.add(value)
         normalized.append(value)
-    if len(normalized) > 1 and frozenset(normalized) != _ADAPTIVE_RK_PAIR:
-        raise ValueError("only the adaptive-dt and rk-explicit native contract pair may be combined")
+    if len(normalized) > 1 and frozenset(normalized) not in _ALLOWED_MULTI_CONTRACTS:
+        raise ValueError(
+            "only the adaptive-dt/rk-explicit pair or exact fem-demag-poisson/adaptive-dt/rk-explicit triple may be combined"
+        )
     return tuple(normalized)
 
 

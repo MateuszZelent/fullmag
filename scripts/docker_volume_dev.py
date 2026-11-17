@@ -2172,6 +2172,12 @@ def _validate_cancellation_maintenance(value):
 
 def _native_contracts(values):
     adaptive_rk_pair = {"fem-adaptive-dt", "fem-rk-explicit"}
+    poisson_adaptive_rk_triple = {
+        "fem-demag-poisson", "fem-adaptive-dt", "fem-rk-explicit",
+    }
+    allowed_combinations = {
+        frozenset(adaptive_rk_pair), frozenset(poisson_adaptive_rk_triple),
+    }
     allowlisted = {
         "fem-demag-poisson", "fem-cuda-activity-trace",
         "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
@@ -2186,9 +2192,9 @@ def _native_contracts(values):
                    or value not in allowlisted
                    for value in values)
             or len(set(values)) != len(values)
-            or (len(values) > 1 and set(values) != adaptive_rk_pair)):
+            or (len(values) > 1 and frozenset(values) not in allowed_combinations)):
         raise BuildControlError(
-            "Native contracts must contain unique allowlisted identifiers or the adaptive-dt/rk-explicit pair"
+            "Native contracts must contain unique allowlisted identifiers, the adaptive-dt/rk-explicit pair, or the exact fem-demag-poisson/adaptive-dt/rk-explicit triple"
         )
     return tuple(sorted(values))
 
