@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
+import { choose, readChoice } from "./lib/viewport-appearance-browser-qa.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightRequire = createRequire(require.resolve("playwright/package.json"));
@@ -76,7 +77,9 @@ const waitMode = (mode) => page.waitForFunction((expected) => {
   return fields?.length > 0 && fields.every((material) => material.kind === expected);
 }, mode, { timeout: 180_000 });
 async function chooseMode(mode) {
-  await page.getByRole("radio", { name: mode === "presentation" ? "Presentation" : "Scientific", exact: true }).click();
+  const label = mode === "presentation" ? "Presentation" : "Scientific";
+  await choose(page, "Visualization mode", label, undefined, 15_000);
+  assert.equal(await readChoice(page, "Visualization mode"), label);
   await waitMode(mode);
 }
 async function capture(name) {
@@ -133,6 +136,9 @@ try {
   ui.keyboardModeSelection = true;
   ui.qualityUnchanged = quality;
   await page.locator(".fm-viewport-3d-settings").screenshot({ path: resolve(directory, "inspector-quality-mode.png"), animations: "disabled" });
+  await chooseMode("presentation");
+  assert.equal(await readChoice(page, "Quality profile"), quality.trim());
+  ui.existingQaControlsCompatible = true;
   console.log("field-presentation: PBR field surface ready");
   const presentation = await capture("presentation");
   assert.equal(audit.presentation.presentation.environmentReady, true);

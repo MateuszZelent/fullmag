@@ -25,7 +25,7 @@ const FRAME_OPTIONS = Object.freeze({
 const SETTING_SECTIONS_BY_LABEL = Object.freeze({
   "Grid and axes": "View",
   "Scale coordinates": "View",
-  "Requested quality": "Quality",
+  "Quality profile": "Quality",
   "PNG background": "Export",
   "PNG resolution": "Export",
 });
@@ -297,7 +297,7 @@ export async function runViewportExportBrowserQa(page, {
       transparentWithoutAnnotations.decoded,
     );
 
-    const qualityAfter = await readChoice(page, "Requested quality", timeoutMs);
+    const qualityAfter = await readChoice(page, "Quality profile", timeoutMs);
     if (qualityAfter !== originalSettings.quality) {
       throw new Error(
         "Export changed the selected render quality from " +
@@ -397,7 +397,7 @@ export async function runViewportExportBrowserQa(page, {
         await setAnnotations(page, settings, originalSettings.annotations, restoreTimeoutMs);
       });
       await restoreSetting(restorationErrors, "render quality", async () => {
-        const quality = await readChoice(page, "Requested quality", restoreTimeoutMs);
+        const quality = await readChoice(page, "Quality profile", restoreTimeoutMs);
         if (quality !== originalSettings.quality) {
           throw new Error("expected " + originalSettings.quality + ", found " + quality);
         }
@@ -465,7 +465,7 @@ async function readSettings(page, settings, timeout) {
     exact: true,
   }).isChecked({ timeout });
   const scale = await readChoice(page, "PNG resolution", timeout);
-  const quality = await readChoice(page, "Requested quality", timeout);
+  const quality = await readChoice(page, "Quality profile", timeout);
   const frame = await readChoice(page, "Grid and axes", timeout);
   if (!Object.values(BACKGROUND_OPTIONS).includes(background)) {
     throw new Error("PNG background control exposed an unknown option: " + background);
@@ -568,7 +568,7 @@ async function exportPng(page, settings, {
   }
 
   await ensureSettingsOpen(page, "Export", timeout);
-  const quality = await readChoice(page, "Requested quality", timeout);
+  const quality = await readChoice(page, "Quality profile", timeout);
   if (quality !== expectedQuality) {
     throw new Error(
       "Render quality was not restored after " +

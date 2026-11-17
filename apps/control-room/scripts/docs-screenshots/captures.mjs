@@ -660,14 +660,11 @@ export function buildAllCaptureJobs(outputDir) {
         const s = await openFreshPage(browser, { scenario: "study-hysteresis", theme: "dark" }, "/session/yig-waveguide");
         try {
           await waitForCanvasRendered(s.page, "viewport-3d-studio-rendering");
-          // Open View Settings dialog -> choose Presentation (PBR & studio HDRI) -> Figure quality -> Close
+          // Open View Settings and select Presentation (PBR & studio HDRI).
           await clickFirstMatching(s.page, [(p) => p.locator(".fm-viewport-3d__render-details-trigger").first()]);
           await waitForUiSettled(s.page, 350);
-          const modeSelect = s.page.locator("#fm-view-render-mode").first();
-          if (await modeSelect.count()) {
-            await modeSelect.click();
-            await s.page.getByRole("option", { name: /Presentation/i }).first().click({ timeout: 2500 }).catch(() => {});
-          }
+          await s.page.getByRole("radiogroup", { name: "Visualization mode", exact: true })
+            .getByRole("radio", { name: "Presentation", exact: true }).click({ timeout: 2500 });
           await clickFirstMatching(s.page, [
             (p) => p.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).first(),
           ]).catch(() => {});
