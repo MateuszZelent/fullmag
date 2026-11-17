@@ -282,6 +282,28 @@ class MaskAntennaSceneTests(unittest.TestCase):
             """
         ))
 
+    def test_ready_antenna_added_again_with_new_parameters_after_remove_survives_export(self) -> None:
+        # with_parameters drops the ready-antenna origin of the changed term only.
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_again"
+            )
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            """
+        ))
+
     def test_functions_with_equal_bodies_keep_their_names(self) -> None:
         script = WHOLE_STUDY_HEADER + textwrap.dedent(
             """

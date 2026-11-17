@@ -6653,8 +6653,9 @@ def _mask_parameter_updates(
 ) -> list[str] | None:
     """``.with_parameters(...)`` calls turning antenna ``before`` into ``after``.
 
-    ``None`` when the two differ in anything but parameter values (the
-    ready-antenna ``origin`` is dropped by ``with_parameters`` and ignored).
+    ``None`` when the two differ in anything but parameter values, or when the
+    ready-antenna ``origin`` of a term does not follow ``with_parameters`` (it
+    keeps the origin of an unchanged term and drops that of a changed one).
     """
 
     def values(function: object) -> dict[str, float]:
@@ -6663,7 +6664,7 @@ def _mask_parameter_updates(
         return {
             str(item["name"]): float(item["value"])
             for item in function.get("parameters") or []
-            if isinstance(item, Mapping)
+            if isinstance(item, Mapping) and "name" in item and "value" in item
         }
 
     def skeleton(value: object) -> object:
@@ -6682,8 +6683,6 @@ def _mask_parameter_updates(
         return value
 
     if skeleton(before) != skeleton(after):
-        return None
-    if after.get("origin") not in (None, before.get("origin")):
         return None
     calls: list[str] = []
     old_terms = list(before.get("terms") or [])
@@ -6707,6 +6706,10 @@ def _mask_parameter_updates(
                 parts.append(f"{argument}={{{rendered}}}")
         if parts:
             calls.append(f".with_parameters(term={index}, {', '.join(parts)})")
+            if new.get("origin") is not None:
+                return None
+        elif new.get("origin") != old.get("origin"):
+            return None
     return calls
 
 
