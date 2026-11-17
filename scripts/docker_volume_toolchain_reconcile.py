@@ -218,7 +218,9 @@ def running_builders(request, original, builders):
 
 def history(request, original):
     validate_observer(request)
-    builders = json_lines(observer_capture(request, "buildx", "ls", "--format", "json").stdout)
+    # Status loading is bounded; a timeout remains an incomplete/unknown builder
+    # unless independently pinned inactive. Full worker histories are unchanged.
+    builders = json_lines(observer_capture(request, "buildx", "ls", "--timeout", "2s", "--format", "json").stdout)
     require(builders and all(isinstance(x.get("Name"), str) for x in builders),
             "Builder enumeration is incomplete")
     inventory = sorted([{"Name": x["Name"], "Driver": x.get("Driver"),

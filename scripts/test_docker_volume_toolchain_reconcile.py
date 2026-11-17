@@ -105,7 +105,8 @@ class RecoveryTests(unittest.TestCase):
             rows = [{"ref": "builder/node/" + "b" * 25, "created_at": "1970-01-01T00:16:50Z",
                      "completed_at": "1970-01-01T00:17:00Z"}]
         def capture(*args, **kwargs):
-            if args == ("buildx", "ls", "--format", "json"):
+            if args in (("buildx", "ls", "--format", "json"),
+                        ("buildx", "ls", "--timeout", "2s", "--format", "json")):
                 value = b"\n".join(canonical(x) for x in (builders or [self.builder]))
             elif args == ("info", "--format", "{{.ID}}"):
                 value = b"engine\n"
@@ -123,6 +124,19 @@ class RecoveryTests(unittest.TestCase):
     def test_history_accepts_one_complete_terminal_record(self):
         with patch.object(subject, "docker_capture", self.history_fake()):
             self.assertEqual(subject.history(self.request, self.original), self.record)
+
+    def test_only_builder_status_loading_has_a_short_timeout(self):
+        calls = []
+        fake = self.history_fake()
+        def capture(*args, **kwargs):
+            calls.append(args)
+            return fake(*args, **kwargs)
+        with patch.object(subject, "docker_capture", capture):
+            subject.history(self.request, self.original)
+        self.assertIn(("buildx", "ls", "--timeout", "2s", "--format", "json"), calls)
+        history_calls = [c for c in calls if c[:2] == ("buildx", "history")]
+        self.assertTrue(history_calls)
+        self.assertTrue(all("--timeout" not in c for c in history_calls))
 
     def test_history_accepts_reviewed_buildkit_0342(self):
         self.builder["Nodes"][0]["Version"] = "v0.34.2"
