@@ -81,6 +81,15 @@ The two forms are a valuable implementation cross-check when evaluated consisten
 (physics-demagnetization-discrete-realization)=
 ## Numerical families
 
+```{figure} /_static/diagrams/demag-solver-families-comparison.svg
+:alt: Four-panel comparison of Fullmag demagnetization solver families and continuum magnetic charge sources rho_m = -div M and sigma_m = M . n: (a) FDM open-boundary 2N zero-padded FFT convolution, (b) FEM Poisson with shared finite airbox Omega_m subset Omega_a and Dirichlet or Robin outer closure on Gamma_a, (c) FEM-BEM Fredkin-Koehler two-solve boundary-integral method on closed body-only mesh Omega_m without an airbox, and (d) periodic replicated images in FDM truncated_images versus FEM reduced periodic_airbox_k0.
+:width: 100%
+:name: fig-demag-solver-families-comparison
+:figclass: fm-physics-figure
+
+Continuum magnetostatic charge sources ($\rho_m = -\nabla\cdot\mathbf{M}$, $\sigma_m = \mathbf{M}\cdot\mathbf{n}$) and Fullmag's four discrete demagnetization operator families across **FDM CPU**, **FDM GPU**, **FEM CPU**, and **FEM GPU** (Brown 1963; Newell *et al.* 1993; Fredkin & Koehler 1990; Lepadatu 2019).
+```
+
 - **FDM open convolution** uses a cell-integrated demagnetization tensor and FFT acceleration.
 - **FDM periodic/truncated images** changes the Green function and requires an explicit zero-mode
   convention.
@@ -177,26 +186,16 @@ ProblemIR documents across all children.
 (physics-demagnetization-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown, *Micromagnetics*, Wiley, 1963.
-2. A. J. Newell, W. Williams, and D. J. Dunlop, *Journal of Geophysical Research* **98**,
-   9551–9555 (1993), DOI: 10.1029/93JB00694.
-3. D. R. Fredkin and T. R. Koehler, *IEEE Transactions on Magnetics* **26**, 415–417 (1990).
-4. NIST μMAG Standard Problems, current benchmark definitions.
-
-(physics-demagnetization-source-code-index)=
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963 ([WorldCat record](https://search.worldcat.org/title/536451)).
+2. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555 (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+3. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* **26**(2), 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+4. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, National Institute of Standards and Technology, NISTIR 6376 (1999), [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
 
 ## Control Room crosswalk
 
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
+(physics-demagnetization-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -216,11 +215,12 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 
 Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
 
+(physics-demagnetization-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `Demag` | public realization vocabulary and IR |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | public realization vocabulary and IR |
 | `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM, FDMDemag, FEM` | numerical policies |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `FdmPbc` | periodic request semantics |
 | `crates/fullmag-plan/src/fdm.rs` | `demag planning` | FDM topology and capability resolution |
@@ -229,5 +229,3 @@ Capabilities not listed as executable must fail closed. Source presence alone is
 | `backends/fdm/gpu/cuda/interactions` | `demag kernels/FFT` | FDM GPU realization |
 | `backends/fem/cpu/mfem` | `Poisson/BEM demag` | FEM CPU realization |
 | `backends/fem/gpu/cuda` | `FEM demag support` | FEM GPU realization |
-
-(physics-demagnetization-round-trip-and-failure-semantics)=

@@ -81,6 +81,15 @@ w_{\mathrm b}=D_{\mathrm b}\,\mathbf m\cdot(\nabla\times\mathbf m),
 The sign of $D$, the interface-normal orientation, and the coordinate handedness jointly
 determine chirality. None may be silently changed during normalization.
 
+```{figure} /_static/diagrams/dmi-three-variants-chirality.svg
+:alt: Three-panel comparison of Fullmag's three Dzyaloshinskii-Moriya interaction operators: interfacial DMI with Moriya vector perpendicular to bond and interface normal stabilizing a Néel cycloid and Néel skyrmion, isotropic bulk DMI with Moriya vector parallel to bond stabilizing a Bloch helix and Bloch skyrmion, and rotated interfacial DMI stabilizing an in-plane Göbel 2019 bimeron.
+:width: 100%
+:name: fig-dmi-three-variants-chirality
+:figclass: fm-physics-figure
+
+Moriya symmetry vectors, energy/field conventions, and numerically evaluated chiral spin textures across Fullmag's three non-aliasing DMI variants (Dzyaloshinsky 1958; Moriya 1960; Fert, Cros & Sampaio 2013; Rohart & Thiaville 2013; Göbel et al. 2019).
+```
+
 (physics-dmi-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -189,25 +198,17 @@ the magnetization while leaving the grid stencil unchanged.
 (physics-dmi-scientific-bibliography)=
 ## Scientific bibliography
 
-1. A. Fert, V. Cros, and J. Sampaio, *Nature Nanotechnology* **8**, 152–156 (2013).
-2. S. Rohart and A. Thiaville, *Physical Review B* **88**, 184422 (2013),
-   DOI: 10.1103/PhysRevB.88.184422.
-3. A. N. Bogdanov and D. A. Yablonskii, *Soviet Physics JETP* **68**, 101 (1989).
+1. I. Dzyaloshinsky, “A thermodynamic theory of ‘weak’ ferromagnetism of antiferromagnetics,” *Journal of Physics and Chemistry of Solids* **4**(4), 241–255 (1958). [doi:10.1016/0022-3697(58)90076-3](https://doi.org/10.1016/0022-3697(58)90076-3).
+2. T. Moriya, “Anisotropic Superexchange Interaction and Weak Ferromagnetism,” *Physical Review* **120**(1), 91–98 (1960). [doi:10.1103/PhysRev.120.91](https://doi.org/10.1103/PhysRev.120.91).
+3. A. N. Bogdanov and D. A. Yablonskii, “Thermodynamically stable ‘vortices’ in magnetically ordered crystals. The mixed state of magnets,” *Soviet Physics JETP (Zh. Eksp. Teor. Fiz.)* **68**(1), 101 (1989).
+4. A. Fert, V. Cros, and J. Sampaio, “Skyrmions on the track,” *Nature Nanotechnology* **8**(3), 152–156 (2013). [doi:10.1038/nnano.2013.29](https://doi.org/10.1038/nnano.2013.29).
+5. S. Rohart and A. Thiaville, “Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction,” *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) | [arXiv:1310.0666](https://arxiv.org/abs/1310.0666).
+6. A. O. Leonov, T. L. Monchesky, N. Romming, A. Kubetzka, A. N. Bogdanov, and R. Wiesendanger, “The properties of isolated chiral skyrmions in thin magnetic films,” *New Journal of Physics* **18**(6), 065003 (2016). [doi:10.1088/1367-2630/18/6/065003](https://doi.org/10.1088/1367-2630/18/6/065003) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/18/6/065003/pdf) | [arXiv:1508.02155](https://arxiv.org/abs/1508.02155).
+7. D. Cortés-Ortuño et al., “Proposal for a micromagnetic standard problem for materials with Dzyaloshinskii–Moriya interaction,” *New Journal of Physics* **20**(11), 113015 (2018). [doi:10.1088/1367-2630/aaea1c](https://doi.org/10.1088/1367-2630/aaea1c) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1367-2630/aaea1c/pdf) | [arXiv:1803.11174](https://arxiv.org/abs/1803.11174).
+8. C. H. Back et al., “The 2020 skyrmionics roadmap,” *Journal of Physics D: Applied Physics* **53**(36), 363001 (2020). [doi:10.1088/1361-6463/ab8418](https://doi.org/10.1088/1361-6463/ab8418) | [Open-access PDF (CC-BY)](https://iopscience.iop.org/article/10.1088/1361-6463/ab8418/pdf) | [arXiv:2001.00026](https://arxiv.org/abs/2001.00026).
+9. J. Joos, P. Bassirian, P. Gypens, J. Mulkers, K. Litzius, B. Van Waeyenberge, and J. Leliaert, “Tutorial: Simulating modern magnetic material systems in mumax3,” *Journal of Applied Physics* **134**(17), 171101 (2023). [doi:10.1063/5.0160988](https://doi.org/10.1063/5.0160988) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/jap/article-pdf/doi/10.1063/5.0160988/18193198/171101_1_5.0160988.pdf).
 
-(physics-dmi-source-code-index)=
-
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
+(physics-dmi-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -217,11 +218,12 @@ Requested intent preserves the authored model, coefficients, orientations, targe
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
 
+(physics-dmi-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `InterfacialDMI, BulkDMI` | explicit authoring |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `InterfacialDMI, BulkDMI, RotatedInterfacialDMI` | explicit authoring |
 | `packages/fullmag-py/src/fullmag/model/structure.py` | `Material.Dind/Dbulk` | canonical material coefficients |
 | `packages/fullmag-py/src/fullmag/world.py` | `geometry material facade` | stage-first `dind` authoring |
 | `crates/fullmag-plan/src/fdm.rs` | `DMI planning` | FDM normal, topology, and field resolution |
@@ -230,5 +232,3 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 | `backends/fem/cpu/mfem/interactions` | `bulk DMI` | FEM CPU bulk operator |
 | `backends/fdm/gpu/cuda/interactions` | `DMI kernels` | FDM GPU realization |
 | `backends/fem/gpu/cuda/interactions` | `DMI kernels` | FEM GPU realization |
-
-(physics-dmi-round-trip-and-failure-semantics)=
