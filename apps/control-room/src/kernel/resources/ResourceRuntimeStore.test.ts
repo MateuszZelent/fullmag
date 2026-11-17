@@ -693,6 +693,66 @@ describe("ResourceRuntimeStore", () => {
     });
   });
 
+  it("retries only an explicitly allowed transient performance conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error("observation busy"), {
+          code: "performance_observation_busy", status: 409,
+        }))
+        .mockResolvedValue("current performance");
+      const request = {
+        externalRevision: "attempt-1", load,
+        resourceKey: "diagnostics/performance|session-1",
+        retryPolicy: {
+          deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      };
+      await store.ensureLoad(request as never);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(store.getSnapshot(request.resourceKey)).toMatchObject({
+        data: "current performance", status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry other conflict codes or statuses under the performance opt-in", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const error of [
+        { code: "stale_authored_initial_state_replacement", status: 409 },
+        { code: "permission_denied", status: 409 },
+        { status: 409 },
+        { code: "performance_observation_busy", status: 403 },
+      ]) {
+        const store = new ResourceRuntimeStore<string>();
+        const load = vi.fn().mockRejectedValue(Object.assign(new Error("conflict"), error));
+        const request = {
+          externalRevision: "attempt-1", load,
+          resourceKey: "diagnostics/performance|session-1",
+          retryPolicy: {
+            deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+            retryableConflictReasonCodes: ["performance_observation_busy"],
+          },
+        };
+        await store.ensureLoad(request as never);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot(request.resourceKey).status).toBe("error");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("autonomously retries an allowlisted transient 404 using retry_after_ms", async () => {
     vi.useFakeTimers();
     try {

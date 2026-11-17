@@ -16,6 +16,7 @@ import type {
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
+  RunPerformanceResource,
   ScalarWindowResource,
   SceneResource,
   SolverStatusResource,
@@ -30,6 +31,7 @@ import {
   useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useObjectMetricsResource,
+  useRunPerformanceResource,
   useScalarWindowResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -52,6 +54,8 @@ import {
   useAntennaFieldEta,
   type AntennaFieldEta,
 } from "./antennaFieldEta";
+
+import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -123,6 +127,9 @@ export function FooterTelemetry({
         } : null,
   );
   const generalTelemetryEnabled = Boolean(status) && view === "overview" && !antennaStage;
+  const performance = useRunPerformanceResource({
+    enabled: generalTelemetryEnabled && Boolean(status?.run?.run_id),
+  });
   const liveSample = useFooterLiveScalarSample(bus);
   const scalarWindow = useScalarWindowResource({
     columns: FOOTER_SCALAR_COLUMNS,
@@ -176,6 +183,9 @@ export function FooterTelemetry({
     scalarWindow.data,
     {
       magneticModelPresent: resolveFooterMagneticModelPresent(scene),
+      performance: performance.data,
+      performanceStatus: performance.status,
+      performanceRefreshFailed: Boolean(performance.error || performance.refreshError),
       currentRunStatus: currentRunForStatus?.status,
       nowMs: antennaNowMs,
       stageExecutionUnpublished,
@@ -462,6 +472,9 @@ export function buildFooterTelemetryModel(
   scalarWindow?: ScalarWindowResource | null,
   runtimePhase?: {
     magneticModelPresent?: boolean | null;
+    performance?: RunPerformanceResource | null;
+    performanceStatus?: ResourceResult<RunPerformanceResource>["status"];
+    performanceRefreshFailed?: boolean;
     currentRunStatus?: string | null;
     nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
@@ -553,6 +566,9 @@ export function buildFooterTelemetryModel(
         runSolverStatus?.step_index ??
         status?.run?.solver_steps ??
         status?.metrics?.total_steps) ?? null;
+  const observedSolverStep = resolveFooterPerformanceStep(
+    status.run?.run_id, runtimePhase?.performance,
+  );
   const stepsPerSecond = status?.metrics?.steps_per_second;
   const maxTorqueT =
     scalarSampleNumber(liveRow, "max_torque_T") ??
@@ -715,11 +731,26 @@ export function buildFooterTelemetryModel(
         value: formatFixed(stepsPerSecond, 1, "—"),
       },
 
+      ...(observedSolverStep !== null ? [{
+        detail: "Last backend-reported solver step for the recorded stage. Field and scalar sample clocks are independent.",
+        icon: <Hash size={14} aria-hidden="true" />,
+        id: "solver-progress",
+        label: "Solver step",
+        subdetail: `Stage ${runtimePhase?.performance?.step_id ?? "unknown"} · ${
+          runtimePhase?.performanceRefreshFailed
+            ? "last observed; refresh unavailable"
+            : runtimePhase?.performanceStatus && runtimePhase.performanceStatus !== "ready"
+              ? "last observed; updating"
+              : "observed"
+        }`,
+        value: formatInteger(observedSolverStep),
+        unit: "steps",
+      }] : []),
       {
-        detail: "Latest step",
+        detail: observedSolverStep !== null ? "Step of the displayed telemetry sample" : "Latest step",
         icon: <Hash size={14} aria-hidden="true" />,
         id: "step",
-        label: "Step",
+        label: observedSolverStep !== null ? "Sample step" : "Step",
         subdetail: directMinimizerWithoutPseudoTime
           ? "Physical time not applicable"
           : `t=${formatScientific(
@@ -1698,7 +1729,7 @@ const FOOTER_TELEMETRY_GROUP_LABELS: Record<FooterTelemetryGroup, string> = {
 function metricGroup(id: string): FooterTelemetryGroup {
   if (id.startsWith("energy-")) return "energy";
   if (id === "avg-mx" || id === "avg-my" || id === "avg-mz" || id === "avg-m") return "magnetization";
-  if (id === "step" || id === "dt" || id === "active-solver" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
+  if (id === "solver-progress" || id === "step" || id === "dt" || id === "active-solver" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
   return "runtime";
 }
 

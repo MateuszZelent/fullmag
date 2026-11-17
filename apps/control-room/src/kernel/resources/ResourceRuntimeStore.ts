@@ -33,6 +33,8 @@ export interface ResourceRetryPolicy {
   retryAfterMs?: number;
   retry_after_ms?: number;
   retryableReasonCodes?: readonly string[];
+  /** Explicit transient 409 codes; all other conflicts remain non-retryable. */
+  retryableConflictReasonCodes?: readonly string[];
 }
 
 export interface ResourceRetryDecision {
@@ -217,10 +219,14 @@ export function resolveResourceRetryDecision(
     status === 503 ||
     status === 504;
   const transientNotFound = status === 404 && reasonCode !== null && reasonAllowed;
-  const retryable =
+  const transientConflict =
+    status === 409 && reasonCode !== null &&
+    policy.retryableConflictReasonCodes?.includes(reasonCode) === true;
+  const retryable = transientConflict || (
     status !== 409 &&
     reasonAllowed &&
-    (transientNotFound || (status !== 404 && retryableStatus));
+    (transientNotFound || (status !== 404 && retryableStatus))
+  );
   if (!retryable) {
     return { delayMs: 0, reasonCode, retry: false };
   }

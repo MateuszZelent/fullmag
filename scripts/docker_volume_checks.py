@@ -494,6 +494,8 @@ PERFORMANCE_FILES = (
     'src/shared/domain/analysis/chartCursorPoint.ts',
     'src/shared/analysis-charts/interactiveChartModel.ts',
     'src/kernel/resources/studyRuntimeResources.test.ts',
+    'src/kernel/resources/ResourceRuntimeStore.ts',
+    'src/kernel/resources/ResourceRuntimeStore.test.ts',
 )
 # Production source typecheck excludes unit/spec targets; no Vitest build.
 PERFORMANCE_SOURCE_COMMANDS = (
@@ -508,6 +510,9 @@ PERFORMANCE_TEST_FILES = (
     *PERFORMANCE_FILES,
     'src/modules/footer/FooterTelemetry.tsx',
     'src/modules/footer/FooterTelemetry.test.ts',
+    'src/modules/footer/FooterTelemetry.performance.test.ts',
+    'src/modules/footer/footerPerformanceProgress.ts',
+    'src/modules/footer/FooterTelemetry.refresh.test.tsx',
     'src/kernel/realtime/RealtimeInvalidationBridge.ts',
     'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
 )
@@ -516,7 +521,10 @@ PERFORMANCE_COMMANDS = (
     ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
                 'src/modules/footer/automaticPerformanceModel.test.ts',
                 'src/modules/footer/FooterTelemetry.test.ts',
+                'src/modules/footer/FooterTelemetry.performance.test.ts',
+                'src/modules/footer/FooterTelemetry.refresh.test.tsx',
                 'src/kernel/resources/studyRuntimeResources.test.ts',
+                'src/kernel/resources/ResourceRuntimeStore.test.ts',
                 'src/kernel/realtime/RealtimeInvalidationBridge.test.ts',
                 '--pool=threads', '--maxWorkers=1')),
     ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
