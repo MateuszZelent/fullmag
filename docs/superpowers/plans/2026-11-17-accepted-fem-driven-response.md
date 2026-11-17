@@ -119,3 +119,23 @@ Kod backendu pozostaje HEAD6846e3d4a5b60e2bfa19202be7b075fb34f08110.
 Brak aktywnego runu, ledger0, sesja buckyball_fmr_k0_pilot, scena2.
 Snapshot/state+mesh są sprawdzone i zapisane na E; FMR nie jest uruchomiony.
 Wybrane przez użytkownika rozszerzenie ma być wykonane, a nie zastąpione FFT.
+
+## Checkpoint integracji 2026-11-17
+
+Task 1 jest zaimplementowany w `2ac6a62ad622fd81f25efad8af7db5b32146e816`:
+managed runner input 12/12, preparation 1/1 i API preparer 6/6 przechodzą.
+Framing z Task 2 jest w `67bcc3b2fd15bf10e6fa79c9414ba5101c0b9b75`, a exact
+codec registry w `75ec5b2ce44d0eb5f5cabf5fc9a5c5bb8ac7d0be` ma 10/10 GREEN
+(receipt `b64ff34bf77d4ae893131427b3dc9e20`). Review tych części zamknięto.
+To dowody źródłowe; producer, admission, publikacja i runtime FMR pozostają
+nieukończone. Nie uruchomiono ponownej relaksacji ani FMR.
+
+Ruling: native point JSON nie ma `converged`; publisher wyprowadzi accepted
+convergence z sukcesu runnera, pełnego manifestu i jawnej bramki relative
+residual. Nie będzie dopisywał rzekomego native flag. Nowa published closure
+użyje istniejącego immutable generation v2, bez zmiany native ABI.
+
+Na polecenie użytkownika poprawki STL/UI z PR #433 scalono do master:
+`10df162b71b7208f5c958c8eb38c9d6fe4d05ec9`. Cztery gotowe commity FMR są
+w PR #446. Rozpoczęte helpery mapy i portów mają być domknięte testami przed
+integracją; cudze dirty pliki frontendu pozostają zachowane poza zakresem.

@@ -159,6 +159,8 @@ pub(crate) mod fem;
 mod fem_baseline;
 mod fem_eigen;
 mod frequency_response;
+#[cfg(any(feature = "fem-gpu", test))]
+pub use frequency_response::{frequency_response_input_descriptor, FrequencyResponseInputDescriptor};
 pub mod frames_index;
 pub mod hysteresis;
 pub mod interactive;

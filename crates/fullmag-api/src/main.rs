@@ -38,6 +38,7 @@ mod accepted_fem_state;
 mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_fem_frequency_response_worker;
 mod accepted_antenna_inspection_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;

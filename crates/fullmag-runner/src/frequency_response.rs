@@ -1,3 +1,8 @@
+#[cfg(any(feature = "fem-gpu", test))]
+mod accepted_input;
+#[cfg(any(feature = "fem-gpu", test))]
+pub use accepted_input::{FrequencyResponseInputDescriptor, frequency_response_input_descriptor};
+
 use crate::eigen::{
     FrequencyDomainArtifactIdentity,
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt,
@@ -6195,7 +6200,7 @@ mod tests {
         assert!(!output_dir.exists());
     }
 
-    fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
+    pub(super) fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
             mesh_build_report: None,
             mesh_name: "unit".to_string(),

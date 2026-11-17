@@ -108,8 +108,11 @@ pełne Cartesian complex XYZ dla pól przeznaczonych do wizualizacji. Sam tangen
 vector nie staje się global XYZ przez zmianę etykiety.
 
 Kompletność plików i zbieżność są oddzielne. Sukces accepted FR wymaga
-wszystkich zadeklarowanych punktów i native `converged=true` dla każdego,
-skończonego residual oraz spełnienia jawnego kryterium solvera. Pierwszy
+wszystkich zadeklarowanych punktów, sukcesu native runnera i manifestu
+`ready/complete` z dokładną liczbą ukończonych częstotliwości. Native point JSON
+nie zapisuje osobnego `converged`; accepted publisher wyprowadza ten znacznik
+z powyższych dowodów oraz skończonego residual spełniającego jawne kryterium.
+Źródło tej oceny musi pozostać zapisane w provenance. Pierwszy
 accepted kontrakt wymaga także relative residual nie większego niż jawnie
 zapisana relative tolerance. Native sukces osiągnięty wyłącznie przez luźniejszy
 absolute threshold nie omija tej bramki jakości i daje czytelny błąd. Niezbieżny
@@ -152,8 +155,9 @@ referencjonowane pliki; nie zgaduje, że duplicate vector files są zbędne.
 Pełny samowystarczalny wynik Zarr musi zachować frozen mesh, M0, mapę węzłów,
 provenance, siatkę częstotliwości, odpowiedź i complex field payloady na WSL.
 
-Existing `frequency_domain_artifact_generation.v1` hash publisher jest
-ponownie używany z jawną allow-listą. Obecna native FR ścieżka zwraca pustą
+Existing immutable publisher `frequency_domain_artifact_generation.v2` jest
+ponownie używany z jawną allow-listą; czytnik zachowuje obsługę historycznej v1.
+Obecna native FR ścieżka zwraca pustą
 listę auxiliary artifacts, dlatego nowe source tests muszą wykazać faktyczne
 wywołanie generation commit, a nie tylko obecność manifestu w katalogu.
 
