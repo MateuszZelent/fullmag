@@ -2421,7 +2421,7 @@ def _native_contract_receipt_matches(receipt: Mapping[str, Any], requested: tupl
     )
 
 
-def _package_matches_fresh_live_manifest(
+def _package_source_matches_fresh_live_manifest(
     receipt: Mapping[str, Any],
     manifest_path: Path,
     toolchain: Mapping[str, Any],
@@ -2429,12 +2429,13 @@ def _package_matches_fresh_live_manifest(
     *,
     required_native_contracts: tuple[str, ...] = (),
 ) -> bool:
-    """Check whether a verified package exactly matches a fresh source capture.
+    """Match a receipt to the captured source, toolchain, native, and build inputs.
 
     Capture ids, timestamps, the manifest digest, and the live-manifest digest
     are intentionally excluded: each start creates a new closed manifest even
     when its source identity is unchanged.  The source/native identities,
-    toolchain, and fixed build inputs remain exact bindings.
+    toolchain, native-contract proof, and fixed build inputs remain exact
+    bindings. This matcher deliberately says nothing about shared publication.
     """
 
     if not _native_contract_receipt_matches(receipt, required_native_contracts):
@@ -2476,6 +2477,30 @@ def _package_matches_fresh_live_manifest(
     if not all(build.get(field) == expected_build[field] for field in BACKEND_BUILD_IDENTITY_FIELDS):
         return False
     if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
+        if build.get("cuda_architectures") != _dev_cuda_architectures():
+            return False
+    return True
+
+
+def _package_matches_fresh_live_manifest(
+    receipt: Mapping[str, Any],
+    manifest_path: Path,
+    toolchain: Mapping[str, Any],
+    cargo_profile: str,
+    *,
+    required_native_contracts: tuple[str, ...] = (),
+) -> bool:
+    """Require source identity and, when configured, publication eligibility."""
+
+    if not _package_source_matches_fresh_live_manifest(
+        receipt,
+        manifest_path,
+        toolchain,
+        cargo_profile,
+        required_native_contracts=required_native_contracts,
+    ):
+        return False
+    if os.environ.get("FULLMAG_SHARED_BACKEND_STORE"):
         import backend_shared_store as shared
         architectures = _dev_cuda_architectures()
         expected_key = shared.key_for(_shared_package_identity(
@@ -2483,8 +2508,7 @@ def _package_matches_fresh_live_manifest(
             **({"required_native_contracts": required_native_contracts} if required_native_contracts else {})))
         binding = receipt.get("shared_package", {})
         return (isinstance(binding, dict) and binding.get("schema") == shared.SCHEMA
-                and binding.get("key") == expected_key
-                and build.get("cuda_architectures") == architectures)
+                and binding.get("key") == expected_key)
     return True
 
 
