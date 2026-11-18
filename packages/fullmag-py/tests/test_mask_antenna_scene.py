@@ -1,0 +1,447 @@
+"""Mask antennas survive script -> SceneDocument -> script (field-masks plan, Task 7)."""
+
+from __future__ import annotations
+
+import json
+import textwrap
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import fullmag as fm
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.script_builder import export_builder_draft, render_scene_document_as_script
+
+ANTENNA_SCRIPT = textwrap.dedent(
+    """
+    from math import exp, log, pi, sin, sqrt
+    import fullmag as fm
+    from fullmag import GHz, mT, nm
+
+    study = fm.study("mask-scene")
+    study.universe(mode="manual", size=(400e-9, 100e-9, 20e-9), center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
+    study.cell(5e-9, 5e-9, 5e-9)
+    film = study.geometry(fm.Box(size=(400e-9, 100e-9, 20e-9), name="film"), name="film")
+    film.Ms = 800e3
+    film.Aex = 13e-12
+    film.alpha = 0.01
+    film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+    left = film.add_region("left", fm.Box(200e-9, 100e-9, 20e-9).translate((-100e-9, 0.0, 0.0)))
+    study.exchange()
+
+
+    def antenna_mask(x, y, z, B01, wavelength, fwhm_y, xs):
+        k = 2 * pi / wavelength
+        sigma_y = fwhm_y / (2 * sqrt(2 * log(2)))
+        g = exp(-(x + xs) ** 2 / (2 * wavelength ** 2))
+        g = g * exp(-y ** 2 / (2 * sigma_y ** 2))
+        return (B01 * g * sin(k * x - pi / 2), 0.0, B01 * g * sin(k * x))
+
+
+    def antenna_time(t, frequency, t0):
+        return sin(2 * pi * frequency * (t - t0))
+
+
+    def static_z(x, y, z, b):
+        return (0.0, 0.0, b)
+
+
+    antenna = film.add_simpleantenna.arbitrary_mask(
+        shape=fm.Box(400e-9, 100e-9, 10e-9),
+        position=(0.0, 0.0, -5e-9),
+        frame="world",
+        time_origin="absolute",
+        name="Antenna",
+    )
+    antenna.add(
+        fm.mask(antenna_mask, B01=0.2 * mT, wavelength=60 * nm, fwhm_y=40 * nm, xs=100 * nm),
+        fm.time(antenna_time, frequency=3.6 * GHz, t0=0.0),
+        name="carrier",
+    )
+    antenna.add(fm.mask(static_z, b=0.01 * mT))
+    study.field_drives.add(antenna)
+
+    probe = left.add_simpleantenna.arbitrary_mask(
+        fm.Box(100e-9, 100e-9, 20e-9),
+        activation=fm.DriveActivation.stage_ids(["run"]),
+        id="probe",
+    )
+    probe.add(
+        fm.mask(antenna_mask, B01=0.1 * mT, wavelength=60 * nm, fwhm_y=40 * nm, xs=0.0),
+        fm.time(antenna_time, frequency=4.0 * GHz, t0=1e-10),
+    )
+    study.field_drives.add(probe)
+    study.stages.add_run(stage_id="run", until=1e-12)
+    """
+)
+
+
+STAGED_SCRIPT = ANTENNA_SCRIPT.split("antenna = film.add_simpleantenna")[0] + textwrap.dedent(
+    """
+    antenna = film.add_simpleantenna.arbitrary_mask(
+        shape=fm.Box(400e-9, 100e-9, 10e-9),
+        position=(0.0, 0.0, -5e-9),
+        frame="world",
+        time_origin="absolute",
+        name="Antenna",
+    )
+    antenna.add(
+        fm.mask(antenna_mask, B01=0.2 * mT, wavelength=60 * nm, fwhm_y=40 * nm, xs=100 * nm),
+        fm.time(antenna_time, frequency=3.6 * GHz, t0=0.0),
+        name="carrier",
+    )
+    study.stages.add_field_drive(antenna, stage_id="source_on")
+    study.stages.add_run(stage_id="run_initial", until=2e-12)
+    study.stages.update_field_drive(
+        antenna,
+        mask_parameters={"B01": 0.1 * mT},
+        time_parameters={"frequency": 4.0 * GHz},
+        term="carrier",
+        stage_id="source_changed",
+    )
+    study.stages.add_run(stage_id="run_changed", until=2e-12)
+    study.stages.remove_field_drive(antenna.id, stage_id="source_off")
+    study.stages.add_run(stage_id="run_without_source", until=1e-12)
+    study.stages.add_field_drive(antenna, stage_id="source_on_again")
+    study.stages.add_run(stage_id="run_again", until=1e-12)
+    """
+)
+
+WHOLE_STUDY_HEADER = ANTENNA_SCRIPT.split("def antenna_mask")[0] + textwrap.dedent(
+    """
+    def ramp(x, y, z, B):
+        return (B * x, 0.0, 0.0)
+
+
+    def wave(t, f0):
+        return sin(2 * pi * f0 * t)
+    """
+)
+
+
+def _without_sources(value: object) -> object:
+    """Parameter sources are display text and are not exported."""
+    if isinstance(value, dict):
+        return {key: _without_sources(item) for key, item in value.items() if key != "source"}
+    if isinstance(value, list):
+        return [_without_sources(item) for item in value]
+    return value
+
+
+def _mask_drives(path: Path) -> list[dict[str, object]]:
+    loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+    run = next(stage for stage in loaded.stages if stage.stage_id == "run")
+    return run.problem.to_ir(include_geometry_assets=False).get("mask_field_drives", [])
+
+
+class MaskAntennaSceneTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        fm.reset()
+
+    def _round_trip(self, script: str) -> tuple[Path, Path, str]:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        original = directory / "original.py"
+        original.write_text(script, encoding="utf-8")
+        loaded = fm.load_problem_from_script(original, lightweight_assets=True)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        rendered_source = render_scene_document_as_script(scene)
+        rendered = directory / "rendered.py"
+        rendered.write_text(rendered_source, encoding="utf-8")
+        return original, rendered, rendered_source
+
+    def test_mask_antennas_survive_script_scene_script(self) -> None:
+        original, rendered, source = self._round_trip(ANTENNA_SCRIPT)
+        before = _mask_drives(original)
+        after = _mask_drives(rendered)
+        self.assertEqual([drive["id"] for drive in before], ["antenna", "probe"])
+        self.assertEqual(_without_sources(after), _without_sources(before))
+
+    def test_rendered_script_reuses_functions_and_keeps_names(self) -> None:
+        _, _, source = self._round_trip(ANTENNA_SCRIPT)
+        self.assertEqual(source.count("def antenna_mask(x, y, z, B01, wavelength, fwhm_y, xs):"), 1)
+        self.assertEqual(source.count("def antenna_time(t, frequency, t0):"), 1)
+        self.assertIn("    g_2 = g * exp(-y ** 2 / (2 * sigma_y ** 2))", source)
+        self.assertIn('name="carrier"', source)
+        self.assertIn('"kind": "region"', source)
+        self.assertIn('fm.DriveActivation.stage_ids(["run"])', source)
+        self.assertIn("from math import exp, log, pi, sin, sqrt", source)
+
+    def test_scene_lists_mask_drives_beside_regional_drives(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "script.py"
+            path.write_text(ANTENNA_SCRIPT, encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        drives = scene["field_drives"]
+        self.assertEqual(drives["drives"], [])
+        self.assertEqual([drive["id"] for drive in drives["mask_drives"]], ["antenna", "probe"])
+        json.dumps(scene)  # the scene stays plain JSON
+
+    def test_staged_mask_antenna_survives_script_scene_script(self) -> None:
+        original, rendered, source = self._round_trip(STAGED_SCRIPT)
+
+        def stages(path: Path) -> list[tuple[str | None, str | None, list[object]]]:
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            result = []
+            for stage in loaded.stages:
+                kind = stage.action.get("kind") if isinstance(stage.action, dict) else None
+                drives = stage.problem.to_ir(include_geometry_assets=False).get(
+                    "mask_field_drives", []
+                )
+                result.append((stage.stage_id, kind, _without_sources(drives)))
+            return result
+
+        before = stages(original)
+        self.assertEqual(
+            [(stage_id, kind) for stage_id, kind, _ in before],
+            [
+                ("source_on", "add_mask_field_drive"),
+                ("run_initial", None),
+                ("source_changed", "update_mask_field_drive"),
+                ("run_changed", None),
+                ("source_off", "remove_field_drive"),
+                ("run_without_source", None),
+                ("source_on_again", "add_mask_field_drive"),
+                ("run_again", None),
+            ],
+        )
+        self.assertEqual(stages(rendered), before)
+        self.assertEqual(source.count("def antenna_mask("), 1)
+        self.assertEqual(source.count("antenna = study.add_simpleantenna.arbitrary_mask("), 1)
+        self.assertEqual(source.count("study.stages.add_field_drive(antenna, stage_id="), 2)
+        self.assertIn(
+            "study.stages.update_field_drive(antenna, mask_parameters={'B01': 0.0001}, "
+            "time_parameters={'frequency': 4000000000.0}, term='carrier', stage_id='source_changed')",
+            source.replace('"', "'"),
+        )
+
+    def _stage_drives(self, path: Path) -> list[tuple[str | None, str | None, object]]:
+        loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+        result = []
+        for stage in loaded.stages:
+            kind = stage.action.get("kind") if isinstance(stage.action, dict) else None
+            drives = stage.problem.to_ir(include_geometry_assets=False).get("mask_field_drives", [])
+            result.append((stage.stage_id, kind, _without_sources(drives)))
+        fm.reset()
+        return result
+
+    def _assert_both_round_trips(self, script: str) -> None:
+        """Script -> scene -> script and script -> script keep every stage's antennas."""
+        from fullmag.runtime.script_builder import render_loaded_problem_as_script
+
+        original, rendered, _ = self._round_trip(script)
+        before = self._stage_drives(original)
+        self.assertEqual(self._stage_drives(rendered), before)
+        loaded = fm.load_problem_from_script(original, lightweight_assets=True)
+        direct = original.parent / "direct.py"
+        direct.write_text(render_loaded_problem_as_script(loaded), encoding="utf-8")
+        fm.reset()
+        self.assertEqual(self._stage_drives(direct), before)
+
+    def test_whole_study_antenna_updated_by_a_stage_keeps_its_base_values(self) -> None:
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.update_field_drive(a, mask_parameters={"B": 5e-3}, stage_id="u")
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        ))
+
+    def test_whole_study_antenna_removed_by_a_stage_survives_export(self) -> None:
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive("a", stage_id="off")
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        ))
+
+    def test_antenna_added_again_with_new_parameters_after_remove_survives_export(self) -> None:
+        # Add(a) -> Remove(a.id) -> Add(a.with_parameters(...)): two definitions of id "a",
+        # never active at the same time.
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.add_field_drive(a.with_parameters(mask_parameters={"B": 5e-3}), stage_id="on_again")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.update_field_drive("a", time_parameters={"f0": 2e9}, stage_id="u")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ))
+
+    def test_ready_antenna_added_again_with_new_parameters_after_remove_survives_export(self) -> None:
+        # with_parameters drops the ready-antenna origin of the changed term only.
+        self._assert_both_round_trips(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_again"
+            )
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            """
+        ))
+
+    def _assert_restored_antenna(
+        self, script: str, restored: str, first: str
+    ) -> tuple[str, dict[str | None, object]]:
+        """Both round trips pass; stage ``restored`` has the antenna of stage ``first`` again.
+
+        Returns the script rendered from the scene and the antennas of each stage.
+        """
+        self._assert_both_round_trips(script)
+        original, _, source = self._round_trip(script)
+        drives = {stage_id: drives for stage_id, _, drives in self._stage_drives(original)}
+        self.assertEqual([drive["id"] for drive in drives[restored]], ["a"])
+        self.assertEqual(drives[restored], drives[first])
+        return source, drives
+
+    def test_antenna_restored_after_a_parameter_copy_survives_export(self) -> None:
+        # Add(a) -> Remove -> Add(a.with_parameters(...)) -> Remove -> Add(a).
+        source, _ = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(a.with_parameters(mask_parameters={"B": 5e-3}), stage_id="on_copy")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.update_field_drive("a", time_parameters={"f0": 2e9}, stage_id="u")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ), restored="run2", first="run0")
+        self.assertEqual(source.count("a = study.add_simpleantenna.arbitrary_mask("), 1)
+        self.assertEqual(source.count("study.stages.add_field_drive(a, stage_id="), 2)
+        self.assertEqual(source.count("a_2 = a.with_parameters("), 1)
+        self.assertIn("study.stages.update_field_drive(a, time_parameters=", source)
+
+    def test_ready_antenna_restored_after_a_parameter_copy_keeps_its_origin(self) -> None:
+        # The case of the review of #439: the copy drops the ready-antenna origin of
+        # term 0, and adding ``a`` again must bring back its parameters and origin.
+        _, drives = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            """
+        ), restored="run2", first="run0")
+        self.assertIsNotNone(drives["run2"][0]["terms"][0].get("origin"))
+        self.assertIsNone(drives["run1"][0]["terms"][0].get("origin"))
+
+    def test_second_parameter_copy_derives_from_the_first_definition(self) -> None:
+        # The third definition keeps the origin of term 0, so only ``a`` can be its base.
+        source, _ = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(
+                a.with_parameters(term=1, mask_parameters={"B": 2e-3}), stage_id="on_second_copy"
+            )
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_last")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ), restored="run3", first="run0")
+        self.assertIn("a_3 = a.with_parameters(term=1, ", source)
+
+    def test_copy_added_before_its_ready_antenna_original_is_refused_by_name(self) -> None:
+        # Known limit: the original (with its origin) is never written before the copy,
+        # so it cannot be derived from it. The export fails with a clear message.
+        script = WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(a, stage_id="on_original")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            """
+        )
+        with self.assertRaisesRegex(ValueError, r"mask antenna 'a' .* cannot be written as with_parameters"):
+            self._round_trip(script)
+
+    def test_functions_with_equal_bodies_keep_their_names(self) -> None:
+        script = WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            def ramp_copy(x, y, z, B):
+                return (B * x, 0.0, 0.0)
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            a.add(fm.mask(ramp_copy, B=2e-3), fm.time(wave, f0=2e9))
+            study.field_drives.add(a)
+            study.stages.add_run(stage_id="run", until=1e-12)
+            """
+        )
+        self._assert_both_round_trips(script)
+
+    def test_script_without_masks_renders_without_mask_sections(self) -> None:
+        plain = ANTENNA_SCRIPT.split("def antenna_mask")[0] + 'study.stages.add_run(stage_id="run", until=1e-12)\n'
+        _, _, source = self._round_trip(plain)
+        self.assertNotIn("# Mask antennas", source)
+        self.assertNotIn("from math import", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -13,7 +13,8 @@ use crate::script_stage_contract::{
 };
 use anyhow::{bail, Context, Result};
 use fullmag_ir::{
-    OutputDataFormatIR, OutputIR, OutputStorageIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR,
+    MaskFieldDriveIR, MaskTermSelectorIR, OutputDataFormatIR, OutputIR, OutputStorageIR,
+    ProblemIR, RegionalFieldDriveIR, TableAutosaveIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -854,6 +855,8 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
             Some(StateTransferOperatorKind::IdentityCopy),
         ),
         ResolvedScriptStageAction::AddFieldDrive { .. }
+        | ResolvedScriptStageAction::AddMaskFieldDrive { .. }
+        | ResolvedScriptStageAction::UpdateMaskFieldDrive { .. }
         | ResolvedScriptStageAction::RemoveFieldDrive { .. }
         | ResolvedScriptStageAction::TableAutosave { .. }
         | ResolvedScriptStageAction::Autosave { .. }
@@ -1090,6 +1093,37 @@ fn resolve_explicit_stage_action(
             (
                 "study_pipeline_add_field_drive",
                 ResolvedScriptStageAction::AddFieldDrive { drive },
+            )
+        }
+        ScriptExecutionStageAction::AddMaskFieldDrive { drive } => {
+            ensure_mask_field_drive_can_be_added(&ir, &drive)?;
+            ir.mask_field_drives.push(drive.clone());
+            (
+                "study_pipeline_add_mask_field_drive",
+                ResolvedScriptStageAction::AddMaskFieldDrive { drive },
+            )
+        }
+        ScriptExecutionStageAction::UpdateMaskFieldDrive {
+            drive_id,
+            term,
+            mask_parameters,
+            time_parameters,
+        } => {
+            update_mask_field_drive(
+                &mut ir,
+                &drive_id,
+                term.as_ref(),
+                &mask_parameters,
+                &time_parameters,
+            )?;
+            (
+                "study_pipeline_update_mask_field_drive",
+                ResolvedScriptStageAction::UpdateMaskFieldDrive {
+                    drive_id,
+                    term,
+                    mask_parameters,
+                    time_parameters,
+                },
             )
         }
         ScriptExecutionStageAction::RemoveFieldDrive { drive_id } => {
@@ -1450,6 +1484,12 @@ fn materialize_pipeline_primitive(
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
         "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
         "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
+        "add_mask_field_drive" => {
+            materialize_pipeline_add_mask_field_drive(current_ir, payload).map(Some)
+        }
+        "update_mask_field_drive" => {
+            materialize_pipeline_update_mask_field_drive(current_ir, payload).map(Some)
+        }
         "remove_field_drive" => {
             materialize_pipeline_remove_field_drive(current_ir, payload).map(Some)
         }
@@ -1695,6 +1735,80 @@ fn materialize_pipeline_add_field_drive(
     ))
 }
 
+fn materialize_pipeline_add_mask_field_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let drive_value = payload
+        .get("drive")
+        .cloned()
+        .context("study pipeline add_mask_field_drive requires payload.drive")?;
+    let drive: MaskFieldDriveIR = serde_json::from_value(drive_value)
+        .context("study pipeline add_mask_field_drive payload.drive is invalid")?;
+    ensure_mask_field_drive_can_be_added(current_ir, &drive)?;
+    current_ir.mask_field_drives.push(drive.clone());
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_add_mask_field_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AddMaskFieldDrive { drive },
+    ))
+}
+
+fn materialize_pipeline_update_mask_field_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let drive_id = payload
+        .get("drive_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("study pipeline update_mask_field_drive requires string payload.drive_id")?;
+    let term: Option<MaskTermSelectorIR> = payload
+        .get("term")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("study pipeline update_mask_field_drive payload.term must be a name or an index")?;
+    let parameters = |key: &str| -> Result<BTreeMap<String, f64>> {
+        payload
+            .get(key)
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .with_context(|| {
+                format!("study pipeline update_mask_field_drive payload.{key} must map names to numbers")
+            })
+            .map(Option::unwrap_or_default)
+    };
+    let mask_parameters = parameters("mask_parameters")?;
+    let time_parameters = parameters("time_parameters")?;
+    update_mask_field_drive(
+        current_ir,
+        &drive_id,
+        term.as_ref(),
+        &mask_parameters,
+        &time_parameters,
+    )?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_update_mask_field_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::UpdateMaskFieldDrive {
+            drive_id,
+            term,
+            mask_parameters,
+            time_parameters,
+        },
+    ))
+}
+
 fn materialize_pipeline_remove_field_drive(
     current_ir: &mut ProblemIR,
     payload: &BTreeMap<String, Value>,
@@ -1856,7 +1970,68 @@ fn time_output_name(output: &OutputIR) -> Option<&str> {
     }
 }
 
+/// Ids are unique across regional drives and mask antennas.
+fn field_drive_id_is_active(ir: &ProblemIR, drive_id: &str) -> bool {
+    ir.field_drives.iter().any(|existing| existing.id == drive_id)
+        || ir
+            .mask_field_drives
+            .iter()
+            .any(|existing| existing.id == drive_id)
+}
+
+/// Add of an active id is not an upsert (Update changes an active antenna).
+fn ensure_mask_field_drive_can_be_added(ir: &ProblemIR, drive: &MaskFieldDriveIR) -> Result<()> {
+    if field_drive_id_is_active(ir, &drive.id) {
+        bail!(
+            "study pipeline field drive id '{}' already exists",
+            drive.id
+        );
+    }
+    Ok(())
+}
+
+/// Patch the active mask antenna atomically; its definition elsewhere is unchanged.
+fn update_mask_field_drive(
+    ir: &mut ProblemIR,
+    drive_id: &str,
+    term: Option<&MaskTermSelectorIR>,
+    mask_parameters: &BTreeMap<String, f64>,
+    time_parameters: &BTreeMap<String, f64>,
+) -> Result<()> {
+    let Some(index) = ir
+        .mask_field_drives
+        .iter()
+        .position(|drive| drive.id == drive_id)
+    else {
+        if ir.field_drives.iter().any(|drive| drive.id == drive_id) {
+            bail!(
+                "mask_update_invalid: field drive '{}' is not a mask antenna",
+                drive_id
+            );
+        }
+        bail!(
+            "mask_update_invalid: antenna '{}' is not active at this point",
+            drive_id
+        );
+    };
+    let updated = ir.mask_field_drives[index]
+        .with_updated_parameters(term, mask_parameters, time_parameters)
+        .map_err(anyhow::Error::msg)?;
+    ir.mask_field_drives[index] = updated;
+    Ok(())
+}
+
 fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR) -> Result<()> {
+    if ir
+        .mask_field_drives
+        .iter()
+        .any(|existing| existing.id == drive.id)
+    {
+        bail!(
+            "study pipeline field drive id '{}' already exists",
+            drive.id
+        );
+    }
     if ir
         .field_drives
         .iter()
@@ -1883,6 +2058,14 @@ fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR)
 fn remove_field_drive(ir: &mut ProblemIR, drive_id: &str) -> Result<()> {
     if drive_id.trim().is_empty() {
         bail!("study pipeline remove_field_drive drive_id must be non-empty");
+    }
+    if let Some(index) = ir
+        .mask_field_drives
+        .iter()
+        .position(|drive| drive.id == drive_id)
+    {
+        ir.mask_field_drives.remove(index);
+        return Ok(());
     }
     let Some(index) = ir
         .field_drives

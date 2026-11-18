@@ -4482,6 +4482,7 @@ pub(crate) fn plan_fem(
             .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         problem.field_drives.iter().any(|drive| crate::util::field_drive_is_active(drive, problem))
+            || !crate::mask_field::active_mask_field_drives(problem).is_empty()
             || problem.solved_antenna_drives.iter().any(|drive| {
                 drive.peak_current_a.is_finite()
                     && drive.peak_current_a != 0.0
@@ -5093,6 +5094,7 @@ pub(crate) fn plan_fem(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         solved_antenna_drive_bases: Vec::new(),
+        mask_field_term_bases: Vec::new(),
         field_drive_geometry_masks,
         time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
@@ -5149,6 +5151,10 @@ pub(crate) fn plan_fem(
             None
         },
     };
+
+    // Hand-written mask terms at the mesh nodes (physics note 0922, section 8.3).
+    fem_plan.mask_field_term_bases =
+        crate::mask_field::resolve_fem_mask_field_terms(problem, &fem_plan)?;
 
     // ── Extract Oersted realizations from energy terms ──
     for (term_index, term) in problem.energy_terms.iter().enumerate() {

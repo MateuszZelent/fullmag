@@ -390,6 +390,8 @@ pub enum StudyPrimitiveStageKind {
     AntennaFieldSolve,
     ChangeDevice,
     AddFieldDrive,
+    AddMaskFieldDrive,
+    UpdateMaskFieldDrive,
     RemoveFieldDrive,
     TableAutosave,
     Autosave,
@@ -411,6 +413,8 @@ impl StudyPrimitiveStageKind {
         Self::AntennaFieldSolve,
         Self::ChangeDevice,
         Self::AddFieldDrive,
+        Self::AddMaskFieldDrive,
+        Self::UpdateMaskFieldDrive,
         Self::RemoveFieldDrive,
         Self::TableAutosave,
         Self::Autosave,
@@ -428,7 +432,8 @@ impl StudyPrimitiveStageKind {
         matches!(
             self,
             Self::SetField | Self::SetCurrent
-                | Self::AddFieldDrive | Self::RemoveFieldDrive
+                | Self::AddFieldDrive | Self::AddMaskFieldDrive
+                | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
                 | Self::TableAutosave | Self::Autosave
         )
     }
@@ -992,6 +997,8 @@ pub struct ScriptBuilderState {
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planar_monitors: Vec<fullmag_ir::PlanarMonitorIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

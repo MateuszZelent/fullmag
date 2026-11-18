@@ -1313,6 +1313,7 @@ dependencies = [
 name = "fullmag-engine"
 version = "0.1.0"
 dependencies = [
+ "fullmag-expr",
  "fullmag-fdm-demag",
  "fullmag-ir",
  "rayon",
@@ -1321,6 +1322,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "fullmag-expr"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -1346,6 +1354,7 @@ version = "0.1.0"
 name = "fullmag-ir"
 version = "0.1.0"
 dependencies = [
+ "fullmag-expr",
  "fullmag-quantities",
  "num-bigint",
  "rayon",
@@ -1360,7 +1369,10 @@ dependencies = [
 name = "fullmag-plan"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "flate2",
  "fullmag-authoring",
+ "fullmag-expr",
  "fullmag-fdm-demag",
  "fullmag-ir",
  "fullmag-quantities",
@@ -1402,6 +1414,7 @@ dependencies = [
  "fullmag-antenna-artifacts",
  "fullmag-build-info",
  "fullmag-engine",
+ "fullmag-expr",
  "fullmag-fdm-demag",
  "fullmag-fdm-sys",
  "fullmag-fem-sys",

@@ -327,6 +327,19 @@ def build_parser() -> argparse.ArgumentParser:
     convert_state.add_argument("--input-dataset", help="Optional dataset path for zarr/h5 inputs.")
     convert_state.add_argument("--output-dataset", default="values", help="Dataset path for zarr/h5 outputs.")
     convert_state.add_argument("--sample", type=int, default=-1, help="Sample index for [T,N,3] inputs.")
+
+    subparsers.add_parser(
+        "ready-antennas",
+        help="Print the ready antennas of fullmag.antennas (function, summary, arguments) as JSON.",
+    )
+    rebuild_antenna = subparsers.add_parser(
+        "rebuild-ready-antenna",
+        help="Call a ready antenna and print the mask terms it returns as JSON.",
+    )
+    rebuild_antenna.add_argument(
+        "--function", required=True, help="Qualified name, for example fullmag.antennas.gaussian_k_source."
+    )
+    rebuild_antenna.add_argument("--arguments-json", required=True, help="JSON object of numeric arguments.")
     return parser
 
 
@@ -345,6 +358,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         from fullmag.runtime.script_inspect import inspect_script as _inspect_script
 
         _write_json(_inspect_script(args.script))
+        return 0
+
+    if args.command == "ready-antennas":
+        from fullmag.antennas import registry_ir
+
+        _write_json(registry_ir())
+        return 0
+
+    if args.command == "rebuild-ready-antenna":
+        from fullmag.antennas import rebuild_terms_ir
+
+        try:
+            arguments = json.loads(args.arguments_json)
+            if not isinstance(arguments, dict):
+                raise ValueError("arguments must be a JSON object of numbers")
+            terms = rebuild_terms_ir(args.function, arguments)
+        except (TypeError, ValueError) as error:
+            # A rejected call (unknown antenna or argument, bad value): exit 3 with the reason.
+            _write_json({"schema": "fullmag.ready-antenna-rejection.v1", "message": str(error)})
+            return 3
+        _write_json({"terms": terms})
         return 0
 
     if args.command in {"export-scene-ir", "export-scene-config"}:

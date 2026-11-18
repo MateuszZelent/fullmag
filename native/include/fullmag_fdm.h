@@ -52,11 +52,16 @@ extern "C" {
 /* Append-only frozen-spin plan extension. Support is advertised separately. */
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
+/* Regional field drives accept HOST_MULTIPLIER terms (descriptor v3). */
+#define FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1 (UINT64_C(1) << 1)
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
 #define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 UINT32_C(2)
+#define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3 UINT32_C(3)
+/* At most this many HOST_MULTIPLIER drives per backend. */
+#define FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES 8u
 
 /* ── Enums ── */
 
@@ -829,6 +834,10 @@ typedef enum {
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+    /* The host evaluates the descriptor's time program (fullmag_time_expr.v1,
+     * native/include/fullmag_time_expression.h) once per field build and the
+     * kernels read that value; v3 descriptors only. */
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5,
 } fullmag_fdm_regional_field_drive_waveform;
 
 typedef enum {
@@ -865,11 +874,23 @@ typedef struct {
     double waveform_origin_time_s; /* original stage start for STAGE_LOCAL */
 } fullmag_fdm_regional_field_drive_desc_v2;
 
+/* v3 adds the time program of a HOST_MULTIPLIER drive (mask terms, ADR 0081).
+ * The program is evaluated at the local time of the v2 clock rules; other
+ * waveforms carry no program (null, length 0). The backend copies it.
+ */
+typedef struct {
+    fullmag_fdm_regional_field_drive_desc_v2 drive;
+    const double *time_program;    /* fullmag_time_expr.v1 words */
+    uint64_t time_program_len;
+} fullmag_fdm_regional_field_drive_desc_v3;
+
 #if defined(__cplusplus)
 static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v1) == 120,
               "regional field-drive v1 ABI size changed");
 static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v2) == 128,
               "regional field-drive v2 ABI size changed");
+static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v3) == 144,
+              "regional field-drive v3 ABI size changed");
 #endif
 
 /* ── Per-step diagnostics ── */
@@ -1491,6 +1512,15 @@ int fullmag_fdm_backend_set_regional_field_drives_v2(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_regional_field_drive_desc_v2 *drives,
     uint32_t drive_count);
+/* v3 also accepts HOST_MULTIPLIER drives; check
+ * FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1 first. */
+int fullmag_fdm_backend_set_regional_field_drives_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
+    uint32_t drive_count);
+/* The library's interpreter of fullmag_time_expr.v1 (for cross-checks with
+ * the Rust interpreter); NaN for a malformed program. */
+double fullmag_fdm_time_expression_eval_v1(const double *code, uint64_t len, double t_s);
 
 /**
  * Execute one time step of length dt_seconds using the configured integrator.

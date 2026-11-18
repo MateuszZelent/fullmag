@@ -3780,6 +3780,38 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_magnetization_assets_asset_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/mask-field-drives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_mask_field_drives"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_mask_field_drives"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/mask-field-drives/{drive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["model_put_sessions_current_model_mask_field_drives_drive_id"];
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_mask_field_drives_drive_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/material-fields": {
         parameters: {
             query?: never;
@@ -4085,6 +4117,38 @@ export interface paths {
         get: operations["model_get_sessions_current_model_readiness"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/ready-antennas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_ready_antennas"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/ready-antennas/terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_ready_antennas_terms"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8126,6 +8190,8 @@ export interface components {
         };
         FieldDriveListStateResource: {
             drives?: components["schemas"]["RegionalFieldDriveResource"][];
+            /** @description Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081). */
+            mask_drives?: components["schemas"]["MaskFieldDriveResource"][];
         };
         FieldDriveMigrationResource: {
             migrated_from: string;
@@ -10507,6 +10573,116 @@ export interface components {
         MagnetizationConstraintSchema: components["schemas"]["FrozenSpinsSchema"] & {
             /** @enum {string} */
             kind: "frozen_spins";
+        };
+        MaskFieldDriveCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["MaskFieldDriveResource"];
+        };
+        MaskFieldDriveListResource: {
+            drives: components["schemas"]["MaskFieldDriveResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        MaskFieldDriveReplaceRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["MaskFieldDriveResource"];
+        };
+        /** @description A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081). */
+        MaskFieldDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            enabled?: boolean;
+            frame: components["schemas"]["MaskFrameResource"];
+            id: string;
+            name: string;
+            position_m: number[];
+            schema_version: string;
+            shape: components["schemas"]["MaskShapeResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            terms: components["schemas"]["MaskTermResource"][];
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+        };
+        /**
+         * @description Frame of a mask antenna's position and of its mask coordinates.
+         * @enum {string}
+         */
+        MaskFrameResource: "world" | "local";
+        MaskFunctionLocalResource: {
+            /** @description `field_expr.v1` text. */
+            expression: string;
+            name: string;
+        };
+        MaskFunctionParameterResource: {
+            name: string;
+            /** @description Authored text of the value, for display only. */
+            source?: string | null;
+            /** Format: double */
+            value: number;
+        };
+        /**
+         * @description A mask function of `x, y, z` (three outputs, tesla) or a time function of
+         *     `t` (one output), as `field_expr.v1` equations.
+         */
+        MaskFunctionResource: {
+            expression_version: string;
+            locals?: components["schemas"]["MaskFunctionLocalResource"][];
+            name?: string | null;
+            outputs: string[];
+            parameters?: components["schemas"]["MaskFunctionParameterResource"][];
+        };
+        /** @description The ready-antenna call (`fullmag.antennas`) that produced a term. */
+        MaskLibraryCallResource: {
+            arguments: {
+                [key: string]: number;
+            };
+            /** Format: int32 */
+            call_index: number;
+            function: string;
+            /** Format: int32 */
+            output_index: number;
+        };
+        /** @description Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes). */
+        MaskShapeResource: {
+            center: number[];
+            /** @enum {string} */
+            kind: "box";
+            size: number[];
+        } | {
+            axis: number[];
+            center: number[];
+            /** Format: double */
+            height: number;
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius: number;
+        } | {
+            center: number[];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius: number;
+        };
+        MaskSourceResource: {
+            function: components["schemas"]["MaskFunctionResource"];
+            /** @enum {string} */
+            kind: "function";
+        } | {
+            cell_m: number[];
+            data: string;
+            encoding: string;
+            /** @enum {string} */
+            kind: "sampled";
+            origin_m: number[];
+            sha256: string;
+            size: number[];
+        };
+        MaskTermResource: {
+            mask: components["schemas"]["MaskSourceResource"];
+            name?: string | null;
+            origin?: null | components["schemas"]["MaskLibraryCallResource"];
+            time?: null | components["schemas"]["MaskFunctionResource"];
         };
         MaterialLibraryDeleteRequest: {
             /**
@@ -13717,6 +13893,37 @@ export interface components {
             window_step_count: number;
             /** Format: int64 */
             window_wall_time_ns: number;
+        };
+        ReadyAntennaArgumentResource: {
+            /**
+             * Format: double
+             * @description Absent: the argument is required, or its default follows another argument.
+             */
+            default?: number | null;
+            doc: string;
+            name: string;
+            /** @description SI unit of the value. */
+            unit: string;
+        };
+        ReadyAntennaListResource: {
+            antennas: components["schemas"]["ReadyAntennaResource"][];
+        };
+        /** @description A ready antenna of `fullmag.antennas`: a function that returns mask terms. */
+        ReadyAntennaResource: {
+            arguments: components["schemas"]["ReadyAntennaArgumentResource"][];
+            /** @description Qualified name, the `function` of a term's origin. */
+            function: string;
+            summary: string;
+        };
+        ReadyAntennaTermsRequest: {
+            arguments: {
+                [key: string]: number;
+            };
+            function: string;
+        };
+        /** @description The terms one ready-antenna call returns, each with its origin. */
+        ReadyAntennaTermsResource: {
+            terms: components["schemas"]["MaskTermResource"][];
         };
         RealizedGeometryBody: {
             body_id: string;
@@ -30339,6 +30546,172 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_mask_field_drives: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hand-written mask antennas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaskFieldDriveListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_mask_field_drives: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaskFieldDriveCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid mask antenna */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or duplicate field drive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_put_sessions_current_model_mask_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Stable mask antenna id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaskFieldDriveReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid mask antenna */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Mask antenna not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_mask_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                /** @description Stable mask antenna id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted a mask antenna */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Mask antenna not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_material_fields: {
         parameters: {
             query?: never;
@@ -31415,6 +31788,63 @@ export interface operations {
             };
             /** @description No active workspace or scene document */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_ready_antennas: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready antennas of fullmag.antennas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyAntennaListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_ready_antennas_terms: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadyAntennaTermsRequest"];
+            };
+        };
+        responses: {
+            /** @description Mask terms returned by one ready-antenna call */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyAntennaTermsResource"];
+                };
+            };
+            /** @description Unknown antenna or invalid arguments */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

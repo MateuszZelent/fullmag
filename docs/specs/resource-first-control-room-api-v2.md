@@ -1295,7 +1295,22 @@ GET    /v2/sessions/current/model/field-drives
 POST   /v2/sessions/current/model/field-drives
 PATCH  /v2/sessions/current/model/field-drives/{drive_id}
 DELETE /v2/sessions/current/model/field-drives/{drive_id}
+GET    /v2/sessions/current/model/mask-field-drives
+POST   /v2/sessions/current/model/mask-field-drives
+PUT    /v2/sessions/current/model/mask-field-drives/{drive_id}
+DELETE /v2/sessions/current/model/mask-field-drives/{drive_id}
+GET    /v2/sessions/current/model/ready-antennas
+POST   /v2/sessions/current/model/ready-antennas/terms
 ```
+
+A mask antenna (`mask_field_drive.v1`, ADR 0081) is one resource: target,
+support shape, position, frame and the list of terms with their equations. A
+replacement sends the whole antenna; the server compiles every equation and
+answers 400 with the code and path of each error
+(`docs/specs/mask-function-v1.md`). `ready-antennas` lists the functions of
+`fullmag.antennas`; `ready-antennas/terms` calls one with numeric arguments and
+returns its terms with their origin, which the client then stores in an antenna.
+The scene resource carries the antennas in `field_drives.mask_drives`.
 
 Every model mutation uses `base_revision` and returns the new
 `scene_revision`. New control-room code does not rewrite the loose
