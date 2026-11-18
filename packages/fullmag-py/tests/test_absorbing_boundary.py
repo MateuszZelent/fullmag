@@ -101,7 +101,7 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
         for expression in (
             None, "", "u + 1", "u / (u - 0.5)", "2*u-u**4", "other(u)", "u.real",
             "u # comment", "u**1_0", "01*u", "(-1)**0.5*u", "1/exp(999)*u",
-            "u**0x2", "u**0o2", "u**0b10",
+            "u**0x2", "u**0o2", "u**0b10", "(sqrt)(u)", "((abs))(u)",
         ):
             with self.subTest(expression=expression), self.assertRaisesRegex(ValueError, "expression"):
                 fm.AbsorbingBoundaryLayer(4., 2., 0.8, profile="custom", expression=expression)
@@ -122,18 +122,38 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
             ["x+", "x-"],
         )
 
-    def test_scenario_uses_flat_study_and_object_boundary(self) -> None:
-        scenario = Path(__file__).resolve().parents[3] / "tests/vlad/4.5GHz_fem.py"
-        source = scenario.read_text(encoding="utf-8")
-        self.assertIn("study = fm.study(\"vlad_4_5ghz_fem\")", source)
-        self.assertNotIn("def build_study", source)
+    def test_fem_example_preserves_the_object_boundary(self) -> None:
+        scenario = Path(__file__).resolve().parents[3] / "examples/fem_absorbing_boundary.py"
         loaded = fm.load_problem_from_script(scenario, lightweight_assets=True)
-        problem = loaded.stages[-1].problem
-        py = next(magnet for magnet in problem.magnets if magnet.name == "py")
-        layer = py.to_ir()["absorbing_boundary"]
-        self.assertEqual(layer["faces"], ["x+", "y-", "y+"])
-        self.assertEqual(layer["profile"], "smootherstep")
-        self.assertEqual(layer["frame"], "universe")
+        problem_ir = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(problem_ir["backend_policy"]["requested_backend"], "fem")
+        film = next(magnet for magnet in problem_ir["magnets"] if magnet["name"] == "film")
+        self.assertEqual(film["absorbing_boundary"], {
+            "total_width_m": 60e-9,
+            "ramp_width_m": 40e-9,
+            "max_damping": 0.5,
+            "faces": ["x+", "x-"],
+            "profile": "custom",
+            "frame": "object",
+            "expression": "sqrt(u)",
+        })
+
+    def test_canonical_export_rejects_invalid_absorbing_boundaries(self) -> None:
+        scenario = Path(__file__).resolve().parents[3] / "examples/fem_absorbing_boundary.py"
+        loaded = fm.load_problem_from_script(scenario, lightweight_assets=True)
+        builder = export_builder_draft(loaded)
+        layer = builder["geometries"][0]["absorbing_boundary"]
+        for field, value in (
+            ("faces", []),
+            ("faces", ["x+", "x+"]),
+            ("ramp_width_m", layer["total_width_m"] * 2),
+            ("max_damping", -1),
+            ("expression", "(sqrt)(u)"),
+        ):
+            with self.subTest(field=field, value=value):
+                builder["geometries"][0]["absorbing_boundary"] = {**layer, field: value}
+                with self.assertRaises(ValueError):
+                    rewrite_loaded_problem_script(loaded, overrides=builder)
 
     def test_script_export_round_trips_object_boundary(self) -> None:
         with TemporaryDirectory() as tmp_dir:

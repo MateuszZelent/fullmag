@@ -335,12 +335,15 @@ fn validate_scene_document_with_mode(
 
     for object in &scene.objects {
         if let Some(layer) = &object.absorbing_boundary {
-            layer.compile_profile().map_err(|error| {
-                SceneDocumentValidationError::new(format!(
-                    "object '{}' has an invalid absorbing boundary profile: {error}",
-                    object.id
-                ))
-            })?;
+            let mut errors = Vec::new();
+            fullmag_ir::validate_absorbing_boundary(
+                &format!("object '{}'.absorbing_boundary", object.id),
+                layer,
+                &mut errors,
+            );
+            if !errors.is_empty() {
+                return Err(SceneDocumentValidationError::new(errors.join("\n")));
+            }
         }
         if let Some(reference) = &object.geometry.source_asset {
             if object.geometry.geometry_kind != "ImportedGeometry" {
@@ -4557,32 +4560,33 @@ mod tests {
     #[test]
     fn scene_validation_rejects_invalid_absorbing_boundary_before_save_and_export() {
         let mut scene = region_owned_scene();
-        let mut layer: fullmag_ir::AbsorbingBoundaryLayerIR = serde_json::from_value(
-            serde_json::json!({
-                "total_width_m": 4.0e-9,
-                "ramp_width_m": 2.0e-9,
-                "max_damping": 0.5,
-                "faces": ["x+"],
-                "profile": "custom",
-                "frame": "object"
-            }),
-        )
-        .unwrap();
-        for expression in [None, Some("u+1")] {
-            layer.expression = expression.map(str::to_string);
-            scene.objects[0].absorbing_boundary = Some(layer.clone());
+        let valid = serde_json::json!({
+            "total_width_m": 4.0e-9,
+            "ramp_width_m": 2.0e-9,
+            "max_damping": 0.5,
+            "faces": ["x+"],
+            "profile": "custom",
+            "expression": "u**3",
+            "frame": "object"
+        });
+        for (field, value) in [
+            ("expression", serde_json::Value::Null),
+            ("expression", serde_json::json!("u+1")),
+            ("total_width_m", serde_json::json!(0)),
+            ("ramp_width_m", serde_json::json!(5.0e-9)),
+            ("max_damping", serde_json::json!(-1)),
+            ("faces", serde_json::json!([])),
+            ("faces", serde_json::json!(["x+", "x+"])),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            scene.objects[0].absorbing_boundary = Some(serde_json::from_value(invalid).unwrap());
             for validate in [validate_scene_document_for_authoring, validate_scene_document] {
-                let error = validate(&scene).expect_err("invalid expression should fail validation");
-                assert!(
-                    error.message.contains("absorbing boundary profile")
-                        && error.message.contains("expression"),
-                    "{}",
-                    error.message
-                );
+                let error = validate(&scene).expect_err("invalid absorbing boundary should fail");
+                assert!(error.message.contains(field), "{}", error.message);
             }
         }
-        layer.expression = Some("u**3".to_string());
-        scene.objects[0].absorbing_boundary = Some(layer);
+        scene.objects[0].absorbing_boundary = Some(serde_json::from_value(valid).unwrap());
         validate_scene_document_for_authoring(&scene).expect("valid profile should save");
         validate_scene_document(&scene).expect("valid profile should export");
     }
