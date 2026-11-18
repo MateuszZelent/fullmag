@@ -404,6 +404,27 @@
         "source-cpu-schur-poisson-lu",
         "source-floquet-poisson-lu"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-augmented-shift",
+      "symbols": [
+        "augmented_shift_matrix",
+        "scaled_shift",
+        "descriptor_scales",
+        "real_split",
+        "Aqq",
+        "rotated_split_mass",
+        "mass_blocks",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "gauge_poisson_block",
+        "q_restriction",
+        "shift_rhs"
+      ],
+      "sources": [
+        "source-augmented-shift-solver",
+        "source-cpu-schur-augmented-shift"
+      ]
     }
   ],
   "symbols": [
@@ -945,6 +966,48 @@
       "id": "lu_permutations",
       "latex": "$\\Pi_{r}$, $\\Pi_{c}$",
       "meaning": "permutacje wierszy (pivotowanie) i kolumn (METIS)",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "augmented_shift_matrix",
+      "latex": "$K_{\\hat\\tau}$",
+      "meaning": "rzadka macierz rozszerzona (q, φ) przesunięta o $\\hat\\tau$",
+      "si_unit": "$1$, $\\mathrm{A^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{m}$"
+    },
+    {
+      "id": "scaled_shift",
+      "latex": "$\\hat\\tau$",
+      "meaning": "przeskalowane przesunięcie widmowe $\\omega_{\\mathrm{target}}/a$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "descriptor_scales",
+      "latex": "$s$, $m_s$, $a$",
+      "meaning": "skale deskryptora: operatora, masy i częstości",
+      "si_unit": "$\\mathrm{s\\,m^{-3}}$, $\\mathrm{m^{-3}}$, $\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "rotated_split_mass",
+      "latex": "$J(B_{qq})$, $\\mathcal B$",
+      "meaning": "obrócony blok masy real-split",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "gauge_poisson_block",
+      "latex": "$P_{g}$",
+      "meaning": "blok Poissona z wierszem i kolumną cechowania",
+      "si_unit": "$\\mathrm{m}$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "q_restriction",
+      "latex": "$\\Pi_{q}$",
+      "meaning": "restrykcja do bloku $q$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "shift_rhs",
+      "latex": "$b$",
+      "meaning": "prawa strona kroku shift-invert",
       "si_unit": "$1$"
     }
   ],
@@ -1573,6 +1636,20 @@
       "symbol": "main",
       "responsibility": "Record PETSc configure options and external-package macros; fail the toolchain build when MUMPS, METIS, ScaLAPACK or OpenBLAS is missing.",
       "evidence_status": "source_visible; toolchain_build_NOT_VERIFIED"
+    },
+    {
+      "id": "source-augmented-shift-solver",
+      "path": "backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp",
+      "symbol": "create_augmented_shift_solver",
+      "responsibility": "Assemble and factor the real-split augmented (q, phi) shift matrix with MUMPS/METIS and apply its q-block inverse as the exact shift-invert action.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-augmented-shift",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Select the augmented exact shift preconditioner for K0 STSINVERT and fall back to the magnetic-only preconditioner.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     }
   ],
   "public_api": {
