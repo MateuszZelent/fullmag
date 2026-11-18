@@ -1,10 +1,12 @@
-# Specyfikacja FEM Eigenmodes v1
+# Specyfikacja: Zaakceptowane FEM Eigenmodes (v1)
 
-## Przegląd
-Specyfikacja implementacji solvera opartego na układzie rozszerzonym.
+## Cel
+Wdrożenie wysokowydajnego solvera dla eigenmodów w układach FEM.
 
-## Wymagania
-1. Wsparcie dla MUMPS (CPU) i cuDSS (GPU).
-2. Wykorzystanie układu rozszerzonego (q, φ).
-3. Spójność z istniejącymi kontraktami residuali.
-4. Język implementacji: C++/CUDA dla backendu, Rust dla runnera.
+## Wymagania techniczne
+1. Obsługa Floquet k≠0.
+2. Wsparcie dla GPU (CUDA).
+3. Redukcja synchronizacji Host-Device (A4).
+
+## Wymagania wydajnościowe
+- P50/P95 w testach `just fem-gpu-headless`.
