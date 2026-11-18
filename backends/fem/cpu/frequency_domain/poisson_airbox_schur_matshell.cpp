@@ -1,6 +1,7 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
+#include "cpu/frequency_domain/modal_augmented_shift_solver.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
 #include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
@@ -6126,13 +6127,45 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             sizeof(out_result->exact_preconditioner_status),
             "single_shift_materialization_failed_fallback");
     }
+    // Exact shift-invert through the sparse augmented (q, phi) system (note
+    // 0830, eq-poisson-airbox-augmented-shift).  The magnetic-only matrix
+    // above stays the ST preconditioning matrix and the fallback when MUMPS
+    // is unavailable, disabled, or the factorization fails.  The solver must
+    // outlive the EPS: it is released (leaked) together with an EPS that is
+    // quarantined after a failed EPSSolve.
+    std::unique_ptr<AugmentedShiftSolver, AugmentedShiftSolverDeleter> augmented_shift;
+    if (!exact_shifted_preconditioner && augmented_shift_solver_enabled()) {
+        const auto augmented_setup_started_at = std::chrono::steady_clock::now();
+        augmented_shift.reset(new (std::nothrow) AugmentedShiftSolver{});
+        if (augmented_shift != nullptr &&
+            !create_augmented_shift_solver(
+                problem,
+                context.gauge_augmented,
+                operator_scale,
+                target_eigenvalue * mass_scale,
+                augmented_shift.get())) {
+            augmented_shift.reset();
+            std::fprintf(
+                stderr,
+                "production K0 Schur: augmented exact shift factorization unavailable; "
+                "using the magnetic-only preconditioner\n");
+        }
+        out_result->shifted_preconditioner_setup_timing_available = true;
+        out_result->shifted_preconditioner_setup_seconds +=
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - augmented_setup_started_at)
+                .count();
+    }
+    const bool augmented_shifted_preconditioner = augmented_shift != nullptr;
     std::snprintf(
         out_result->shifted_preconditioner_kind,
         sizeof(out_result->shifted_preconditioner_kind),
         "%s",
         exact_shifted_preconditioner
             ? "exact_shifted_schur_action"
-            : "magnetic_shift_preconditioner");
+            : (augmented_shifted_preconditioner
+                   ? "augmented_exact_shift_mumps"
+                   : "magnetic_shift_preconditioner"));
     if (shifted_preconditioner == nullptr) {
         destroy_slepc_objects(&eps, &xr, &xi, nullptr, nullptr);
         return fail_production_schur(
@@ -6190,17 +6223,22 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
         }
     }
+    configured = configured && KSPGetPC(st_ksp, &st_pc) == 0;
+    if (configured && augmented_shifted_preconditioner) {
+        configured = configure_augmented_shift_pc(st_pc, augmented_shift.get()) == 0;
+    } else if (configured) {
+        configured =
+            PCSetType(st_pc, PCLU) == 0 &&
+            // MATSOLVERUMFPACK/MATSOLVERKLU are public string constants even
+            // when PETSc was built without those packages.  Do not use their
+            // preprocessor presence as an availability probe; PETSc's default
+            // sequential factorization is always valid for this bounded path.
+            PCFactorReorderForNonzeroDiagonal(st_pc, 1.0e-12) == 0 &&
+            // The transformed pencil is dimensionless, so the factorization uses
+            // PETSc's default zero-pivot policy without the former SI workaround.
+            PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0;
+    }
     configured = configured &&
-        KSPGetPC(st_ksp, &st_pc) == 0 &&
-        PCSetType(st_pc, PCLU) == 0 &&
-        // MATSOLVERUMFPACK/MATSOLVERKLU are public string constants even
-        // when PETSc was built without those packages.  Do not use their
-        // preprocessor presence as an availability probe; PETSc's default
-        // sequential factorization is always valid for this bounded path.
-        PCFactorReorderForNonzeroDiagonal(st_pc, 1.0e-12) == 0 &&
-        // The transformed pencil is dimensionless, so the factorization uses
-        // PETSc's default zero-pivot policy without the former SI workaround.
-        PCFactorSetShiftType(st_pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(
             st_ksp,
             shifted_ksp_tolerance,
@@ -6301,6 +6339,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         operator_context->solve_control.cancellation_observed ||
         poisson_airbox_modal_cancel_requested(problem);
     if (eps_solve_status != PETSC_SUCCESS) {
+        // The quarantined EPS keeps a reference to the shell preconditioner.
+        static_cast<void>(augmented_shift.release());
         operator_context->eps_lifetime_unsafe = true;
         operator_context->invalidated = true;
         operator_context->solve_control.disarm();

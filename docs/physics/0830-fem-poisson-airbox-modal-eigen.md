@@ -2178,3 +2178,77 @@ kontraktu.
 | source-cpu-schur-poisson-lu | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + configure_production_context | Poisson K0 przez wspólny helper |
 | source-floquet-poisson-lu | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | $P(k)$ Floqueta przez wspólny helper i provenance pakietu |
 | source-petsc-build-metadata | docker/fem-gpu/write_petsc_build_metadata.py + main | Metadane PETSc i wymagane pakiety w toolchainie |
+
+## Dokładny shift-invert K0 przez rzadki układ rozszerzony (q, φ)
+
+Status: zmiana realizacji kroku shift-invert FEM CPU K0 (audyt
+`2026-11-18-eigensolve-performance-and-gpu-readiness-audit.md`, pozycja A1).
+Build i runtime **NOT VERIFIED** do czasu pomiaru A/B na identycznym modelu.
+Pencil własny, cel, wymiary Krylova, tolerancje, residual oryginalnego
+deskryptora i bramki certyfikacji nie zmieniają się. Zmienia się wyłącznie
+preconditioner KSP wewnątrz `STSINVERT`.
+
+Krok shift-invert rozwiązuje układ z przeskalowanym, rozszczepionym na część
+rzeczywistą i urojoną operatorem Schura przesuniętym o $\hat\tau$. Ten operator jest
+dopełnieniem Schura bloku $q$ rzadkiej macierzy rozszerzonej, więc jego
+odwrotność jest blokiem $q$ jednego rozwiązania rzadkiego układu:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift
+K_{\hat\tau}=
+\begin{bmatrix}
+s\,\mathcal R(A_{qq})+\hat\tau m_{s}\,J(B_{qq}) & s\,\mathcal R(A_{q\phi})\\
+\mathcal R(A_{\phi q}) & \mathcal R(P_{g})
+\end{bmatrix},
+\qquad
+\Bigl(s\,\mathcal R\bigl(A_{qq}-A_{q\phi}P_{g}^{-1}A_{\phi q}\bigr)-\hat\tau m_{s}\,\mathcal B\Bigr)^{-1} b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Tożsamość wynika z eliminacji wierszy Poissona,
+$\phi=-P_{g}^{-1}A_{\phi q}q$ (blok $\phi$), identycznej z akcją operatora Schura z
+{eq}`eq-poisson-airbox-modal-block` i
+{eq}`eq-poisson-airbox-exact-poisson-lu`. $J(B_{qq})$ jest obróconym blokiem masy
+real-split, tym samym, którego używa macierz masy pencilu ($\mathcal B$). Skale
+$s=m_s/a$ i $m_s$ są tymi samymi skalami deskryptora, których używa operator
+EPS, więc $K_{\hat\tau}$ odtwarza dokładnie operator przesunięty widziany przez ST.
+
+Realizacja: jedna faktoryzacja LU macierzy $K_{\hat\tau}$ (MUMPS, porządkowanie
+METIS `ICNTL(7)=5`, progowe częściowe pivotowanie) na każde przesunięcie,
+podana jako prawy preconditioner `PCSHELL` dotychczasowego GMRES. Przy
+dokładnej odwrotności GMRES zbiega w jednej iteracji, a tolerancja
+`shifted_ksp_rtol` i limit iteracji pozostają bez zmian. Macierz
+magnetyczna bez sprzężenia demag pozostaje macierzą preconditionera ST
+i ścieżką zapasową, gdy PETSc nie ma MUMPS, gdy
+`FULLMAG_K0_AUGMENTED_SHIFT=0` albo gdy faktoryzacja się nie powiedzie.
+Dokładna gęsta materializacja dla małych wymiarów ma pierwszeństwo bez zmian.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $K_{\hat\tau}$ | rzadka macierz rozszerzona (q, φ) przesunięta o $\hat\tau$ | $1$, $\mathrm{A^{-1}}$, $\mathrm{A\,m}$, $\mathrm{m}$ |
+| $\hat\tau$ | przeskalowane przesunięcie widmowe $\omega_{\mathrm{target}}/a$ | $1$ |
+| $s$, $m_s$, $a$ | skale deskryptora: operatora, masy i częstości | $\mathrm{s\,m^{-3}}$, $\mathrm{m^{-3}}$, $\mathrm{s^{-1}}$ |
+| $J(B_{qq})$, $\mathcal B$ | obrócony blok masy real-split | $\mathrm{m^3}$ |
+| $P_{g}$ | blok Poissona z wierszem i kolumną cechowania | $\mathrm{m}$, $\mathrm{m^3}$ |
+| $\Pi_{q}$ | restrykcja do bloku $q$ | $1$ |
+| $b$ | prawa strona kroku shift-invert | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja, NOT VERIFIED | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
+| FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
+| FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
+| FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
+
+Provenance: `shifted_preconditioner_kind` przyjmuje
+`augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
+`magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
+obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
+liczbę iteracji GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
+preconditioner do osobnej zmiany.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; NOT VERIFIED runtime |
+| source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |
