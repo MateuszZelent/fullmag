@@ -74,7 +74,7 @@ export function buildAbsorbingBoundaryPatch(
   if (!Number.isFinite(rampWidth) || rampWidth <= 0 || rampWidth > totalWidth) {
     return { error: "Ramp width must be positive and no greater than total width." };
   }
-  if (!Number.isFinite(maxDamping) || maxDamping < 0) {
+  if (!draft.maxDamping.trim() || !Number.isFinite(maxDamping) || maxDamping < 0) {
     return { error: "Maximum damping must be finite and non-negative." };
   }
   const faces = [...new Set(draft.faces)].filter((face) =>
