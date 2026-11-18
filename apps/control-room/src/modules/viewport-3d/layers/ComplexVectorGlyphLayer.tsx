@@ -6,6 +6,7 @@ import type { SessionResourceIdentity } from "@/kernel/resources/sessionResource
 import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import type { Viewport3DComplexGlyphPass } from "../viewport3dRenderModel";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { ScalarRange } from "../viewport3dFieldMapping";
@@ -186,5 +187,37 @@ export function ComplexVectorGlyphLayer({
         renderOrder={glyphPolicy.renderOrder}
       />
     </>
+  );
+}
+
+/** Draws a target pass's GPU-phased glyphs with the pass's phase binding. */
+export function ComplexGlyphPassLayer({
+  pass,
+  ...layerProps
+}: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  carrierId?: string;
+  fallbackColor: string;
+  fieldBufferId?: string | null;
+  opacity?: number;
+  pass: Viewport3DComplexGlyphPass;
+  renderOnTop?: boolean;
+  sessionIdentity?: SessionResourceIdentity | null;
+  style?: VectorFieldLayerVectorStyle;
+  tracker: Viewport3DResourceTracker;
+}) {
+  return (
+    <ComplexVectorGlyphLayer
+      {...layerProps}
+      cellOrigin={pass.phase.cellOrigin}
+      colorMode={pass.colorMode}
+      colorRange={pass.colorRange}
+      floquetSpatialConvention={pass.phase.floquetSpatialConvention}
+      glyphs={pass.glyphs}
+      palette={pass.palette}
+      phase={pass.phase.uniform ?? pass.phase.phaseRad}
+      phasorConvention={pass.phase.phasorConvention}
+      wavevectorKf={pass.phase.wavevectorKf}
+    />
   );
 }

@@ -72,7 +72,7 @@ import { buildViewport3DRenderableMeshPartKey } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { BoundsBox } from "./BoundsLayers";
 import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
-import { ComplexVectorGlyphLayer } from "./ComplexVectorGlyphLayer";
+import { ComplexGlyphPassLayer, ComplexVectorGlyphLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -1409,29 +1409,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderPlan.vectors.visible &&
         vectorLayerInput.complexGlyphs ? (
-        <ComplexVectorGlyphLayer
+        <ComplexGlyphPassLayer
           adoptionRegistry={adoptionRegistry}
           carrierId={part.id}
-          cellOrigin={vectorLayerInput.complexGlyphs.phase.cellOrigin}
-          colorMode={vectorLayerInput.complexGlyphs.colorMode}
-          colorRange={vectorLayerInput.complexGlyphs.colorRange}
           fallbackColor={String(colors.field)}
           fieldBufferId={requestedFieldBufferId}
-          floquetSpatialConvention={
-            vectorLayerInput.complexGlyphs.phase.floquetSpatialConvention
-          }
-          glyphs={vectorLayerInput.complexGlyphs.glyphs}
           opacity={renderPlan.vectors.opacity}
-          palette={vectorLayerInput.complexGlyphs.palette}
-          phase={
-            vectorLayerInput.complexGlyphs.phase.uniform ??
-            vectorLayerInput.complexGlyphs.phase.phaseRad
-          }
-          phasorConvention={vectorLayerInput.complexGlyphs.phase.phasorConvention}
+          pass={vectorLayerInput.complexGlyphs}
           sessionIdentity={sessionIdentity}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
-          wavevectorKf={vectorLayerInput.complexGlyphs.phase.wavevectorKf}
         />
       ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderPlan.vectors.visible ? (
