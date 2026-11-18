@@ -947,6 +947,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::material_library::delete_material),
         )
         .route(
+            "/v2/workspace/material-library/versions",
+            post(handlers::material_library::publish_version),
+        )
+        .route(
+            "/v2/workspace/material-library/versions/:family/:version",
+            patch(handlers::material_library::patch_version),
+        )
+        .route(
             "/v2/workspace/items",
             get(handlers::workspace_items::list_items).post(handlers::workspace_items::post_item),
         )

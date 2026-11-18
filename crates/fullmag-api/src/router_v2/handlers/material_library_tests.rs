@@ -205,6 +205,58 @@ fn invalid_stored_material_is_a_storage_failure_and_preserves_the_database() {
     assert_eq!(std::fs::read(&db).unwrap(), before);
 }
 
+#[test]
+fn catalog_version_routes_use_entry_revisions_and_preserve_published_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("library.sqlite3");
+    let source = create_at(&db, write_request("custom:sample"))
+        .unwrap()
+        .material;
+    create_at(&db, write_request("custom:unrelated")).unwrap();
+    let request = MaterialVersionPublishRequest {
+        material_id: source.id,
+        base_revision: source.revision,
+        family: "yig".into(),
+        version: "sample_1".into(),
+        display_name: "Sample 1".into(),
+        source_project: Some("Saved project".into()),
+    };
+    let version = publish_at(&db, request.clone()).unwrap();
+    assert_eq!(
+        publish_at(&db, request).unwrap_err().status,
+        StatusCode::CONFLICT
+    );
+    let patch = MaterialVersionUpdateRequest {
+        base_revision: version.published.revision,
+        display_name: "Renamed".into(),
+        archived: true,
+    };
+    assert_eq!(
+        patch_at(&db, "yig", "unknown", patch.clone())
+            .unwrap_err()
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    let archived = patch_at(&db, "yig", "sample_1", patch.clone()).unwrap();
+    assert_eq!(
+        patch_at(&db, "yig", "sample_1", patch).unwrap_err().status,
+        StatusCode::CONFLICT
+    );
+    let wire = serde_json::to_value(list_at(&db).unwrap()).unwrap();
+    assert_eq!(wire["revision"], archived.catalog_revision);
+    assert_eq!(wire["versions"][0]["revision"], archived.catalog_revision);
+    assert_eq!(wire["versions"][0]["archived"], true);
+    assert_eq!(wire["versions"][0]["display_name"], "Renamed");
+    assert_eq!(wire["versions"][0]["source"]["name"], "Sample 1");
+    assert_eq!(
+        wire["versions"][0]["source"]["version"],
+        json!({
+            "family": "yig", "version": "sample_1", "source_project": "Saved project"
+        })
+    );
+    assert_eq!(wire["versions"][0]["original"]["catalog_id"], "builtin:yig");
+}
+
 #[tokio::test]
 async fn catalog_routes_reject_invalid_json_as_400_without_session_or_storage() {
     let app =
@@ -230,6 +282,16 @@ async fn catalog_routes_reject_invalid_json_as_400_without_session_or_storage() 
             Method::DELETE,
             "/v2/workspace/material-library/custom:one",
             r#"{"base_revision":null}"#,
+        ),
+        (
+            Method::POST,
+            "/v2/workspace/material-library/versions",
+            r#"{"base_revision":1,"material_id":"builtin:yig","family":"yig","version":"sample"}"#,
+        ),
+        (
+            Method::PATCH,
+            "/v2/workspace/material-library/versions/yig/sample",
+            r#"{"base_revision":1,"display_name":"Sample","archived":false,"properties":{}}"#,
         ),
     ] {
         let response = app
@@ -262,6 +324,11 @@ fn catalog_openapi_is_typed_and_independent_of_current_session_scope() {
     for (path, methods) in [
         ("/v2/workspace/material-library", vec!["get", "post"]),
         ("/v2/workspace/material-library/{id}", vec!["put", "delete"]),
+        ("/v2/workspace/material-library/versions", vec!["post"]),
+        (
+            "/v2/workspace/material-library/versions/{family}/{version}",
+            vec!["patch"],
+        ),
     ] {
         for method in methods {
             let operation = &document["paths"][path][method];
@@ -281,7 +348,12 @@ fn catalog_openapi_is_typed_and_independent_of_current_session_scope() {
         "MaterialLibraryUpdateRequest",
         "MaterialLibraryDeleteRequest",
         "MaterialLibraryDeleteResource",
+        "PublishedMaterialVersion",
+        "MaterialVersionPublishRequest",
+        "MaterialVersionUpdateRequest",
+        "MaterialVersionMutationResource",
         "SceneMaterialSource",
+        "SceneMaterialVersionSource",
         "SceneMaterialSourceKind",
         "SceneMaterialSourceProperties",
         "SceneMaterialReference",

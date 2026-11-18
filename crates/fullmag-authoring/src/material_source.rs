@@ -24,6 +24,72 @@ pub struct SceneMaterialSourceProperties {
     pub dbulk: Option<f64>,
 }
 
+/// A stable published material key and the provenance recorded at publication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SceneMaterialVersionSource {
+    pub family: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_from_family: Option<String>,
+}
+
+pub const PUBLISHED_MATERIAL_ID_PREFIX: &str = "custom:published:";
+
+impl SceneMaterialVersionSource {
+    pub fn catalog_id(&self) -> String {
+        format!(
+            "{PUBLISHED_MATERIAL_ID_PREFIX}{}:{}",
+            self.family, self.version
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        validate_material_version_key("family", &self.family)?;
+        validate_material_version_key("version", &self.version)?;
+        if let Some(family) = &self.copied_from_family {
+            validate_material_version_key("copied_from_family", family)?;
+            if family == &self.family {
+                return Err("copied_from_family must differ from the published family".into());
+            }
+        }
+        if let Some(project) = &self.source_project {
+            validate_material_source_project(project)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn validate_material_source_project(project: &str) -> Result<(), String> {
+    if project.trim().is_empty() || project.len() > 4096 {
+        return Err("material source project must contain 1 to 4096 bytes".into());
+    }
+    Ok(())
+}
+
+pub fn validate_material_version_key(field: &str, key: &str) -> Result<(), String> {
+    const PYTHON_KEYWORDS: &[&str] = &[
+        "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+        "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is",
+        "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with",
+        "yield",
+    ];
+    if key.len() > 48
+        || !key.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        || PYTHON_KEYWORDS.contains(&key)
+    {
+        return Err(format!(
+            "material {field} must be a non-keyword ASCII Python identifier, starting with a lowercase letter and using at most 48 lowercase letters, digits or underscores"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SceneMaterialSource {
     pub catalog_id: String,
@@ -33,6 +99,8 @@ pub struct SceneMaterialSource {
     pub properties: SceneMaterialSourceProperties,
     #[serde(default)]
     pub references: Vec<SceneMaterialReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<SceneMaterialVersionSource>,
 }
 
 pub fn validate_material_references(references: &[SceneMaterialReference]) -> Result<(), String> {
@@ -94,6 +162,15 @@ pub fn validate_material_source(source: &SceneMaterialSource) -> Result<(), Stri
     };
     if !source.catalog_id.starts_with(prefix) {
         return Err("material source kind and identity disagree".into());
+    }
+    if let Some(version) = &source.version {
+        version.validate()?;
+        if source.catalog_id != version.catalog_id() {
+            return Err("material source identity and published key disagree".into());
+        }
+        if source.properties.ms.is_none() || !source.properties.aex.is_some_and(|aex| aex > 0.0) {
+            return Err("published material source requires Ms and positive Aex".into());
+        }
     }
     let properties = &source.properties;
     for (name, value) in [

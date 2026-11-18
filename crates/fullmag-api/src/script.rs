@@ -2,6 +2,9 @@
 
 use crate::error::ApiError;
 use crate::types::*;
+use fullmag_application::script_source_capture::{
+    material_catalog_input, runtime_helper_loads_authored_script, MATERIAL_CATALOG_UNAVAILABLE,
+};
 use fullmag_authoring::{
     scene_document_problem_projection, scene_document_to_script_builder, SceneDocument, StudyPlan,
     ScriptBuilderState,
@@ -1482,7 +1485,14 @@ fn run_python_helper_with_policy(
     let inherited_pythonpath = std::env::var("PYTHONPATH").ok();
     {
         let mut command = python_command(repo_root)?;
-        command.args(args);
+        command.args(args).stdin(Stdio::null());
+        if runtime_helper_loads_authored_script(args) {
+            if let Some(snapshot) = material_catalog_snapshot() {
+                let input = material_catalog_input(&snapshot)
+                    .map_err(|error| ApiError::internal(error.to_string()))?;
+                command.arg("--material-catalog-stdin").stdin(Stdio::from(input));
+            }
+        }
         // Large mesh exports use stdout as a JSON data channel. Keep it
         // buffered; progress events already flush stderr explicitly.
         command.env_remove("PYTHONUNBUFFERED");
@@ -1542,10 +1552,7 @@ fn run_progress_python_helper(
     mut command: ProcessCommand,
     sender: &tokio::sync::mpsc::Sender<PythonHelperProgress>,
 ) -> io::Result<Output> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let Some(mut stdout) = child.stdout.take() else {
         let _ = child.kill();
@@ -1768,10 +1775,7 @@ fn run_bounded_python_helper_with_budget(
     };
     let stdout_path = logs.stdout_path.clone();
     let stderr_path = logs.stderr_path.clone();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr));
+    command.stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr));
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Err(BoundedHelperError::Spawn(error)),
@@ -2960,6 +2964,21 @@ study.stages.add_eigenmodes(count=4)
     }
 }
 
+fn material_catalog_snapshot() -> Option<Vec<u8>> {
+    let snapshot = fullmag_workspace::material_catalog::read_published_material_versions()
+        .map_err(anyhow::Error::from)
+        .and_then(|versions| {
+            if versions.is_empty() {
+                return Ok(None);
+            }
+            serde_json::to_vec(&versions).map(Some).map_err(anyhow::Error::from)
+        });
+    snapshot.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Shared material catalog is unavailable");
+        Some(MATERIAL_CATALOG_UNAVAILABLE.to_vec())
+    })
+}
+
 /// Bounded, environment-isolated executor for the shared immutable capture producer.
 /// Capture has no geometry/cache environment; meshing remains a separate one-shot preparation.
 pub(crate) fn capture_startup_script_scene(
@@ -2969,15 +2988,20 @@ pub(crate) fn capture_startup_script_scene(
     let authored = real_root.join("packages/fullmag-py/src/fullmag");
     let fullmag = if authored.is_dir() { authored } else { real_root.join("python/site-packages/fullmag") };
     let fullmag = fs::canonicalize(fullmag).map_err(|error| ApiError::internal(format!("capture runtime root: {error}")))?;
+    let catalog = material_catalog_snapshot();
     fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
-        &fullmag_application::script_source_capture::CaptureOptions { scene_only: true, ..Default::default() },
-        |args, maximum| {
+        &fullmag_application::script_source_capture::CaptureOptions {
+            scene_only: true,
+            material_catalog: catalog.as_deref(),
+            ..Default::default()
+        },
+        |args, maximum, input| {
             let interpreter = resolve_python(repo_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
             let mut command = interpreter.command(&real_root).map_err(|error| anyhow::anyhow!(error.to_string()))?;
             command.env_clear();
             if let Some(parent) = interpreter.path.parent() { command.env("PATH", parent); }
             command.env("PYTHONHASHSEED", "0").env("PYTHONDONTWRITEBYTECODE", "1");
-            command.args(args);
+            command.args(args).stdin(input.map(Stdio::from).unwrap_or_else(Stdio::null));
             run_bounded_python_helper_with_budget(
                 command, workspace_root, u64::try_from(maximum)?, BOUNDED_SOURCE_CAPTURE_TIMEOUT,
             )

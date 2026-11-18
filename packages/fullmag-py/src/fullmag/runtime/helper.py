@@ -13,6 +13,7 @@ from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.canonical import canonical_json_sha256
 from fullmag.model._incomplete import IncompletePhysicsError
+from fullmag.runtime.accepted_source_capture import read_material_catalog_stdin
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
@@ -141,6 +142,8 @@ def _load_script(args: argparse.Namespace, *, lightweight_assets: bool):
         Path(args.script),
         lightweight_assets=lightweight_assets,
         source_bytes=_read_source_snapshot(getattr(args, "source_snapshot", None)),
+        material_catalog=getattr(args, "material_catalog", None),
+        material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
     )
 
 
@@ -327,6 +330,8 @@ def build_parser() -> argparse.ArgumentParser:
     convert_state.add_argument("--input-dataset", help="Optional dataset path for zarr/h5 inputs.")
     convert_state.add_argument("--output-dataset", default="values", help="Dataset path for zarr/h5 outputs.")
     convert_state.add_argument("--sample", type=int, default=-1, help="Sample index for [T,N,3] inputs.")
+    for authored in (export_ir, export_run_config, rewrite_script, export_builder, export_scene, rewrite_scene):
+        authored.add_argument("--material-catalog-stdin", action="store_true", help=argparse.SUPPRESS)
 
     subparsers.add_parser(
         "ready-antennas",
@@ -346,6 +351,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if getattr(args, "material_catalog_stdin", False):
+        args.material_catalog = read_material_catalog_stdin()
+        args.material_catalog_unavailable = args.material_catalog is None
 
     if args.command == "check-syntax":
         script_path = Path(args.script)
@@ -508,7 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "export-builder-draft":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         print(json.dumps(export_builder_draft(loaded)))
         emit_progress("Builder draft exported")
         return 0
@@ -521,6 +529,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Path(args.script),
                 lightweight_assets=True,
                 source_bytes=source_bytes,
+                material_catalog=getattr(args, "material_catalog", None),
+                material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
             )
         except Exception as error:
             # The script itself failed for these exact bytes; the caller has
@@ -537,7 +547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "rewrite-scene-document":
         emit_progress(f"Loading Python script {Path(args.script).name}")
-        loaded = load_problem_from_script(Path(args.script), lightweight_assets=True)
+        loaded = _load_script(args, lightweight_assets=True)
         scene_document = json.loads(Path(args.scene_json).read_text(encoding="utf-8"))
         _ = build_builder_from_scene_document(scene_document)
         emit_progress("Rendering canonical Python from SceneDocument")

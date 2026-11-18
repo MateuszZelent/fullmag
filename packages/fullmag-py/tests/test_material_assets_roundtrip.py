@@ -364,5 +364,238 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         self.assertEqual(material["references"], REFERENCES)
 
 
+def test_published_version_assignment_preserves_dormant_dmi_and_exports_offline(tmp_path):
+    published = copy.deepcopy(PUBLISHED)
+    source = tmp_path / "catalog.py"
+    source.write_text(
+        "import fullmag as fm\n"
+        "disc = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='disc')\n"
+        "disc.Ku1 = 200.0\n"
+        "disc.anisU = (0.0, 0.0, 1.0)\n"
+        "disc.material = fm.materials.yig.kuswik\n"
+        "assert disc.Dind == -0.002\n"
+        "disc.Ms = 975000.0\n",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(source, lightweight_assets=True, material_catalog=[published])
+    published["source"]["properties"]["Dind"] = -0.003
+    assert not any(isinstance(term, fm.InterfacialDMI) for term in loaded.problem.energy)
+    assert loaded.problem.magnets[0].material.Dind is None
+    assert loaded.problem.magnets[0].material.Ku1 == 200.0
+    assert loaded.problem.magnets[0].material.anisU == (0, 0, 1)
+    first = build_scene_document_from_builder(export_builder_draft(loaded))
+    material = first["materials"][0]
+    assert material["name"] == "Measured YIG alias"
+    assert material["source"] == PUBLISHED["source"]
+    assert material["properties"]["Ms"] == 975000.0
+    assert material["properties"]["Dind"] == -0.002
+    assert next(term for term in first["objects"][0]["physics_stack"]
+                if term["kind"] == "interfacial_dmi")["enabled"] is False
+
+    for script in (render_scene_document_as_script(first), render_loaded_problem_as_script(loaded)):
+        assert "fm.materials.yig.kuswik" not in script
+        canonical = tmp_path / "offline.py"
+        canonical.write_text(script, encoding="utf-8")
+        replayed = fm.load_problem_from_script(canonical, lightweight_assets=True)
+        replay_scene = build_scene_document_from_builder(export_builder_draft(replayed))
+        assert replay_scene["materials"] == first["materials"]
+        assert replay_scene["objects"][0]["physics_stack"] == first["objects"][0]["physics_stack"]
+
+
+def test_material_version_keeps_dormant_dmi_beside_explicit_zero(tmp_path):
+    for parameter, kind, coefficient in (
+        ("Dind", "interfacial_dmi", -0.002),
+        ("Dbulk", "bulk_dmi", 0.003),
+    ):
+        _assert_material_version_keeps_dormant_dmi(tmp_path, parameter, kind, coefficient)
+
+
+def _assert_material_version_keeps_dormant_dmi(tmp_path, parameter, kind, coefficient):
+    published = copy.deepcopy(PUBLISHED)
+    published["source"]["properties"][parameter] = coefficient
+    path = tmp_path / "mixed.py"
+    path.write_text(
+        "import fullmag as fm\n"
+        "a = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='a', object_id='first')\n"
+        "a.Ms = 800000\n"
+        "a.Aex = 1.3e-11\n"
+        f"a.{parameter} = 0\n"
+        "b = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='b', object_id='second')\n"
+        "b.material = fm.materials.yig.kuswik\n",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(path, lightweight_assets=True, material_catalog=[published])
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    first, second = scene["objects"]
+    materials = {material["id"]: material for material in scene["materials"]}
+    for obj, enabled in ((first, True), (second, False)):
+        term = next(term for term in obj["physics_stack"] if term["kind"] == kind)
+        assert term["enabled"] is enabled
+    assert materials[second["material_ref"]]["properties"][parameter] == coefficient
+
+    offline = tmp_path / "offline-mixed.py"
+    canonical_source = render_loaded_problem_as_script(loaded)
+    for script in (render_scene_document_as_script(scene), canonical_source):
+        offline.write_text(script, encoding="utf-8")
+        replayed = fm.load_problem_from_script(offline, lightweight_assets=True)
+        rebuilt = build_scene_document_from_builder(export_builder_draft(replayed))
+        assert rebuilt["materials"] == scene["materials"]
+        assert [obj["physics_stack"] for obj in rebuilt["objects"]] == [
+            obj["physics_stack"] for obj in scene["objects"]
+        ]
+
+    # Explicit authored zero remains authoritative even with dormant metadata.
+    edited, count = re.subn(r"(b\.Ms\s*=[^\n]+\n)", rf"\g<1>b.{parameter} = 0\n", canonical_source)
+    assert count == 1
+    offline.write_text(edited, encoding="utf-8")
+    edited_scene = build_scene_document_from_builder(export_builder_draft(
+        fm.load_problem_from_script(offline, lightweight_assets=True)
+    ))
+    second = edited_scene["objects"][1]
+    term = next(term for term in second["physics_stack"] if term["kind"] == kind)
+    assert term["enabled"]
+    edited_material = next(material for material in edited_scene["materials"] if material["id"] == second["material_ref"])
+    assert edited_material["properties"][parameter] == 0
+    assert edited_material["source"] == published["source"]
+
+
+def test_published_version_assignment_keeps_explicit_dmi_activation(tmp_path):
+    source = tmp_path / "active.py"
+    source.write_text(
+        "import fullmag as fm\n"
+        "a = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='a')\n"
+        "a.Dind = 0.001\n"
+        "a.Dbulk = 0.001\n"
+        "a.material = fm.materials.yig.kuswik\n",
+        encoding="utf-8",
+    )
+    loaded = fm.load_problem_from_script(source, lightweight_assets=True, material_catalog=[PUBLISHED])
+    assert next(term for term in loaded.problem.energy if isinstance(term, fm.InterfacialDMI)).D == -0.002
+    assert next(term for term in loaded.problem.energy if isinstance(term, fm.BulkDMI)).D == 0
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    assert scene["materials"][0]["properties"]["Dbulk"] is None
+    assert next(term for term in scene["objects"][0]["physics_stack"] if term["kind"] == "bulk_dmi")["enabled"]
+    offline = tmp_path / "offline-active.py"
+    offline.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    replayed = fm.load_problem_from_script(offline, lightweight_assets=True)
+    rebuilt = build_scene_document_from_builder(export_builder_draft(replayed))
+    assert rebuilt["materials"] == scene["materials"]
+    assert rebuilt["objects"][0]["physics_stack"] == scene["objects"][0]["physics_stack"]
+
+
+def test_unavailable_catalog_blocks_lookup_only_and_canonical_export_replays(tmp_path):
+    import pytest
+
+    script = tmp_path / "catalog.py"
+    declarations = (
+        "import fullmag as fm\n"
+        "disc = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='disc')\n"
+    )
+    script.write_text(declarations + "disc.Ms = 140000\n" + "disc.Aex = 3.5e-12\n", encoding="utf-8")
+    assert fm.load_problem_from_script(
+        script, lightweight_assets=True, material_catalog_unavailable=True,
+    ).problem.magnets[0].material.Ms == 140000
+
+    script.write_text(declarations + "disc.material = fm.materials.yig.kuswik\n", encoding="utf-8")
+    with pytest.raises(LookupError, match=r"catalog is unavailable.*yig\.kuswik"):
+        fm.load_problem_from_script(
+            script, lightweight_assets=True, material_catalog_unavailable=True,
+        )
+    loaded = fm.load_problem_from_script(script, lightweight_assets=True, material_catalog=[PUBLISHED])
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    script.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+    offline = fm.load_problem_from_script(
+        script, lightweight_assets=True, material_catalog_unavailable=True,
+    )
+    rebuilt = build_scene_document_from_builder(export_builder_draft(offline))
+    assert rebuilt["materials"] == scene["materials"]
+
+
+def test_missing_published_version_reports_full_key_and_binding_does_not_leak(tmp_path):
+    import pytest
+
+    source = tmp_path / "lookup.py"
+    source.write_text("import fullmag as fm\nfm.materials.yig.kuswik\n", encoding="utf-8")
+    with pytest.raises(LookupError, match=r"yig\.kuswik"):
+        fm.load_problem_from_script(source, lightweight_assets=True)
+    with pytest.raises(LookupError, match=r"unknown_family\.unknown_version"):
+        fm.materials.unknown_family.unknown_version
+    with pytest.raises(ValueError, match=r"duplicate.*yig\.kuswik"):
+        fm.load_problem_from_script(source, lightweight_assets=True, material_catalog=[PUBLISHED, PUBLISHED])
+    with pytest.raises(LookupError, match=r"yig\.kuswik"):
+        fm.materials.yig.kuswik
+
+
+def test_published_material_source_validates_keys_and_coefficients(tmp_path):
+    import pytest
+
+    source = tmp_path / "validate.py"
+    source.write_text("import fullmag as fm\nfm.materials.yig.kuswik\n", encoding="utf-8")
+    for path, value, message in (
+        (("version", "family"), "class", "non-keyword ASCII"),
+        (("version", "version"), "Bad-key", "non-keyword ASCII"),
+        (("version", "copied_from_family"), "yig", "must differ"),
+        (("properties", "Ms"), None, "requires Ms and Aex"),
+        (("properties", "Aex"), 0, "Aex must be positive"),
+        (("catalog_id",), "custom:yig", "catalog_id and version disagree"),
+    ):
+        invalid = copy.deepcopy(PUBLISHED)
+        field = invalid["source"] if len(path) == 1 else invalid["source"][path[0]]
+        field[path[-1]] = value
+        with pytest.raises(ValueError, match=message):
+            fm.load_problem_from_script(source, lightweight_assets=True, material_catalog=[invalid])
+
+
+def test_client_material_catalog_binding_exposes_one_snapshot_and_restores_context(tmp_path):
+    import pytest
+    from fullmag.client import Client
+    from live_api_fake import FakeFullmagApi
+
+    source = tmp_path / "standalone.py"
+    source.write_text(
+        "import fullmag as fm\n"
+        "disc = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9))\n"
+        "disc.material = fm.materials.yig.kuswik\n",
+        encoding="utf-8",
+    )
+    endpoint = "/v2/workspace/material-library"
+    with FakeFullmagApi() as fake:
+        fake.route("GET", endpoint, {"entries": [], "revision": 7, "versions": [PUBLISHED]})
+        with Client(fake.url) as client, client.bind_material_catalog():
+            assert fm.materials.yig.kuswik.archived
+            loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+            assert loaded.problem.magnets[0].material.Ms == PROPERTIES["Ms"]
+            with pytest.raises(AttributeError):
+                fm.materials.yig.kuswik.archived = False
+            with pytest.raises(LookupError, match=r"yig\.kuswik"):
+                fm.load_problem_from_script(source, lightweight_assets=True, material_catalog=[])
+            assert fm.materials.yig.kuswik.archived
+        assert len(fake.find("GET", endpoint)) == 1
+    with pytest.raises(LookupError, match=r"yig\.kuswik"):
+        fm.materials.yig.kuswik
+
+
+PUBLISHED = {
+    "source": {
+        "catalog_id": "custom:published:yig:kuswik",
+        "catalog_revision": 3,
+        "name": "Published YIG",
+        "kind": "modified",
+        "properties": {**PROPERTIES, "Dind": -0.002},
+        "references": REFERENCES,
+        "version": {
+            "family": "yig",
+            "version": "kuswik",
+            "source_project": "Prior project",
+            "copied_from_family": "permalloy",
+        },
+    },
+    "original": SOURCE,
+    "display_name": "Measured YIG alias",
+    "archived": True,
+    "revision": 7,
+}
+
+
 if __name__ == "__main__":
     unittest.main()

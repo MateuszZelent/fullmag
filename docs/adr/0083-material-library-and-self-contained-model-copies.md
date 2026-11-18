@@ -96,6 +96,32 @@ dla Tools i Inspectora. Nie tworzy własnych endpointów ani osobnego magazynu
 katalogu w Zustand. Ponowne otwarcie odświeża katalog; konflikt zachowuje draft
 przed jawnym przeładowaniem. Spóźniony ACK nie zmienia draftu nowej sesji.
 
+## Opublikowane wersje
+
+Kopia materiału z dowolnego projektu może zostać opublikowana z kluczem
+`rodzina.wersja`. Oba człony są stabilnymi identyfikatorami Pythona. Publikacja
+przypina efektywne wartości SI, referencje, dostępne pochodzenie i oryginał
+rodziny do porównania. Zmiana próbki używa nowego klucza. Zmiana nazwy i archiwizacja
+obejmują wyłącznie metadane publikacji. Archiwalny klucz nadal działa w skryptach
+i jest ukryty w domyślnym wyborze w UI.
+
+GET katalogu zwraca `versions` w tym samym snapshocie co `entries` i `revision`.
+POST `/versions` sprawdza rewizję kopiowanego wpisu. PATCH
+`/versions/{family}/{version}` sprawdza rewizję publikacji. Mutacje przesuwają
+wspólny zegar katalogu. SQLite migruje do schematu 2 w jednej transakcji.
+Tabela publikacji ma unikalny klucz `(family, version)`. Limit odczytu dla
+skryptu wynosi 8 MiB i jest egzekwowany przy zapisie, by stare klucze pozostały
+dostępne.
+
+Zarządzane API i CLI czytają katalog przez `fullmag-workspace` przed uruchomieniem
+skryptu. Katalog trafia do kontekstu autora przez ograniczone wejście pomocnika.
+`fm.materials.yig.kuswik` zwraca przypięty zestaw z tego kontekstu. Samodzielny
+Python może użyć `Client.bind_material_catalog()` dla wybranej instancji.
+Przypisanie na uchwycie zachowuje jawny stan oddziaływań. Eksport DSL zapisuje
+efektywne wartości oraz opcjonalną tożsamość wersji w istniejących metadanych
+materiału. Takie źródło i kopia w archiwum projektu odtwarzają model także
+bez połączenia z katalogiem.
+
 ## Walidacja i prezentacja
 
 Wartości muszą być skończone; podane Ms jest dodatnie, Aex i alpha są nieujemne.

@@ -328,6 +328,8 @@ export const openApiV2PathLiterals = [
   "/v2/workspace/items/{id}/playback/geometry",
   "/v2/workspace/items/{id}/thumbnail",
   "/v2/workspace/material-library",
+  "/v2/workspace/material-library/versions",
+  "/v2/workspace/material-library/versions/{family}/{version}",
   "/v2/workspace/material-library/{id}",
   "/v2/workspace/roots",
   "/v2/workspace/scan",

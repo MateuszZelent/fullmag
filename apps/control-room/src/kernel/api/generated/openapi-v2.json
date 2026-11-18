@@ -21625,6 +21625,13 @@
               }
             ]
           },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "summary": {
             "type": [
               "string",
@@ -21675,11 +21682,18 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedMaterialVersion"
+            },
+            "type": "array"
           }
         },
         "required": [
           "revision",
-          "entries"
+          "entries",
+          "versions"
         ],
         "type": "object"
       },
@@ -21732,6 +21746,13 @@
               {
                 "$ref": "#/components/schemas/SceneMaterialSource"
               }
+            ]
+          },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
             ]
           },
           "summary": {
@@ -22317,6 +22338,83 @@
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionMutationResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "published": {
+            "$ref": "#/components/schemas/PublishedMaterialVersion"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "published"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionPublishRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the source entry.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "material_id": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "material_id",
+          "base_revision",
+          "family",
+          "version",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "base_revision": {
+            "description": "Revision of the published version's metadata.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_revision",
+          "display_name",
+          "archived"
         ],
         "type": "object"
       },
@@ -33450,6 +33548,41 @@
         ],
         "type": "object"
       },
+      "PublishedMaterialVersion": {
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "original": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SceneMaterialSource"
+          }
+        },
+        "required": [
+          "source",
+          "display_name",
+          "archived",
+          "revision"
+        ],
+        "type": "object"
+      },
       "QuantityCatalogEntry": {
         "properties": {
           "capability_state": {
@@ -37828,6 +37961,16 @@
               "$ref": "#/components/schemas/SceneMaterialReference"
             },
             "type": "array"
+          },
+          "version": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialVersionSource"
+              }
+            ]
           }
         },
         "required": [
@@ -37957,6 +38100,35 @@
           "outside"
         ],
         "type": "string"
+      },
+      "SceneMaterialVersionSource": {
+        "additionalProperties": false,
+        "description": "A stable published material key and the provenance recorded at publication.",
+        "properties": {
+          "copied_from_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "version"
+        ],
+        "type": "object"
       },
       "SceneMetadataResource": {
         "properties": {
@@ -75585,7 +75757,7 @@
                 }
               }
             },
-            "description": "Built-in and user material entries with catalog revision"
+            "description": "Built-in entries, user drafts and published versions with catalog revision"
           },
           "500": {
             "content": {
@@ -75644,6 +75816,166 @@
               }
             },
             "description": "Material identity already exists or is read-only"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions": {
+      "post": {
+        "operationId": "workspace_post_workspace_material_library_versions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Immutable material version published"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or incomplete material"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source revision or version already exists"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions/{family}/{version}": {
+      "patch": {
+        "operationId": "workspace_patch_workspace_material_library_versions_family_version",
+        "parameters": [
+          {
+            "description": "Stable material family key",
+            "in": "path",
+            "name": "family",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable published version key",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Published version metadata updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or metadata"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Published version does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale version metadata revision"
           },
           "500": {
             "content": {

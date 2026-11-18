@@ -1509,28 +1509,7 @@ pub struct ObjectRegionReorderRequest {
     pub region_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MaterialPropertiesResource {
-    #[serde(rename = "Ms")]
-    pub ms: Option<f64>,
-    #[serde(rename = "Aex")]
-    pub aex: Option<f64>,
-    pub alpha: f64,
-    #[serde(rename = "Dind")]
-    pub dind: Option<f64>,
-    #[serde(rename = "Dbulk")]
-    pub dbulk: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct MaterialReferenceResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub citation: Option<String>,
-}
+pub use fullmag_workspace::material_catalog::{MaterialPropertiesResource, MaterialReferenceResource};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialResource {

@@ -5259,6 +5259,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/material-library/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["workspace_post_workspace_material_library_versions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library/versions/{family}/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["workspace_patch_workspace_material_library_versions_family_version"];
+        trace?: never;
+    };
     "/v2/workspace/material-library/{id}": {
         parameters: {
             query?: never;
@@ -10707,6 +10739,8 @@ export interface components {
             /** Format: int64 */
             revision: number;
             source?: null | components["schemas"]["SceneMaterialSource"];
+            /** @description Name of the project from which the draft was copied. */
+            source_project?: string | null;
             summary?: string | null;
         };
         /** @description The entry clock protects edits; the catalog clock invalidates shared readers. */
@@ -10718,6 +10752,7 @@ export interface components {
             entries: components["schemas"]["MaterialLibraryEntryResource"][];
             /** Format: int64 */
             revision: number;
+            versions: components["schemas"]["PublishedMaterialVersion"][];
         };
         MaterialLibraryUpdateRequest: components["schemas"]["MaterialLibraryWriteRequest"] & {
             /**
@@ -10732,6 +10767,8 @@ export interface components {
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
             source?: null | components["schemas"]["SceneMaterialSource"];
+            /** @description Name of the project from which the draft was copied. */
+            source_project?: string | null;
             summary?: string | null;
         };
         MaterialParameterFieldDataListResource: {
@@ -10861,6 +10898,32 @@ export interface components {
             /** Format: int64 */
             scene_revision: number;
             source?: null | components["schemas"]["SceneMaterialSource"];
+        };
+        MaterialVersionMutationResource: {
+            /** Format: int64 */
+            catalog_revision: number;
+            published: components["schemas"]["PublishedMaterialVersion"];
+        };
+        MaterialVersionPublishRequest: {
+            /**
+             * Format: int64
+             * @description Revision of the source entry.
+             */
+            base_revision: number;
+            display_name: string;
+            family: string;
+            material_id: string;
+            source_project?: string | null;
+            version: string;
+        };
+        MaterialVersionUpdateRequest: {
+            archived: boolean;
+            /**
+             * Format: int64
+             * @description Revision of the published version's metadata.
+             */
+            base_revision: number;
+            display_name: string;
         };
         MaterializedDatasetActiveSupportResource: {
             selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
@@ -13795,6 +13858,14 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        PublishedMaterialVersion: {
+            archived: boolean;
+            display_name: string;
+            original?: null | components["schemas"]["SceneMaterialSource"];
+            /** Format: int64 */
+            revision: number;
+            source: components["schemas"]["SceneMaterialSource"];
+        };
         QuantityCatalogEntry: {
             /** @description Capability of the resolved backend/plan, independent of field cache. */
             capability_state: string;
@@ -14908,6 +14979,7 @@ export interface components {
             name: string;
             properties: components["schemas"]["SceneMaterialSourceProperties"];
             references?: components["schemas"]["SceneMaterialReference"][];
+            version?: null | components["schemas"]["SceneMaterialVersionSource"];
         };
         /** @enum {string} */
         SceneMaterialSourceKind: "builtin" | "custom" | "modified";
@@ -14941,6 +15013,13 @@ export interface components {
         };
         /** @enum {string} */
         SceneMaterialTransitionScope: "boundary" | "inside" | "outside";
+        /** @description A stable published material key and the provenance recorded at publication. */
+        SceneMaterialVersionSource: {
+            copied_from_family?: string | null;
+            family: string;
+            source_project?: string | null;
+            version: string;
+        };
         SceneMetadataResource: {
             authoring_schema: string;
             id: string;
@@ -35151,7 +35230,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Built-in and user material entries with catalog revision */
+            /** @description Built-in entries, user drafts and published versions with catalog revision */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -35203,6 +35282,131 @@ export interface operations {
                 };
             };
             /** @description Material identity already exists or is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_post_workspace_material_library_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialVersionPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable material version published */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialVersionMutationResource"];
+                };
+            };
+            /** @description Invalid version key or incomplete material */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Source material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source revision or version already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_patch_workspace_material_library_versions_family_version: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable material family key */
+                family: string;
+                /** @description Stable published version key */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialVersionUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Published version metadata updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialVersionMutationResource"];
+                };
+            };
+            /** @description Invalid version key or metadata */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Published version does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale version metadata revision */
             409: {
                 headers: {
                     [name: string]: unknown;

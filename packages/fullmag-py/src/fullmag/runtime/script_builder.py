@@ -91,6 +91,7 @@ from fullmag.model.outputs import (
     Snapshot,
 )
 from fullmag.model.problem import FdmPbc, ParallelExecutionPolicy, Problem
+from fullmag.model.structure import Ferromagnet
 from fullmag.model.study import (
     AntennaFieldSolve,
     DEFAULT_RELAXATION_MAX_STEPS,
@@ -4484,10 +4485,10 @@ def _render_geometry_and_materials(
                 lines.extend(rendered_initial)
             else:
                 lines.append(rendered_initial)
-        dmi = _magnet_dmi(problem, magnet.name)
+        dmi = _magnet_dmi(problem, magnet, "Dind", InterfacialDMI)
         if dmi is not None:
             lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
-        bulk_dmi = _magnet_bulk_dmi(problem, magnet.name)
+        bulk_dmi = _magnet_dmi(problem, magnet, "Dbulk", BulkDMI)
         if bulk_dmi is not None:
             lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         lines.append("")
@@ -11565,7 +11566,7 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
 
 
 def _export_geometry_entry(
-    magnet: object,
+    magnet: Ferromagnet,
     problem: Problem,
     *,
     source_root: Path,
@@ -11586,10 +11587,10 @@ def _export_geometry_entry(
         "Dind": None,
         "Dbulk": None,
     }
-    dmi_val = _magnet_dmi(problem, magnet.name)
+    dmi_val = _magnet_dmi(problem, magnet, "Dind", InterfacialDMI)
     if dmi_val is not None:
         material["Dind"] = dmi_val
-    bulk_dmi_val = _magnet_bulk_dmi(problem, magnet.name)
+    bulk_dmi_val = _magnet_dmi(problem, magnet, "Dbulk", BulkDMI)
     if bulk_dmi_val is not None:
         material["Dbulk"] = bulk_dmi_val
     physics_stack: list[dict[str, object]] = [
@@ -11991,24 +11992,28 @@ def _export_table_autosave(problem: Problem) -> dict[str, object] | None:
     return table_autosave.to_ir() if table_autosave is not None else None
 
 
-def _magnet_dmi(problem: Problem, magnet_name: str) -> float | None:
+def _magnet_dmi(
+    problem: Problem,
+    magnet: Ferromagnet,
+    parameter: str,
+    term_type: type[InterfacialDMI] | type[BulkDMI],
+) -> float | None:
+    material_value = getattr(magnet.material, parameter)
     for term in problem.energy:
-        if isinstance(term, InterfacialDMI):
-            return term.D
-    for magnet in problem.magnets:
-        if magnet.name == magnet_name:
-            return magnet.material.Dind
-    return None
-
-
-def _magnet_bulk_dmi(problem: Problem, magnet_name: str) -> float | None:
-    for term in problem.energy:
-        if isinstance(term, BulkDMI):
-            return term.D
-    for magnet in problem.magnets:
-        if magnet.name == magnet_name:
-            return magnet.material.Dbulk
-    return None
+        if not isinstance(term, term_type):
+            continue
+        if term.D == 0 and material_value is None and magnet.object_id is not None:
+            metadata = problem.runtime_metadata.get("material_assets")
+            inactive = metadata.get("inactive_dmi") if isinstance(metadata, Mapping) else None
+            keys = inactive.get(magnet.object_id) if isinstance(inactive, Mapping) else None
+            # The flat DSL promotes an authored local zero into a global term.
+            # Its mirror must not reactivate a dormant coefficient on another object.
+            if isinstance(keys, list) and parameter in keys and _material_dmi_mirror_matches(
+                problem, parameter=parameter, explicit_value=term.D,
+            ):
+                return None
+        return term.D
+    return material_value
 
 
 def _material_dmi_mirror_matches(

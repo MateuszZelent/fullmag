@@ -21,8 +21,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/kernel/KernelContext", () => ({ useKernel: () => mocks.kernel }));
-vi.mock("@/kernel/resources/materialLibraryResources", () => ({
-  MATERIAL_LIBRARY_RESOURCE_KEY: "/v2/workspace/material-library",
+vi.mock("@/kernel/resources/materialLibraryResources", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/kernel/resources/materialLibraryResources")>(),
   useMaterialLibraryResource: () => mocks.library,
 }));
 vi.mock("@/kernel/resources/useSessionStatus", () => ({ SESSION_STATUS_RESOURCE_KEY: "session:status", useSessionResourceIdentity: () => mocks.identity }));
@@ -54,15 +54,31 @@ const builtin = {
 } as MaterialLibraryEntryResource;
 const custom = { ...builtin, id: "custom:sample", name: "Measured film", kind: "custom", revision: 3 } as MaterialLibraryEntryResource;
 
+const original = { catalog_id: builtin.id, catalog_revision: builtin.revision, name: builtin.name, kind: builtin.kind, properties: builtin.properties, references: builtin.references };
+const published = {
+  display_name: "Measured reference film", archived: false, revision: 6, original,
+  source: {
+    catalog_id: "custom:published:permalloy:sample_a", catalog_revision: 5, name: "First publication", kind: "custom" as const,
+    version: { family: "permalloy", version: "sample_a", source_project: "Film project" },
+    properties: { ...builtin.properties, Ms: 900000 }, references: [{ citation: "Sample measurement" }],
+  },
+};
+const archived = {
+  ...published, display_name: "Earlier sample", archived: true, revision: 7,
+  source: { ...published.source, catalog_id: "custom:published:permalloy:earlier", version: { ...published.source.version, version: "earlier" } },
+};
+
 beforeEach(() => {
   mocks.identity = { sessionId: "A", sessionEpoch: "1", requestScopeEpoch: "1" };
-  mocks.library = { data: { revision: 8, entries: [builtin, custom] }, status: "ready", error: null, refetch: vi.fn() };
+  mocks.library = { data: { revision: 8, entries: [builtin, custom], versions: [] }, status: "ready", error: null, refetch: vi.fn() };
   mocks.kernel = {
     api: {
       workspace: {
         createMaterial: vi.fn(async (request) => ({ ...request, catalog_revision: 9, id: "custom:new", kind: request.source ? "modified" : "custom", revision: 1 })),
         updateMaterial: vi.fn(async (id, request) => ({ ...custom, ...request, catalog_revision: 9, id, revision: 4 })),
         deleteMaterial: vi.fn(async () => ({ revision: 9 })),
+        publishMaterialVersion: vi.fn(async () => ({ catalog_revision: 10, published })),
+        updateMaterialVersion: vi.fn(async (_family, _version, request) => ({ catalog_revision: 9, published: { ...archived, ...request } })),
       },
       model: { createMaterial: vi.fn(async () => ({ scene_revision: 8 })) },
     },
@@ -90,6 +106,130 @@ describe("MaterialLibraryDialog mounted catalog", () => {
       expect(findElements(mounted.body, (element) => element.getAttribute("data-material-id") === custom.id)).toHaveLength(1);
       await act(async () => radio(mounted.body, "Built-in").click());
       expect(mounted.body.textContent).toContain("No matching materials");
+    } finally { await mounted.dispose(); }
+  });
+
+  it("groups published versions, searches stable keys, and passes the immutable snapshot to the chooser", async () => {
+    mocks.library.data = { revision: 8, entries: [builtin, custom], versions: [published, archived] };
+    const onUseMaterial = vi.fn(async () => {});
+    const mounted = await mount({ onUseMaterial });
+    try {
+      const family = findElement(mounted.body, (element) => element.getAttribute("data-material-family") === "permalloy", "material family");
+      expect(family.textContent).toContain(builtin.name);
+      expect(family.textContent).toContain(published.display_name);
+      expect(mounted.body.textContent).not.toContain(archived.display_name);
+      await act(async () => change(input(mounted.body, "Search materials"), "permalloy.sample_a"));
+      await act(async () => selectEntry(mounted.body, published.source.catalog_id));
+      expect(mounted.body.textContent).toContain("800000 → 900000 A/m");
+      expect(mounted.body.textContent).toContain("Film project");
+      expect(mounted.body.textContent).toContain("Sample measurement");
+      await act(async () => button(mounted.body, "Use in model").click());
+      expect(onUseMaterial).toHaveBeenCalledWith(published);
+    } finally { await mounted.dispose(); }
+  });
+
+  it("exposes archived versions through an explicit filter and updates only display metadata", async () => {
+    mocks.library.data = { revision: 8, entries: [builtin, custom], versions: [published, archived] };
+    const mounted = await mount();
+    try {
+      await act(async () => button(mounted.body, "Show archived versions").click());
+      await act(async () => selectEntry(mounted.body, archived.source.catalog_id));
+      expect(buttons(mounted.body, "Use in model")).toHaveLength(0);
+      await act(async () => button(mounted.body, "Manage version").click());
+      await act(async () => change(input(mounted.body, "Display name"), "Renamed sample"));
+      await act(async () => submit(mounted.body));
+      expect(workspace().updateMaterialVersion).toHaveBeenCalledWith("permalloy", "earlier", {
+        base_revision: 7, display_name: "Renamed sample", archived: true,
+      });
+      expect(workspace().updateMaterial).not.toHaveBeenCalled();
+      expect(resources().invalidate).toHaveBeenCalledWith("/v2/workspace/material-library", 9);
+    } finally { await mounted.dispose(); }
+  });
+
+  it("saves a working copy before publishing and keeps the copied project's name", async () => {
+    const snapshot = { state: "ready", resource: { name: "Earlier project" } };
+    mocks.kernel.projectDocument = { subscribe: () => () => {}, getSnapshot: () => snapshot };
+    const modelMaterial = { id: "mat:model", name: "Model film", properties: { ...builtin.properties, Ms: 900000 }, references: builtin.references, source: original };
+    const mounted = await mount({ modelMaterial });
+    try {
+      await act(async () => button(mounted.body, "Save model copy to database").click());
+      await act(async () => button(mounted.body, "Save and continue to publish").click());
+      expect(input(mounted.body, "Family key").value).toBe("permalloy");
+      expect(input(mounted.body, "Display name").value).toBe("Model film");
+      await act(async () => change(input(mounted.body, "Version key"), "sample_a"));
+      await act(async () => submit(mounted.body));
+      expect(workspace().publishMaterialVersion).toHaveBeenCalledWith({
+        material_id: "custom:new", base_revision: 1, family: "permalloy", version: "sample_a",
+        display_name: "Model film", source_project: "Earlier project",
+      });
+      expect(model().createMaterial).not.toHaveBeenCalled();
+    } finally { await mounted.dispose(); }
+  });
+
+  it("keeps zero exchange valid in a working copy and requires positive exchange for publishing", async () => {
+    const modelMaterial = {
+      id: "mat:model", name: "Model film", properties: { ...builtin.properties, Aex: 0 }, references: builtin.references, source: original,
+    };
+    const mounted = await mount({ modelMaterial });
+    try {
+      await act(async () => button(mounted.body, "Save model copy to database").click());
+      await act(async () => button(mounted.body, "Save and continue to publish").click());
+      expect(mounted.body.textContent).toContain("Aex must be greater than 0 J/m to publish a version.");
+      expect(workspace().createMaterial).not.toHaveBeenCalled();
+      await act(async () => submit(mounted.body));
+      expect(workspace().createMaterial).toHaveBeenCalledWith(expect.objectContaining({
+        properties: expect.objectContaining({ Aex: 0 }),
+      }));
+    } finally { await mounted.dispose(); }
+  });
+
+  it("retains the source project when publishing a saved model copy after reopening the database", async () => {
+    const projectSnapshot = { state: "ready", resource: { name: "Earlier project" } };
+    mocks.kernel.projectDocument = { getSnapshot: () => projectSnapshot };
+    const modelMaterial = {
+      id: "mat:model", name: "Model film", properties: builtin.properties, references: builtin.references, source: original,
+    };
+    const mounted = await mount({ modelMaterial });
+    try {
+      await act(async () => button(mounted.body, "Save model copy to database").click());
+      await act(async () => submit(mounted.body));
+      expect(workspace().createMaterial).toHaveBeenCalledWith(expect.objectContaining({
+        name: "Model film", source_project: "Earlier project",
+      }));
+      const saved = await workspace().createMaterial.mock.results[0]?.value;
+      await mounted.setOpen(false);
+      delete mocks.kernel.projectDocument;
+      mocks.library.data = { revision: saved.catalog_revision, entries: [builtin, custom, saved], versions: [] };
+      await mounted.setOpen(true);
+      await act(async () => selectEntry(mounted.body, saved.id));
+      await act(async () => button(mounted.body, "Publish version").click());
+      expect(mounted.body.textContent).toContain("Copied from project Earlier project");
+      await act(async () => change(input(mounted.body, "Version key"), "sample_a"));
+      await act(async () => submit(mounted.body));
+      expect(workspace().publishMaterialVersion).toHaveBeenCalledWith({
+        material_id: saved.id, base_revision: saved.revision, family: "permalloy", version: "sample_a",
+        display_name: "Model film", source_project: "Earlier project",
+      });
+    } finally { await mounted.dispose(); }
+  });
+
+  it("preserves publication input after a duplicate key and allows changing the key", async () => {
+    workspace().publishMaterialVersion.mockRejectedValueOnce(new ControlRoomApiError("Version permalloy.sample_a already exists", 409));
+    const mounted = await mount();
+    try {
+      await act(async () => selectEntry(mounted.body, custom.id));
+      await act(async () => button(mounted.body, "Publish version").click());
+      await act(async () => change(input(mounted.body, "Family key"), "permalloy"));
+      await act(async () => change(input(mounted.body, "Version key"), "sample_a"));
+      await act(async () => submit(mounted.body));
+      expect(mounted.body.textContent).toContain("Version permalloy.sample_a already exists");
+      expect(input(mounted.body, "Version key").value).toBe("sample_a");
+      await act(async () => change(input(mounted.body, "Version key"), "sample_b"));
+      await act(async () => submit(mounted.body));
+      expect(workspace().publishMaterialVersion).toHaveBeenLastCalledWith(expect.objectContaining({
+        material_id: custom.id, base_revision: custom.revision, family: "permalloy", version: "sample_b",
+      }));
+      expect(resources().invalidate).toHaveBeenCalledExactlyOnceWith("/v2/workspace/material-library", 10);
     } finally { await mounted.dispose(); }
   });
 
