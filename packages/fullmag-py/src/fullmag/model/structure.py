@@ -757,12 +757,19 @@ def _region_shape_to_ir(shape: object) -> dict[str, object]:
         raise TypeError("region shape must be a Fullmag geometry or shape IR dict")
 
     kind = shape_ir.get("kind")
+    if kind in {"difference", "union", "intersection"}:
+        return {"kind": "csg", "expression": shape_ir}
     if kind == "translate":
         base = shape_ir.get("base")
         if not isinstance(base, dict):
             raise TypeError("translated region shape base must be a shape IR dict")
         translated = _region_shape_to_ir(base)
         offset = as_vector3(shape_ir.get("by"), "shape.center")
+        if translated["kind"] == "csg":
+            # A CSG region carries its placement in the geometry expression.
+            return {"kind": "csg", "expression": {
+                **shape_ir, "base": translated["expression"], "by": list(offset),
+            }}
         center = as_vector3(translated.get("center", (0.0, 0.0, 0.0)), "shape.center")
         translated["center"] = [center[index] + offset[index] for index in range(3)]
         return translated

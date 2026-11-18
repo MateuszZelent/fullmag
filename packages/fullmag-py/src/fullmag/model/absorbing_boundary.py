@@ -146,8 +146,8 @@ _GEOMETRY_FIELDS = {
 
 
 def _identifier(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} must be a nonempty string")
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError(f"{field} must be a nonempty string without surrounding whitespace")
     return value
 
 

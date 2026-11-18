@@ -93,6 +93,11 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
             layer_id="wide", name="Wide", total_width_m=2., ramp_width_m=1., max_damping=.5,
             geometry=geometry.sphere((0, 0, 0), 2., "outward"), region_id=region.region_id,
         )
+        for kwargs in ({"layer_id": " rim "}, {"region_id": " branch-id"}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, "whitespace"):
+                replace(layer, **kwargs)
+        with self.assertRaisesRegex(ValueError, "whitespace"):
+            geometry.region_boundary("branch-id ")
         with self.assertRaises(FrozenInstanceError):
             layer.layer_id = "other"
         with self.assertRaisesRegex(ValueError, "unique|duplicate"):
@@ -130,6 +135,54 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
         for point in ((0., -3., 0.), (-3., 3., 0.), (3., 3., 0.)):
             self.assertGreater(branch(*point), 0.)
         self.assertLess(branch(0., 3., 0.), 0.)
+
+    def test_translated_spherical_csg_boundary_survives_scene_export(self) -> None:
+        from fullmag.runtime.script_builder import render_scene_document_as_script
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "shell.py"
+            path.write_text("""
+import fullmag as fm
+study = fm.study("csg-shell")
+study.engine("fdm")
+film = study.geometry(fm.Box(1e-6, 1e-6, 1e-6), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.01
+shell = (fm.Sphere(8e-9) - fm.Sphere(3e-9)).translate((20e-9, 0, 0))
+region = film.add_region("Displaced shell", shell, region_id="shell-id")
+film.alpha.absorbing_boundary(layers=[
+    fm.SpatialAbsorbingLayer(layer_id="abl", name="Shell boundary",
+        geometry=fm.AbsorbingGeometry.region_boundary(region.region_id),
+        total_width_m=2e-9, ramp_width_m=1e-9, max_damping=0.5),
+])
+study.stages.add_run(stage_id="run", until=1e-12)
+""", encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            original = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+            shape = original["object_regions"][0]["shape"]
+            self.assertEqual(shape["kind"], "csg")
+            offset = shape["expression"]
+            self.assertEqual((offset["kind"], offset["by"]), ("translate", [20e-9, 0, 0]))
+            self.assertEqual(offset["base"]["kind"], "difference")
+            self.assertEqual(offset["base"]["base"]["radii"], [8e-9] * 3)
+            self.assertEqual(offset["base"]["tool"]["radii"], [3e-9] * 3)
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            path.write_text(render_scene_document_as_script(scene), encoding="utf-8")
+            restored = fm.load_problem_from_script(path, lightweight_assets=True)
+            recovered = restored.stages[-1].problem.to_ir(include_geometry_assets=False)
+            self.assertEqual(recovered["object_regions"], original["object_regions"])
+            self.assertEqual(recovered["magnets"][0]["absorbing_boundary"],
+                             original["magnets"][0]["absorbing_boundary"])
+
+    def test_boolean_regions_keep_the_authored_expression(self) -> None:
+        film = self._film()
+        a = fm.Box(8e-9, 8e-9, 8e-9)
+        b = fm.Sphere(2e-9)
+        for geometry in (a - b, a + b, a & b, (a - b).translate((1e-9, 0, 0)).translate((0, 2e-9, 0))):
+            with self.subTest(geometry=geometry):
+                region = film.add_region(geometry.geometry_name, geometry)
+                self.assertEqual(region.to_ir()["shape"], {"kind": "csg", "expression": geometry.to_ir()})
 
     def test_spatial_layers_round_trip_scene_script_and_ir(self) -> None:
         with TemporaryDirectory() as tmp_dir:
