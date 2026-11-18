@@ -314,6 +314,13 @@ mumax3 also drives every step from the host. The plan measures it.
   `add_simpleantenna.mask(...)` call and one `.add(fm.mask(f, name=value, …), fm.time(g, …))`
   per term; an array mask is written as `fm.VectorMask.load(path)`. User modules and library calls (L1) are
   expanded: a script exported from the UI contains the L0 form.
+- Re-added antennas (review of PR #439): an id removed by a stage may be added
+  again. A definition already written keeps its variable, so
+  `Add(a) → Remove → Add(a.with_parameters(...)) → Remove → Add(a)` exports `a`
+  again. A new definition that differs only in parameter values is written as
+  `a_2 = a.with_parameters(...)`, from the first earlier definition it can be
+  derived from (a changed term has no ready-antenna `origin`). Any other change
+  under the same id is refused.
 - API: `MaskFieldDriveResource`, CRUD like field drives; errors
   `{code, path, position, message}`.
 - Control Room: one panel per antenna — target, shape, position, frame, and a
@@ -324,6 +331,16 @@ mumax3 also drives every step from the host. The plan measures it.
   arguments of the chosen one and rebuilds its terms on the server when an
   argument changes. The server validates; no client-side
   evaluation.
+- Panel draft (review of PR #439): the local draft belongs to the antenna, not to
+  a scene revision, so a newer revision keeps the draft, the focus and the scroll.
+  The panel merges its edits onto the antenna as the scene has it now (three-way
+  merge from the version the edits started at): a field changed only elsewhere
+  follows the scene, and a field changed on both sides blocks Apply until the user
+  keeps their values or loads the scene version. Apply merges onto the antenna the
+  server holds at the write's base revision, so a stale list cannot overwrite a
+  change made elsewhere. A successful create, save or delete marks the Inspector
+  session clean before the panel moves the selection, so no "Unapplied Inspector
+  changes" dialog follows it; a discarded new-antenna draft is clean until edited.
 
 ## 8. L2: one function of space and time (Mateusz's form)
 
