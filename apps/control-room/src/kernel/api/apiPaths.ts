@@ -1248,3 +1248,6 @@ export const MODEL_OBJECT_SOURCE_SURFACE_PATH = openApiV2Path(
 export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
 );
+
+export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/material-library");
+export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
