@@ -6726,52 +6726,54 @@ class _MaskAntennaRenderer:
 
         self._taken |= {name.rsplit(".", 1)[-1] for name in READY_ANTENNAS}
         self._defs: dict[tuple[str, str], str] = {}
-        self._antennas: dict[str, tuple[str, str]] = {}
-        # Ids removed by a stage: their next Add may carry a new definition.
+        # Every definition emitted for an id, in order: definition key -> variable.
+        self._emitted: dict[str, dict[str, str]] = {}
+        # The definition an id currently has; Update stages use its variable.
+        self._active: dict[str, str] = {}
+        # Ids removed by a stage: their next Add may carry another definition.
         self._removed: set[str] = set()
         self._source_root = source_root
         self._loop_names: tuple[str, str, str] | None = None
 
     def variable(self, drive_id: str) -> str | None:
-        known = self._antennas.get(drive_id)
-        return None if known is None else known[0]
+        key = self._active.get(drive_id)
+        return None if key is None else self._emitted[drive_id][key]
 
     def remove(self, drive_id: str) -> None:
         """A stage removed the antenna ``drive_id``."""
-        if drive_id in self._antennas:
+        if drive_id in self._active:
             self._removed.add(drive_id)
 
     def define(self, payload: Mapping[str, object]) -> tuple[str, list[str]]:
         """The antenna's variable and the lines that create it (none when already created).
 
-        An id removed by a stage may be added again with another definition
-        (``Add(a) -> Remove(a.id) -> Add(a.with_parameters(...))``); it then gets
-        a new variable, which later Update stages use.
+        An id removed by a stage may be added again with another definition. A
+        definition emitted before keeps its variable, so
+        ``Add(a) -> Remove -> Add(a.with_parameters(...)) -> Remove -> Add(a)``
+        adds ``a`` again. A new definition that differs only in parameter values
+        becomes ``a_2 = a.with_parameters(...)``. Later Update stages use the
+        variable of the definition added last.
         """
         drive_id = str(payload["id"])
         key = json.dumps(payload, sort_keys=True)
-        known = self._antennas.get(drive_id)
-        removed = drive_id in self._removed
-        self._removed.discard(drive_id)
-        if known is not None:
-            if known[1] == key:
-                return known[0], []
-            calls = (
-                _mask_parameter_updates(json.loads(known[1]), payload) if removed else None
-            )
-            if calls is None:
+        emitted = self._emitted.get(drive_id)
+        if emitted is not None:
+            if drive_id not in self._removed and self._active[drive_id] != key:
                 raise ValueError(
                     f"mask antenna {drive_id!r} is added with two different definitions; "
-                    "give the changed antenna its own id, or change only parameter values "
-                    "after removing it"
+                    "give the changed antenna its own id, or remove it before adding "
+                    "it again with new parameter values"
                 )
-            # The same antenna with new parameter values: a frozen copy, as
-            # ``antenna.with_parameters(...)`` in the original script.
-            variable = _unique_identifier(drive_id, self._taken)
-            self._antennas[drive_id] = (variable, key)
-            return variable, [f"{variable} = {known[0]}{''.join(calls)}"]
+            if key in emitted:
+                variable, lines = emitted[key], []
+            else:
+                variable, lines = self._parameter_copy(drive_id, emitted, key)
+            self._removed.discard(drive_id)
+            self._active[drive_id] = key
+            return variable, lines
         variable = _unique_identifier(drive_id, self._taken)
-        self._antennas[drive_id] = (variable, key)
+        self._emitted[drive_id] = {key: variable}
+        self._active[drive_id] = key
         def_lines: list[str] = []
         position = [float(value) for value in payload.get("position_m") or (0.0, 0.0, 0.0)]
         arguments = [
@@ -6820,6 +6822,30 @@ class _MaskAntennaRenderer:
         if payload.get("enabled") is False:
             lines.append(f"{variable}.enabled = False")
         return variable, [*def_lines, *lines]
+
+    def _parameter_copy(
+        self, drive_id: str, emitted: dict[str, str], key: str
+    ) -> tuple[str, list[str]]:
+        """``<id>_2 = <earlier variable>.with_parameters(...)`` for a new definition.
+
+        The first definition emitted for the id that differs only in parameter
+        values is the base; the original script usually derives its copies from
+        the antenna it created.
+        """
+        after = json.loads(key)
+        for base_key, base_variable in emitted.items():
+            calls = _mask_parameter_updates(json.loads(base_key), after)
+            if calls is not None:
+                # A frozen copy, as ``antenna.with_parameters(...)`` in the original script.
+                variable = _unique_identifier(drive_id, self._taken)
+                emitted[key] = variable
+                return variable, [f"{variable} = {base_variable}{''.join(calls)}"]
+        raise ValueError(
+            f"mask antenna {drive_id!r} is added again with a definition that cannot be "
+            "written as with_parameters(...) of an earlier one: only parameter values may "
+            "differ, a changed term has no ready-antenna origin and an unchanged term keeps "
+            "it; give the changed antenna its own id"
+        )
 
     def _library_call_lines(
         self,

@@ -304,6 +304,123 @@ class MaskAntennaSceneTests(unittest.TestCase):
             """
         ))
 
+    def _assert_restored_antenna(
+        self, script: str, restored: str, first: str
+    ) -> tuple[str, dict[str | None, object]]:
+        """Both round trips pass; stage ``restored`` has the antenna of stage ``first`` again.
+
+        Returns the script rendered from the scene and the antennas of each stage.
+        """
+        self._assert_both_round_trips(script)
+        original, _, source = self._round_trip(script)
+        drives = {stage_id: drives for stage_id, _, drives in self._stage_drives(original)}
+        self.assertEqual([drive["id"] for drive in drives[restored]], ["a"])
+        self.assertEqual(drives[restored], drives[first])
+        return source, drives
+
+    def test_antenna_restored_after_a_parameter_copy_survives_export(self) -> None:
+        # Add(a) -> Remove -> Add(a.with_parameters(...)) -> Remove -> Add(a).
+        source, _ = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), id="a")
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(a.with_parameters(mask_parameters={"B": 5e-3}), stage_id="on_copy")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.update_field_drive("a", time_parameters={"f0": 2e9}, stage_id="u")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ), restored="run2", first="run0")
+        self.assertEqual(source.count("a = study.add_simpleantenna.arbitrary_mask("), 1)
+        self.assertEqual(source.count("study.stages.add_field_drive(a, stage_id="), 2)
+        self.assertEqual(source.count("a_2 = a.with_parameters("), 1)
+        self.assertIn("study.stages.update_field_drive(a, time_parameters=", source)
+
+    def test_ready_antenna_restored_after_a_parameter_copy_keeps_its_origin(self) -> None:
+        # The case of the review of #439: the copy drops the ready-antenna origin of
+        # term 0, and adding ``a`` again must bring back its parameters and origin.
+        _, drives = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            """
+        ), restored="run2", first="run0")
+        self.assertIsNotNone(drives["run2"][0]["terms"][0].get("origin"))
+        self.assertIsNone(drives["run1"][0]["terms"][0].get("origin"))
+
+    def test_second_parameter_copy_derives_from_the_first_definition(self) -> None:
+        # The third definition keeps the origin of term 0, so only ``a`` can be its base.
+        source, _ = self._assert_restored_antenna(WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            a.add(fm.mask(ramp, B=1e-3), fm.time(wave, f0=1e9))
+            study.stages.add_field_drive(a, stage_id="on")
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_again")
+            study.stages.add_field_drive(
+                a.with_parameters(term=1, mask_parameters={"B": 2e-3}), stage_id="on_second_copy"
+            )
+            study.stages.add_run(stage_id="run2", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off_last")
+            study.stages.add_field_drive(a, stage_id="on_restored")
+            study.stages.add_run(stage_id="run3", until=1e-12)
+            """
+        ), restored="run3", first="run0")
+        self.assertIn("a_3 = a.with_parameters(term=1, ", source)
+
+    def test_copy_added_before_its_ready_antenna_original_is_refused_by_name(self) -> None:
+        # Known limit: the original (with its origin) is never written before the copy,
+        # so it cannot be derived from it. The export fails with a clear message.
+        script = WHOLE_STUDY_HEADER + textwrap.dedent(
+            """
+            from fullmag.antennas import gaussian_k_source
+
+            a = film.add_simpleantenna.arbitrary_mask(fm.Box(400e-9, 100e-9, 10e-9), frame="world", id="a")
+            for field, drive in gaussian_k_source(amplitude=0.2 * mT, wavelength=60 * nm, frequency=3.6 * GHz,
+                                                  fwhm_y=40 * nm, center_x=-100 * nm):
+                a.add(field, drive)
+            study.stages.add_field_drive(
+                a.with_parameters(term=0, mask_parameters={"amplitude": 0.1 * mT}), stage_id="on_copy"
+            )
+            study.stages.add_run(stage_id="run0", until=1e-12)
+            study.stages.remove_field_drive(a.id, stage_id="off")
+            study.stages.add_field_drive(a, stage_id="on_original")
+            study.stages.add_run(stage_id="run1", until=1e-12)
+            """
+        )
+        with self.assertRaisesRegex(ValueError, r"mask antenna 'a' .* cannot be written as with_parameters"):
+            self._round_trip(script)
+
     def test_functions_with_equal_bodies_keep_their_names(self) -> None:
         script = WHOLE_STUDY_HEADER + textwrap.dedent(
             """
