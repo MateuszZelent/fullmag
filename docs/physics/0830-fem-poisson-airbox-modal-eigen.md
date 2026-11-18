@@ -2222,7 +2222,13 @@ dokładnej odwrotności GMRES zbiega w jednej iteracji, a tolerancja
 magnetyczna bez sprzężenia demag pozostaje macierzą preconditionera ST
 i ścieżką zapasową, gdy PETSc nie ma MUMPS, gdy
 `FULLMAG_K0_AUGMENTED_SHIFT=0` albo gdy faktoryzacja się nie powiedzie.
-Dokładna gęsta materializacja dla małych wymiarów ma pierwszeństwo bez zmian.
+Dokładna gęsta materializacja operatora przesuniętego pozostaje dla
+wymiaru real-split do 512 (status `exact_preconditioner.status` bez zmian).
+Powyżej tego progu, gdy MUMPS jest dostępny, zastępuje ją faktoryzacja
+$K_{\hat\tau}$ (status `superseded_by_augmented_shift`), ponieważ gęsta
+materializacja wymaga dwóch rozwiązań Poissona na kolumnę i gęstego LU.
+Nieudana faktoryzacja $K_{\hat\tau}$ przechodzi wtedy na preconditioner
+magnetyczny.
 
 | Symbol | Znaczenie | Jednostka SI |
 | --- | --- | --- |

@@ -5950,6 +5950,13 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     // materialized and usable for this shift.
     out_result->exact_preconditioner_dimension_available = false;
     out_result->exact_preconditioner_dimension = 0u;
+    // Beyond the bounded window dimension the sparse augmented factorization
+    // (see below) is exact and far cheaper than the dense materialization,
+    // which needs 2*split Poisson solves and a dense split x split LU.
+    const bool prefer_augmented_shift =
+        !borrowed_window_operator &&
+        augmented_shift_solver_enabled() &&
+        split_count > kProductionWindowExactPreconditionerMaxDimension;
     if (borrowed_window_operator) {
         copy_message(
             out_result->exact_preconditioner_status,
@@ -5961,9 +5968,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         copy_message(
             out_result->exact_preconditioner_status,
             sizeof(out_result->exact_preconditioner_status),
-            split_count <= kProductionExactPreconditionerMaxDimension
-                ? "pending_single_shift"
-                : "disabled_dimension_limit");
+            prefer_augmented_shift
+                ? "superseded_by_augmented_shift"
+                : (split_count <= kProductionExactPreconditionerMaxDimension
+                       ? "pending_single_shift"
+                       : "disabled_dimension_limit"));
     }
     // A standalone positive target needs the two-vector J-equivalence class.
     // Window subcalls use the same target enum but retain four-vector coverage.
@@ -6006,7 +6015,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     const bool exact_preconditioner_eligible =
         borrowed_window_operator
             ? bounded_window_preconditioner
-            : split_count <= kProductionExactPreconditionerMaxDimension;
+            : !prefer_augmented_shift &&
+                split_count <= kProductionExactPreconditionerMaxDimension;
     const std::uint64_t preconditioner_poisson_solve_count_before =
         context.poisson_solve_count;
     double window_shift_setup_seconds = 0.0;
@@ -6024,7 +6034,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_shift_setup_timing_available;
         out_result->shifted_preconditioner_setup_seconds =
             window_shift_setup_seconds;
-    } else if (!borrowed_window_operator) {
+    } else if (!borrowed_window_operator && !prefer_augmented_shift) {
         const auto exact_construction_started_at = std::chrono::steady_clock::now();
         exact_shifted_preconditioner = create_production_exact_shift_preconditioner(
             schur_shell,
