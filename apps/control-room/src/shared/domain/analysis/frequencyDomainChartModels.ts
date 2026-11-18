@@ -1664,6 +1664,7 @@ function responseObservableSeries(
   diagnostics: string[],
 ): FrequencyDomainChartSeries[] {
   const evidence = new Map<FrequencyResponsePoint, ResponseObservableSeriesEvidence>();
+  let incompleteProvenance = false;
   for (const point of points) {
     if (selector(point) == null) continue;
     const raw = provenanceByPoint.get(point);
@@ -1695,14 +1696,16 @@ function responseObservableSeries(
       unit = stringValue(provenance?.response_units);
     }
     if (!provenance || label == null || unit == null) {
-      const diagnostic = `${diagnosticLabel} provenance is incomplete or unsupported`;
-      if (!diagnostics.includes(diagnostic)) diagnostics.push(diagnostic);
+      incompleteProvenance = true;
       continue;
     }
     // Native provenance is a flat metadata record. Sort its entries without
     // mutating it so equivalent key order does not create another series.
     const key = JSON.stringify(Object.entries(provenance).toSorted(([a], [b]) => a.localeCompare(b)));
     evidence.set(point, { key, label, unit });
+  }
+  if (incompleteProvenance) {
+    diagnostics.push(`${diagnosticLabel} provenance is incomplete or unsupported`);
   }
   const groups = Map.groupBy(points, (point) => evidence.get(point)?.key ?? null);
   const validGroups = [...groups].filter(([key]) => key !== null);
