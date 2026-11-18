@@ -399,6 +399,55 @@ describe("MaskAntennaPanel draft across scene revisions", () => {
     expect(maskFunction(request.drive).parameters?.[0].value).toBe(5e-4);
   });
 
+  it("edits a field from the value the scene gave it, without a conflict", async () => {
+    publish([antenna("antenna", 2e-4)], 11);
+    const view = await mount(antennaSelection("antenna"));
+    await type(input(view.container, "Bz ="), EDITED_BZ);
+    await act(async () => publish([antenna("antenna", 5e-4)], 12));
+    await type(input(view.container, "B01"), "7e-4");
+
+    expect(view.container.textContent).not.toContain(CONFLICT);
+    view.model.replaceMaskFieldDrive.mockResolvedValue(ack(13));
+    expect(await apply(view.session())).toBe(true);
+    const request = submittedDrive(view.model.replaceMaskFieldDrive);
+    expect(maskFunction(request.drive).parameters?.[0].value).toBe(7e-4);
+    expect(maskFunction(request.drive).outputs[2]).toBe(EDITED_BZ);
+  });
+
+  it("types the earlier value back after the scene changed it", async () => {
+    publish([antenna("antenna", 2e-4)], 11);
+    const view = await mount(antennaSelection("antenna"));
+    await type(input(view.container, "Bz ="), EDITED_BZ);
+    await act(async () => publish([antenna("antenna", 5e-4)], 12));
+    const b01 = input(view.container, "B01");
+    for (const text of ["2", "2e", "2e-", "2e-4"]) {
+      await type(b01, text);
+      expect(b01.value).toBe(text);
+      expect(view.container.textContent).not.toContain(CONFLICT);
+    }
+
+    view.model.replaceMaskFieldDrive.mockResolvedValue(ack(13));
+    expect(await apply(view.session())).toBe(true);
+    expect(maskFunction(submittedDrive(view.model.replaceMaskFieldDrive).drive).parameters?.[0].value).toBe(2e-4);
+  });
+
+  it("does not bring back a value the user typed back before the scene changed it", async () => {
+    publish([antenna("antenna", 2e-4)], 11);
+    const view = await mount(antennaSelection("antenna"));
+    await type(input(view.container, "B01"), "3e-4");
+    await type(input(view.container, "Bz ="), EDITED_BZ);
+    await type(input(view.container, "B01"), "2e-4");
+    await act(async () => publish([antenna("antenna", 5e-4)], 12));
+    expect(input(view.container, "B01").value).toBe("0.0005");
+
+    await type(input(view.container, "Bz ="), `${EDITED_BZ} + 0.0`);
+    expect(input(view.container, "B01").value).toBe("0.0005");
+    expect(view.container.textContent).not.toContain(CONFLICT);
+    view.model.replaceMaskFieldDrive.mockResolvedValue(ack(13));
+    expect(await apply(view.session())).toBe(true);
+    expect(maskFunction(submittedDrive(view.model.replaceMaskFieldDrive).drive).parameters?.[0].value).toBe(5e-4);
+  });
+
   it("blocks Apply for a field changed on both sides until the user keeps their values", async () => {
     publish([antenna("antenna", 2e-4)], 11);
     const view = await mount(antennaSelection("antenna"));

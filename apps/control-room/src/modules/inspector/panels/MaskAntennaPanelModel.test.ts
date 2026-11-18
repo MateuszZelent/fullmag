@@ -8,6 +8,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import {
   addTerm,
+  addTermParameter,
   commitMaskAntenna,
   createMaskAntennaDraft,
   maskAntennaSummary,
@@ -251,6 +252,33 @@ describe("mask antenna draft merge", () => {
     const term = merged.terms[0];
     expect(term.mask.kind === "function" && term.mask.function.outputs[2]).toBe("amplitude * g");
     expect(term.time?.parameters?.[1]).toEqual({ name: "t0", value: 1e-9 });
+  });
+
+  it("merges parameters by name when the scene reorders them", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const mine = setTermParameter(base, 0, "mask", "amplitude", 3e-4);
+    const theirs = structuredClone(base);
+    const theirMask = theirs.terms[0].mask;
+    if (theirMask.kind !== "function" || !theirMask.function.parameters) throw new Error("a function mask");
+    theirMask.function.parameters.reverse();
+    const { conflicts, merged } = mergeMaskAntennaDraft(base, mine, theirs);
+    expect(conflicts).toEqual([]);
+    const mask = merged.terms[0].mask;
+    expect(mask.kind === "function" && mask.function.parameters).toEqual([
+      { name: "center_x", value: -2.6e-6 },
+      { name: "wavelength", value: 2.79e-7 },
+      { name: "amplitude", value: 3e-4 },
+    ]);
+  });
+
+  it("keeps a parameter the draft added beside one the scene changed", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const mine = addTermParameter(base, 0, "time", "phase");
+    const theirs = setTermParameter(base, 0, "time", "frequency", 4e9);
+    const { conflicts, merged } = mergeMaskAntennaDraft(base, mine, theirs);
+    expect(conflicts).toEqual([]);
+    expect(merged.terms[0].time?.parameters?.map((parameter) => parameter.name)).toEqual(["frequency", "t0", "phase"]);
+    expect(merged.terms[0].time?.parameters?.[0]).toEqual({ name: "frequency", value: 4e9 });
   });
 
   it("treats a list whose length changed on one side and was edited on the other as a conflict", () => {

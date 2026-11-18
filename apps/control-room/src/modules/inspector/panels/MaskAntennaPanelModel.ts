@@ -491,22 +491,51 @@ export interface MaskAntennaMerge {
   merged: MaskFieldDriveResource;
 }
 
+/** Lists whose items are identified by their unique `name`, not by position. */
+const NAMED_LISTS = new Set(["locals", "parameters"]);
+
+function namedItems(value: unknown): Map<string, unknown> | null {
+  if (!Array.isArray(value)) return null;
+  const items = new Map<string, unknown>();
+  for (const item of value) {
+    if (!isJsonRecord(item) || typeof item.name !== "string" || items.has(item.name)) return null;
+    items.set(item.name, item);
+  }
+  return items;
+}
+
 function mergeJson(
   base: unknown,
   mine: unknown,
   theirs: unknown,
   path: string,
   conflicts: string[],
+  key?: string,
 ): unknown {
   if (sameJson(mine, base)) return theirs;
   if (sameJson(theirs, base) || sameJson(mine, theirs)) return mine;
   if (isJsonRecord(base) && isJsonRecord(mine) && isJsonRecord(theirs)) {
     const merged: Record<string, unknown> = {};
-    for (const key of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
-      const value = mergeJson(base[key], mine[key], theirs[key], `${path}.${key}`, conflicts);
-      if (value !== undefined) merged[key] = value;
+    for (const name of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
+      const value = mergeJson(base[name], mine[name], theirs[name], `${path}.${name}`, conflicts, name);
+      if (value !== undefined) merged[name] = value;
     }
     return merged;
+  }
+  const named = key && NAMED_LISTS.has(key)
+    ? [namedItems(base), namedItems(mine), namedItems(theirs)]
+    : null;
+  if (named?.[0] && named[1] && named[2]) {
+    // Parameters and locals merge by name, in the scene's order; items added
+    // by the draft follow. A list reordered elsewhere keeps each value on its name.
+    const [baseItems, mineItems, theirItems] = named;
+    const names = [...theirItems.keys(), ...[...mineItems.keys()].filter((name) => !theirItems.has(name))];
+    return names.flatMap((name) => {
+      const value = mergeJson(
+        baseItems.get(name), mineItems.get(name), theirItems.get(name), `${path}[${name}]`, conflicts,
+      );
+      return value === undefined ? [] : [value];
+    });
   }
   if (
     Array.isArray(base) && Array.isArray(mine) && Array.isArray(theirs) &&

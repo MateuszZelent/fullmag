@@ -571,45 +571,40 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   const pending = pendingId !== null;
   const locked = !draft || pending;
 
-  /** This antenna's edits, pinned to the scene version they start from. */
-  function pinned(current: MaskAntennaDraftState): MaskAntennaDraftState {
-    if (current.key === identityKey && current.value !== null) return current;
-    return {
-      base: model.mode === "found" && baseline ? structuredClone(baseline) : null,
-      key: identityKey,
-      value: baseline ? structuredClone(baseline) : null,
-    };
+  /**
+   * The state the next edit starts from. Edits are relative to `base` and use
+   * every typed text. Without a conflict, the draft is first rebased onto the
+   * scene version: the merge is folded in and only the typed texts that still
+   * match it are kept, so a field the user sees from the scene is edited from
+   * the scene's value. A conflict keeps its base until it is resolved.
+   */
+  function editStart(): { base: MaskFieldDriveResource | null; raw: RawInputs; value: MaskFieldDriveResource } | null {
+    if (!own) {
+      if (!baseline) return null;
+      return {
+        base: model.mode === "found" ? structuredClone(baseline) : null,
+        raw: ownRaw,
+        value: structuredClone(baseline),
+      };
+    }
+    if (merge && baseline && merge.conflicts.length === 0 && !sameJson(draftState.base, baseline)) {
+      return { base: structuredClone(baseline), raw, value: structuredClone(merge.merged) };
+    }
+    return { base: draftState.base, raw: ownRaw, value: own };
   }
   function setRaw(key: string, text: string): void {
-    setDraftState(pinned);
-    setRawState((current) => ({
-      identityKey,
-      values: {
-        ...(current.identityKey === identityKey
-          ? Object.fromEntries(Object.entries(current.values).filter(([name]) => name in raw))
-          : {}),
-        [key]: text,
-      },
-    }));
+    const start = editStart();
+    if (!start) return;
+    setDraftState({ base: start.base, key: identityKey, value: start.value });
+    setRawState({ identityKey, values: { ...start.raw, [key]: text } });
   }
   function setDraft(
     update: (value: MaskFieldDriveResource) => MaskFieldDriveResource,
   ): void {
-    setDraftState((current) => {
-      const next = pinned(current);
-      if (!next.value) return next;
-      const mine = applyRawInputs(next.value, raw);
-      if (model.mode === "found" && next.base && baseline) {
-        const merged = mergeMaskAntennaDraft(next.base, mine, baseline);
-        // Without a conflict, fold the scene's changes in and rebase the draft
-        // onto the scene version; a conflict keeps its base until it is resolved.
-        if (merged.conflicts.length === 0) {
-          return { base: structuredClone(baseline), key: identityKey, value: update(merged.merged) };
-        }
-      }
-      return { ...next, value: update(mine) };
-    });
-    // Structural edits fold the numeric drafts into the antenna.
+    const start = editStart();
+    if (!start) return;
+    // Structural edits fold the typed numbers into the antenna.
+    setDraftState({ base: start.base, key: identityKey, value: update(applyRawInputs(start.value, start.raw)) });
     setRawState({ identityKey, values: {} });
   }
   /** Resolve the conflicts with this panel's values; other fields keep the scene's. */
@@ -739,6 +734,7 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
           // write is checked against.
           const current = await api.model.maskFieldDrives({ sessionScopeKey: scopeKey });
           if (current.scene_revision !== baseRevision) {
+            resources.invalidate(MODEL_MASK_FIELD_DRIVES_RESOURCE_KEY, current.scene_revision);
             throw new Error("The scene changed while saving. Apply again.");
           }
           const server = current.drives.find((item) => item.id === submitted.id);
