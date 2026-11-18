@@ -22,7 +22,7 @@ from fullmag.init.magnetization import (
 )
 from fullmag.init.textures import PresetTexture
 from fullmag.init.state_io import infer_magnetization_state_format
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers, SpatialAbsorbingLayer
 from fullmag.model.antenna import (
     ANTENNA_PORT_MODE_SCHEMA_VERSION,
     AntennaSourceCutRt0,
@@ -1497,18 +1497,17 @@ def _render_scene_document_bootstrap(
     for mode in builder.get("antenna_port_modes") or []:
         lines.append(_render_antenna_port_mode_payload_line(mode))
 
+    # Region references are also used by object-scoped damping, even before a stage is added.
+    region_lines, region_vars = _render_region_owned_authoring_from_override(
+        objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
+    )
+    lines.extend(region_lines)
     authored_stages = []
     raw_stages = builder.get("stages") or []
     if include_authored_stages:
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
-        region_vars: dict[tuple[str, str], str] = {}
-        if any("magnetization_assignments" in stage for stage in authored_stages):
-            region_lines, region_vars = _render_region_owned_authoring_from_override(
-                objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
-            )
-            lines.extend(region_lines)
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
@@ -5067,6 +5066,25 @@ def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
         return []
     if not isinstance(raw, Mapping):
         raise ValueError(f"{var_name}.absorbing_boundary must be an object")
+    if "layers" in raw:
+        if set(raw) != {"layers"} or not isinstance(raw["layers"], (list, tuple)):
+            raise ValueError(f"{var_name}.absorbing_boundary requires a layers array")
+        try:
+            collection = AbsorbingBoundaryLayers(tuple(SpatialAbsorbingLayer.from_ir(row) for row in raw["layers"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Invalid {var_name}.absorbing_boundary: {error}") from error
+        lines = [f"{var_name}.alpha.absorbing_boundary(layers=["]
+        for layer in collection.layers:
+            args = layer.to_ir()
+            geometry = args.pop("geometry")
+            kind = geometry.pop("kind")
+            geometry_args = ", ".join(f"{key}={value!r}" for key, value in geometry.items())
+            lines.append("    fm.SpatialAbsorbingLayer(")
+            lines.extend(f"        {key}={value!r}," for key, value in args.items())
+            lines.append(f"        geometry=fm.AbsorbingGeometry.{kind}({geometry_args}),")
+            lines.append("    ),")
+        lines.append("])")
+        return lines
     faces = raw.get("faces")
     if not isinstance(faces, (list, tuple)):
         raise ValueError(f"{var_name}.absorbing_boundary.faces must be an array")

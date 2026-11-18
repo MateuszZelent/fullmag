@@ -9,7 +9,7 @@ from fullmag.init import InitialMagnetization, SampledMagnetization
 from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers
 
 
 @dataclass(frozen=True, slots=True)
@@ -806,7 +806,7 @@ class Ferromagnet:
     object_regions: tuple[ObjectRegion, ...] = ()
     allocated_region_ids: tuple[str, ...] = ()
     material_parameter_fields: tuple[MaterialParameterAssignment, ...] = ()
-    absorbing_boundary: AbsorbingBoundaryLayer | None = None
+    absorbing_boundary: AbsorbingBoundaryLayer | AbsorbingBoundaryLayers | None = None
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
     )
@@ -815,6 +815,8 @@ class Ferromagnet:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
         if self.object_id is not None:
             object.__setattr__(self, "object_id", require_non_empty(self.object_id, "object_id"))
+        if isinstance(self.absorbing_boundary, AbsorbingBoundaryLayers):
+            self.absorbing_boundary.validate_regions({region.region_id for region in self.object_regions})
         if self.region is not None and self.region.geometry.geometry_name != self.geometry.geometry_name:
             raise ValueError("region geometry must match magnet geometry")
         if self.m0 is None:

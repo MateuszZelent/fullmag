@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError, replace
 import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import fullmag as fm
+from fullmag.runtime.scene_document import build_builder_from_scene_document, build_scene_document_from_builder
+from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 
 
@@ -81,6 +84,106 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
             fm.world._build_problem().magnets[0].to_ir()["absorbing_boundary"]["faces"],
             ["x-"],
         )
+
+    def test_spatial_geometry_validation_and_region_lifecycle(self) -> None:
+        film = self._film()
+        region = film.add_region("branch", fm.Box(1e-8, 1e-8, 1e-8), region_id="branch-id")
+        geometry = fm.AbsorbingGeometry
+        layer = fm.SpatialAbsorbingLayer(
+            layer_id="wide", name="Wide", total_width_m=2., ramp_width_m=1., max_damping=.5,
+            geometry=geometry.sphere((0, 0, 0), 2., "outward"), region_id=region.region_id,
+        )
+        with self.assertRaises(FrozenInstanceError):
+            layer.layer_id = "other"
+        with self.assertRaisesRegex(ValueError, "unique|duplicate"):
+            film.alpha.absorbing_boundary(layers=[layer, layer])
+        with self.assertRaisesRegex(ValueError, "radius"):
+            replace(layer, total_width_m=3.)
+        with self.assertRaisesRegex(ValueError, "normal"):
+            geometry.plane((0, 0, 0), (0, 0, 0))
+        for expression in ("u", "x.y", "__import__('os')", "x + 0x1", "sin(z, y)", "(sqrt)(x)", "min(x,y,)"):
+            with self.subTest(expression=expression), self.assertRaisesRegex(ValueError, "expression"):
+                geometry.expression(expression)
+        film.alpha.absorbing_boundary(layers=[layer])
+        film.rename_region(region, "renamed")
+        with self.assertRaisesRegex(ValueError, "wide"):
+            film.remove_region(region)
+        self.assertEqual(fm.world._build_problem().magnets[0].to_ir()["absorbing_boundary"]["layers"][0]["region_id"], "branch-id")
+        film.alpha.absorbing_boundary(layers=[replace(layer, region_id=None, geometry=geometry.region_boundary("branch-id"))])
+        with self.assertRaisesRegex(ValueError, "wide"):
+            film.remove_region(region)
+        film.alpha.absorbing_boundary(layers=[])
+        film.remove_region(region)
+        film.alpha.absorbing_boundary(layers=[layer])
+        with self.assertRaisesRegex(ValueError, "branch-id"):
+            fm.world._build_problem()
+
+    def test_custom_distance_both_edges_of_annulus_and_y_branch(self) -> None:
+        from fullmag.model._absorbing_boundary_expression import compile_distance_expression
+
+        annulus = compile_distance_expression("min(5e-7-sqrt(x*x+y*y), sqrt(x*x+y*y)-2e-7)")
+        self.assertLess(annulus(0., 0., 0.), 0.)  # The central hole.
+        self.assertAlmostEqual(annulus(2.5e-7, 0., 0.), 5e-8, delta=1e-21)
+        self.assertAlmostEqual(annulus(0., 4.5e-7, 0.), 5e-8, delta=1e-21)
+        self.assertLess(annulus(0., 6e-7, 0.), 0.)
+        branch = compile_distance_expression("max(min(-y,1-abs(x)),min(y,1-abs(abs(x)-y)))")
+        for point in ((0., -3., 0.), (-3., 3., 0.), (3., 3., 0.)):
+            self.assertGreater(branch(*point), 0.)
+        self.assertLess(branch(0., 3., 0.), 0.)
+
+    def test_spatial_layers_round_trip_scene_script_and_ir(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "source.py"
+            path.write_text("""
+import fullmag as fm
+study = fm.study("spatial")
+film = study.geometry(fm.Box(1e-6, 1e-6, 1e-8), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = .01
+film.add_region("branch", fm.Box(4e-7, 4e-7, 1e-8), region_id="region-1")
+G = fm.AbsorbingGeometry
+shapes = [
+    G.faces(("x-", "y+")),
+    G.plane(origin=(2e-8, 3e-8, 0), normal=(1, 2, 3)),
+    G.cylinder(center=(1.2345678901234567e-8, 0, 0), axis=(0, 1, 0), radius_m=3e-7, direction="outward"),
+    G.sphere(center=(0, 0, 0), radius_m=1e-9, direction="inward"),
+    G.region_boundary("region-1"),
+    G.expression("min(2e-7-sqrt(x*x+y*y), sqrt(x*x+y*y)-2e-8)"),
+]
+film.alpha.absorbing_boundary(layers=[
+    fm.SpatialAbsorbingLayer(layer_id=f"abl-{i}", name=f"Layer {i}", geometry=shape,
+        total_width_m=8.123456789012346e-8, ramp_width_m=5e-8, max_damping=.5,
+        region_id="region-1" if i % 2 else None, enabled=i != 2, profile="custom",
+        expression="u**3", frame="universe" if i % 2 else "object")
+    for i, shape in enumerate(shapes)
+])
+study.stages.add_run(stage_id="run", until=1e-12)
+""", encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            expected = loaded.stages[-1].problem.magnets[0].to_ir()["absorbing_boundary"]
+            self.assertEqual([row["geometry"]["kind"] for row in expected["layers"]],
+                             ["faces", "plane", "cylinder", "sphere", "region_boundary", "expression"])
+            builder = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(builder)
+            direct_ir = scene_document_to_problem_ir(
+                scene, requested_backend="fdm", requested_device="cpu",
+                requested_precision="double", requested_mode="strict", source_root=path.parent,
+            )
+            self.assertEqual(direct_ir["magnets"][0]["absorbing_boundary"], expected)
+            restored = build_builder_from_scene_document(scene)
+            self.assertEqual(restored["geometries"][0]["absorbing_boundary"], expected)
+            rendered = rewrite_loaded_problem_script(loaded, overrides=restored)["rendered_source"]
+            self.assertIn("fm.AbsorbingGeometry.cylinder(", rendered)
+            for missing in ("enabled", "profile", "frame"):
+                rows = [dict(row) for row in expected["layers"]]
+                del rows[0][missing]
+                restored["geometries"][0]["absorbing_boundary"] = {"layers": rows}
+                with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, missing):
+                    rewrite_loaded_problem_script(loaded, overrides=restored)
+            path.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            self.assertEqual(reloaded.stages[-1].problem.magnets[0].to_ir()["absorbing_boundary"], expected)
 
     def test_new_profiles_sample_ramp_and_plateau(self) -> None:
         for profile, expression, midpoint in (

@@ -19,6 +19,8 @@ from .init import (
 )
 from .model import (
     AbsorbingBoundaryLayer,
+    AbsorbingGeometry,
+    SpatialAbsorbingLayer,
     AdaptiveTimestep,
     AntennaLayout,
     AntennaRigidTransform,
@@ -497,6 +499,8 @@ __all__ = [
     "table",
     "transaction",
     "AbsorbingBoundaryLayer",
+    "AbsorbingGeometry",
+    "SpatialAbsorbingLayer",
     "ExecutionContext",
     "ParameterDefinition",
     "ParameterExpression",

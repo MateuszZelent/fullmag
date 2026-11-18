@@ -1,5 +1,5 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
-from .absorbing_boundary import AbsorbingBoundaryLayer
+from .absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingGeometry, SpatialAbsorbingLayer
 from .output_storage import OutputStorage
 from .antenna import (
     AntennaFieldSolveStage,
@@ -224,6 +224,8 @@ from .eigen import (
 
 __all__ = [
     "AbsorbingBoundaryLayer",
+    "AbsorbingGeometry",
+    "SpatialAbsorbingLayer",
     "Selection",
     "SelectionDefinition",
     "SelectionScalar",
