@@ -689,7 +689,8 @@ pub use timestep_qualification::{
 pub use types::TerminalOutputScheduleBinding;
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
-    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, geometry_only_mesh_topology_fingerprint,
+    live_preview_values_sha256,
     recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
     FdmGpuOperatorResidency, FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt,

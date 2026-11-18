@@ -15,7 +15,7 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.universe(mode="manual", size=(80e-9, 50e-9, 50e-9), center=(0, 0, 0))
 study.universe.mesh(maximum_element_size=5e-9)
-study.objects.mesh.defaults(maximum_element_size=5e-9, order=1)
+study.objects.mesh.defaults(maximum_element_size=4e-9, order=1)
 film = study.geometry(fm.Box(40e-9, 10e-9, 10e-9), name="film")
 film.Ms = 800e3
 film.Aex = 13e-12
@@ -23,7 +23,6 @@ film.alpha = 0.03
 film.m = fm.texture.uniform(1, 0, 0)
 study.exchange()
 study.demag(enabled=False)
-study.solver(integrator="rk4", fix_dt=1e-17)
 study.stages.add_run(stage_id="run", until=1e-12)
 "#;
 
@@ -175,6 +174,14 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     }
 
     let edited_scene = edited.scene_document.as_ref().unwrap();
+    let mut wrong_owner = edited.clone();
+    let segments = &mut wrong_owner.fem_mesh.as_mut().unwrap().object_segments;
+    let magnetic = segments.iter_mut().find(|s| s.object_id == object_id).unwrap();
+    magnetic.object_id = "other-object".into();
+    assert!(matches!(super::geometry::evaluate(
+        &state.repo_root, temp.path(), Some(store.root()), &context, &wrong_owner, edited_scene, 6,
+    ).unwrap(), super::geometry::Evaluation::Pending(reason) if reason == "geometry_node_ownership_mismatch"));
+
     let mut invalid = edited.clone();
     let binding = invalid.mesh_workspace.as_mut().unwrap();
     binding[mesh_build::GEOMETRY_REUSE_KEY]["asset_sha256"] = Value::String("0".repeat(64));

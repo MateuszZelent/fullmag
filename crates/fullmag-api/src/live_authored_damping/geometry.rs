@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fullmag_authoring::SceneDocument;
-use fullmag_ir::BackendPlanIR;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -90,72 +89,45 @@ pub(super) fn evaluate(
     let problem = crate::script::scene_document_to_authored_problem_ir_with_asset_root(
         repo, workspace, asset_root, scene, &requested,
     )?;
-    let mut input = fullmag_application::StudyStepExecutionInput {
-        step_id: "authored_damping".into(),
-        problem,
-        layers: scene.study.execution_layers.clone(),
+    // Build Mesh has already chosen the nodal carrier. Verify its retained
+    // topology and ownership independently of solver stage and mesh recipes.
+    let Some(raw) = &asset.mesh else { return pending("geometry_mesh_missing") };
+    let (packed, segments, _) = match fullmag_plan::pack_geometry_only_shared_domain_mesh(
+        raw, &asset.region_markers,
+    ) {
+        Ok(domain) => domain,
+        Err(reason) => return pending(format!("geometry_mesh_packing: {reason}")),
     };
-    if !mesh_build::bind_reused_geometry_to_inputs(
-        repo,
-        scene,
-        &asset,
-        &reference.provenance(),
-        std::slice::from_mut(&mut input),
-    )? {
-        return pending("geometry_owner_or_mesh_recipe_mismatch");
-    }
-    let problem = match fullmag_application::bind_declared_execution(&input.problem, vec![]) {
-        Ok(problem) => problem,
-        Err(reason) => return pending(format!("geometry_execution_binding: {reason}")),
-    };
-    let plan = match fullmag_plan::plan(&problem) {
-        Ok(plan) => plan,
-        Err(reason) => return pending(format!("geometry_damping_plan: {reason}")),
-    };
-    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
-        return pending("geometry_damping_plan_not_fem");
-    };
-    if fem.fe_order != 1 {
-        return pending("geometry_damping_requires_p1");
-    }
-    let planned = fullmag_runner::FemMeshPayload::from(fem);
-    if fullmag_runner::fem_mesh_topology_fingerprint(&planned) != mesh.topology_fingerprint() {
+    let fingerprint = mesh.topology_fingerprint();
+    if fullmag_runner::geometry_only_mesh_topology_fingerprint(&packed).as_deref() != Ok(fingerprint) {
         return pending("geometry_node_topology_mismatch");
     }
-    // The solver uses magnet names for packed segments, whereas Build Mesh
-    // retains immutable scene IDs. Resolve that association via the authored IR.
-    let owners: std::collections::BTreeMap<_, _> = problem
-        .magnets
-        .iter()
-        .filter_map(|magnet| Some((magnet.name.as_str(), magnet.object_id.as_deref()?)))
-        .collect();
-    if planned.object_segments.len() != mesh.object_segments.len()
-        || !planned
-            .object_segments
-            .iter()
-            .zip(&mesh.object_segments)
-            .all(|(solver, built)| {
-                owners
-                    .get(solver.object_id.as_str())
-                    .copied()
-                    .unwrap_or(solver.object_id.as_str())
-                    == built.object_id
-                    && (solver.node_start, solver.node_count)
-                        == (built.node_start, built.node_count)
-            })
+    if snapshot.mesh_workspace.as_ref().and_then(|w| w["mesh_summary"]["order"].as_u64()) != Some(1) {
+        return pending("geometry_damping_requires_p1");
+    }
+    if segments.len() != mesh.object_segments.len()
+        || !segments.iter().zip(&mesh.object_segments).all(|(a, b)| {
+            a.object_id == b.object_id && a.geometry_id == b.geometry_id
+                && (a.node_start, a.node_count, a.element_start, a.element_count)
+                    == (b.node_start, b.node_count, b.element_start, b.element_count)
+        })
     {
         return pending("geometry_node_ownership_mismatch");
     }
-    let layout = match fullmag_runner::study_magnetization_layout_for_plan(&plan) {
-        Ok(layout) => layout,
-        Err(error) => return pending(format!("geometry_damping_layout: {}", error.message)),
+    let values = match fullmag_plan::damping_on_geometry_mesh(&problem, &packed, &segments) {
+        Ok(values) => values,
+        Err(reason) => return pending(format!("geometry_damping_material: {reason}")),
     };
-    let Some(mut field) = super::project_damping(plan.backend_plan, layout, revision) else {
-        return pending("geometry_damping_projection_unavailable");
-    };
-    field["geometry_source"] = reference.provenance();
-    field["mesh_topology_sha256"] = mesh.topology_fingerprint().into();
-    Ok(Evaluation::Ready(field))
+    let layout = json!({
+        "backend": "fem", "mesh_name": packed.mesh_name, "fe_order": 1,
+        "topology_fingerprint": packed.topology_fingerprint_v6(),
+        "n_nodes": packed.nodes.len(), "n_elements": packed.cell_count(),
+    });
+    Ok(Evaluation::Ready(json!({
+        "values": values, "layout": layout, "source_revision": revision,
+        "sample_location": "node", "authored_damping_revision": revision,
+        "geometry_source": reference.provenance(), "mesh_topology_sha256": fingerprint,
+    })))
 }
 
 /// Build Mesh retains its own successful result when a partial scene has no
