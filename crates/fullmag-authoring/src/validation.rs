@@ -294,6 +294,9 @@ fn validate_scene_document_with_mode(
     let mut magnetization_ids = BTreeSet::new();
 
     for material in &scene.materials {
+        if let Some(source) = &material.source {
+            crate::validate_material_source(source).map_err(SceneDocumentValidationError::new)?;
+        }
         if material.id.trim().is_empty() {
             return Err(SceneDocumentValidationError::new(
                 "scene material ids must not be empty",

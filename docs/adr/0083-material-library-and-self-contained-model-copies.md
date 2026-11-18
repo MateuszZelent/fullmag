@@ -12,6 +12,14 @@ projektami i rozróżnienia oryginałów od zmodyfikowanych kopii.
 Zmiana wspólnego wpisu nie może po cichu zmieniać istniejących modeli. Sama
 zgodność nazwy albo parametrów nie jest dowodem pochodzenia materiału.
 
+Kontrakt materiałów i jawnych oddziaływań opisuje istniejąca nota
+[0104](../physics/0104-material-regions-parameter-fields-and-interface-couplings.md).
+Ten ADR określa politykę authoringu i provenance. Efektywne współczynniki trafiają
+przez istniejący DSL do kanonicznego `ProblemIR`; dodatkowy snapshot jest
+wersjonowanymi metadanymi istniejącej mapy `runtime_metadata`. Ocena wykonalności,
+wybór backendu/urządzenia i jawny zestaw modułów pozostają w ich obecnych
+kontraktach. Dowody roundtrip i tożsamości wejścia są wymagane osobno od solvera.
+
 ## Decyzja
 
 1. Backend jest właścicielem katalogu. Pięć istniejących zestawów wartości SI
@@ -60,9 +68,15 @@ zgodność nazwy albo parametrów nie jest dowodem pochodzenia materiału.
 Katalog jest zasobem `/v2/workspace/material-library`, dostępnym bez aktywnej
 sesji. GET zwraca rewizję katalogu oraz wpisy; POST tworzy wpis. Osobna ścieżka
 `/{id}` obsługuje PUT i DELETE z wymaganą `base_revision` wpisu. Nie ma upsertu:
-kolizja tworzenia i nieaktualna rewizja zwracają konflikt. DELETE zwraca nową
-rewizję katalogu. Błędy walidacji mają 400, brak wpisu 404, konflikt 409,
-a błąd magazynu 500. Wbudowane ID są chronione przed zmianą i usunięciem.
+kolizja tworzenia i nieaktualna rewizja zwracają konflikt. POST i PUT zwracają
+płaski wpis wraz z `catalog_revision` pobraną w tej samej transakcji co zapis;
+DELETE zwraca nową rewizję katalogu. Frontend unieważnia globalny zasób tym
+zegarem także wtedy, gdy odpowiedź przychodzi po zmianie widoku. Rewizja wpisu
+nie zastępuje rewizji katalogu. Błędy walidacji mają 400, brak wpisu 404, konflikt 409,
+a błąd magazynu 500. Wbudowane ID są chronione przed zmianą i usunięciem. Przy
+utworzeniu wpis dostaje rewizję z nowego zegara katalogu; aktualizacja zwiększa
+rewizję wpisu. Ponowne użycie usuniętego ID nie może zaakceptować starego tokena
+edycji lub usunięcia.
 
 Scenowa transakcja `create_material` otrzymuje zgodne wstecznie opcjonalne
 `source` i `assign_to_object_id`. Brak celu lub nieprawidłowe dane nie mogą

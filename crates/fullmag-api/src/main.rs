@@ -61,6 +61,7 @@ mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
 mod error;
+mod material_library;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
 mod fem_cross_section;
@@ -7386,3 +7387,7 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
 }
 
 mod imported_geometry_sources;
+
+#[cfg(test)]
+#[path = "material_library/tests.rs"]
+mod material_library_tests;

@@ -442,6 +442,17 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    material_metadata = base_problem.runtime_metadata.get("material_assets")
+    if material_metadata is not None:
+        from fullmag.runtime.material_assets import canonical_material_assets, reconcile_material_assets
+
+        material_metadata = canonical_material_assets(material_metadata)
+        for magnet in base_problem.magnets:
+            if magnet.object_id is None:
+                # The DSL's default ID remains its name, but a newly authored
+                # geometry without an explicit ID cannot inherit an old asset.
+                material_metadata["assignments"].pop(magnet.name, None)
+        draft["material_assets"] = reconcile_material_assets(material_metadata, draft["geometries"])
     fem_domain_mesh = _export_fem_domain_mesh_reference(
         base_problem,
         source_root=source_root,
@@ -761,6 +772,14 @@ def render_loaded_problem_as_script(
     authored_pipeline = overrides.get("study_pipeline", base_problem.runtime_metadata.get("study_pipeline"))
     if authored_pipeline is not None:
         lines.append(f"fm.runtime_metadata('study_pipeline', {_py_literal(authored_pipeline)})")
+
+    material_metadata = overrides.get("material_assets", base_problem.runtime_metadata.get("material_assets"))
+    if material_metadata is not None:
+        from fullmag.runtime.material_assets import canonical_material_assets
+
+        lines.append(
+            f"fm.runtime_metadata('material_assets', {_py_literal(canonical_material_assets(material_metadata))})"
+        )
 
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
@@ -10996,7 +11015,7 @@ def _export_geometry_entry(
 
     return {
         "name": magnet.name,
-        "object_id": magnet.object_id,
+        "object_id": magnet.object_id or magnet.name,
         "region_name": magnet.region_name,
         "geometry_kind": geometry_kind,
         "geometry_params": geometry_params,

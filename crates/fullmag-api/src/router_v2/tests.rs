@@ -54,6 +54,7 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        material_assets: None,
         compute_resources: None,
         execution_profile: None,
         execution_layers: vec![],

@@ -5311,6 +5311,12 @@
           },
           {
             "properties": {
+              "assign_to_object_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "base_revision": {
                 "format": "int64",
                 "minimum": 0,
@@ -5339,6 +5345,16 @@
                   "$ref": "#/components/schemas/MaterialReferenceResource"
                 },
                 "type": "array"
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneMaterialSource"
+                  }
+                ]
               }
             },
             "required": [
@@ -21083,6 +21099,192 @@
           }
         ]
       },
+      "MaterialLibraryDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the entry being deleted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryDeleteResource": {
+        "properties": {
+          "revision": {
+            "description": "Catalog revision after deletion.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryEntryResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "name",
+          "kind",
+          "properties",
+          "references"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryMutationResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+          },
+          {
+            "properties": {
+              "catalog_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "catalog_revision"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The entry clock protects edits; the catalog clock invalidates shared readers."
+      },
+      "MaterialLibraryResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryUpdateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "description": "Revision of the entry being replaced, not the catalog revision.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "base_revision"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaterialLibraryWriteRequest": {
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "properties"
+        ],
+        "type": "object"
+      },
       "MaterialParameterFieldDataListResource": {
         "properties": {
           "fields": {
@@ -21636,6 +21838,16 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
@@ -36964,6 +37176,29 @@
           }
         ]
       },
+      "SceneMaterialReference": {
+        "properties": {
+          "citation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SceneMaterialResource": {
         "properties": {
           "id": {
@@ -36981,12 +37216,105 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSource": {
+        "properties": {
+          "catalog_id": {
+            "type": "string"
+          },
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/SceneMaterialSourceProperties"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/SceneMaterialReference"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "catalog_revision",
+          "name",
+          "kind",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSourceKind": {
+        "enum": [
+          "builtin",
+          "custom",
+          "modified"
+        ],
+        "type": "string"
+      },
+      "SceneMaterialSourceProperties": {
+        "properties": {
+          "Aex": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dbulk": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dind": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Ms": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "alpha": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "alpha"
         ],
         "type": "object"
       },
@@ -74442,6 +74770,254 @@
         },
         "tags": [
           "workspace_items"
+        ]
+      }
+    },
+    "/v2/workspace/material-library": {
+      "get": {
+        "operationId": "workspace_get_workspace_material_library",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryResource"
+                }
+              }
+            },
+            "description": "Built-in and user material entries with catalog revision"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "operationId": "workspace_post_workspace_material_library",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material document"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material identity already exists or is read-only"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/{id}": {
+      "delete": {
+        "operationId": "workspace_delete_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryDeleteResource"
+                }
+              }
+            },
+            "description": "Material deleted and catalog revision advanced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material identity or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_put_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material replaced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
         ]
       }
     },

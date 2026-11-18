@@ -3518,6 +3518,8 @@ fn apply_authoring_transaction(
             name,
             properties,
             references,
+            source,
+            assign_to_object_id,
         } => {
             apply_create_material_transaction(
                 current_scene,
@@ -3526,6 +3528,8 @@ fn apply_authoring_transaction(
                 name,
                 properties,
                 references,
+                source,
+                assign_to_object_id,
             )?;
             Ok("create_material")
         }
@@ -4164,6 +4168,8 @@ fn apply_create_material_transaction(
     name: String,
     properties: MaterialPropertiesResource,
     references: Vec<MaterialReferenceResource>,
+    source: Option<fullmag_authoring::SceneMaterialSource>,
+    assign_to_object_id: Option<String>,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
     let material_id = material_id.trim();
@@ -4179,6 +4185,29 @@ fn apply_create_material_transaction(
     if name.is_empty() {
         return Err(ApiError::bad_request("material name must not be empty"));
     }
+    crate::material_library::validate_properties(&properties)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if let Some(source) = &source {
+        fullmag_authoring::validate_material_source(source).map_err(ApiError::bad_request)?;
+    }
+    let references = material_references_from_resources(references)?;
+    fullmag_authoring::validate_material_references(&references).map_err(ApiError::bad_request)?;
+    let target_index = assign_to_object_id
+        .as_deref()
+        .map(|object_id| {
+            let index = scene.objects.iter().position(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+            if scene.objects[index].role != "magnet" {
+                return Err(ApiError::bad_request(
+                    "material assignment requires a magnetic object",
+                ));
+            }
+            Ok(index)
+        })
+        .transpose()?;
+
+    // Validate both sides before changing the scene so failed assignment
+    // cannot leave an unassigned material asset behind.
     scene.materials.push(SceneMaterialAsset {
         id: material_id.to_string(),
         name: name.to_string(),
@@ -4189,8 +4218,12 @@ fn apply_create_material_transaction(
             dind: properties.dind,
             dbulk: properties.dbulk,
         },
-        references: material_references_from_resources(references)?,
+        references,
+        source,
     });
+    if let Some(index) = target_index {
+        scene.objects[index].material_ref = material_id.to_string();
+    }
     Ok(())
 }
 
@@ -5340,6 +5373,7 @@ fn build_material_resource(
                 citation: reference.citation.clone(),
             })
             .collect(),
+        source: material.source.clone(),
     }
 }
 
@@ -5785,3 +5819,7 @@ mod antenna_scene_roundtrip_tests {
         assert_eq!(serialized["antenna_spectrum_requests"][0]["id"], "spectrum_1");
     }
 }
+
+#[cfg(test)]
+#[path = "material_library_authoring_tests.rs"]
+mod material_library_authoring_tests;

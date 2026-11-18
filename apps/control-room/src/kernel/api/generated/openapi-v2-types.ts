@@ -5179,6 +5179,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/workspace/material-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_get_workspace_material_library"];
+        put?: never;
+        post: operations["workspace_post_workspace_material_library"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["workspace_put_workspace_material_library_id"];
+        post?: never;
+        delete: operations["workspace_delete_workspace_material_library_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/workspace/roots": {
         parameters: {
             query?: never;
@@ -6506,6 +6538,7 @@ export interface components {
             transform?: Record<string, unknown> | null;
             universe?: Record<string, unknown> | null;
         } | {
+            assign_to_object_id?: string | null;
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
@@ -6514,6 +6547,7 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -10474,6 +10508,56 @@ export interface components {
             /** @enum {string} */
             kind: "frozen_spins";
         };
+        MaterialLibraryDeleteRequest: {
+            /**
+             * Format: int64
+             * @description Revision of the entry being deleted.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryDeleteResource: {
+            /**
+             * Format: int64
+             * @description Catalog revision after deletion.
+             */
+            revision: number;
+        };
+        MaterialLibraryEntryResource: {
+            id: string;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            summary?: string | null;
+        };
+        /** @description The entry clock protects edits; the catalog clock invalidates shared readers. */
+        MaterialLibraryMutationResource: components["schemas"]["MaterialLibraryEntryResource"] & {
+            /** Format: int64 */
+            catalog_revision: number;
+        };
+        MaterialLibraryResource: {
+            entries: components["schemas"]["MaterialLibraryEntryResource"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        MaterialLibraryUpdateRequest: components["schemas"]["MaterialLibraryWriteRequest"] & {
+            /**
+             * Format: int64
+             * @description Revision of the entry being replaced, not the catalog revision.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryWriteRequest: {
+            id?: string | null;
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            summary?: string | null;
+        };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
             /** Format: int64 */
@@ -10600,6 +10684,7 @@ export interface components {
             region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
         };
         MaterializedDatasetActiveSupportResource: {
             selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
@@ -14594,6 +14679,11 @@ export interface components {
         /** @enum {string} */
         SceneMaterialParameterName: "ms" | "aex" | "alpha" | "ku1" | "ku2" | "anisotropy_axis" | "kc1" | "kc2" | "kc3" | "dind" | "dbulk";
         SceneMaterialParameterValue: number | number[];
+        SceneMaterialReference: {
+            citation?: string | null;
+            label?: string | null;
+            url?: string | null;
+        };
         SceneMaterialResource: {
             id: string;
             name: string;
@@ -14601,6 +14691,30 @@ export interface components {
                 [key: string]: unknown;
             };
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+        };
+        SceneMaterialSource: {
+            catalog_id: string;
+            /** Format: int64 */
+            catalog_revision: number;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["SceneMaterialSourceProperties"];
+            references?: components["schemas"]["SceneMaterialReference"][];
+        };
+        /** @enum {string} */
+        SceneMaterialSourceKind: "builtin" | "custom" | "modified";
+        SceneMaterialSourceProperties: {
+            /** Format: double */
+            Aex?: number | null;
+            /** Format: double */
+            Dbulk?: number | null;
+            /** Format: double */
+            Dind?: number | null;
+            /** Format: double */
+            Ms?: number | null;
+            /** Format: double */
+            alpha: number;
         };
         SceneMaterialTransition: {
             /** Format: int32 */
@@ -34595,6 +34709,212 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    workspace_get_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Built-in and user material entries with catalog revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryResource"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_post_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description User material created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material identity already exists or is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_put_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description User material replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_delete_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Material deleted and catalog revision advanced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryDeleteResource"];
+                };
+            };
+            /** @description Invalid material identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

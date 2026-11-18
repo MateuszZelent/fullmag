@@ -1957,6 +1957,7 @@ mod tests {
                     dind: None,
                     dbulk: None,
                 },
+                source: None,
                 references: Vec::new(),
             }],
             magnetization_assets: vec![crate::MagnetizationAsset {
