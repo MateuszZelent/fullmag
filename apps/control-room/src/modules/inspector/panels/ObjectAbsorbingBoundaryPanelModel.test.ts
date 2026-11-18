@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   absorbingBoundaryDraftFromObject,
+  absorbingBoundaryDraftKey,
   buildAbsorbingBoundaryPatch,
 } from "./ObjectAbsorbingBoundaryPanelModel";
 
@@ -26,7 +27,34 @@ describe("ObjectAbsorbingBoundaryPanelModel", () => {
       faces: ["x+", "y-"],
       profile: "smootherstep",
       frame: "universe",
+      expression: "",
     });
+  });
+
+  it("exposes preset profiles and sends an expression only for a custom profile", () => {
+    const draft = absorbingBoundaryDraftFromObject({
+      absorbing_boundary: {
+        total_width_m: 4e-7,
+        ramp_width_m: 3e-7,
+        max_damping: 0.5,
+        faces: ["x+"],
+        profile: "custom",
+        expression: "u**3",
+      },
+    });
+    expect(draft.expression).toBe("u**3");
+    expect(buildAbsorbingBoundaryPatch(draft, 4)).toMatchObject({
+      patch: { absorbing_boundary: { profile: "custom", expression: "u**3" } },
+    });
+    expect(buildAbsorbingBoundaryPatch({ ...draft, expression: " " }, 4)).toHaveProperty("error");
+    for (const profile of ["logarithmic", "tanh"]) {
+      const result = buildAbsorbingBoundaryPatch({ ...draft, profile }, 4);
+      expect(result).toMatchObject({ patch: { absorbing_boundary: { profile } } });
+      expect(result).not.toHaveProperty("patch.absorbing_boundary.expression");
+      expect(absorbingBoundaryDraftKey({ ...draft, profile })).toBe(
+        absorbingBoundaryDraftKey({ ...draft, profile, expression: "" }),
+      );
+    }
   });
 
   it("builds a fail-closed patch for invalid widths and a typed object patch", () => {
@@ -39,6 +67,7 @@ describe("ObjectAbsorbingBoundaryPanelModel", () => {
         faces: ["x+"],
         profile: "smootherstep",
         frame: "object",
+        expression: "",
       },
       4,
     );
@@ -54,6 +83,7 @@ describe("ObjectAbsorbingBoundaryPanelModel", () => {
         faces: ["x+", "y-"],
         profile: "smootherstep",
         frame: "universe",
+        expression: "",
       },
       4,
     );

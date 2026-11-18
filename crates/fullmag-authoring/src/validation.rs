@@ -331,6 +331,14 @@ fn validate_scene_document_with_mode(
     }
 
     for object in &scene.objects {
+        if let Some(layer) = &object.absorbing_boundary {
+            layer.compile_profile().map_err(|error| {
+                SceneDocumentValidationError::new(format!(
+                    "object '{}' has an invalid absorbing boundary profile: {error}",
+                    object.id
+                ))
+            })?;
+        }
         if let Some(reference) = &object.geometry.source_asset {
             if object.geometry.geometry_kind != "ImportedGeometry" {
                 return Err(SceneDocumentValidationError::new(format!(
@@ -4541,6 +4549,39 @@ mod tests {
     #[test]
     fn scene_document_validation_accepts_region_owned_payloads() {
         validate_scene_document(&region_owned_scene()).expect("region-owned scene should validate");
+    }
+
+    #[test]
+    fn scene_validation_rejects_invalid_absorbing_boundary_before_save_and_export() {
+        let mut scene = region_owned_scene();
+        let mut layer: fullmag_ir::AbsorbingBoundaryLayerIR = serde_json::from_value(
+            serde_json::json!({
+                "total_width_m": 4.0e-9,
+                "ramp_width_m": 2.0e-9,
+                "max_damping": 0.5,
+                "faces": ["x+"],
+                "profile": "custom",
+                "frame": "object"
+            }),
+        )
+        .unwrap();
+        for expression in [None, Some("u+1")] {
+            layer.expression = expression.map(str::to_string);
+            scene.objects[0].absorbing_boundary = Some(layer.clone());
+            for validate in [validate_scene_document_for_authoring, validate_scene_document] {
+                let error = validate(&scene).expect_err("invalid expression should fail validation");
+                assert!(
+                    error.message.contains("absorbing boundary profile")
+                        && error.message.contains("expression"),
+                    "{}",
+                    error.message
+                );
+            }
+        }
+        layer.expression = Some("u**3".to_string());
+        scene.objects[0].absorbing_boundary = Some(layer);
+        validate_scene_document_for_authoring(&scene).expect("valid profile should save");
+        validate_scene_document(&scene).expect("valid profile should export");
     }
 
     #[test]
