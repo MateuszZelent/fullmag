@@ -55,6 +55,9 @@ def _evaluator(node: ast.AST) -> _ScalarFunction:
     elif (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
+        # Python's AST drops parentheses around a callee. The ramp grammar
+        # accepts a function name followed directly by its argument list.
+        and node.col_offset == node.func.col_offset
         and node.func.id in _FUNCTIONS
         and len(node.args) == 1
         and not node.keywords

@@ -218,6 +218,7 @@ import {
 import {
   resolveTrustedViewport3DResponseDomainGenerationId,
   describeViewport3DFieldDomainMismatch,
+  liveFemDampingLocationMismatch,
   resolveViewport3DFieldDomainCompatibility,
   resolveViewport3DFieldVectorForDomain,
   safeViewport3DDomainGenerationId,
@@ -876,6 +877,7 @@ export function mergeViewport3DPartScalarRanges({
 }
 
 export function mergeViewport3DPrimaryTargetFieldBuffers({
+  liveFemDampingLocation,
   fieldRenderOptions,
   fieldRevision = null,
   fieldVector,
@@ -887,6 +889,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   topology,
   topologyRevision = null,
 }: {
+  liveFemDampingLocation?: string | null;
   fieldRenderOptions: Viewport3DFieldRenderOptions;
   fieldRevision?: string | null;
   fieldVector: DecodedFieldVector | null;
@@ -946,6 +949,8 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
         fieldRevision,
         fieldVector,
         domain: {
+          discretization: "fem",
+          liveDampingLocation: liveFemDampingLocation,
           domainGenerationId: topology.meshGenerationId,
           meshTopologyHash: topology.meshTopologyHash,
           meshTopologyRevision: topology.meshRevision == null ? null : String(topology.meshRevision),
@@ -1009,6 +1014,7 @@ type Viewport3DResolvedFieldResourceRequest =
   };
 
 export function resolveViewport3DResolvedPartFieldBuffers({
+  liveFemDampingLocation,
   airboxFieldRevision = null,
   airboxFieldVectorRequests,
   airboxFieldVectors,
@@ -1027,6 +1033,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   topology,
   topologyRevision = null,
 }: {
+  liveFemDampingLocation?: string | null;
   airboxFieldRevision?: ResourceRevision | null;
   airboxFieldVectorRequests?: ReadonlyMap<
     string,
@@ -1091,6 +1098,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
       }
     }
     if (!request) {
+      if (liveFemDampingLocationMismatch(fieldVector.quantityId, liveFemDampingLocation)) return;
       partFieldVectors.set(partId, fieldVector);
       return;
     }
@@ -1102,6 +1110,8 @@ export function resolveViewport3DResolvedPartFieldBuffers({
         fieldVector,
         domain: topology
           ? {
+              discretization: "fem",
+              liveDampingLocation: liveFemDampingLocation,
               domainGenerationId: topology.meshGenerationId,
               meshTopologyHash: topology.meshTopologyHash,
               meshTopologyRevision:
@@ -3492,6 +3502,12 @@ export function useViewport3DSceneModel({
   );
   const currentFieldSelection = !analysisOverlay && !pinnedObservationActive &&
     !preparedSource && !selectedSnapshotId && !selectedSnapshotQuery;
+  // A prepared or pinned magnetization can share the viewport with live part damping.
+  const liveFemDampingLocation = liveViewportResourcesEnabled && femLaneActive && !selectedSnapshotId && !selectedSnapshotQuery
+    ? fieldCatalog.data?.quantities.find((field) =>
+        field.available && resolveCanonicalQuantityId(field.quantity_id) === "mat_alpha"
+      )?.location ?? null
+    : undefined;
   const liveMagnetizationUnavailable = currentFieldSelection && fieldCatalog.status === "ready" &&
     availableFieldQuantityIds !== null && !availableFieldQuantityIds.has("m");
   const waitingForAuthoredFieldCatalog = currentFieldSelection &&
@@ -4999,6 +5015,7 @@ export function useViewport3DSceneModel({
       const { partFieldVectors, partTargetFieldBuffers } =
         resolveViewport3DResolvedPartFieldBuffers({
           quantityCatalog: quantityCatalog.data,
+          liveFemDampingLocation,
           airboxFieldRevision: airboxFieldVectors.payloadRevision ?? null,
           airboxFieldVectorRequests,
           airboxFieldVectors: airboxFieldVectors.data,
@@ -5040,7 +5057,9 @@ export function useViewport3DSceneModel({
         : primaryFieldRenderOptions;
     },
     [
-      quantityCatalog.data,      airboxFieldVectorRequests,
+      quantityCatalog.data,
+      liveFemDampingLocation,
+      airboxFieldVectorRequests,
       airboxFieldVectors.data,
       airboxFieldVectors.payloadRevision,
       airboxSettings.airboxSyntheticVectorsEnabled,
@@ -5535,7 +5554,10 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
     ],
   );
-  const committedFieldVector = modeFieldOverlay.binary ?? displayedFieldVector;
+  const primaryFieldPayload = modeFieldOverlay.binary ?? displayedFieldVector;
+  const committedFieldVector = liveFemDampingLocationMismatch(primaryFieldPayload?.quantityId, liveFemDampingLocation)
+    ? null
+    : primaryFieldPayload;
   const primaryFieldRevision =
     modeFieldOverlay.metadata?.resourceRevision ??
     displayedFieldVectorEnvelope?.etag ??
@@ -5546,7 +5568,8 @@ export function useViewport3DSceneModel({
         fieldRenderOptions: resolvedFieldRenderOptions,
         fieldRevision:
           primaryFieldRevision == null ? null : String(primaryFieldRevision),
-        fieldVector: committedFieldVector,
+        fieldVector: primaryFieldPayload,
+        liveFemDampingLocation,
         getPartSettings,
         primaryFieldQuantityId,
         primaryFieldRequest,
@@ -5557,7 +5580,8 @@ export function useViewport3DSceneModel({
           topology.revision == null ? null : String(topology.revision),
       }),
     [
-      committedFieldVector,
+      primaryFieldPayload,
+      liveFemDampingLocation,
       fieldCompatibleTopologyRenderModel,
       getPartSettings,
       primaryFieldQuantityId,
@@ -7689,7 +7713,7 @@ export function useViewport3DSceneModel({
     return {
       key: `${fieldVectorResourceKey}:domain-mismatch:${reason}`,
       message: describeViewport3DFieldDomainMismatch(reason),
-      quantityId: primaryFieldQuantityId,
+      quantityId: reason === "damping-location-mismatch" ? "mat_alpha" : primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
       retry: fieldVector.refetch,
     };
@@ -7720,6 +7744,8 @@ export function useViewport3DSceneModel({
   return {
     artifactInspectionDefinitions: !savedSelectionActive && scene.status === "ready" ? scene.data?.antenna_field_solve_stages ?? [] : [],
     airboxSettings,
+    analysisComplexField: savedSelectionActive ? null : analysisComplexField,
+    analysisOverlay: savedSelectionActive ? null : analysisOverlay,
     availableQuantityIds: effectiveViewportAvailableQuantityIds,
     publishedModelQuantityIds,
     bounds,

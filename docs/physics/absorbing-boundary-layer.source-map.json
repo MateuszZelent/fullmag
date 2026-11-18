@@ -30,11 +30,14 @@
     {"id": "ir-validation", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "validate_absorbing_boundary", "responsibility": "Store and validate the optional typed absorbing-boundary module and its face/profile/frame enums."},
     {"id": "planner-profile", "path": "crates/fullmag-plan/src/material.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
     {"id": "fem-materialization", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "Carry the resolved FEM alpha field into the material plan."},
+    {"id": "fdm-mask", "path": "crates/fullmag-plan/src/tests.rs", "symbol": "fdm_absorbing_boundary_uses_magnetic_support", "responsibility": "Check padded grids, inactive cells and explicit universe faces against the active magnetic support."},
     {"id": "cuda-planner", "path": "crates/fullmag-plan/src/tests.rs", "symbol": "fdm_cuda_absorbing_boundary_plans_cellwise_damping", "responsibility": "Verify single-grid FDM CUDA planner materializes cellwise alpha."},
     {"id": "ramp-evaluator", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "ResolvedAbsorbingBoundaryProfile", "responsibility": "Evaluate normalized presets and validated authored expressions."},
     {"id": "python-expression", "path": "packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py", "symbol": "compile_expression", "responsibility": "Validate the DSL expression and support Python analytic sampling."},
     {"id": "script-expression", "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py", "symbol": "_render_absorbing_boundary", "responsibility": "Preserve authored expression and scalar precision in editable script export."},
     {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."},
+    {"id": "reflection-input", "path": "tests/standard_problems/absorbing_boundary/prepare.py", "symbol": "prepare_case", "responsibility": "Generate matched normal-incidence wave-packet controls and ABL models."},
+    {"id": "reflection-measurement", "path": "tests/standard_problems/absorbing_boundary/verify.py", "symbol": "inspect_case", "responsibility": "Verify managed execution, realized damping and quantitative reflection traces."},
     {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"}
   ],
   "public_api": {

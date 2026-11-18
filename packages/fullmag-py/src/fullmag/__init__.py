@@ -1,6 +1,6 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, fields, init, select, shapes, units
+from . import couplings, export3d, fields, init, select, shapes, units
 from .units import GHz, MHz, T, mT, mm, nm, ns, ps, um
 from .model.mask_function import mask, time
 from .model.space_time import space_time
@@ -789,6 +789,7 @@ __all__ = [
     "Hysteresis",
     "couplings",
     "disk",
+    "export3d",
     "export_stl",
     "fields",
     "generate_mesh",

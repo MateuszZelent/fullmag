@@ -2735,6 +2735,19 @@ fn digest_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Identity of a Build Mesh domain in the normalized Live viewport format.
+pub fn geometry_only_mesh_topology_fingerprint(mesh: &fullmag_ir::MeshIR) -> Result<String, String> {
+    fullmag_ir::fem_mesh_topology_fingerprint_v3(
+        &mesh.nodes,
+        &mesh.cells,
+        &normalized_payload_element_markers(&mesh.element_markers, None),
+        &mesh.facets,
+        &mesh.boundary_markers,
+        &mesh.periodic_boundary_pairs,
+        &mesh.periodic_node_pairs,
+    )
+}
+
 fn normalized_payload_element_markers(
     element_markers: &[u32],
     magnetic_markers: Option<&BTreeSet<u32>>,

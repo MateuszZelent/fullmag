@@ -127,6 +127,7 @@ RUN set -eu; \
         --with-scalar-type=real --with-precision=double \
         --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
         --with-blaslapack-lib="-llapack -lblas" \
+        --download-mumps --download-scalapack --download-metis --download-parmetis \
         --with-hypre=1 --with-hypre-dir="${INSTALL_PREFIX}"; \
       make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j"$build_jobs" all; \
       make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install; \

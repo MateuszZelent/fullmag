@@ -99,6 +99,7 @@ mod dispatch;
 pub use dispatch::{stage_step_time_frame, StageStepTimeFrame};
 pub mod eigen;
 mod fdm;
+pub use fdm::live_layout::{live_fdm_grid_layout, live_fdm_multilayer_grid_layout};
 mod accepted_materialization;
 pub use accepted_materialization::{
     accepted_observation_quantity_ids, capture_solver_observables,
@@ -689,7 +690,8 @@ pub use timestep_qualification::{
 pub use types::TerminalOutputScheduleBinding;
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
-    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, geometry_only_mesh_topology_fingerprint,
+    live_preview_values_sha256,
     recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
     FdmGpuOperatorResidency, FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt,

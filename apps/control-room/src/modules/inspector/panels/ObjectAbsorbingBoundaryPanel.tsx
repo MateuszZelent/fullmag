@@ -206,12 +206,16 @@ export function ObjectAbsorbingBoundaryPanel({
       );
       if (historyContext.isCurrentSessionScope() === false) return false;
       const revision = typeof response.revision === "number" ? response.revision : (baseRevision ?? 0) + 1;
-      const acknowledgedDraft = { ...submittedDraft };
+      const savedObject = response.objects?.find((candidate) => candidate.id === objectId);
+      const acknowledgedDraft = absorbingBoundaryDraftFromObject(savedObject ?? result.patch);
       setAcknowledgedBase({ objectId, revision, draft: acknowledgedDraft });
       const latestDraft = draftRef.current;
-      const rebasedDraft = latestDraft === submittedDraft
-        ? acknowledgedDraft
-        : latestDraft;
+      const rebasedDraft = { ...acknowledgedDraft };
+      for (const field of Object.keys(submittedDraft) as (keyof AbsorbingBoundaryDraft)[]) {
+        if (latestDraft[field] !== submittedDraft[field]) {
+          Object.assign(rebasedDraft, { [field]: latestDraft[field] });
+        }
+      }
       draftRef.current = rebasedDraft;
       setDraftState({
         key: `${objectId}:${absorbingBoundaryDraftKey(acknowledgedDraft)}`,

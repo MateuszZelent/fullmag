@@ -271,6 +271,8 @@ mod tests {
             "u**1_0",
             "01*u",
             "u.real",
+            "(sqrt)(u)",
+            "((abs))(u)",
             "other(u)",
             "u/ /u",
             "u 2",

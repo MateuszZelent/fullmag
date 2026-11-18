@@ -47,7 +47,7 @@ def _assert_source_contract() -> None:
     assert "unset PETSC_ARCH" in cpu_slepc, cpu_slepc
     assert cpu_slepc.count("env -u PETSC_ARCH") == 3, cpu_slepc
     assert not re.search(r"(?<![A-Za-z0-9_])PETSC_ARCH\s*=", cpu_slepc), cpu_slepc
-    for command in ("python3 ./configure", "make -j2 all", "make install"):
+    for command in ("python3 ./configure", 'make -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" all', "make install"):
         assert command in cpu_slepc, (command, cpu_slepc)
 
     # The CPU PETSc build still owns its explicit arch; the GPU stack remains

@@ -346,14 +346,16 @@ function useObjectMaterialPanelState(
   const assignmentBaseOverride = assignmentBaseDecision === "use"
     ? assignmentBaseOverrideState
     : null;
+  // The scene already carries its assigned coefficients during the detail GET.
+  const useSceneBase = assignmentBaseDecision === "rebase" || !material.data;
   const baseDraft = assignmentBaseDecision === "use" && assignmentBaseOverride
     ? assignmentBaseOverride.baseDraft
-    : assignmentBaseDecision === "rebase" && currentSceneBaseDraft
+    : useSceneBase && currentSceneBaseKey && currentSceneBaseDraft
       ? currentSceneBaseDraft
       : resourceBaseDraft;
   const draftKey = assignmentBaseDecision === "use" && assignmentBaseOverride
     ? assignmentBaseOverride.baseKey
-    : assignmentBaseDecision === "rebase" && currentSceneBaseKey
+    : useSceneBase && currentSceneBaseKey
       ? currentSceneBaseKey
       : resourceDraftKey;
   const [draftState, setDraftState] = useState<

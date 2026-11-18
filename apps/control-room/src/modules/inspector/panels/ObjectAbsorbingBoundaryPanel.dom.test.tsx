@@ -342,7 +342,7 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
         <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={10} />,
       ));
       const totalWidth = findControl(container, "Total width");
-      totalWidth.value = "5e-7";
+      totalWidth.value = "5.00e-7";
       await act(async () => totalWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
       await act(async () => {
         findButton(container, "Apply boundary").click();
@@ -361,28 +361,24 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       rampWidth.value = "2e-7";
       await act(async () => rampWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
 
-      await act(async () => {
-        finishPatch?.({
-          committed_scene: {
-            objects: [{
-              id: "object-a",
-              absorbing_boundary: {
-                total_width_m: 5e-7,
-                ramp_width_m: 3e-7,
-                max_damping: 0.5,
-                faces: ["x+"],
-                profile: "smootherstep",
-                frame: "universe",
-              },
-            }],
-            revision: 11,
-            scene_revision: 11,
+      const committed = {
+        objects: [{
+          id: "object-a",
+          absorbing_boundary: {
+            ...mocks.sceneData.objects[0].absorbing_boundary as Record<string, unknown>,
+            total_width_m: 5e-7,
           },
-          revision: 11,
-          scene_revision: 11,
-        });
+        }],
+        revision: 11,
+      };
+      await act(async () => {
+        finishPatch?.(committed);
         await patchResult;
       });
+      mocks.sceneData = committed;
+      await act(async () => root.render(
+        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={11} />,
+      ));
 
       expect(findControl(container, "Total width").value).toBe("5e-7");
       expect(findControl(container, "Ramp width").value).toBe("2e-7");
