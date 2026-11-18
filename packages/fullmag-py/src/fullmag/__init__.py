@@ -1,6 +1,6 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, fields, init, select, shapes
+from . import couplings, export3d, fields, init, select, shapes
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -762,6 +762,7 @@ __all__ = [
     "Hysteresis",
     "couplings",
     "disk",
+    "export3d",
     "export_stl",
     "fields",
     "generate_mesh",

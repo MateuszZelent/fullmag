@@ -179,6 +179,7 @@ describe("viewport3dStore", () => {
       rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
+      export3dDialogOpen: false,
       settingsDialogOpen: false,
       viewCubeVisible: true,
     });
@@ -209,6 +210,7 @@ describe("viewport3dStore", () => {
       rotationMode: "object",
       scaleLabelsVisible: true,
       scaleUnitMode: "auto",
+      export3dDialogOpen: false,
       settingsDialogOpen: false,
       viewCubeVisible: false,
     });
@@ -342,5 +344,55 @@ describe("viewport3dStore", () => {
       DEFAULT_VIEWPORT_3D_CAMERA_STATE,
     );
     expect(resolveViewport3DCameraProjection(null)).toBe("perspective");
+  });
+
+  it("tracks 3D export dialog state, quick export requests, and errors stably", () => {
+    viewport3dStore.reset();
+    const initial = viewport3dStore.getSnapshot();
+    expect(initial.widgets.export3dDialogOpen).toBe(false);
+    expect(initial.quickExport3DRequest).toBeNull();
+    expect(initial.export3DError).toBeNull();
+
+    viewport3dStore.setExport3DDialogOpen(false);
+    expect(viewport3dStore.getSnapshot()).toBe(initial);
+
+    viewport3dStore.setExport3DError("Previous failure");
+    expect(viewport3dStore.getSnapshot().export3DError).toBe("Previous failure");
+
+    viewport3dStore.openExport3DDialog();
+    const opened = viewport3dStore.getSnapshot();
+    expect(opened.widgets.export3dDialogOpen).toBe(true);
+    expect(opened.export3DError).toBeNull();
+
+    viewport3dStore.openExport3DDialog();
+    expect(viewport3dStore.getSnapshot()).toBe(opened);
+
+    viewport3dStore.requestQuickExport3D("glb");
+    const firstQuick = viewport3dStore.getSnapshot().quickExport3DRequest;
+    expect(firstQuick).toEqual({ format: "glb", revision: 1 });
+
+    viewport3dStore.requestQuickExport3D("vtu");
+    expect(viewport3dStore.getSnapshot().quickExport3DRequest).toEqual({
+      format: "vtu",
+      revision: 2,
+    });
+
+    viewport3dStore.clearQuickExport3DRequest(1);
+    expect(viewport3dStore.getSnapshot().quickExport3DRequest).toEqual({
+      format: "vtu",
+      revision: 2,
+    });
+
+    viewport3dStore.clearQuickExport3DRequest(2);
+    const cleared = viewport3dStore.getSnapshot();
+    expect(cleared.quickExport3DRequest).toBeNull();
+
+    viewport3dStore.clearQuickExport3DRequest();
+    expect(viewport3dStore.getSnapshot()).toBe(cleared);
+
+    viewport3dStore.reset();
+    expect(viewport3dStore.getSnapshot().widgets.export3dDialogOpen).toBe(false);
+    expect(viewport3dStore.getSnapshot().quickExport3DRequest).toBeNull();
+    expect(viewport3dStore.getSnapshot().export3DError).toBeNull();
   });
 });
