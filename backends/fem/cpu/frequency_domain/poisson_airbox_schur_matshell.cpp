@@ -6223,6 +6223,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         STSetShift(st, static_cast<PetscScalar>(target_eigenvalue)) == 0 &&
         set_st_preconditioner_mat_compat(st, shifted_preconditioner) == 0 &&
         STGetKSP(st, &st_ksp) == 0;
+    if (augmented_shifted_preconditioner) {
+        // Standard right-preconditioned GMRES forms x = x0 + K^{-1}(V y) with
+        // one extra K^{-1} application whose rounding error never enters its
+        // residual estimate; with the augmented factorization EPS then sees an
+        // inexact shift-invert operator and stagnates (measured: 2412 restarts
+        // without convergence at split 4824).  FGMRES forms x = x0 + Z y from
+        // the already-preconditioned basis, so its residual is the true one.
+        resolved_tuning.shifted_ksp_type = "fgmres";
+    }
     if (configured) {
         // Defaults preserve the existing GMRES path. An explicit common
         // runtime override also applies to Gamma within a Floquet sweep.
@@ -6235,11 +6244,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     configured = configured && KSPGetPC(st_ksp, &st_pc) == 0;
     if (configured && augmented_shifted_preconditioner) {
-        // Right preconditioning with the unpreconditioned residual norm: the
-        // KSP must certify ||b - (A - tau B) x|| itself.  With left
-        // preconditioning the test uses ||K^{-1} r||, which the augmented
-        // factorization can make small while the true residual is not, and
-        // EPS then stagnates on an inexact shift-invert operator.
+        // FGMRES (selected above) with right preconditioning and the
+        // unpreconditioned norm certifies ||b - (A - tau B) x|| itself.
         configured = configure_augmented_shift_pc(st_pc, augmented_shift.get()) == 0 &&
             KSPSetPCSide(st_ksp, PC_RIGHT) == 0 &&
             KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
