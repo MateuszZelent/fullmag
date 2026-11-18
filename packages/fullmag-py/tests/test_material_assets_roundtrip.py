@@ -73,7 +73,8 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="fullmag-material-dmi-") as temporary:
             path = Path(temporary) / "dmi.py"
             path.write_text(canonical, encoding="utf-8")
-            rebuilt = build_scene_document_from_builder(export_builder_draft(str(path)))
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            rebuilt = build_scene_document_from_builder(export_builder_draft(loaded))
         entries = {entry["kind"]: entry for entry in rebuilt["objects"][0]["physics_stack"]}
         self.assertFalse(entries["interfacial_dmi"]["enabled"])
         self.assertFalse(entries["bulk_dmi"]["enabled"])
@@ -101,7 +102,8 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="fullmag-material-old-") as temporary:
             path = Path(temporary) / "legacy.py"
             path.write_text(canonical, encoding="utf-8")
-            rebuilt = build_scene_document_from_builder(export_builder_draft(str(path)))
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+            rebuilt = build_scene_document_from_builder(export_builder_draft(loaded))
         self.assertEqual(rebuilt["materials"][0], material)
         self.assertEqual(rebuilt["objects"][0]["material_ref"], material["id"])
 
@@ -298,6 +300,27 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         kinds = {term["kind"] for term in rebuilt["objects"][0]["physics_stack"]}
         self.assertNotIn("interfacial_dmi", kinds)
         self.assertNotIn("bulk_dmi", kinds)
+
+    def test_active_dmi_can_keep_a_null_catalog_coefficient(self):
+        scene = material_scene()
+        scene["objects"][0]["physics_stack"].append({
+            "kind": "interfacial_dmi", "enabled": True, "params": {"dind": 0.0},
+        })
+        canonical = render_scene_document_as_script(scene)
+        self.assertRegex(canonical, r"\.Dind\s*=\s*0")
+        edited, count = re.subn(r"(\.Dind\s*=\s*)[^\n]+", r"\g<1>0.003", canonical, count=1)
+        self.assertEqual(count, 1)
+        with tempfile.TemporaryDirectory(prefix="fullmag-material-active-dmi-") as temporary:
+            path = Path(temporary) / "active.py"
+            for text, coefficient in ((canonical, None), (edited, 0.003)):
+                with self.subTest(coefficient=coefficient):
+                    path.write_text(text, encoding="utf-8")
+                    loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+                    rebuilt = build_scene_document_from_builder(export_builder_draft(loaded))
+                    self.assertEqual(rebuilt["materials"][0]["properties"]["Dind"], coefficient)
+                    interaction = next(entry for entry in rebuilt["objects"][0]["physics_stack"]
+                                       if entry["kind"] == "interfacial_dmi")
+                    self.assertTrue(interaction["enabled"])
 
     def test_signed_active_dmi_roundtrips(self):
         for key in ("Dind", "Dbulk"):

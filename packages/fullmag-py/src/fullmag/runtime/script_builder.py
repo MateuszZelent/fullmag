@@ -457,6 +457,7 @@ def export_builder_draft(
                 # geometry without an explicit ID cannot inherit an old asset.
                 material_metadata["assignments"].pop(magnet.name, None)
                 material_metadata.get("inactive_dmi", {}).pop(magnet.name, None)
+                material_metadata.get("active_dmi_without_coefficient", {}).pop(magnet.name, None)
         restore_inactive_material_dmi(material_metadata, draft["geometries"])
         draft["material_assets"] = reconcile_material_assets(material_metadata, draft["geometries"])
     fem_domain_mesh = _export_fem_domain_mesh_reference(

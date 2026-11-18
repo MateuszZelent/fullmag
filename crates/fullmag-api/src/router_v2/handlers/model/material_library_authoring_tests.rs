@@ -118,6 +118,32 @@ fn material_database_assignment_and_edits_do_not_enable_implicit_dmi() {
 }
 
 #[test]
+fn selecting_a_database_copy_from_the_existing_material_dropdown_preserves_dmi() {
+    use ScriptBuilderMagneticInteractionKind::InterfacialDmi;
+
+    for explicitly_enabled in [false, true] {
+        let mut value = scene();
+        if explicitly_enabled {
+            value.objects[0].physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                kind: InterfacialDmi, enabled: true, params: Some(json!({"dind":0.004})),
+            });
+        }
+        let mut input = serde_json::to_value(create(true, None)).unwrap();
+        input["properties"]["Dind"] = json!(-0.001);
+        input["references"] = json!([{"label":" Sample "}]);
+        input["source"]["references"] = input["references"].clone();
+        apply_authoring_transaction(&mut value, serde_json::from_value(input).unwrap()).unwrap();
+        let asset = &value.materials[0];
+        assert_eq!(asset.references, asset.source.as_ref().unwrap().references);
+        let patch = serde_json::from_value(json!({"base_revision":4,"material_ref":"mat:sample"})).unwrap();
+        apply_object_patch(&mut value, "body", patch).unwrap();
+        let interaction = find_interaction(&value.objects[0], InterfacialDmi).unwrap();
+        assert_eq!(interaction.enabled, explicitly_enabled);
+        assert_eq!(interaction.params.as_ref().unwrap()["dind"], json!(-0.001));
+    }
+}
+
+#[test]
 fn material_database_assignment_preserves_legacy_active_dmi() {
     use ScriptBuilderMagneticInteractionKind::InterfacialDmi;
 

@@ -307,24 +307,38 @@ pub fn scene_document_to_script_builder(
 }
 
 fn material_assets_metadata(scene: &SceneDocument) -> crate::SceneMaterialAssetsMetadata {
+    use crate::MaterialDmiCoefficient::{Bulk, Interfacial};
+    use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
+
+    let mut inactive_dmi: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    let mut active_dmi_without_coefficient: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for object in &scene.objects {
+        let Some(material) = scene.materials.iter().find(|entry| entry.id == object.material_ref) else {
+            continue;
+        };
+        for (kind, flag, key, value) in [
+            (InterfacialDmi, Interfacial, "dind", material.properties.dind),
+            (BulkDmi, Bulk, "dbulk", material.properties.dbulk),
+        ] {
+            if let Some(entry) = object.physics_stack.iter().find(|entry| entry.kind == kind) {
+                if !entry.enabled {
+                    inactive_dmi.entry(object.id.clone()).or_default().push(flag);
+                } else if value.is_none()
+                    && entry.params.as_ref().and_then(|params| params.get(key)).and_then(Value::as_f64) == Some(0.0)
+                {
+                    active_dmi_without_coefficient.entry(object.id.clone()).or_default().push(flag);
+                }
+            }
+        }
+    }
     crate::SceneMaterialAssetsMetadata {
         version: crate::SceneMaterialAssetsVersion::V1,
         materials: scene.materials.clone(),
         assignments: scene.objects.iter().filter(|object| scene.materials.iter().any(|material| material.id == object.material_ref))
             .map(|object| (object.id.clone(),object.material_ref.clone())).collect(),
         object_ids: scene.objects.iter().map(|object| (builder_geometry_name_for_object(object),object.id.clone())).collect(),
-        inactive_dmi: scene.objects.iter().filter_map(|object| {
-            if !scene.materials.iter().any(|material| material.id == object.material_ref) {
-                return None;
-            }
-            let inactive = [
-                (ScriptBuilderMagneticInteractionKind::InterfacialDmi, crate::InactiveMaterialDmi::Interfacial),
-                (ScriptBuilderMagneticInteractionKind::BulkDmi, crate::InactiveMaterialDmi::Bulk),
-            ].into_iter().filter_map(|(kind, flag)| {
-                object.physics_stack.iter().any(|entry| entry.kind == kind && !entry.enabled).then_some(flag)
-            }).collect::<Vec<_>>();
-            (!inactive.is_empty()).then(|| (object.id.clone(), inactive))
-        }).collect(),
+        inactive_dmi,
+        active_dmi_without_coefficient,
     }
 }
 
@@ -342,18 +356,25 @@ fn restore_material_assets(builder: &ScriptBuilderState, objects: &mut [SceneObj
         let mut properties = geometry.material.clone();
         if let Some(original) = metadata.assignments.get(&object.id)
             .and_then(|id| metadata.materials.iter().find(|material| &material.id == id)) {
-            use crate::InactiveMaterialDmi::{Bulk, Interfacial};
+            use crate::MaterialDmiCoefficient::{Bulk, Interfacial};
             use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi, RotatedInterfacialDmi};
 
             let inactive = metadata.inactive_dmi.get(&object.id).map(Vec::as_slice).unwrap_or_default();
+            let active_without_coefficient = metadata.active_dmi_without_coefficient
+                .get(&object.id).map(Vec::as_slice).unwrap_or_default();
             let rotated = geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == RotatedInterfacialDmi);
             for (flag, kind, key, effective, saved) in [
                 (Interfacial, InterfacialDmi, "dind", &mut properties.dind, original.properties.dind),
                 (Bulk, BulkDmi, "dbulk", &mut properties.dbulk, original.properties.dbulk),
             ] {
-                if effective.is_some() || (flag == Interfacial && rotated)
-                    || geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == kind)
-                {
+                let active = geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == kind);
+                // The generator uses executable zero to retain an enabled module
+                // when its catalog copy has no corresponding coefficient.
+                if active_without_coefficient.contains(&flag) && *effective == Some(0.0) && active {
+                    *effective = None;
+                    continue;
+                }
+                if effective.is_some() || (flag == Interfacial && rotated) || active {
                     continue;
                 }
                 if inactive.contains(&flag) {
@@ -2788,6 +2809,8 @@ mod tests {
     #[test]
     fn material_library_roundtrip_preserves_source_identity_and_manual_edits() {
         let mut builder = sample_builder();
+        builder.geometries[0].object_regions.clear();
+        builder.geometries[0].allocated_region_ids.clear();
         let mut second = builder.geometries[0].clone();
         second.name = "Second sample".into();
         builder.geometries.push(second);

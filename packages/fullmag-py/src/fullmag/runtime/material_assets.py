@@ -125,7 +125,8 @@ def canonical_material_assets(value: object) -> dict[str, Any]:
     raw = _mapping(value, context)
     if raw.get("version") != MATERIAL_ASSETS_VERSION:
         raise ValueError(f"{context}.version must be {MATERIAL_ASSETS_VERSION}")
-    if set(raw) - {"version", "materials", "assignments", "object_ids", "inactive_dmi"}:
+    dmi_metadata_fields = ("inactive_dmi", "active_dmi_without_coefficient")
+    if set(raw) - {"version", "materials", "assignments", "object_ids", *dmi_metadata_fields}:
         raise ValueError(f"{context} has unsupported fields")
     entries = raw.get("materials")
     if not isinstance(entries, list):
@@ -173,26 +174,40 @@ def canonical_material_assets(value: object) -> dict[str, Any]:
         if object_id in object_ids.values():
             raise ValueError(f"{context}.object_ids contains duplicate object ID {object_id!r}")
         object_ids[name] = object_id
-    inactive_dmi = {}
-    for object_id, values in _mapping(raw.get("inactive_dmi", {}), f"{context}.inactive_dmi").items():
-        if (object_id not in assignments or not isinstance(values, list)
-                or any(not isinstance(value, str) or value not in _DMI_KINDS for value in values)
-                or len(values) != len(set(values))):
-            raise ValueError(f"{context}.inactive_dmi has invalid object or coefficient")
-        if values:
-            inactive_dmi[object_id] = [key for key in _DMI_KINDS if key in values]
     result = {"version": MATERIAL_ASSETS_VERSION, "materials": materials, "assignments": assignments,
               "object_ids": object_ids}
-    if inactive_dmi:
-        result["inactive_dmi"] = inactive_dmi
+    for field in dmi_metadata_fields:
+        flags = {}
+        for object_id, values in _mapping(raw.get(field, {}), f"{context}.{field}").items():
+            if (object_id not in assignments or not isinstance(values, list)
+                    or any(not isinstance(value, str) or value not in _DMI_KINDS for value in values)
+                    or len(values) != len(set(values))):
+                raise ValueError(f"{context}.{field} has invalid object or coefficient")
+            if values:
+                flags[object_id] = [key for key in _DMI_KINDS if key in values]
+        if flags:
+            result[field] = flags
     return result
 
 
 def material_assets_from_scene(scene: Mapping[str, Any]) -> dict[str, Any]:
     """Capture independent assets, including unassigned entries, by immutable ID."""
+    materials = scene.get("materials") or []
+    by_id = {entry["id"]: entry["properties"] for entry in materials}
+    active_without_coefficient = {}
+    for obj in scene.get("objects") or []:
+        properties = by_id.get(obj.get("material_ref"))
+        if properties is None or str(obj.get("role") or "magnet") != "magnet":
+            continue
+        physics = obj.get("physics_stack") or []
+        if fields := [key for key, kind in _DMI_KINDS.items() if properties.get(key) is None
+                      and any(term.get("kind") == kind and term.get("enabled", True)
+                              and (term.get("params") or {}).get(key.lower()) == 0 for term in physics)]:
+            active_without_coefficient[obj["id"]] = fields
     return canonical_material_assets({
         "version": MATERIAL_ASSETS_VERSION,
-        "materials": copy.deepcopy(scene.get("materials") or []),
+        "materials": materials,
+        "active_dmi_without_coefficient": active_without_coefficient,
         "object_ids": {
             str(obj.get("name") or obj["id"]).strip(): obj["id"]
             for obj in scene.get("objects") or []
@@ -256,6 +271,7 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
     assignments = {}
     object_ids = {}
     inactive = {}
+    active_without_coefficient = {}
     for geometry in geometries:
         if str(geometry.get("role") or "magnet") != "magnet":
             continue
@@ -295,9 +311,16 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
             term.get("kind") for term in geometry.get("physics_stack") or []
             if isinstance(term, Mapping) and term.get("enabled", True) is not False
         }
-        for key, kind in (("Dind", "interfacial_dmi"), ("Dbulk", "bulk_dmi")):
-            if (properties[key] is None and by_id[material_id]["properties"][key] == 0
-                    and kind not in enabled_kinds
+        original = by_id[material_id]
+        for key, kind in _DMI_KINDS.items():
+            saved = original["properties"][key]
+            if (key in metadata.get("active_dmi_without_coefficient", {}).get(object_id, ())
+                    and properties[key] in (None, 0) and kind in enabled_kinds):
+                # The script needs an executable zero to preserve an enabled
+                # interaction. The catalog copy still has an unset coefficient.
+                properties[key] = None
+                active_without_coefficient.setdefault(object_id, []).append(key)
+            elif (properties[key] is None and saved == 0 and kind not in enabled_kinds
                     and not (key == "Dind" and "rotated_interfacial_dmi" in enabled_kinds)):
                 properties[key] = 0.0
         if flags := _inactive_dmi(geometry.get("physics_stack") or []):
@@ -326,6 +349,8 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
               "object_ids": object_ids}
     if inactive:
         result["inactive_dmi"] = inactive
+    if active_without_coefficient:
+        result["active_dmi_without_coefficient"] = active_without_coefficient
     return result
 
 

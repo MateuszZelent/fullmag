@@ -59,7 +59,10 @@ kontraktach. Dowody roundtrip i tożsamości wejścia są wymagane osobno od sol
    jako edytorskie metadane `inactive_dmi`, przypisane do ID obiektu i pola
    `Dind` lub `Dbulk`. Przy reimporcie jawny DSL ma pierwszeństwo. Dla
    pominiętego pola bez tej informacji metadane zachowują wyłącznie
-   nieaktywne zero. Pochodzenie katalogowe nie uzupełnia parametrów wykonania.
+   nieaktywne zero. `active_dmi_without_coefficient` oznacza aktywne
+   oddziaływanie emitowane jako zero przy pustym polu materiału. Niezerowa
+   edycja DSL nadal zmienia współczynnik. Pochodzenie katalogowe nie
+   uzupełnia parametrów wykonania.
 10. Pochodzenie i referencje nie są wejściami wykonania w
     `scene_execution_input_view`. Zmiana samych metadanych przechodzi istniejącą
     bramkę `metadata_only`. Hash archiwizowanego całego ProblemIR może się

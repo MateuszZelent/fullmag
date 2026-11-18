@@ -2996,16 +2996,7 @@ pub async fn patch_authoring_material(
     let mut scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
-    let material = scene
-        .materials
-        .iter_mut()
-        .find(|entry| entry.id == material_id)
-        .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
-
-    apply_material_patch_to_asset(material, req)?;
-
-    sync_interfacial_dmi_for_material(&mut scene, &material_id);
-    sync_bulk_dmi_for_material(&mut scene, &material_id);
+    apply_patch_material_transaction(&mut scene, None, &material_id, req)?;
 
     let committed =
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
@@ -4190,7 +4181,10 @@ fn apply_create_material_transaction(
     if let Some(source) = &source {
         fullmag_authoring::validate_material_source(source).map_err(ApiError::bad_request)?;
     }
-    let references = material_references_from_resources(references, assign_to_object_id.is_some())?;
+    let references = material_references_from_resources(
+        references,
+        source.is_some() || assign_to_object_id.is_some(),
+    )?;
     let target_index = assign_to_object_id
         .as_deref()
         .map(|object_id| {
@@ -4221,39 +4215,66 @@ fn apply_create_material_transaction(
         source,
     });
     if let Some(index) = target_index {
-        let object = &mut scene.objects[index];
-        let previous = scene.materials.iter()
-            .find(|entry| entry.id == object.material_ref)
-            .map(|entry| &entry.properties);
-        preserve_implicit_dmi(object, previous, properties.dind, properties.dbulk);
-        object.material_ref = material_id.to_string();
+        assign_object_material(
+            &mut scene.objects[index], &scene.materials, material_id.to_owned(), true,
+        );
     }
     Ok(())
 }
 
-/// Keep the legacy implicit enablement when replacing material coefficients.
-fn preserve_implicit_dmi(
+/// Keep explicit activation and preserve legacy enablement when assigning a copy.
+fn assign_object_material(
+    object: &mut SceneObject,
+    materials: &[SceneMaterialAsset],
+    material_id: String,
+    independent_copy: bool,
+) {
+    if object.role == "magnet" && material_id != object.material_ref {
+        let previous = materials.iter().find(|entry| entry.id == object.material_ref);
+        let next = materials.iter().find(|entry| entry.id == material_id);
+        if independent_copy || previous.is_some_and(|entry| entry.source.is_some())
+            || next.is_some_and(|entry| entry.source.is_some())
+        {
+            sync_object_dmi_parameters(
+                object,
+                previous.map(|entry| &entry.properties),
+                next.map(|entry| &entry.properties),
+                true,
+            );
+        }
+    }
+    object.material_ref = material_id;
+}
+
+fn sync_object_dmi_parameters(
     object: &mut SceneObject,
     previous: Option<&fullmag_authoring::ScriptBuilderMaterialState>,
-    dind: Option<f64>,
-    dbulk: Option<f64>,
+    next: Option<&fullmag_authoring::ScriptBuilderMaterialState>,
+    preserve_implicit: bool,
 ) {
     use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
 
     for (kind, key, before, after) in [
-        (InterfacialDmi, "dind", previous.and_then(|value| value.dind), dind),
-        (BulkDmi, "dbulk", previous.and_then(|value| value.dbulk), dbulk),
+        (InterfacialDmi, "dind", previous.and_then(|value| value.dind), next.and_then(|value| value.dind)),
+        (BulkDmi, "dbulk", previous.and_then(|value| value.dbulk), next.and_then(|value| value.dbulk)),
     ] {
-        let enabled = before.is_some_and(|value| value != 0.0);
-        if enabled != after.is_some_and(|value| value != 0.0)
-            && find_interaction(object, kind).is_none()
-        {
-            object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
-                kind,
-                enabled,
-                params: Some(Value::Object([(key.to_owned(), Value::from(after.unwrap_or(0.0)))]
-                    .into_iter().collect())),
-            });
+        let coefficient = Value::from(after.unwrap_or(0.0));
+        if let Some(entry) = object.physics_stack.iter_mut().find(|entry| entry.kind == kind) {
+            let mut params = match entry.params.take() {
+                Some(Value::Object(params)) => params,
+                _ => Default::default(),
+            };
+            params.insert(key.to_owned(), coefficient);
+            entry.params = Some(Value::Object(params));
+        } else if preserve_implicit {
+            let enabled = before.is_some_and(|value| value != 0.0);
+            if enabled != after.is_some_and(|value| value != 0.0) {
+                object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled,
+                    params: Some(Value::Object([(key.to_owned(), coefficient)].into_iter().collect())),
+                });
+            }
         }
     }
 }
@@ -4272,15 +4293,10 @@ fn apply_patch_material_transaction(
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
     let previous = material.source.as_ref().map(|_| material.properties.clone());
     apply_material_patch_to_asset(material, patch)?;
-    if let Some(previous) = previous.as_ref() {
-        for object in scene.objects.iter_mut().filter(|object| {
-            object.role == "magnet" && object.material_ref == material_id
-        }) {
-            preserve_implicit_dmi(object, Some(previous), material.properties.dind, material.properties.dbulk);
-        }
+    for object in scene.objects.iter_mut().filter(|object| object.material_ref == material_id) {
+        let preserve_implicit = previous.is_some() && object.role == "magnet";
+        sync_object_dmi_parameters(object, previous.as_ref(), Some(&material.properties), preserve_implicit);
     }
-    sync_interfacial_dmi_for_material(scene, material_id);
-    sync_bulk_dmi_for_material(scene, material_id);
     Ok(())
 }
 
@@ -4891,7 +4907,7 @@ fn apply_object_patch(
     req: ObjectPatchRequest,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, req.base_revision)?;
-    let object = find_scene_object_mut(scene, object_id)?;
+    let object = find_object_mut(&mut scene.objects, object_id)?;
     let mut mesh_dirty = false;
     if let Some(name) = req.name {
         let name = name.trim();
@@ -4912,9 +4928,8 @@ fn apply_object_patch(
         object.visible = visible;
     }
     if let Some(material_ref) = req.material_ref {
-        // Material assignment is lowered again with the solver input.
         // RegionRealizationImpact independently checks magnetic support.
-        object.material_ref = material_ref;
+        assign_object_material(object, &scene.materials, material_ref, false);
     }
     if let Some(region_name) = req.region_name {
         let region_name = region_name.trim();
@@ -4985,9 +5000,14 @@ fn find_scene_object_mut<'a>(
     scene: &'a mut SceneDocument,
     object_id: &str,
 ) -> Result<&'a mut SceneObject, ApiError> {
-    scene
-        .objects
-        .iter_mut()
+    find_object_mut(&mut scene.objects, object_id)
+}
+
+fn find_object_mut<'a>(
+    objects: &'a mut [SceneObject],
+    object_id: &str,
+) -> Result<&'a mut SceneObject, ApiError> {
+    objects.iter_mut()
         .find(|entry| entry.id == object_id || entry.name == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))
 }
@@ -5437,58 +5457,6 @@ fn build_magnetization_asset_resource(
         region_initial_state_revision: Some(region_initial_state_revision),
         asset: asset.into_iter().collect(),
     })
-}
-
-fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
-    let material_dind = scene
-        .materials
-        .iter()
-        .find(|entry| entry.id == material_id)
-        .and_then(|entry| entry.properties.dind)
-        .unwrap_or(0.0);
-    for object in &mut scene.objects {
-        if object.material_ref != material_id {
-            continue;
-        }
-        if let Some(interaction) = object
-            .physics_stack
-            .iter_mut()
-            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::InterfacialDmi)
-        {
-            let mut params = match interaction.params.clone() {
-                Some(Value::Object(map)) => map,
-                _ => Default::default(),
-            };
-            params.insert("dind".to_string(), Value::from(material_dind));
-            interaction.params = Some(Value::Object(params));
-        }
-    }
-}
-
-fn sync_bulk_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
-    let material_dbulk = scene
-        .materials
-        .iter()
-        .find(|entry| entry.id == material_id)
-        .and_then(|entry| entry.properties.dbulk)
-        .unwrap_or(0.0);
-    for object in &mut scene.objects {
-        if object.material_ref != material_id {
-            continue;
-        }
-        if let Some(interaction) = object
-            .physics_stack
-            .iter_mut()
-            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::BulkDmi)
-        {
-            let mut params = match interaction.params.clone() {
-                Some(Value::Object(map)) => map,
-                _ => Default::default(),
-            };
-            params.insert("dbulk".to_string(), Value::from(material_dbulk));
-            interaction.params = Some(Value::Object(params));
-        }
-    }
 }
 
 fn parse_interaction_kind(raw: &str) -> Result<ScriptBuilderMagneticInteractionKind, ApiError> {

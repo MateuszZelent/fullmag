@@ -122,7 +122,7 @@ pub enum SceneMaterialAssetsVersion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InactiveMaterialDmi {
+pub enum MaterialDmiCoefficient {
     #[serde(rename = "Dind")]
     Interfacial,
     #[serde(rename = "Dbulk")]
@@ -137,7 +137,9 @@ pub struct SceneMaterialAssetsMetadata {
     pub assignments: std::collections::BTreeMap<String, String>,
     pub object_ids: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub inactive_dmi: std::collections::BTreeMap<String, Vec<InactiveMaterialDmi>>,
+    pub inactive_dmi: std::collections::BTreeMap<String, Vec<MaterialDmiCoefficient>>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub active_dmi_without_coefficient: std::collections::BTreeMap<String, Vec<MaterialDmiCoefficient>>,
 }
 #[derive(Deserialize)]
 struct MaterialAssetsMetadataWire {
@@ -146,7 +148,9 @@ struct MaterialAssetsMetadataWire {
     assignments: std::collections::BTreeMap<String, String>,
     object_ids: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    inactive_dmi: std::collections::BTreeMap<String, Vec<InactiveMaterialDmi>>,
+    inactive_dmi: std::collections::BTreeMap<String, Vec<MaterialDmiCoefficient>>,
+    #[serde(default)]
+    active_dmi_without_coefficient: std::collections::BTreeMap<String, Vec<MaterialDmiCoefficient>>,
 }
 impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
     type Error = String;
@@ -180,12 +184,12 @@ impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
         }) {
             return Err("material metadata contains empty or duplicate object identities".into());
         }
-        if value.inactive_dmi.iter().any(|(object, flags)| {
+        if value.inactive_dmi.iter().chain(&value.active_dmi_without_coefficient).any(|(object, flags)| {
             !value.assignments.contains_key(object)
                 || flags.len() > 2
                 || (flags.len() == 2 && flags[0] == flags[1])
         }) {
-            return Err("material metadata has invalid inactive DMI".into());
+            return Err("material metadata has invalid DMI editor state".into());
         }
         Ok(Self {
             version: value.version,
@@ -193,6 +197,7 @@ impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
             assignments: value.assignments,
             object_ids: value.object_ids,
             inactive_dmi: value.inactive_dmi,
+            active_dmi_without_coefficient: value.active_dmi_without_coefficient,
         })
     }
 }
