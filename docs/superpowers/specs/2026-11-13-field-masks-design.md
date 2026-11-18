@@ -334,9 +334,11 @@ mumax3 also drives every step from the host. The plan measures it.
 - Panel draft (review of PR #439): the local draft belongs to the antenna, not to
   a scene revision, so a newer revision keeps the draft, the focus and the scroll.
   The panel merges its edits onto the antenna as the scene has it now (three-way
-  merge from the version the edits started at): a field changed only elsewhere
-  follows the scene, and a field changed on both sides blocks Apply until the user
-  keeps their values or loads the scene version. Apply merges onto the antenna the
+  merge from the version the edits started at; parameters and locals by name): a
+  field changed only elsewhere follows the scene, and a field changed on both sides
+  blocks Apply until the user keeps their values or loads the scene version. Each
+  edit without a conflict first rebases the draft onto the scene version, so a
+  field shown from the scene is edited from the scene's value. Apply merges onto the antenna the
   server holds at the write's base revision, so a stale list cannot overwrite a
   change made elsewhere. A successful create, save or delete marks the Inspector
   session clean before the panel moves the selection, so no "Unapplied Inspector
