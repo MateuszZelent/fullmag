@@ -1676,7 +1676,7 @@
       "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
       "symbol": "create_native_floquet_augmented_shift_solver",
       "responsibility": "Assemble the phase-rotated Floquet augmented (q, phi) shift matrix from the normalized shell blocks, factor it with MUMPS and install it as the inner shifted-KSP preconditioner.",
-      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     }
   ],
   "public_api": {
