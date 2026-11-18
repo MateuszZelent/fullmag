@@ -23159,6 +23159,35 @@ async fn authoring_magnetization_asset_patch_upserts_new_asset() {
 }
 
 #[tokio::test]
+async fn absorbing_boundary_patch_distinguishes_omission_and_removal() {
+    let app = test_router_with_scene_document().await;
+    let boundary = serde_json::json!({
+        "total_width_m": 4e-7, "ramp_width_m": 2e-7, "max_damping": 0.5,
+        "faces": ["x+"], "frame": "object", "profile": "custom", "expression": "u**3"
+    });
+    for (patch, expected) in [
+        (serde_json::json!({ "absorbing_boundary": boundary }), Some(&boundary)),
+        (serde_json::json!({ "notes": "keep the boundary" }), Some(&boundary)),
+        (serde_json::json!({ "absorbing_boundary": null }), None),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/objects/body")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        let status = response.status();
+        let scene = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{scene:#}");
+        let object = scene["objects"].as_array().unwrap().iter()
+            .find(|object| object["id"] == "body").unwrap();
+        assert_eq!(object.get("absorbing_boundary").filter(|v| !v.is_null()), expected);
+    }
+}
+
+#[tokio::test]
 async fn authoring_object_resource_crud_commits_scene() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();

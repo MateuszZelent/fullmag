@@ -1478,7 +1478,11 @@ pub struct ObjectPatchRequest {
     #[schema(value_type = Object, nullable)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "super::common::deserialize_double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[schema(value_type = Option<Object>, nullable)]
     pub absorbing_boundary: Option<Option<Value>>,
 }
