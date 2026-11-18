@@ -278,7 +278,7 @@ describe("ObjectMaterialPanel database lifecycle", () => {
     const view = await mountPanel();
     try {
       expect(view.container.textContent).toContain("Modified in model");
-      expect(view.container.textContent).toContain("Permalloy · version 1");
+      expect(view.container.textContent).toContain("Permalloy · revision 1");
       expect(view.container.textContent).toContain("Ms: 800000 → 900000 A/m");
     } finally { await view.dispose(); }
   });
