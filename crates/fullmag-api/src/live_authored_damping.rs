@@ -213,9 +213,8 @@ async fn prepare_snapshot(
                 PublishedDomainPlan::Ready { plan, layout, .. } => {
                     project_damping(plan.backend_plan, layout, revision)
                 }
-                PublishedDomainPlan::Pending(_) => {
-                    // A topology edit or unavailable native evidence means the
-                    // old coefficient must disappear until the next preparation.
+                PublishedDomainPlan::Pending(reason) => {
+                    pending_reason = Some(reason.to_string());
                     None
                 }
             }

@@ -31,7 +31,8 @@ function expectedAlpha(x: number, layer: Layer | null): number {
 }
 
 test("ABL editor updates the live FDM damping field and canonical script", async ({ page }, info) => {
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
+  const workspaceStartupTimeout = 120_000;
   const timeout = 30_000;
   page.setDefaultTimeout(timeout);
   expect(process.env.FULLMAG_QA_ALLOW_ABL_WRITE, "requires explicit writes to a seeded QA scene").toBe("1");
@@ -113,7 +114,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
           if (!issued.has(response.request()) || response.status() !== 200) return false;
           lastObservation = await inspectField(response, layer);
           return lastObservation.maximumError < 2e-7;
-        }, { timeout }),
+        }, { timeout: step === "baseline" ? workspaceStartupTimeout + timeout : timeout }),
         action(),
       ]);
       await expect(label).toBeVisible({ timeout });
@@ -155,7 +156,8 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   };
 
   await observeChange("baseline", null, async () => {
-    await page.goto(new URL("/workspace", origin).href, { waitUntil: "domcontentloaded" });
+    await page.goto(new URL("/workspace", origin).href, { waitUntil: "domcontentloaded", timeout: workspaceStartupTimeout });
+    await expect(page.getByRole("tab", { name: fixture.name, exact: true })).toBeVisible({ timeout: workspaceStartupTimeout });
     const home = page.locator('.fm-home-overlay[data-state="home-overlay"]');
     if (await home.isVisible()) await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
     await page.locator("#fm-main-content.fm-workspace-body").waitFor();
@@ -165,17 +167,9 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       await page.getByRole("menuitemradio", { name: "α", exact: true }).click();
     }
   });
-  const object = page.getByRole("treeitem", { name: fixture.object_id, exact: true });
-  for (const name of ["Model", "Geometry", "Objects"]) {
-    if (await object.isVisible()) break;
-    const branch = page.getByRole("treeitem", { name, exact: true });
-    if (await branch.isVisible() && await branch.getAttribute("aria-expanded") === "false") {
-      await branch.press("ArrowRight");
-    }
-  }
-  await object.waitFor();
-  if (await object.getAttribute("aria-expanded") === "false") await object.press("ArrowRight");
-  await page.getByRole("treeitem", { name: "Magnetic Parameters", exact: true }).click();
+  await page.getByRole("tab", { name: "Workspace", exact: true }).click();
+  await page.getByTitle("Expand All", { exact: true }).click();
+  await page.locator(`[data-node-id="model:object:${fixture.object_id}:magnetic-parameters"]`).click();
   const group = page.locator('section[data-slot="inspector-group"]').filter({
     has: page.getByRole("heading", { name: "Absorbing Boundary", exact: true }),
   }).last();

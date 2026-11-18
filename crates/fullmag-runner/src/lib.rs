@@ -99,6 +99,7 @@ mod dispatch;
 pub use dispatch::{stage_step_time_frame, StageStepTimeFrame};
 pub mod eigen;
 mod fdm;
+pub use fdm::live_layout::{live_fdm_grid_layout, live_fdm_multilayer_grid_layout};
 mod accepted_materialization;
 pub use accepted_materialization::{
     accepted_observation_quantity_ids, capture_solver_observables,

@@ -59,7 +59,7 @@ study.wait_for_solve(True)
         client.session_scope = urlencode(dict(session=pin["session_id"], epoch=pin["session_epoch"],
                                               request_scope_epoch=pin["request_scope_epoch"]))
         before = client.model.scene()
-        if before["revision"] != 0 or before["objects"]:
+        if before["revision"] != 0 or before.get("objects", []) != []:
             raise RuntimeError("Refusing to replace a nonempty scene")
         client.model.replace_scene(scene, base_revision=0)
         saved = client.model.scene()

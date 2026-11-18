@@ -299,8 +299,17 @@ pub(crate) fn plan_on_published_domain(
                 .metadata
                 .as_ref()
                 .and_then(|meta| meta.get("artifact_layout"));
-            if !published_layout.is_some_and(|persisted| matching_domain_layout(persisted, &layout))
-            {
+            // Build Grid publishes a compact summary alongside its complete execution plan.
+            // Qualify that exact summary against the published plan. The full old and new
+            // layouts (including native masks and cell order) are still compared below.
+            let matches_publication = published_layout.is_some_and(|persisted| {
+                matching_domain_layout(persisted, &layout) || match &published.backend_plan {
+                    BackendPlanIR::Fdm(fdm) => persisted == &fullmag_runner::live_fdm_grid_layout(fdm),
+                    BackendPlanIR::FdmMultilayer(ml) => persisted == &fullmag_runner::live_fdm_multilayer_grid_layout(ml),
+                    _ => false,
+                }
+            });
+            if !matches_publication {
                 return Ok(PublishedDomainPlan::Pending("domain_layout_not_qualified"));
             }
             None

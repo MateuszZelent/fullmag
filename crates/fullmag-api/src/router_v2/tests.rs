@@ -22835,7 +22835,9 @@ study.stages.add_run(stage_id="run", until=1e-12)
     };
     let problem = crate::script::scene_document_to_problem_ir(&state.repo_root, workspace.path(), &scene, &execution).unwrap();
     let plan = fullmag_plan::plan(&problem).unwrap();
-    let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+    // Use the same compact metadata as the CLI's real Build Grid publication.
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM fixture") };
+    let layout = fullmag_runner::live_fdm_grid_layout(fdm);
     let (scope, mesh_revision) = {
         let mut current = state.current_live_state.write().await;
         let snapshot = current.as_mut().unwrap();
@@ -22889,6 +22891,28 @@ async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding
         assert_eq!(snapshot.mesh_revision, mesh_revision);
         assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
     }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_rejects_a_different_published_grid_with_the_same_cell_count() {
+    let (state, _workspace, _source, _, _, _) = prepared_absorber_fixture("").await;
+    let mut scene = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["origin_m"] =
+            serde_json::json!([1.0, 0.0, 0.0]);
+        snapshot.scene_document.clone().unwrap()
+    };
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, scene).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["pending_reason"],
+        "domain_layout_not_qualified");
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
 }
 
 #[tokio::test]
