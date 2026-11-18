@@ -1592,8 +1592,16 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         STGetKSP(st, &ksp) == 0 &&
         KSPSetType(ksp, KSPPREONLY) == 0 &&
         KSPGetPC(ksp, &pc) == 0 &&
-        PCSetType(pc, PCFACTOR) == 0 &&
-        PCFactorSetMatSolverType(pc, MATSOLVERMUMPS) == 0 &&
+        PCSetType(pc, PCLU) == 0 &&
+        // Solver-name macros are defined by PETSc headers regardless of
+        // whether that optional package was configured. Let PETSc select its
+        // available sequential LU implementation for this bounded oracle.
+        // The descriptor's rotated-real ordering has exact zero diagonal
+        // blocks despite a nonsingular shifted system.  PETSc's built-in
+        // sparse LU does not numerically pivot, so move existing nonzeros onto
+        // the diagonal without perturbing the operator.
+        PCFactorReorderForNonzeroDiagonal(pc, 1.0e-12) == 0 &&
+        PCFactorSetShiftType(pc, MAT_SHIFT_NONE) == 0 &&
         KSPSetTolerances(ksp, std::min(0.01 * tolerance, 1.0e-10), 1.0e-14, PETSC_DEFAULT, max_linear) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, total, &xr) == 0 &&
         VecCreateSeq(PETSC_COMM_SELF, total, &xi) == 0;
