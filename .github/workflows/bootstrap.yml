@@ -450,7 +450,8 @@ jobs:
       - name: Run absorbing boundary scene validation
         run: |
           cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
-          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_patch
+          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
 
       - name: Run scene thermal intent preservation contracts
         run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
@@ -1255,6 +1256,9 @@ jobs:
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
           packages/fullmag-py/tests/test_runtime_source_snapshot.py
+
+      - name: Verify absorbing layer reflection inputs and amplitude analysis
+        run: python -m unittest discover -s tests/standard_problems/absorbing_boundary -p test_reflection.py
 
       - name: Run FEM tested/runtime library identity contracts
         run: |

@@ -22756,6 +22756,198 @@ study.run(1e-12)
     }
 }
 
+pub(crate) async fn assert_fem_absorber_field_endpoints(snapshot: &SessionStateResponse, expected: &[f64]) {
+    use crate::router_v2::handlers::data::resolved_spatial_field::{
+        resolve_current_spatial_field_metadata, SpatialFieldCarrier,
+    };
+    let resolved = resolve_current_spatial_field_metadata(snapshot, "mat_alpha", 1).unwrap().unwrap();
+    assert!(matches!(resolved.carrier, SpatialFieldCarrier::FemNodes { .. }));
+    let state = test_app_state_with_live_session().await;
+    *state.current_live_state.write().await = Some(snapshot.clone());
+    let app = build_v2_router().with_state(state);
+    let get = |uri| Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let catalog = app.clone().oneshot(get("/v2/sessions/current/data/fields")).await.unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = body_json(catalog).await;
+    let descriptor = catalog["quantities"].as_array().unwrap().iter().find(|q| q["quantity_id"] == "mat_alpha").unwrap();
+    assert_eq!(descriptor["location"], "node");
+    assert_eq!(descriptor["available"], true);
+    let meta = app.clone().oneshot(get("/v2/sessions/current/data/fields/mat_alpha/meta")).await.unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    assert_eq!(body_json(meta).await["location"], "node");
+    let samples = app.oneshot(get("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin"))
+        .await.unwrap();
+    assert_eq!(samples.status(), StatusCode::OK);
+    let bytes = body_bytes(samples).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize, expected.len());
+    assert_eq!(decode_fmvp_payload_f64(&bytes), expected);
+}
+
+async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::TempDir, PathBuf, String, String, u64) {
+    let state = test_app_state_with_live_session().await;
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("absorber.py");
+    fs::write(&source, r#"import fullmag as fm
+study = fm.study("absorber")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.cell(5e-9, 5e-9, 5e-9)
+film = study.geometry(fm.Box(40e-9, 5e-9, 5e-9), name="film")
+film.Ms = 800e3
+film.Aex = 13e-12
+film.alpha = 0.05
+film.m = fm.texture.uniform(1, 0, 0)
+# test region
+study.stages.add_run(stage_id="run", until=1e-12)
+"#.replace("# test region", region)).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    let object_id = scene.objects[0].id.clone();
+    let execution = fullmag_application::RequestedExecution {
+        backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+        mode: "strict".into(), minimum_resources: None,
+    };
+    let problem = crate::script::scene_document_to_problem_ir(&state.repo_root, workspace.path(), &scene, &execution).unwrap();
+    let plan = fullmag_plan::plan(&problem).unwrap();
+    let layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+    let (scope, mesh_revision) = {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::apply_current_live_metadata(snapshot, serde_json::json!({
+            "execution_plan": plan, "artifact_layout": layout,
+        }));
+        (crate::current_live_publisher_scope_header(&state, snapshot), snapshot.mesh_revision)
+    };
+    (state, workspace, source, object_id, scope, mesh_revision)
+}
+
+#[tokio::test]
+async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding_grid() {
+    let (state, _workspace, _source, object_id, scope, mesh_revision) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut previous_etag: Option<axum::http::HeaderValue> = None;
+    for (index, face) in [Some("x+"), Some("x-"), None].into_iter().enumerate() {
+        let layer = face.map(|face| serde_json::json!({
+            "profile": "custom", "expression": "u**3", "frame": "object",
+            "faces": [face], "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9,
+        }));
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(serde_json::json!({"base_revision":5 + index, "absorbing_boundary": layer}).to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["revision"], 6 + index);
+        let mut request = Request::builder()
+            .uri("/v2/sessions/current/data/fields/mat_alpha/samples/vector?component=magnitude&format=bin")
+            .header("x-fullmag-session-scope", scope.as_str());
+        if let Some(etag) = previous_etag.take() { request = request.header("if-none-match", etag); }
+        let samples = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(samples.status(), StatusCode::OK, "changed samples must have a new ETag");
+        previous_etag = Some(samples.headers().get("etag").expect("alpha field ETag").clone());
+        let bytes = body_bytes(samples).await;
+        let values = bytes[48..].chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap())).collect::<Vec<_>>();
+        assert_eq!(values.len(), 8);
+        let (left, right) = match face {
+            Some("x+") => (0.05, 0.55), Some("x-") => (0.55, 0.05), _ => (0.05, 0.05),
+        };
+        assert!((values[0] - left).abs() < 1e-12 && (values[7] - right).abs() < 1e-12, "{values:?}");
+        if face.is_none() { assert!(values.iter().all(|alpha| (*alpha - 0.05).abs() < 1e-12)); }
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.mesh_revision, mesh_revision);
+        assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_move_before_first_layer_remains_pending_until_domain_preparation() {
+    let (state, _workspace, _source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let app = build_v2_router().with_state(state.clone());
+    let mut transform = state.current_live_state.read().await.as_ref().unwrap()
+        .scene_document.as_ref().unwrap().objects[0].transform.clone();
+    transform.translation[0] += 10e-9;
+    let mut layer = serde_json::json!({"profile": "linear", "frame": "object", "faces": ["x+"],
+        "max_damping": 0.5, "total_width_m": 15e-9, "ramp_width_m": 10e-9});
+    let first_layer = layer.clone();
+    layer["max_damping"] = serde_json::json!(0.6);
+    let mutations = [
+        serde_json::json!({"base_revision": 5, "transform": transform}),
+        serde_json::json!({"base_revision": 6, "absorbing_boundary": first_layer}),
+        serde_json::json!({"base_revision": 7, "absorbing_boundary": layer}),
+    ];
+    for patch in mutations {
+        let response = app.clone().oneshot(Request::builder().method("PATCH")
+            .uri(format!("/v2/sessions/current/model/objects/{object_id}"))
+            .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+            .body(Body::from(patch.to_string())).unwrap()).await.unwrap();
+        let status = response.status();
+        assert_eq!(status, StatusCode::OK, "{}", body_json(response).await);
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+        assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+    }
+}
+
+#[tokio::test]
+async fn absorbing_boundary_membership_edit_before_first_layer_invalidates_the_published_domain() {
+    let (state, _workspace, _source, _object, _scope, _) = prepared_absorber_fixture(
+        r#"core = film.add_region("core", fm.Box(10e-9, 5e-9, 5e-9), region_id="core")"#,
+    ).await;
+    let before = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let mut edited = before.clone();
+    edited.objects[0].regions[0].enabled = false;
+    let impact = fullmag_authoring::classify_region_realization_impact(&before, &edited);
+    assert!(impact.membership && !impact.topology);
+    let mut edited = crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    edited.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    crate::commit_current_live_scene_document(&state, edited).await.unwrap();
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    assert_eq!(snapshot.metadata.as_ref().unwrap()["authored_damping"]["requires_domain_rebuild"], true);
+    assert!(crate::session::resolved_current_field_source(snapshot, "mat_alpha", 1).is_none());
+}
+
+#[tokio::test]
+async fn absorbing_boundary_replace_scene_keeps_the_applied_magnetization_plan() {
+    let (state, workspace, source, object_id, scope, _) = prepared_absorber_fixture("").await;
+    let script = fs::read_to_string(&source).unwrap().replace("uniform(1, 0, 0)", "uniform(0, 1, 0)");
+    fs::write(&source, script).unwrap();
+    let mut scene = crate::script::load_scene_document_state(&state.repo_root, workspace.path(), &source).unwrap();
+    scene.revision = 5;
+    scene.objects[0].absorbing_boundary = Some(serde_json::from_value(serde_json::json!({
+        "profile": "linear", "frame": "object", "faces": ["x+"], "max_damping": 0.5,
+        "total_width_m": 15e-9, "ramp_width_m": 10e-9
+    })).unwrap());
+    let key = "dbef0372bc5247478858ed654dcd540b";
+    let payload = serde_json::json!({"kind": "replace_scene", "base_revision": 5, "scene": scene,
+        "magnetization_apply": {"operation_id": key, "scopes": [{"object_id": object_id}]}});
+    let response = build_v2_router().with_state(state.clone()).oneshot(Request::builder().method("POST")
+        .uri("/v2/sessions/current/model/transactions")
+        .header("content-type", "application/json").header("x-fullmag-session-scope", scope.as_str())
+        .header("idempotency-key", key).body(Body::from(payload.to_string())).unwrap()).await.unwrap();
+    let status = response.status();
+    let receipt = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_ready");
+    let current = state.current_live_state.read().await;
+    let snapshot = current.as_ref().unwrap();
+    let plan = &snapshot.metadata.as_ref().unwrap()["execution_plan"]["backend_plan"];
+    assert_eq!(plan["initial_magnetization"][0], serde_json::json!([0.0, 1.0, 0.0]));
+    let alpha = &snapshot.latest_fields.get("mat_alpha").unwrap()["values"];
+    assert!(alpha[7].as_f64().unwrap() > alpha[0].as_f64().unwrap());
+}
+
 #[tokio::test]
 async fn scoped_magnetization_apply_publishes_only_the_selected_fdm_region() {
     let state = test_app_state_with_live_session().await;

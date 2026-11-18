@@ -684,7 +684,7 @@ fn fdm_multilayer_layout_resource(
             .map(|artifact| (Some(artifact), None))
             .collect()
     };
-    let layers = correlated_layers
+    let mut layers = correlated_layers
         .into_iter()
         .enumerate()
         .map(|(index, (artifact_layer, plan_layer))| {
@@ -701,6 +701,19 @@ fn fdm_multilayer_layout_resource(
             )
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
+    if crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        let alpha = snapshot.latest_fields.get("mat_alpha")
+            .filter(|field| crate::live_authored_damping::matches_publication(snapshot, field));
+        for layer in &mut layers {
+            layer.available_material_quantities.retain(|quantity| quantity != "mat_alpha");
+            layer.material_field_revisions.remove("mat_alpha");
+            if alpha.is_some() {
+                layer.available_material_quantities.push("mat_alpha".to_owned());
+                layer.material_field_revisions.insert("mat_alpha".to_owned(),
+                    snapshot.field_quantity_revisions.get("mat_alpha").copied().unwrap_or(1));
+            }
+        }
+    }
     let layout_fingerprint = artifact.or(backend_plan).and_then(|value| {
         serde_json::to_vec(value).ok().map(|bytes| {
             let mut hasher = Sha256::new();

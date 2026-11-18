@@ -463,6 +463,8 @@ fn prepared_domain_publication(
         Some(Value::Object(metadata)) => metadata.clone(),
         Some(_) => return Err(ApiError::conflict("live metadata must be an object")),
     };
+    // A newly qualified preparation owns its material samples again.
+    metadata.remove("authored_damping");
     let execution_plan_metadata = serde_json::to_value(&read_model.execution_plan).map_err(
         |error| ApiError::internal(format!("failed to encode prepared execution plan: {error}")),
     )?;
@@ -918,6 +920,7 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
         let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
         let session_status = preparation_session_status(snapshot);
         let mut prepared_snapshot = snapshot.clone();
+        crate::live_authored_damping::retire_for_prepared_domain(&mut prepared_snapshot);
         crate::session::apply_current_live_snapshot(
             &mut prepared_snapshot,
             CurrentLiveSnapshotRequest {
@@ -1756,6 +1759,7 @@ async fn publish_accepted_task_preparation_with_mode(
     };
     let (metadata, fem_mesh) = prepared_domain_publication(&prepared_snapshot, &read_model)?;
     let session_status = if terminal_observation { None } else { preparation_session_status(&prepared_snapshot) };
+    crate::live_authored_damping::retire_for_prepared_domain(&mut prepared_snapshot);
     crate::session::apply_current_live_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
@@ -3672,6 +3676,109 @@ mod tests {
                     physics_graph: None,
                 },
             },
+        }
+    }
+
+    #[tokio::test]
+    async fn absorbing_boundary_live_fem_projects_edited_and_removed_profiles_in_native_node_order() {
+        for equal_node_and_element_counts in [false, true] {
+            check_fem_damping_endpoints(equal_node_and_element_counts).await;
+        }
+    }
+
+    async fn check_fem_damping_endpoints(equal_node_and_element_counts: bool) {
+        use fullmag_ir::{AirBoxPolicyIR, BackendTarget, DiscretizationHintsIR, EnergyTermIR,
+            FemConnectivityIR, FemDomainMeshAssetIR, FemDomainRegionMarkerIR, FemFacetConnectivityIR,
+            FemHintsIR, GeometryAssetsIR, MeshIR, ProblemIR};
+
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: None, hybrid: None,
+            fem: Some(FemHintsIR { order: 1, hmax: 2e-9, mesh: None, demag_solver_policy: None }),
+        });
+        problem.air_box_policy = Some(AirBoxPolicyIR { boundary_marker: Some(99), ..Default::default() });
+        problem.energy_terms = vec![EnergyTermIR::Exchange];
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fdm_grid_assets: vec![], fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+                mesh_source: None, build_report: None, object_region_markers: vec![],
+                region_markers: vec![FemDomainRegionMarkerIR { geometry_name: "strip".into(), marker: 1 }],
+                mesh: Some(MeshIR {
+                    mesh_name: "strip".into(),
+                    nodes: vec![[0.,0.,0.], [1e-9,0.,0.], [0.,1e-9,0.], [0.,0.,1e-9],
+                        [-2e-9,-2e-9,-2e-9], [2e-9,-2e-9,-2e-9], [-2e-9,2e-9,-2e-9], [-2e-9,-2e-9,2e-9]],
+                    cells: FemConnectivityIR::from_tet4(vec![[0,1,2,3], [4,5,6,7]]),
+                    element_markers: vec![1,0],
+                    facets: FemFacetConnectivityIR::from_tri3(vec![[0,1,2], [4,5,6]]),
+                    boundary_markers: vec![1,99], periodic_boundary_pairs: vec![], periodic_node_pairs: vec![],
+                    per_domain_quality: Default::default(),
+                }),
+            }),
+        });
+        if equal_node_and_element_counts {
+            let mesh = problem.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut()
+                .unwrap().mesh.as_mut().unwrap();
+            let mut magnetic = vec![[0_u32, 1, 2, 3]];
+            // Three conforming barycentric subdivisions each add one node and
+            // three tetrahedra. The full mesh then has 11 nodes and 11 cells.
+            for _ in 0..3 {
+                let cell = magnetic.pop().unwrap();
+                let center = std::array::from_fn(|axis| cell.iter()
+                    .map(|index| mesh.nodes[*index as usize][axis] * 0.25).sum());
+                let index = mesh.nodes.len() as u32;
+                mesh.nodes.push(center);
+                for slot in 0..4 {
+                    let mut child = cell;
+                    child[slot] = index;
+                    magnetic.push(child);
+                }
+            }
+            mesh.element_markers = vec![1; magnetic.len()];
+            mesh.element_markers.push(0);
+            magnetic.push([4, 5, 6, 7]);
+            mesh.cells = FemConnectivityIR::from_tet4(magnetic);
+            assert_eq!(mesh.nodes.len(), mesh.cell_count());
+        }
+        let mut model = prepared_fem_read_model(true);
+        model.execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let layout = fullmag_runner::study_magnetization_layout_for_plan(&model.execution_plan).unwrap();
+        let mut request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "fem-absorber"})).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
+        request.metadata = Some(metadata);
+        request.fem_mesh = mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, request).unwrap();
+        let mesh_revision = snapshot.mesh_revision;
+        let base = problem.materials[0].damping;
+        for (i, face) in [Some("x+"), Some("x-"), None].into_iter().enumerate() {
+            problem.magnets[0].absorbing_boundary = face.map(|face| serde_json::from_value(json!({
+                "total_width_m": 0.5e-9, "ramp_width_m": 0.25e-9, "max_damping": 0.5,
+                "faces": [face], "profile": "linear", "frame": "object"
+            })).unwrap());
+            let plan = fullmag_plan::plan(&problem).unwrap();
+            let updated_layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+            assert_eq!(layout, updated_layout);
+            let revision = i as u64 + 1;
+            let projected = crate::live_authored_damping::project_damping(plan.backend_plan, updated_layout, revision).unwrap();
+            snapshot.metadata.as_mut().unwrap()["authored_damping"] =
+                crate::live_authored_damping::binding(revision, Some(&projected));
+            crate::session::replace_authored_damping(&mut snapshot, Some(projected));
+            let published = crate::session::resolved_current_field_source(&snapshot, "mat_alpha", 1);
+            let Some(crate::session::ResolvedCurrentFieldSource::Latest(raw)) = published else {
+                panic!("edited FEM damping must be an accepted native scalar source");
+            };
+            let samples = raw["values"].as_array().unwrap();
+            let nodes = &snapshot.fem_mesh.as_ref().unwrap().nodes;
+            assert_eq!(samples.len(), nodes.len());
+            for (node, sample) in nodes[..4].iter().zip(samples) {
+                let at_face = match face { Some("x+") => node[0] > 0., Some("x-") => node[0] == 0., _ => false };
+                let expected = base + if at_face {0.5} else {0.0};
+                assert!((sample.as_f64().unwrap() - expected).abs() < 1e-12);
+            }
+            assert_eq!(snapshot.mesh_revision, mesh_revision);
+            let expected: Vec<f64> = samples.iter().map(|sample| sample.as_f64().unwrap()).collect();
+            crate::router_v2::tests::assert_fem_absorber_field_endpoints(&snapshot, &expected).await;
         }
     }
 

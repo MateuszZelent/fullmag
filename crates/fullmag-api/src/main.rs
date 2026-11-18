@@ -88,6 +88,7 @@ mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
 mod live_authored_initial_state;
+mod live_authored_damping;
 mod prepared_observation_adoption;
 mod prepared_observation_bundle;
 mod docker_startup;
@@ -5720,6 +5721,7 @@ async fn commit_current_live_scene_document_with_context(
             }
         }
     }
+    let prepared_damping = crate::live_authored_damping::prepare(state, context, &scene_document).await?;
     let (
         scene_document,
         realtime_snapshot,
@@ -5849,6 +5851,9 @@ async fn commit_current_live_scene_document_with_context(
         } else {
             (None, None)
         };
+        if let Some(damping) = prepared_damping.as_ref() {
+            damping.validate(state, snapshot)?;
+        }
         let retired = crate::live_execution_binding::validate_active_scene_mutation(
             state, snapshot, &scene_document, magnetization_apply.is_some(),
         ).await?;
@@ -5867,7 +5872,7 @@ async fn commit_current_live_scene_document_with_context(
             crate::session::refresh_runtime_status(target);
         }
         target.builder_adapter = builder_state;
-        let next_mesh_signature = scene_mesh_signature(&scene_document);
+        let domain_changed = previous_mesh_signature.as_ref() != Some(&scene_mesh_signature(&scene_document));
         target.scene_document = Some(scene_document.clone());
         target.region_realization_revisions = next_region_revisions;
         let allow_live_magnetization_rebuild = magnetization_apply.is_none()
@@ -5886,13 +5891,18 @@ async fn commit_current_live_scene_document_with_context(
         } else {
             None
         };
+        if let Some(damping) = prepared_damping {
+            damping.publish(target);
+        } else if domain_changed && previous_scene.is_some() {
+            crate::live_authored_damping::mark_prepared_domain_changed(target, next_revision);
+        }
         let previous_preview = target.preview.clone();
         target.preview = build_preview_state(
             target, &target.display_selection, &target.preview_config,
         ).or(previous_preview);
         // Polling clients gate updates on `state_version`.
         target.state_version = target.state_version.wrapping_add(1);
-        if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
+        if domain_changed {
             target.mesh_revision = target.mesh_revision.wrapping_add(1).max(1);
             target.mesh_build_revision = target.mesh_build_revision.wrapping_add(1).max(1);
         }

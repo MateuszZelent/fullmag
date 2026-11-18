@@ -50,8 +50,16 @@ const LARGE_LIVE_FIELD_QUANTITIES: [&str; 6] = [
     "mat_dbulk",
 ];
 
-fn drop_large_live_field_carriers(latest_fields: &mut LatestFields) {
+fn drop_large_current_field_carriers(current: &mut SessionStateResponse) {
+    let has_authored_alpha = crate::live_authored_damping::publication_revision(current).is_some();
+    drop_large_live_field_carriers(&mut current.latest_fields, has_authored_alpha);
+}
+
+fn drop_large_live_field_carriers(latest_fields: &mut LatestFields, preserve_authored_alpha: bool) {
     for quantity in LARGE_LIVE_FIELD_QUANTITIES {
+        if quantity == "mat_alpha" && preserve_authored_alpha {
+            continue;
+        }
         latest_fields.remove(quantity);
     }
 }
@@ -1817,7 +1825,20 @@ struct CurrentLiveApplyFlags {
     clear_preview_cache: bool,
 }
 
-pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, metadata: Value) {
+pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, mut metadata: Value) {
+    // The authored coefficient belongs to the scene. Ordinary solver metadata
+    // may replay the earlier plan and cannot supersede this publication.
+    let key = crate::live_authored_damping::PUBLICATION;
+    let binding = current.metadata.as_ref().and_then(|old| old.get(key)).cloned();
+    let has_authored_damping = binding.is_some();
+    if let Some(object) = metadata.as_object_mut() {
+        object.remove(key);
+        if let Some(binding) = binding {
+            object.insert(key.to_owned(), binding);
+        }
+    } else if has_authored_damping {
+        return;
+    }
     current.metadata = Some(metadata.into());
     if let Some(metadata) = current.metadata.as_ref() {
         // A session can be reused while switching execution lanes.  The FEM
@@ -2004,8 +2025,8 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                 };
                 current.latest_fields.insert("mat_aex".to_string(), val);
             }
-            if let Some(vals) = alpha_field {
-                let val = if let Some(grid) = fdm_grid {
+            if let Some(vals) = alpha_field.filter(|_| !has_authored_damping) {
+                let mut val = if let Some(grid) = fdm_grid {
                     json!({
                         "layout": { "grid_cells": grid },
                         "values": vals
@@ -2015,6 +2036,9 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
                         "values": vals
                     })
                 };
+                if plan_val["backend_plan"]["kind"] == "fem" {
+                    val["sample_location"] = "node".into();
+                }
                 current.latest_fields.insert("mat_alpha".to_string(), val);
             }
             if let Some(vals) = dind_field {
@@ -2115,12 +2139,11 @@ fn expand_uniform_material_latest_fields(latest_fields: &mut LatestFields, sampl
         if values.len() != 1 {
             continue;
         }
-        latest_fields.insert(
-            quantity.to_string(),
-            json!({
-                "values": vec![values[0]; sample_count]
-            }),
-        );
+        let mut expanded = json!({"values": vec![values[0]; sample_count]});
+        if quantity == "mat_alpha" && value["sample_location"] == "node" {
+            expanded["sample_location"] = "node".into();
+        }
+        latest_fields.insert(quantity.to_string(), expanded);
     }
 }
 
@@ -2591,6 +2614,9 @@ fn apply_current_live_snapshot_in_place(
     drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
+    if crate::live_authored_damping::publication_revision(current).is_some() {
+        discard_solver_damping_previews(req.live_state.as_mut(), req.preview_fields.as_mut());
+    }
     if req.latest_scalar_row.is_some() {
         reject_unbound_accepted_scalar_row(current)?;
     }
@@ -2697,7 +2723,7 @@ fn apply_current_live_snapshot_in_place(
     }
     flags.clear_preview_cache |= domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
     if drop_live_magnetization {
-        drop_large_live_field_carriers(&mut current.latest_fields);
+        drop_large_current_field_carriers(current);
     }
     apply_frozen_spins_runtime_status(current, req.frozen_spins_runtime_status.take());
     if let Some(mesh_workspace) = req.mesh_workspace {
@@ -2725,7 +2751,7 @@ fn apply_current_live_snapshot_in_place(
         }
         if drop_live_magnetization {
             live_state.latest_step.magnetization = None;
-            drop_large_live_field_carriers(&mut current.latest_fields);
+            drop_large_current_field_carriers(current);
         }
         current.live_state = Some(live_state);
     }
@@ -2737,7 +2763,7 @@ fn apply_current_live_snapshot_in_place(
     }
     if let Some(latest_fields) = req.latest_fields.as_mut() {
         if drop_live_magnetization {
-            drop_large_live_field_carriers(latest_fields);
+            drop_large_live_field_carriers(latest_fields, false);
         }
         bind_latest_field_observation_frames_with_candidate(
             current,
@@ -2754,15 +2780,18 @@ fn apply_current_live_snapshot_in_place(
             current.scalar_revision = next_revision(current.scalar_revision);
         }
     }
-    if let Some(latest_fields) = req.latest_fields {
+    if let Some(mut latest_fields) = req.latest_fields {
         if req.replace_latest_fields {
+            if crate::live_authored_damping::publication_revision(current).is_some() {
+                latest_fields.retain_quantity_from(&current.latest_fields, "mat_alpha");
+            }
             current.latest_fields = latest_fields;
         } else {
             merge_latest_fields(&mut current.latest_fields, latest_fields);
         }
     }
     if drop_live_magnetization {
-        drop_large_live_field_carriers(&mut current.latest_fields);
+        drop_large_current_field_carriers(current);
     }
     if req.replace_latest_fields {
         if let Some(generation) = req.field_generation.as_ref() {
@@ -3034,6 +3063,9 @@ fn apply_current_live_runtime_frame_in_place(
     mut frame: CurrentLiveRuntimeFrameRequest,
     drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
+    if crate::live_authored_damping::publication_revision(current).is_some() {
+        discard_solver_damping_previews(frame.live_state.as_mut(), None);
+    }
     if let Some(live_state) = frame.live_state.as_ref() {
         live_state
             .latest_step
@@ -3154,7 +3186,7 @@ fn apply_current_live_runtime_frame_in_place(
         }
         if drop_live_magnetization {
             live_state.latest_step.magnetization = None;
-            drop_large_live_field_carriers(&mut current.latest_fields);
+            drop_large_current_field_carriers(current);
         }
         // Promote the active preview field into preview_cache so that API
         // query handlers (get_field_meta, get_field_vector, etc.) can find
@@ -3348,11 +3380,44 @@ pub(crate) fn apply_current_live_accepted_field_frame(
     Ok(())
 }
 
+fn discard_solver_damping_previews(
+    live: Option<&mut LiveState>,
+    previews: Option<&mut Vec<LivePreviewField>>,
+) {
+    if let Some(live) = live {
+        if live.latest_step.preview_field.as_ref().is_some_and(|field| field.quantity == "mat_alpha") {
+            live.latest_step.preview_field = None;
+        }
+    }
+    if let Some(previews) = previews {
+        previews.retain(|field| field.quantity != "mat_alpha");
+    }
+}
+
+/// Publish the authored coefficient against the same revision used by binary
+/// samples and catalog subscribers. A missing carrier retires the old samples.
+pub(crate) fn replace_authored_damping(current: &mut SessionStateResponse, field: Option<Value>) {
+    current.latest_fields.remove("mat_alpha");
+    discard_solver_damping_previews(current.live_state.as_mut(), None);
+    current.preview_cache.forget_quantity("mat_alpha");
+    current.field_publication_bundles.remove("mat_alpha");
+    bump_field_sample_revision(current, "mat_alpha", None);
+    bump_field_catalog_revision(current);
+    if let Some(mut field) = field {
+        field["field_revision"] = current.field_quantity_revisions["mat_alpha"].into();
+        current.latest_fields.insert("mat_alpha".into(), field);
+    }
+    if matches!(current.preview.as_ref(), Some(PreviewState::Spatial(view)) if view.quantity == "mat_alpha") {
+        current.preview = None;
+    }
+}
+
 /// A reset awaiting a qualified carrier must not expose the previous
 /// solver's vectors or derived quantities as the new initial state.
 pub(crate) fn invalidate_live_magnetization_preview(current: &mut SessionStateResponse) {
+    let authored_alpha = crate::live_authored_damping::publication_revision(current).is_some();
     let removed: Vec<_> = current.latest_fields.entries()
-        .filter(|(_, value)| value.get("artifact_field_locator").is_none())
+        .filter(|(quantity, value)| !(authored_alpha && *quantity == "mat_alpha") && value.get("artifact_field_locator").is_none())
         .map(|(quantity, _)| quantity.clone())
         .collect();
     let mut quantities: BTreeSet<_> = removed.iter().cloned().collect();
@@ -3435,6 +3500,9 @@ fn apply_current_live_field_frame_in_place(
     accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
     authored_publication: Option<crate::live_authored_initial_state::AuthoredInitialStatePublication>,
 ) -> Result<(), ApiError> {
+    if crate::live_authored_damping::publication_revision(current).is_some() {
+        discard_solver_damping_previews(None, frame.preview_fields.as_mut());
+    }
     if accepted_source_frame.is_some_and(|frame| frame.authored_initial_state.is_none())
         && crate::live_authored_initial_state::supersedes_run(current, &current.session.run_id)
     {
@@ -3488,6 +3556,7 @@ fn apply_current_live_field_frame_in_place(
         let stale_quantities = current.latest_fields.entries()
             .filter(|(quantity, value)| {
                 value.get("artifact_field_locator").is_none()
+                    && !(*quantity == "mat_alpha" && crate::live_authored_damping::publication_revision(current).is_some())
                     && !authored_material_field_matches(current, quantity, value)
             })
             .map(|(quantity, _)| quantity.clone())
@@ -3531,8 +3600,11 @@ fn apply_current_live_field_frame_in_place(
     }
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
-    if let Some(latest_fields) = frame.latest_fields {
+    if let Some(mut latest_fields) = frame.latest_fields {
         if frame.replace_latest_fields {
+            if crate::live_authored_damping::publication_revision(current).is_some() {
+                latest_fields.retain_quantity_from(&current.latest_fields, "mat_alpha");
+            }
             current.latest_fields = latest_fields;
         } else {
             merge_latest_fields(&mut current.latest_fields, latest_fields);
@@ -3897,7 +3969,7 @@ fn authored_material_field_matches(
 /// The material comparison flattens and compares every cell of both arrays
 /// (millions on a large FDM grid) and runs for every field read, so it is
 /// memoized on the latest field per version of the plan-bearing metadata.
-fn authored_material_field_matches_memoized(
+pub(crate) fn authored_material_field_matches_memoized(
     current: &SessionStateResponse,
     quantity_id: &str,
     raw: &Value,
@@ -3921,6 +3993,11 @@ pub(crate) fn latest_field_source_is_qualified(
         .binary_source_is_registered(quantity_id, raw)
     {
         return false;
+    }
+    if quantity_id == "mat_alpha" {
+        if crate::live_authored_damping::publication_revision(current).is_some() {
+            return crate::live_authored_damping::matches_publication(current, raw);
+        }
     }
     if quantity_id != "m"
         && (authored_material_field_matches_memoized(current, quantity_id, raw)
@@ -4166,6 +4243,9 @@ pub(crate) fn preview_field_source_is_qualified(
     current: &SessionStateResponse,
     field: &LivePreviewField,
 ) -> bool {
+    if field.quantity == "mat_alpha" && crate::live_authored_damping::publication_revision(current).is_some() {
+        return false;
+    }
     let actual = &field.vector_field_values;
     if field.quantity != "m"
         && authored_material_field_values(current, &field.quantity).is_some_and(|expected| {
@@ -4243,6 +4323,9 @@ fn bind_latest_field_observation_frames_with_candidate(
     candidate_row: Option<&ScalarRow>,
     accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
+    if crate::live_authored_damping::publication_revision(current).is_some() {
+        latest_fields.remove("mat_alpha");
+    }
     let current_step = current.live_state.as_ref().map(|state| &state.latest_step);
     let current_physical_step = current_step.filter(|step| step.is_physical_observation());
     for (quantity_id, value) in latest_fields.entries_mut() {
@@ -5395,6 +5478,53 @@ mod tests {
         .expect("field with contradictory explicit source time");
         assert!(bind_latest_field_observation_frames(&mut current, &mut moved_time).is_err());
         assert!(moved_time.get("H_ex").unwrap().get("observation_frame").is_none());
+    }
+
+    #[test]
+    fn absorbing_boundary_publication_rejects_superseded_samples_and_retires_pending_fields() {
+        let mut snapshot = test_current_snapshot();
+        let values = json!({"values": [0.5, 0.2, 0.01], "layout": {"backend": "fdm_multilayer",
+            "layers": [{"layer_id": "left", "value_offset": 0, "value_count": 1},
+                {"layer_id": "right", "value_offset": 1, "value_count": 2}]},
+            "authored_damping_revision": 8});
+        snapshot.metadata = Some(json!({"authored_damping":
+            crate::live_authored_damping::binding(8, Some(&values))}).into());
+        replace_authored_damping(&mut snapshot, Some(values.clone()));
+        assert_eq!(crate::live_authored_damping::native_layer_values(&snapshot, "right", 2).unwrap(), [0.2, 0.01]);
+        let old_revision = snapshot.field_quantity_revisions["mat_alpha"];
+        let original_metadata = json!({"execution_plan": {"backend_plan": {
+            "kind": "fdm", "grid": {"cells": [3, 1, 1]},
+            "material": {"damping": 0.01, "ms_field": [2.0, 2.0, 2.0]}
+        }}});
+        apply_current_live_metadata(&mut snapshot, original_metadata.clone());
+        let terminal = |sequence| serde_json::from_value(json!({
+            "session_id": "test-session", "replace_latest_fields": true,
+            "field_generation": {"run_id": "test-run", "sequence": sequence},
+            "clear_preview_cache": true, "latest_fields": {
+                "mat_alpha": {"values": [0.01, 0.01, 0.01]},
+                "mat_ms": {"values": [2.0, 2.0, 2.0]}
+            }
+        })).unwrap();
+        apply_current_live_field_frame(&mut snapshot, terminal(1)).unwrap();
+        assert_eq!(snapshot.latest_fields.get("mat_ms").unwrap()["values"], json!([2.0, 2.0, 2.0]));
+        assert_eq!(snapshot.latest_fields.get("mat_alpha").unwrap()["values"], values["values"]);
+        assert_eq!(snapshot.field_quantity_revisions["mat_alpha"], old_revision);
+        let field = snapshot.latest_fields.get("mat_alpha").unwrap();
+        assert!(latest_field_source_is_qualified(&snapshot, "mat_alpha", field));
+        let mut wrong_layout = values.clone();
+        wrong_layout["layout"]["layers"][0]["value_offset"] = json!(2);
+        assert!(!latest_field_source_is_qualified(&snapshot, "mat_alpha", &wrong_layout));
+        snapshot.metadata.as_mut().unwrap()["authored_damping"] = crate::live_authored_damping::binding(9, None);
+        replace_authored_damping(&mut snapshot, None);
+        assert!(snapshot.latest_fields.get("mat_alpha").is_none());
+        assert!(snapshot.field_quantity_revisions["mat_alpha"] > old_revision);
+        assert!(!latest_field_source_is_qualified(&snapshot, "mat_alpha", &values));
+        apply_current_live_metadata(&mut snapshot, original_metadata.clone());
+        apply_current_live_field_frame(&mut snapshot, terminal(2)).unwrap();
+        assert!(snapshot.latest_fields.get("mat_alpha").is_none());
+        crate::live_authored_damping::retire_for_prepared_domain(&mut snapshot);
+        apply_current_live_metadata(&mut snapshot, original_metadata);
+        assert_eq!(snapshot.latest_fields.get("mat_alpha").unwrap()["values"], json!([0.01, 0.01, 0.01]));
     }
 
     #[test]
