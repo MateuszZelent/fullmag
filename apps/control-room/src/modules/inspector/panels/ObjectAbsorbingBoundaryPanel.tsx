@@ -2,18 +2,22 @@
 
 import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import { SCENE_RESOURCE_KEY, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
   authoringWriteOptions,
   runAuthoringMutationWithHistory,
 } from "@/kernel/authoring/authoringHistoryMutation";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
-import { Button } from "@/shared/ui/Button";
 
+import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { DedicatedInspectorRouteFrame } from "./DedicatedInspectorRouteFrame";
+import { sceneResourceRevision } from "./ObjectMaterialPanelModel";
 import {
   ABSORBING_BOUNDARY_FACES,
   ABSORBING_BOUNDARY_FRAMES,
@@ -25,29 +29,53 @@ import {
 } from "./ObjectAbsorbingBoundaryPanelModel";
 import {
   objectMaterialMutationCoordinator,
+  objectMaterialMutationScopeKey,
   type ObjectMaterialMutationCoordinator,
 } from "./ObjectMaterialPanelEditSession";
 
 interface ObjectAbsorbingBoundaryPanelProps {
   objectId: string;
-  baseRevision: number | null;
+  scene: SceneResource | null;
+  view: "activation" | "editor";
   mutationCoordinator?: ObjectMaterialMutationCoordinator;
-  mutationScopeKey?: string;
+  sessionScopeKey: string | null;
 }
 
 type Feedback = { kind: "error" | "success"; message: string } | null;
 
+export function ObjectAbsorbingBoundaryInspectorPanel({ selection }: InspectorPanelProps) {
+  const scene = useSceneResource();
+  const objectId = selection.ref?.type === "scene-object"
+    ? selection.ref.objectId
+    : selection.objectId;
+  const scopeKey = objectMaterialMutationScopeKey(scene.sessionScopeKey ?? null, objectId ?? "");
+  return (
+    <DedicatedInspectorRouteFrame owner="object.absorbing-boundary" selection={selection}>
+      <ObjectAbsorbingBoundaryPanel
+        key={scopeKey}
+        objectId={objectId ?? ""}
+        scene={scene.data}
+        view="editor"
+        sessionScopeKey={scene.sessionScopeKey}
+      />
+    </DedicatedInspectorRouteFrame>
+  );
+}
+
 export function ObjectAbsorbingBoundaryPanel({
   objectId,
-  baseRevision,
+  scene,
+  view,
   mutationCoordinator: sharedMutationCoordinator,
-  mutationScopeKey,
+  sessionScopeKey,
 }: ObjectAbsorbingBoundaryPanelProps) {
   const { api, authoringHistory, commands, resources } = useKernel();
-  const scene = useSceneResource();
+  const baseRevision = sceneResourceRevision(scene);
+  const mutationScopeKey = objectMaterialMutationScopeKey(sessionScopeKey, objectId);
+  const historyGeneration = authoringHistory?.getGeneration?.();
   const object = useMemo(
-    () => scene.data?.objects?.find((candidate) => candidate.id === objectId) ?? null,
-    [objectId, scene.data?.objects],
+    () => scene?.objects?.find((candidate) => candidate.id === objectId) ?? null,
+    [objectId, scene?.objects],
   );
   const baseDraft = useMemo(
     () => absorbingBoundaryDraftFromObject(object),
@@ -58,7 +86,7 @@ export function ObjectAbsorbingBoundaryPanel({
     objectId: string;
     revision: number;
   } | null>(null);
-  const resourceRevision = scene.data?.revision ?? baseRevision ?? -1;
+  const resourceRevision = baseRevision ?? -1;
   const hasPendingAcknowledgedBase =
     acknowledgedBase?.objectId === objectId &&
     resourceRevision < acknowledgedBase.revision;
@@ -83,8 +111,7 @@ export function ObjectAbsorbingBoundaryPanel({
     mutationCoordinator.getVersion,
     mutationCoordinator.getVersion,
   );
-  const objectMutationScopeKey = mutationScopeKey ?? `session:unknown|${objectId}`;
-  const mutationBusy = mutationCoordinator.getActive(objectMutationScopeKey) !== null;
+  const mutationBusy = mutationCoordinator.getActive(mutationScopeKey) !== null;
   const [feedback, setFeedback] = useState<Feedback>(null);
   const update = (patch: Partial<AbsorbingBoundaryDraft>) => {
     const next = { ...draftRef.current, ...patch };
@@ -95,10 +122,13 @@ export function ObjectAbsorbingBoundaryPanel({
     absorbingBoundaryDraftKey(draft) !==
     absorbingBoundaryDraftKey(effectiveBaseDraft);
   const validation = buildAbsorbingBoundaryPatch(draft, baseRevision);
-  const valid = object !== null && baseRevision !== null && !("error" in validation);
+  const fieldError = (field: keyof AbsorbingBoundaryDraft) =>
+    dirty && "error" in validation && validation.field === field ? validation.error : undefined;
+  const editable = object !== null && (view === "activation" || effectiveBaseDraft.enabled);
+  const valid = editable && baseRevision !== null && !("error" in validation);
 
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
-    object ? "staged" : null,
+    editable ? "staged" : null,
     pending || mutationBusy,
     dirty,
     valid,
@@ -109,19 +139,17 @@ export function ObjectAbsorbingBoundaryPanel({
       applyBlockReason:
         object && baseRevision === null
           ? "The canonical scene revision is unavailable. Refetch the scene before applying."
-          : undefined,
+          : dirty && "error" in validation ? validation.error : undefined,
       historyMode: "mutation-owned",
     },
   );
 
   function createHistoryMutationContext() {
-    const sessionScopeKey = commands.getSessionScopeKey();
-    const historyGeneration = authoringHistory?.getGeneration?.();
     return {
       api,
       authoringHistory,
-      resourceData: { [SCENE_RESOURCE_KEY]: scene.data },
-      sessionScopeKey: sessionScopeKey ?? null,
+      resourceData: { [SCENE_RESOURCE_KEY]: scene },
+      sessionScopeKey,
       isCurrentSessionScope: () =>
         commands.getSessionScopeKey() === sessionScopeKey &&
         (historyGeneration === undefined ||
@@ -137,7 +165,7 @@ export function ObjectAbsorbingBoundaryPanel({
     });
 
   function resetDraft(): void {
-    const active = mutationCoordinator.getActive(objectMutationScopeKey);
+    const active = mutationCoordinator.getActive(mutationScopeKey);
     if (active) {
       setFeedback({
         kind: "error",
@@ -151,11 +179,7 @@ export function ObjectAbsorbingBoundaryPanel({
   }
 
   async function apply(): Promise<boolean> {
-    if (applyInFlight.current) return false;
-    if (!object) {
-      setFeedback({ kind: "error", message: "The selected object is not available." });
-      return false;
-    }
+    if (applyInFlight.current || !editable || !dirty) return false;
     const submittedDraft = draft;
     const result = buildAbsorbingBoundaryPatch(submittedDraft, baseRevision);
     if ("error" in result) {
@@ -163,16 +187,20 @@ export function ObjectAbsorbingBoundaryPanel({
       return false;
     }
     const historyContext = createHistoryMutationContext();
-    if (!historyContext.sessionScopeKey) {
+    if (!historyContext.sessionScopeKey || !commands.getSessionScopeKey()) {
       setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
       return false;
     }
+    if (!historyContext.isCurrentSessionScope()) {
+      setFeedback({ kind: "error", message: "The active session changed. Reopen the absorbing boundary before applying." });
+      return false;
+    }
     const mutationLease = mutationCoordinator.acquire(
-      objectMutationScopeKey,
+      mutationScopeKey,
       "Absorbing boundary",
     );
     if (!mutationLease) {
-      const active = mutationCoordinator.getActive(objectMutationScopeKey);
+      const active = mutationCoordinator.getActive(mutationScopeKey);
       setFeedback({
         kind: "error",
         message: active
@@ -187,10 +215,17 @@ export function ObjectAbsorbingBoundaryPanel({
       const response = await runAuthoringMutationWithHistory(
         historyContext,
         `Update absorbing boundary ${objectId}`,
-        async ({ baseRevision: capturedRevision }) => {
+        async ({ before, baseRevision: capturedRevision }) => {
           const commitRevision = capturedRevision ?? baseRevision;
           if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
             throw new Error("The canonical scene revision is unavailable. Refetch the scene before applying.");
+          }
+          if (before && capturedRevision !== baseRevision) {
+            const current = before.objects?.find((candidate) => candidate.id === objectId);
+            const currentKey = absorbingBoundaryDraftKey(absorbingBoundaryDraftFromObject(current));
+            if (!current || currentKey !== absorbingBoundaryDraftKey(effectiveBaseDraft)) {
+              throw new Error("Absorbing boundary changed. Refresh the scene before applying your draft.");
+            }
           }
           const next = buildAbsorbingBoundaryPatch(
             submittedDraft,
@@ -221,8 +256,8 @@ export function ObjectAbsorbingBoundaryPanel({
         key: `${objectId}:${absorbingBoundaryDraftKey(acknowledgedDraft)}`,
         draft: rebasedDraft,
       });
+      invalidateAuthoringMutationDependents(resources, "material", revision);
       if (latestDraft === submittedDraft && !acknowledgeAppliedDraft()) return false;
-      resources.invalidate(SCENE_RESOURCE_KEY, revision);
       setFeedback({ kind: "success", message: "Absorbing boundary updated." });
       return true;
     } catch (error) {
@@ -239,92 +274,100 @@ export function ObjectAbsorbingBoundaryPanel({
     }
   }
 
+  const feedbackBanner = feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null;
+  if (view === "activation") {
+    return (
+      <>
+        <FormField
+          label="Absorbing Boundary"
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(event) => update({ enabled: event.target.checked })}
+        />
+        {feedbackBanner}
+      </>
+    );
+  }
+
+  if (!editable) {
+    return <p>{scene ? "No absorbing boundary is active for this object." : "Loading absorbing boundary…"}</p>;
+  }
+
   return (
-    <InspectorGroup
-      title="Absorbing Boundary"
-      description="Adds object-owned Gilbert damping toward selected faces."
-      collapsible
-      defaultOpen={draft.enabled}
-    >
+    <InspectorGroup title="Absorbing Boundary" description="Adds object-owned Gilbert damping toward selected faces.">
       <FormField
-        label="Enabled"
-        type="checkbox"
-        checked={draft.enabled}
-        onChange={(event) => update({ enabled: event.target.checked })}
+        label="Total width"
+        error={fieldError("totalWidth")}
+        type="number"
+        unit="m"
+        value={draft.totalWidth}
+        onChange={(event) => update({ totalWidth: event.target.value })}
       />
-      {draft.enabled ? (
-        <>
-          <FormField
-            label="Total width"
-            type="number"
-            unit="m"
-            value={draft.totalWidth}
-            onChange={(event) => update({ totalWidth: event.target.value })}
-          />
-          <FormField
-            label="Ramp width"
-            type="number"
-            unit="m"
-            value={draft.rampWidth}
-            onChange={(event) => update({ rampWidth: event.target.value })}
-          />
-          <FormField
-            label="Maximum damping"
-            type="number"
-            value={draft.maxDamping}
-            onChange={(event) => update({ maxDamping: event.target.value })}
-          />
-          <FormField
-            label="Profile"
-            type="select"
-            value={draft.profile}
-            onChange={(event) => update({ profile: event.target.value })}
-          >
-            {ABSORBING_BOUNDARY_PROFILES.map((profile) => (
-              <option key={profile} value={profile}>{profile}</option>
-            ))}
-          </FormField>
-          {draft.profile === "custom" ? (
-            <FormField
-              label="Expression"
-              type="text"
-              mono
-              value={draft.expression}
-              maxLength={256}
-              placeholder="u**3"
-              hint="u runs from 0 at the start of the ramp to 1 at the plateau."
-              help="Use u, decimal numbers, +, -, *, /, **, parentheses, and abs, sqrt, exp, log, log1p, tanh, sin, or cos. The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
-              onChange={(event) => update({ expression: event.target.value })}
-            />
-          ) : null}
-          <FormField
-            label="Frame"
-            type="select"
-            value={draft.frame}
-            onChange={(event) => update({ frame: event.target.value })}
-          >
-            {ABSORBING_BOUNDARY_FRAMES.map((frame) => (
-              <option key={frame} value={frame}>{frame}</option>
-            ))}
-          </FormField>
-          <div className="grid gap-fm-inspector-control">
-            <span className="text-fm-xs font-medium text-fm-secondary">Faces</span>
-            {ABSORBING_BOUNDARY_FACES.map((face) => (
-              <FormField
-                key={face}
-                label={face}
-                type="checkbox"
-                checked={draft.faces.includes(face)}
-                onChange={() => toggleFace(face)}
-              />
-            ))}
-          </div>
-        </>
+      <FormField
+        label="Ramp width"
+        error={fieldError("rampWidth")}
+        type="number"
+        unit="m"
+        value={draft.rampWidth}
+        onChange={(event) => update({ rampWidth: event.target.value })}
+      />
+      <FormField
+        label="Maximum damping"
+        error={fieldError("maxDamping")}
+        type="number"
+        value={draft.maxDamping}
+        onChange={(event) => update({ maxDamping: event.target.value })}
+      />
+      <FormField
+        label="Profile"
+        error={fieldError("profile")}
+        type="select"
+        value={draft.profile}
+        onChange={(event) => update({ profile: event.target.value })}
+      >
+        {ABSORBING_BOUNDARY_PROFILES.map((profile) => (
+          <option key={profile} value={profile}>{profile}</option>
+        ))}
+      </FormField>
+      {draft.profile === "custom" ? (
+        <FormField
+          label="Expression"
+          error={fieldError("expression")}
+          type="text"
+          mono
+          value={draft.expression}
+          maxLength={256}
+          placeholder="u**3"
+          hint="u runs from 0 at the start of the ramp to 1 at the plateau."
+          help="Use u, decimal numbers, +, -, *, /, **, parentheses, and abs, sqrt, exp, log, log1p, tanh, sin, or cos. The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
+          onChange={(event) => update({ expression: event.target.value })}
+        />
       ) : null}
-      <Button type="button" size="sm" variant="primary" disabled={mutationBusy} onClick={() => void apply()}>
-        {pending ? "Saving…" : "Apply boundary"}
-      </Button>
-      {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
+      <FormField
+        label="Frame"
+        error={fieldError("frame")}
+        type="select"
+        value={draft.frame}
+        onChange={(event) => update({ frame: event.target.value })}
+      >
+        {ABSORBING_BOUNDARY_FRAMES.map((frame) => (
+          <option key={frame} value={frame}>{frame}</option>
+        ))}
+      </FormField>
+      <div className="grid gap-fm-inspector-control">
+        <span className="text-fm-xs font-medium text-fm-secondary">Faces</span>
+        {ABSORBING_BOUNDARY_FACES.map((face) => (
+          <FormField
+            key={face}
+            label={face}
+            error={face === ABSORBING_BOUNDARY_FACES[0] ? fieldError("faces") : undefined}
+            type="checkbox"
+            checked={draft.faces.includes(face)}
+            onChange={() => toggleFace(face)}
+          />
+        ))}
+      </div>
+      {feedbackBanner}
     </InspectorGroup>
   );
 }
