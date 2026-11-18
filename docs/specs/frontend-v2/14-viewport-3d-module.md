@@ -135,7 +135,7 @@ Disposal rules:
 | object mesh | topology revision, displayed object/part set, per-object display style |
 | scalar field | field revision, quantity/component, color range, compatible topology, FMVP indexing map |
 | vector glyphs | vector field revision, density, vector scope, per-object glyph visibility/style, FMVP indexing map for sampled/scoped payloads |
-| wireframe | topology revision or per-object wireframe visibility |
+| wireframe | topology revision, per-object wireframe visibility/extent; prepared preview selected during camera navigation |
 | airbox | mesh/manifest revision or airbox visualization state |
 | axes/grid/bounds | camera/domain setting |
 | selection | kernel selection change |
@@ -144,7 +144,39 @@ Layers may share render-model inputs, but one layer cannot own another layer's d
 
 Object and airbox layers resolve display settings through the target visualization registry. A target can independently enable/disable shader surface, wireframe, points, vector glyphs, visibility, and opacity. The renderer applies those settings per manifest object/part where the backend supplies object/part mapping; otherwise it falls back to the domain-level target and marks the display as degraded.
 
+FEM object/part wireframe has its own `wireframeGeometryScope`, serialized as
+`display.wireframe_geometry_scope` and resolved `settings.wireframe_geometry_scope`.
+The Inspector offers **Surface mesh** (default) and **Full volume mesh**. This
+choice changes only mesh edges; `geometryScope`, point selection, vector sample
+scope and vector budget remain independent. Missing legacy wireframe extent
+uses surface edges. Airbox and structured FDM keep their existing extent rules.
+
+During camera navigation a prepared surface preview uses at most 12000 evenly
+distributed edge segments per visible FEM part. Once the camera settles or the
+gesture is cancelled, the exact selected edge geometry returns. The preview
+shares topology positions, owns only its sampled index buffer and uses the
+existing upload/disposal pipeline; camera frames do not rebuild topology.
+If the preview is not ready, the selected full-detail geometry remains visible.
+This motion preview is an explicitly accepted presentation fallback, not a
+change to scientific field values or saved full-detail mesh semantics.
+
+The controls commit the final live camera pose only after 500 ms of quiet and
+observed rest. Wheel impulses within that interval restart the same guarded
+commit path; stale epochs, cancelled gestures and unmounted controls cannot
+publish a late pose. OrbitControls remains the only zoom owner.
+
+For multilayer FDM, Airbox owns cells whose centres are outside the active
+native magnetic layers. The field API applies this mask before sampling and
+computing statistics. The same ownership applies to planar Airbox samples and
+3D Airbox geometry. Magnetic objects use their own native masks. The outer
+Airbox bounds still describe the full observation volume.
+
 Airbox wireframe has a different visual contract from magnetic-object wireframe. `geometryScope: "surface"` may show only boundary surface edges. `geometryScope: "full"` must show the airbox volume/bounds edge set as an overlay that is not hidden by the translucent airbox surface. Full mode uses the procedural interior volume/bounds overlay as the primary wireframe, even when backend mesh edge geometry exists, because backend-provided or fallback edge geometry can otherwise make the full airbox collapse visually to a surface-only display. Airbox surface opacity must not attenuate airbox wireframe opacity; those are separate display controls.
+
+The multilayer FDM Airbox uses the explicit View quantity color range when
+its quantity and component match the Airbox scalar or vector color mode.
+The same finite limits and palette can be selected for the 2D Airbox slice.
+Each view retains its own automatic scaling when no manual range is selected.
 
 ## 8. Picking
 
@@ -216,10 +248,10 @@ reserved HUD rectangles. Orientation widgets and reference text use a dedicated
 render layer within the same scene and renderer, composited after geometry
 effects. Picking must continue to include interactive orientation widgets.
 
-Quantitative field colors are always unlit and un-tonemapped. Studio lighting
-controls apply only to uniform solid geometry; no appearance or quality-profile
-choice may modulate scientific field colors.
-Global AO/Bloom are suppressed while scientific field buffers are displayed;
+In Scientific mode, quantitative field colors are unlit and un-tonemapped.
+Presentation explicitly shades field surfaces as well as uniform geometry;
+its surface brightness is visual and must not be used to read the HSL Z component.
+Global AO/Bloom are suppressed while field buffers are displayed in Scientific;
 requested and effective states and the protection reason remain visible. AO
 radius is a fraction of the scene span, not a fixed number of meters. No effect
 may silently change the color legend or trigger a topology rebuild/field fetch.
@@ -246,3 +278,68 @@ Required verification:
 - API hygiene proves no module-level fetch or raw `/v2/...` strings.
 - per-object visualization changes update only affected layer style/field buffers and do not rebuild topology for unaffected objects.
 - new object creation displays primitive geometry and fallback wireframe without object topology, then switches to current mesh topology after a successful mesh build.
+
+
+## Presentation rendering and PNG export (2026-11-12)
+
+The existing single viewport exposes two independent preferences: visualization
+mode and render quality. Scientific mode is the default, including migrated
+preferences. Presentation mode uses MeshStandardMaterial on uniform geometry
+and field-colored surfaces,
+a locally generated linear HDR studio panorama filtered through PMREM, and
+filtered directional shadows. Roughness and metalness are visual preferences,
+not solver material parameters. No remote asset request is required.
+
+The Scientific/Presentation choice is always visible above the 3D View settings
+tabs as a labelled two-option control. Quality profiles (Fast, Standard,
+Detailed, Figure) stay in Quality and choose detail and rendering cost.
+Their persisted identifiers remain `interactive-lite`, `interactive`,
+`balanced`, and `figure`. Selecting a visualization mode never changes the
+quality profile; selecting quality never changes the visualization mode.
+
+Figure renders at 2 pixels per CSS pixel on both standard- and high-density
+displays, improving edge sampling even at 100% display scaling. This requires
+four times the live pixel count of a native-density 1x image. Other profiles
+retain their existing native-density caps (1x, 1.25x, and 1.5x). Selecting
+Figure in Presentation applies Studio lighting, soft shadows, and ambient
+occlusion together. Entering Presentation with Figure already selected also
+applies that preset. Individual effect controls remain editable afterward;
+unrelated appearance changes and PNG capture do not reapply the preset.
+Other profiles preserve effect switches. Scientific continues to protect
+quantitative field colors regardless of the selected quality.
+
+Scientific surfaces and glyphs retain their unlit palette and bypass tone
+mapping. AO, bloom and presentation tone mapping are suppressed while field data
+are visible in Scientific. Presentation field surfaces use the same scalar/vector
+interpolation and palettes as Scientific as their PBR base color; shadows and
+AO may change displayed brightness. Glyphs and legends remain unlit, with HUD
+annotations composited after effects. UI explains that exact color reading uses
+Scientific. Changing modes does not change field values or rebuild topology.
+Fast disables AO/shadows;
+Standard and Detailed use half-resolution AO and progressively larger
+shadow maps; Figure uses full-resolution AO and 2048 shadow maps. One-shot
+PNG retains the selected profile and data/glyph budget rather than forcing
+a higher-cost capture profile.
+The HDR compositor uses single-sample targets and FXAA where the selected
+profile enables antialiasing. This avoids invalid HDR MSAA resolves observed
+on the managed software WebGL renderer while preserving the quality controls.
+All frame scheduling remains demand-driven. HDRI/PMREM and shadow resources
+have explicit lifecycle ownership and are released on mode changes/unmount.
+
+PNG renders at a selected 1, 2 or 4 times the CSS viewport size using the same
+geometry/effects pipeline as the live view, for both viewport and transparent
+backgrounds. Effect exports read linear RGBA16F from the final composed target,
+so RGB and coverage use the same FXAA-filtered samples, independent of the
+canvas alpha setting. The path without effects retains its raw RGBA capture. ACES maps
+straight linear light before restoring coverage, avoiding bright translucent
+edges. Pure additive glow outside geometry receives the smallest non-clipping
+alpha derived from its linear RGB, retaining its black-background composition.
+Standard PNG alpha cannot reproduce purely additive light on every background.
+Export omits
+both the HUD pass and DOM annotations when annotations are disabled. Limits
+(8192 pixels per side, 16 million pixels and device texture limits) fail with
+an actionable error before allocating oversized targets. Export restores
+renderer/composer dimensions and state even on failure. Ray tracing is outside
+this implementation.
+
+Adapter N8AO stabilizuje normalne z pochodnych w jednostkach SI przez skalowanie operandów iloczynu wektorowego. Nie zmienia jednostek, geometrii ani kamery. Śledzenie nowej shadow map odbywa się po renderze sceny i HUD; dodatkowy callback nie renderuje sceny. Po zakończeniu gestu OrbitControls kompozycja współczynnika tłumienia według czasu ogranicza długi ogon przy wolnych klatkach; zapis pozycji wymaga zaobserwowanego spoczynku.

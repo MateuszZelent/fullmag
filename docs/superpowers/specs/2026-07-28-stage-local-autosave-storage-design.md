@@ -65,7 +65,7 @@ the runtime must not silently fork or overwrite the target.
 
 ### 4.1 Zarr
 
-**Current implementation at base `e5a1c01864455737acc4134a650cf7861a6202c5`
+**Current implementation at base `96b352aa8861a7dfcea5e51b424eed177cc2aa5a`
 (source inspection, not runtime qualification):**
 
 ```text
@@ -87,30 +87,32 @@ the runtime must not silently fork or overwrite the target.
 
 `ZarrAutosaveWriter::begin_stage` creates the stage groups and `manifest.json`,
 and stores the table column order in `table/.zattrs.quantities`
-(`crates/fullmag-runner/src/autosave_zarr.rs:81-135`).
+(`crates/fullmag-runner/src/autosave_zarr.rs`).
 `initialize_array` writes `[sample, width]`, `<f8`, Zarr v2 arrays with
 `compressor: null`; compression is **not** enabled by default
-(`crates/fullmag-runner/src/autosave_zarr.rs:222-240`).
+(`crates/fullmag-runner/src/autosave_zarr.rs`).
 `update_artifact_manifest` writes the sibling `<target>.autosave.json`
-(`crates/fullmag-runner/src/autosave_storage.rs:39-79`).
+(`crates/fullmag-runner/src/autosave_storage.rs`).
 `append_continuous_index` appends payload references to
 `continuous/index.jsonl`, only for continuous layout
-(`crates/fullmag-runner/src/autosave_zarr.rs:319-337`). The prior `manifest/`,
+(`crates/fullmag-runner/src/autosave_zarr.rs`). The prior `manifest/`,
 `metadata/`, `table-index/`, and `field-index/` groups were design intent,
 not this implemented layout. The index carries a `StageSampleCoordinate`
 (`PhysicalTime` or `AcceptedStep`); the flat arrays do not provide the full
 per-array units and spatial metadata proposed above
-(`crates/fullmag-runner/src/autosave_storage.rs:6-11,82-91`,
+(`crates/fullmag-runner/src/autosave_storage.rs`,
 `StageSampleCoordinate`, `ContinuousIndexEntry`;
-`crates/fullmag-runner/src/autosave_zarr.rs:102-184`,
+`crates/fullmag-runner/src/autosave_zarr.rs`,
 `ZarrAutosaveWriter::begin_stage`, `ZarrAutosaveWriter::append_field_sample`).
 
 ### 4.2 HDF5
 
-HDF5 mirrors the Zarr hierarchy under `/stages` and `/continuous`. Numerical
-datasets live only under `/stages`. `/continuous` stores index datasets and
-metadata; readers resolve these indexes rather than duplicating field data.
-The file records the same schema version and provenance as Zarr.
+`Hdf5AutosaveWriter::finish_stage` writes the stage manifest to
+`/stages/stage_<index:04>_<stage-id>/manifest_json`. When the stage emitted
+table rows it writes the `table` matrix and `table_quantities_json` in that
+group. Field samples have a matrix under `fields/<quantity>`. Continuous
+layout adds the stage's references to `/continuous/stage_<index:04>_index_json`
+(`crates/fullmag-runner/src/autosave_hdf5.rs`).
 
 ### 4.3 TXT
 

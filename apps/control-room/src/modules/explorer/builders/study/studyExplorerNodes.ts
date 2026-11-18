@@ -34,6 +34,8 @@ const STUDY_ADD_STAGE_COMMANDS = [
 
 const STUDY_EXECUTION_COMMANDS = [
   "study.run",
+  "study.build-and-run",
+  "study.cancel-build-and-run",
   "study.pause",
   "study.resume",
   "study.stop",
@@ -61,6 +63,7 @@ export function buildStudyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode
     icon: "play",
     status: "ready",
     contextCommands: [
+      ...STUDY_EXECUTION_COMMANDS,
       "explorer.expand-all",
       "explorer.collapse-all",
       "workspace.focus-selection",

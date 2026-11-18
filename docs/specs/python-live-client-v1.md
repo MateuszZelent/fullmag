@@ -189,6 +189,13 @@ przez `fullmag skrypt.py` jak dziś (`capture`).
   stanie. Akcje (`relax`, `run`) wymagają kompletnej sceny i zgłaszają błąd.
 - `with fm.transaction():` zbiera wywołania w jedną synchronizację na
   wyjściu z bloku.
+- Po utracie odpowiedzi na Apply klient ponawia ten sam zapis tekstury.
+  Gdy serwer zwróci `magnetization_apply_scene_advanced`, Apply jest już
+  zapisane, a sesja ma nowszą rewizję. Sprawdź bieżącą scenę przez
+  `session.client.model.scene()` i wywołaj `fm.sync(reconcile=True)`.
+  Uzgodnienie zachowuje rozłączne zmiany obu klientów. Konflikt w tym samym
+  polu lub w kolejności elementów wymaga poprawienia lokalnego szkicu przed
+  ponownym uzgodnieniem. Kolejny Relax używa uzgodnionej rewizji sceny.
 - Ponowne wykonanie `fm.geometry(shape, name=X)` dla istniejącego `X` w
   trybie `live` podmienia kształt tego obiektu i zwraca ten sam uchwyt
   (ponowne uruchomienie komórki notatnika); poza trybem `live` duplikat

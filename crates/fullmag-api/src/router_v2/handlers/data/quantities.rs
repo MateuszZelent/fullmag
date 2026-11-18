@@ -373,15 +373,10 @@ pub(crate) fn resolved_quantity_capability_for_snapshot(
 /// Keep a prepared initial magnetization readable before a solver provider is
 /// selected, while requiring the field to remain the exact current publication
 /// bound to the prepared mesh workspace and current observation domain.
-fn prepared_initial_state_m_carriers(
+fn legacy_prepared_m_binding(
     snapshot: &SessionStateResponse,
-    spec: &QuantitySpec,
-    scope: &str,
-) -> Option<Vec<FieldCarrierDescriptor>> {
-    if spec.id.as_str() != "m" || scope.trim().is_empty() || scope.trim() == "airbox" {
-        return None;
-    }
-
+    raw: &serde_json::Value,
+) -> Option<()> {
     let workspace = snapshot.mesh_workspace.as_ref()?;
     if workspace.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
         return None;
@@ -401,7 +396,6 @@ fn prepared_initial_state_m_carriers(
         return None;
     }
 
-    let raw = snapshot.latest_fields.get("m")?;
     let provenance = raw.get("provenance")?;
     if provenance.get("source_kind").and_then(serde_json::Value::as_str)
         != Some("prepared_initial_state")
@@ -422,28 +416,37 @@ fn prepared_initial_state_m_carriers(
         return None;
     }
 
-    let source_time_seconds = raw
-        .get("source_time_seconds")
-        .and_then(serde_json::Value::as_f64)
+    Some(())
+}
+
+fn prepared_initial_state_m_carriers(
+    snapshot: &SessionStateResponse,
+    spec: &QuantitySpec,
+    scope: &str,
+) -> Option<Vec<FieldCarrierDescriptor>> {
+    if spec.id.as_str() != "m" || scope.trim().is_empty() || scope.trim() == "airbox" {
+        return None;
+    }
+
+    let raw = snapshot.latest_fields.get("m")?;
+    let source_time_seconds = raw.get("source_time_seconds").and_then(serde_json::Value::as_f64)
         .filter(|time| time.is_finite() && *time >= 0.0)?;
-    let observation_frame = raw
-        .get("observation_frame")
-        .and_then(|value| {
-            serde_json::from_value::<crate::schemas::common::AcceptedObservationFrameRef>(
-                value.clone(),
-            )
-            .ok()
-        })?;
-    if observation_frame.source_step != 0
-        || observation_frame.source_time_seconds != Some(source_time_seconds)
-        || observation_frame
-            != crate::session::accepted_observation_frame_ref(
-                snapshot,
-                0,
-                Some(source_time_seconds),
-            )
+    let frame: crate::schemas::common::AcceptedObservationFrameRef =
+        serde_json::from_value(raw.get("observation_frame")?.clone()).ok()?;
+    if frame.source_step != 0 || frame.source_time_seconds != Some(source_time_seconds)
+        || raw.get("source_step").and_then(serde_json::Value::as_u64) != Some(0)
     {
         return None;
+    }
+    if frame.authored_initial_state.is_some() {
+        if !crate::live_authored_initial_state::qualifies_frame(snapshot, &frame) {
+            return None;
+        }
+    } else {
+        legacy_prepared_m_binding(snapshot, raw)?;
+        if frame != crate::session::accepted_observation_frame_ref(snapshot, 0, Some(source_time_seconds)) {
+            return None;
+        }
     }
 
     // A same-identity preview or legacy live field must not stand in for the

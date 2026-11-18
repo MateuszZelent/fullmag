@@ -1200,6 +1200,9 @@ pub struct MeshSharedDomainManifestResource {
     pub revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_scene_revision: Option<u64>,
+    /// Current scene whose mesher inputs still match this immutable publication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validated_for_scene_revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry_realization_revision: Option<u64>,
     /// Mesh identity for tree/selection metadata.

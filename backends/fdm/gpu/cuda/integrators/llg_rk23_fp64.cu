@@ -46,6 +46,7 @@ extern double launch_external_energy_fp64(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp64(Context &ctx);
 extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n);
 extern double reduce_max_cross_norm_fp64(Context &ctx,
     const void *ax, const void *ay, const void *az,
@@ -64,7 +65,8 @@ extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
     const double * __restrict__ hx, const double * __restrict__ hy, const double * __restrict__ hz,
     double * __restrict__ out_x, double * __restrict__ out_y, double * __restrict__ out_z,
-    int n, double gamma_bar, double alpha, int disable_precession, SttParams stt, SotParams sot);
+    int n, double gamma_bar, double alpha, int disable_precession, SttParams stt, SotParams sot,
+    const double * __restrict__ alpha_field, double gamma);
 
 /* ── Stage kernels ──
  *
@@ -268,7 +270,8 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             static_cast<double*>(rhs_out.y),
             static_cast<double*>(rhs_out.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx),
+            ctx.alpha_field, ctx.gamma);
         context_note_local_pipeline_unfused_rhs(ctx);
         fullmag_fdm_note_llg_rhs_torque_device_launch(
             ctx, "RK23 fp64 LLG RHS launch");
@@ -320,6 +323,7 @@ static void finish_rk23_accepted_step_fp64(
     const double e_aniso = reduce_uniaxial_anisotropy_energy_fp64(ctx);
     const double e_cubic = reduce_cubic_anisotropy_energy_fp64(ctx);
     const double e_dmi = reduce_dmi_energy_fp64(ctx);
+    const double e_mel = reduce_magnetoelastic_energy_fp64(ctx);
     const double max_h_eff = reduce_max_norm_fp64(
         ctx, ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
     const double max_h_demag = ctx.enable_demag
@@ -356,7 +360,7 @@ static void finish_rk23_accepted_step_fp64(
     stats->cubic_energy_joules = e_cubic;
     stats->dmi_energy_joules = e_dmi;
     stats->total_energy_joules =
-        e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
+        e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi + e_mel;
     stats->max_effective_field_amplitude = max_h_eff;
     stats->max_demag_field_amplitude = max_h_demag;
     stats->max_rhs_amplitude = max_dm_dt;
@@ -682,8 +686,10 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         return;
     }
 
-    // Save original m
-    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
+    // Save original m. The stage kernels below run on the orchestration
+    // (legacy default) stream; a copy on the nonblocking compute stream would
+    // not be ordered against them and races with their reads of tmp/k1.
+    copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_orchestration_stream(ctx));
 
     for (;;) {
         ctx.trial_dt = dt;
@@ -691,7 +697,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         const FsalReuseDecision fsal_decision = rhs_allows_fsal_reuse(ctx, dt);
         context_note_fsal_decision(ctx, fsal_decision);
         if (fsal_decision.allowed) {
-            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_orchestration_stream(ctx));
         } else {
             if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha,
                                   step_start_time, 1)) return;
@@ -768,7 +774,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.dt_min_exhausted) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
             return;
@@ -776,7 +782,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (policy.failed) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
-            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
             context_refresh_observables(ctx);
             return;
         }
@@ -794,7 +800,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx, FULLMAG_FDM_FSAL_INVALIDATION_REJECTED_STEP); // fsal_rejected_step
 
         // Restore original m
-        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+        copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_orchestration_stream(ctx));
         if (!context_retry_gpu_transport_step(ctx)) {
             if (ctx.last_error.empty())
                 ctx.last_error = "failed to restart bound transport adaptive trial";

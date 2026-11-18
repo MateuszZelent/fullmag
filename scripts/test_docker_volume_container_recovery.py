@@ -579,6 +579,81 @@ class ContainerRecoveryTests(unittest.TestCase):
                 with self.assertRaises(recovery.ContainerRecoveryError):
                     recovery._container_observation(container, pin, after=True)
 
+    def test_recovery_args_preserve_retained_native_contract_and_all_44_source_files(self):
+        import docker_volume_dev as volume_dev
+
+        retained_files = [f"untracked-inputs/input-{index:02d}.py" for index in range(44)]
+        normalized_files = volume_dev.normalize_include_untracked_paths(retained_files)
+        terminal = {"inputs": {"native_contracts": ["fem-demag-poisson"]}}
+        compose = {"services": {"backend": {
+            "command": ["start", "--native-contract", "fem-demag-poisson"],
+            "environment": {volume_dev.INCLUDE_UNTRACKED_ENV: json.dumps(
+                normalized_files, ensure_ascii=False, separators=(",", ":"))},
+        }}}
+        args = SimpleNamespace(source_root=Path("/old"), script=Path("old.py"),
+                               native_contract=None, include_untracked=None)
+        native_contracts, include_untracked = recovery._retained_start_selections(args, terminal, compose)
+
+        result = recovery._recover_args(
+            args, Path("/selected"), native_contracts=native_contracts,
+            include_untracked=include_untracked)
+
+        self.assertEqual(result.source_root, Path("/selected"))
+        self.assertEqual(result.native_contract, ["fem-demag-poisson"])
+        self.assertEqual(result.include_untracked, retained_files)
+        self.assertEqual(len(result.include_untracked), 44)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "source allowlist"):
+            recovery._retained_start_selections(
+                SimpleNamespace(native_contract=None, include_untracked=[]), terminal, compose)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "native contracts"):
+            recovery._retained_start_selections(
+                SimpleNamespace(native_contract=["fem-cuda-activity-trace"], include_untracked=None),
+                terminal, compose)
+
+    def test_recovery_pins_layout_from_retained_terminal_and_refuses_legacy_fallback(self):
+        import docker_volume_dev as volume_dev
+
+        writes = []
+        control = SimpleNamespace(write=lambda path, value: writes.append((path, copy.deepcopy(value))),
+                                  read=lambda path, optional=False: None)
+        operation = {"root": "development/attempts/" + "a" * 32,
+                     "receipt": {"private_group_storage": None}}
+        terminal = {"private_group_storage": "group-volume-v1"}
+
+        self.assertTrue(recovery._pin_recovery_private_group_storage(control, operation, terminal))
+        self.assertEqual(operation["receipt"]["private_group_storage"], "group-volume-v1")
+        self.assertEqual(writes, [(operation["root"] + "/receipt.json", operation["receipt"])])
+
+        legacy = {"root": "development/attempts/" + "b" * 32, "receipt": {}}
+        self.assertFalse(recovery._pin_recovery_private_group_storage(control, legacy, {}))
+        self.assertEqual(len(writes), 1)
+
+        grouped_marker = {"schema": "fullmag.docker-group-storage-owner.v1"}
+        foreign_control = SimpleNamespace(write=lambda *_args: None,
+                                           read=lambda path, optional=False: grouped_marker)
+        with self.assertRaisesRegex(volume_dev.BuildControlError, "cannot fall back"):
+            recovery._pin_recovery_private_group_storage(foreign_control, legacy, {})
+
+    def test_recovery_layout_pin_requires_same_retained_terminal_bytes_at_boundary(self):
+        terminal = {"private_group_storage": "group-volume-v1", "inputs": {"native_contracts": []}}
+        raw = recovery._canonical(terminal)
+        self.assertIsNone(recovery._assert_retained_terminal_matches(terminal, raw, terminal, raw))
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "retained terminal changed"):
+            recovery._assert_retained_terminal_matches(
+                terminal, raw, {**terminal, "private_group_storage": "legacy"}, raw)
+        with self.assertRaisesRegex(recovery.ContainerRecoveryError, "retained terminal changed"):
+            recovery._assert_retained_terminal_matches(terminal, raw + b"\n", terminal, raw)
+
+    def test_recovery_inherits_layout_before_removing_old_containers(self):
+        import inspect
+
+        source = inspect.getsource(recovery.recover)
+        boundary = source.index("_revalidate_recovery_boundary(")
+        pin = source.index("_pin_recovery_private_group_storage(control, operation, terminal)")
+        remove = source.index('docker_capture("rm"')
+        self.assertLess(boundary, pin)
+        self.assertLess(pin, remove)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,45 +16,35 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The Zeeman vector is authored in tesla and serialized as a three-component value.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates the applied magnetic induction three-vector in tesla in Python, while `to_ir()` emits the canonical `ProblemIR` record before field evaluation.
 
 (python-api-interactions-zeeman-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-zeeman
-
-q_{\mathrm{IR}} = \mathrm{zeeman}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object zeeman. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+The Zeeman interaction couples magnetization $\mathbf{M} = M_s\mathbf{m}$ to an applied external magnetic flux density $\mathbf{B}$ with volumetric energy density $w_Z = -\mathbf{M}\cdot\mathbf{B}$ and effective field $\mathbf{H}_Z = \mathbf{B}/\mu_0$. Continuum definitions and energy sign conventions are documented in {doc}`../../physics/interactions/zeeman/index`.
 
 (python-api-interactions-zeeman-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+`fm.Zeeman.B` is authored as Cartesian magnetic flux density in SI teslas ($\mathrm{T}$). The corresponding magnetic effective field $\mathbf{B}/\mu_0$ has units of $\mathrm{A\,m^{-1}}$.
 
 (python-api-interactions-zeeman-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`B` must be a finite real three-component vector (`(Bx, By, Bz)`). Non-finite components (`NaN`, `Inf`) or non-three-element sequences fail closed during construction.
 
 (python-api-interactions-zeeman-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.Zeeman(B)
+`fm.Zeeman(B)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `fm.Zeeman.B` | `tuple[float,float,float]` | `required` | `T` | finite three-vector | applied magnetic induction | FEM/FDM CPU/GPU: IR; resolved support required | `B` |
+| `fm.Zeeman.B` | `tuple[float,float,float]` | `required` | $\mathrm{T}$ | finite three-vector | applied magnetic induction | FEM/FDM CPU/GPU: IR; resolved support required | `B` |
 
 ### Stage-first example
 
@@ -75,52 +65,48 @@ value = fm.Zeeman(B=(0.0, 0.0, 1.0e-3))
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, attach external fields on a stage (`stage.external_field(...)` / study Zeeman terms) or lower `fm.Zeeman(B)` directly.
 
 (python-api-interactions-zeeman-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed zeeman record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits `{"kind": "zeeman", "B": [Bx, By, Bz]}` preserving all three Cartesian components in tesla.
 
 (python-api-interactions-zeeman-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves the exact three-component induction vector in `ProblemIR` independently of `resolved execution`. `Validation errors` reject malformed or non-finite vectors, while `unsupported combinations` fail closed if a time-varying envelope or solver path conflicts with the stage definition.
 
 (python-api-interactions-zeeman-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies the uniform Cartesian flux density $\mathbf{B}$ in `ProblemIR` only; converting $\mathbf{B}/\mu_0$ across active cells/nodes and integrating Zeeman energy are handled by the solver backends.
 
 (python-api-interactions-zeeman-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/energy.py symbol class Zeeman. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/energy.py` (`class Zeeman`). Constructor validation and `to_ir()` keys come directly from that module.
 
 (python-api-interactions-zeeman-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_zeeman_serializes_vector_to_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering `Zeeman` vector serialization include `test_zeeman_serializes_vector_to_ir`. Live solver runtime and Control Room browser behavior require separate qualification.
 
 (python-api-interactions-zeeman-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Control Room edits stage external-field vectors on active study stages; this low-level `fm.Zeeman(B)` value object has no separate object-inspector route. See {doc}`/frontend/capability-register`.
 
 (python-api-interactions-zeeman-scientific-bibliography)=
 ## Scientific bibliography
 
-- W. F. Brown, Jr., Thermal Fluctuations of a Single-Domain Particle, Phys. Rev. 130 (1963), DOI: https://doi.org/10.1103/PhysRev.130.1677
+- W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York (1963).
+- E. C. Stoner and E. P. Wohlfarth, “A mechanism of magnetic hysteresis in heterogeneous alloys,” *Philosophical Transactions of the Royal Society of London. Series A, Mathematical and Physical Sciences* **240**(826), 599–642 (1948), [doi:10.1098/rsta.1948.0007](https://doi.org/10.1098/rsta.1948.0007).
+- A. Baker, M. Beg, G. Ashton, M. Albert, D. Chernyshenko, W. Wang, S. Zhang, M.-A. Bisotti, M. Franchin, C. L. Hu, R. Stamps, T. Hesjedal, and H. Fangohr, “Proposal of a micromagnetic standard problem for ferromagnetic resonance simulations,” *Journal of Magnetism and Magnetic Materials* **421**, 428–439 (2017), [doi:10.1016/j.jmmm.2016.08.009](https://doi.org/10.1016/j.jmmm.2016.08.009) | [arXiv:1603.05419](https://arxiv.org/abs/1603.05419).
 
 (python-api-interactions-zeeman-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/energy.py | class Zeeman | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/energy.py::class Zeeman
-- Source-map: interactions/zeeman.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class Zeeman` | public constructor and IR lowering |

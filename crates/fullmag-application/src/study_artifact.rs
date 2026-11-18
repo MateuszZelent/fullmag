@@ -9,6 +9,12 @@ use crate::antenna_inspection_bundle::{
     ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION, ANTENNA_INSPECTION_BUNDLE_MAX_BYTES,
 };
 use crate::execution::{ExecutionError, ResolvedStudyArtifact};
+use crate::study_frequency_response_artifact::{
+    decode_frequency_response_index_bundle, decode_frequency_response_point_bundle,
+    FrequencyResponseBundle, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES,
+    FREQUENCY_RESPONSE_CODEC_VERSION, FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+    FREQUENCY_RESPONSE_POINT_CODEC_ID,
+};
 use fullmag_quantities::fem_state_field::FemP1MagnetizationFieldSemantics;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -216,6 +222,8 @@ pub enum DecodedStudyArtifact {
     Scalar(StudyScalarArtifact),
     AntennaClosedLoopInspection(AntennaInspectionBundle),
     AntennaInspection(AntennaInspectionArtifact),
+    FemDrivenResponseIndex(FrequencyResponseBundle),
+    FemDrivenResponsePoint(FrequencyResponseBundle),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -323,6 +331,14 @@ pub fn decode_study_artifact(
             decode_frozen_magnetization_state(bytes).map(DecodedStudyArtifact::FrozenMagnetizationState),
         ("scalar", STUDY_SCALAR_CODEC_ID, STUDY_SCALAR_CODEC_VERSION) => {
             decode_scalar(bytes).map(DecodedStudyArtifact::Scalar)
+        }
+        ("artifact", FREQUENCY_RESPONSE_INDEX_CODEC_ID, FREQUENCY_RESPONSE_CODEC_VERSION) => {
+            decode_frequency_response_index_bundle(bytes, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES)
+                .map(DecodedStudyArtifact::FemDrivenResponseIndex)
+        }
+        ("artifact", FREQUENCY_RESPONSE_POINT_CODEC_ID, FREQUENCY_RESPONSE_CODEC_VERSION) => {
+            decode_frequency_response_point_bundle(bytes, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES)
+                .map(DecodedStudyArtifact::FemDrivenResponsePoint)
         }
         ("artifact", ANTENNA_INSPECTION_BUNDLE_CODEC_ID, ANTENNA_INSPECTION_BUNDLE_CODEC_VERSION) => {
             decode_antenna_inspection_bundle(bytes, ANTENNA_INSPECTION_BUNDLE_MAX_BYTES)

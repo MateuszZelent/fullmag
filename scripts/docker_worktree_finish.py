@@ -7,13 +7,13 @@ import shlex
 import uuid
 
 from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
-    MIN_FREE_CONTROL_BYTES, bounded_capture, docker_capture, toolchain_configuration)
+    MIN_FREE_CONTROL_BYTES, _exact_local_image_id, bounded_capture, docker_capture, toolchain_configuration)
 from docker_compose_identity import compose_project_identity
 from docker_named_volume_safety import validate_local_named_volume
 import docker_shared_build_storage as shared
 
 
-def _retire_groups(control, selected, unit_keys, operation):
+def _retire_groups(control, selected, cache_project_id, unit_keys, operation):
     if not unit_keys:
         return {'state': 'succeeded', 'unit_keys': []}
     receipt = (control.read('image-backend/verified.json', optional=True)
@@ -25,13 +25,13 @@ def _retire_groups(control, selected, unit_keys, operation):
     image = json.loads(docker_capture('image', 'inspect', receipt['image_id']).stdout)
     if len(image) != 1 or image[0]['Id'] != receipt['image_id']:
         raise BuildControlError('Retirement helper image differs')
-    names = shared.shared_volume_names(control.identity['project_id'])
+    names = shared.shared_volume_names(cache_project_id)
     volume = names[shared.PACKAGE_ROLE]
     observed = json.loads(docker_capture('volume', 'inspect', volume).stdout)
     if len(observed) != 1:
         raise BuildControlError('Shared package volume is ambiguous')
     validate_local_named_volume(observed[0], volume)
-    if any(observed[0].get('Labels', {}).get(k) != v for k, v in shared.shared_volume_labels(control.identity['project_id'], shared.PACKAGE_ROLE).items()):
+    if any(observed[0].get('Labels', {}).get(k) != v for k, v in shared.shared_volume_labels(cache_project_id, shared.PACKAGE_ROLE).items()):
         raise BuildControlError('Shared package labels differ before retirement')
     helpers = selected / 'docker/all-in-one'
     hashes = {name: hashlib.sha256((helpers / name).read_bytes()).hexdigest()
@@ -69,17 +69,32 @@ print(json.dumps(result))
     return proof
 
 
-def finish(layout, task_id, owner):
+def finish(layout, task_id, owner, *, resume=None, helper_image=None):
     """Called under storage's worktree lock after exact registry owner validation."""
+    from docker_backend_volume_cache import _safe_project_id
     from docker_cache_retirement import retire
     identity = compose_project_identity(layout)
     if identity['checkout_kind'] != 'worktree':
         raise BuildControlError('Automatic worktree completion cannot retire the main checkout')
     selected = Path(identity['source_root'])
-    configured = toolchain_configuration(selected, identity)
-    control = BuildControl(identity, configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
+    if helper_image is not None:
+        # A source-only historical checkout need not contain today's Compose
+        # files. This selects only an installed control helper; target identity,
+        # leases, inventory and namespace retirement remain unchanged.
+        if (not isinstance(helper_image, str)
+                or re.fullmatch(r'sha256:[a-f0-9]{64}', helper_image) is None):
+            raise BuildControlError('Retirement helper requires a full immutable local image ID')
+        if not _exact_local_image_id(helper_image, helper_image):
+            raise BuildControlError('Retirement helper image is not installed locally; no pull or build is allowed')
+    else:
+        configured = toolchain_configuration(selected, identity)
+        helper_image = configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE']
+    control = BuildControl(identity, helper_image)
     control.prepare(minimum_free_bytes=MIN_FREE_CONTROL_BYTES)
-    result = retire(control, layout, task_id, owner,
-        retire_namespaces=lambda keys, operation: _retire_groups(control, selected, keys, operation))
+    cache_project_id = _safe_project_id(layout)
+    result = retire(control, layout, task_id, owner, resume=resume,
+        retire_namespaces=lambda keys, operation: _retire_groups(
+            control, selected, cache_project_id, keys, operation))
     return {'state': result['state'], 'compose_project': control.project,
+            'control_helper_image': control.image,
             'receipt': 'docker-volume://'+control.volume+'/'+control.subpath('cache-retirement/result.json')}

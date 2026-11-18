@@ -22,7 +22,7 @@ pub struct TerminalLeadExtensionIR {
     pub id: String,
     pub observation_id: String,
     pub object_id: String,
-    pub boundary_markers: Vec<i32>,
+    pub boundary_markers: Vec<u32>,
     pub length_m: f64,
     pub outward_direction_xyz: [f64; 3],
     pub conductivity_spm: f64,
@@ -97,7 +97,7 @@ impl ExternalLeadPreparationIR {
                     .any(|marker| *marker <= 0 || !markers.insert(*marker))
             {
                 errors.push(format!(
-                    "{prefix}.boundary_markers requires globally disjoint positive int32 selectors"
+                    "{prefix}.boundary_markers requires globally disjoint positive u32 selectors"
                 ));
             }
             if !extension.length_m.is_finite()
@@ -152,6 +152,20 @@ pub(crate) mod tests {
                 {"id":"minus", "observation_id":"observe-minus", "object_id":"device", "boundary_markers":[11], "length_m":1e-6, "outward_direction_xyz":[-1.,0.,0.], "conductivity_spm":4e7},
                 {"id":"plus", "observation_id":"observe-plus", "object_id":"device", "boundary_markers":[12], "length_m":1e-6, "outward_direction_xyz":[1.,0.,0.], "conductivity_spm":4e7}],
             "drives":[{"id":"drive", "port_mode_ref":"port", "outer_terminal_currents_a":{"minus":-0.002, "plus":0.002}}]})
+    }
+
+    #[test]
+    fn declaration_preserves_full_u32_boundary_selectors() {
+        let mut value = fixture();
+        value["extensions"][0]["boundary_markers"] = json!([u32::MAX]);
+        value["extensions"][1]["boundary_markers"] = json!([i32::MAX as u32 + 1]);
+        let preparation: ExternalLeadPreparationIR = serde_json::from_value(value.clone()).unwrap();
+        assert!(preparation.validation_errors("intent").is_empty());
+        assert_eq!(serde_json::to_value(&preparation).unwrap()["extensions"][0]["boundary_markers"], json!([u32::MAX]));
+        for invalid in [json!(-1), json!(u64::from(u32::MAX)+1)] {
+            value["extensions"][0]["boundary_markers"][0] = invalid;
+            assert!(serde_json::from_value::<ExternalLeadPreparationIR>(value.clone()).is_err());
+        }
     }
 
     #[test]

@@ -25,6 +25,14 @@
   animation: fm-study-progress-indeterminate 1.4s ease-in-out infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-study-progress--indeterminate .fm-study-progress__bar {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(70%);
+  }
+}
+
 @keyframes fm-study-progress-indeterminate {
   0% {
     transform: translateX(-100%);

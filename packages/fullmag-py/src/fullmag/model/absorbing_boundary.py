@@ -5,10 +5,11 @@ import math
 from typing import Sequence
 
 from fullmag._validation import require_non_negative, require_positive
+from fullmag.model._absorbing_boundary_expression import compile_expression
 
 
 _FACES = ("x+", "x-", "y+", "y-", "z+", "z-")
-_PROFILES = ("linear", "quadratic", "smootherstep")
+_PROFILES = ("linear", "quadratic", "smootherstep", "logarithmic", "tanh", "custom")
 _FRAMES = ("object", "universe")
 
 
@@ -22,6 +23,7 @@ class AbsorbingBoundaryLayer:
     faces: tuple[str, ...] = ("x+",)
     profile: str = "smootherstep"
     frame: str = "object"
+    expression: str | None = None
 
     def __post_init__(self) -> None:
         total_width = require_positive(self.total_width_m, "total_width")
@@ -42,7 +44,14 @@ class AbsorbingBoundaryLayer:
             raise ValueError("faces must not contain duplicates")
         profile = str(self.profile).strip().lower()
         if profile not in _PROFILES:
-            raise ValueError("profile must be 'linear', 'quadratic', or 'smootherstep'")
+            raise ValueError(f"profile must be one of: {', '.join(_PROFILES)}")
+        expression = self.expression
+        if profile == "custom":
+            if not isinstance(expression, str) or not expression.strip():
+                raise ValueError("expression is required for a custom absorbing boundary profile")
+            compile_expression(expression)
+        elif expression is not None:
+            raise ValueError("expression requires a custom absorbing boundary profile")
         frame = str(self.frame).strip().lower()
         if frame not in _FRAMES:
             raise ValueError("frame must be 'object' or 'universe'")
@@ -54,7 +63,7 @@ class AbsorbingBoundaryLayer:
         object.__setattr__(self, "frame", frame)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "total_width_m": self.total_width_m,
             "ramp_width_m": self.ramp_width_m,
             "max_damping": self.max_damping,
@@ -62,13 +71,24 @@ class AbsorbingBoundaryLayer:
             "profile": self.profile,
             "frame": self.frame,
         }
+        if self.expression is not None:
+            payload["expression"] = self.expression
+        return payload
 
     def _profile_value(self, value: float) -> float:
         t = max(0.0, min(1.0, value))
+        if t in (0.0, 1.0):
+            return t
         if self.profile == "linear":
             return t
         if self.profile == "quadratic":
             return t * t
+        if self.profile == "logarithmic":
+            return math.log1p(9 * t) / math.log(10)
+        if self.profile == "tanh":
+            return (1 + math.tanh(4 * t - 2) / math.tanh(2)) / 2
+        if self.expression is not None:
+            return compile_expression(self.expression)(t)
         return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 
     def contribution(self, point: Sequence[float], bounds: Sequence[float]) -> float:

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -226,6 +227,22 @@ bool solve_demag_poisson_hypre(
     }
 
     ensure_mpi_initialized();
+    // HypreParVector does not initialize HYPRE. The later matrix constructor
+    // cannot establish the runtime before this function's vector workspace.
+    mfem::Hypre::Init();
+
+    HYPRE_Int observed_hypre_error = HYPRE_GetError();
+    const auto trace_hypre_error = [&](const char *phase) {
+        const HYPRE_Int current = HYPRE_GetError();
+        if (current != observed_hypre_error) {
+            std::fprintf(stderr,
+                         "CPU Poisson HYPRE transition: phase=%s before=%d after=%d setup=%d iterations=%d\n",
+                         phase, static_cast<int>(observed_hypre_error),
+                         static_cast<int>(current), ctx.poisson_demag.solver_setup,
+                         ctx.poisson_demag.last_iterations);
+        }
+        observed_hypre_error = current;
+    };
 
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
     HYPRE_BigInt row_starts[2] = {0, glob_size};
@@ -253,6 +270,7 @@ bool solve_demag_poisson_hypre(
         return false;
     }
 
+    trace_hypre_error("vector workspace setup");
     mfem::Vector &rhs_bc = poisson_hypre_workspace->rhs_bc;
     try {
         rhs_bc.SetSize(rhs.Size());
@@ -370,6 +388,7 @@ bool solve_demag_poisson_hypre(
         ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_wall_start);
     }
 
+    trace_hypre_error("operator and solver setup");
     auto *solver = static_cast<mfem::HypreSolver *>(ctx.poisson_demag.cached_hypre_solver);
     if (solver == nullptr) {
         error = "Poisson Hypre solver is null during solver apply";
@@ -421,9 +440,11 @@ bool solve_demag_poisson_hypre(
         return true;
     };
 
+    trace_hypre_error("input vector staging");
     const auto solver_apply_wall_start = FemSteadyClock::now();
     try {
         solver->Mult(b_par, x_par);
+        trace_hypre_error("solver Mult");
     } catch (const std::exception &ex) {
         ctx.poisson_demag.last_solver_apply_wall_time_ns =
             elapsed_ns(solver_apply_wall_start);
@@ -475,8 +496,10 @@ bool solve_demag_poisson_hypre(
         final_residual = 0.0;
         break;
     }
+    trace_hypre_error("solver result getters");
     ctx.poisson_demag.last_iterations = iterations;
     const double rhs_norm = b_par.Norml2();
+    trace_hypre_error("RHS norm");
     bool residual_independently_certified = false;
     double absolute_residual = 0.0;
     auto *active_operator = static_cast<mfem::HypreParMatrix *>(
@@ -490,8 +513,10 @@ bool solve_demag_poisson_hypre(
     }
     try {
         active_operator->Mult(x_par, poisson_hypre_workspace->residual);
+        trace_hypre_error("independent operator Mult");
         poisson_hypre_workspace->residual.Add(-1.0, b_par);
         absolute_residual = poisson_hypre_workspace->residual.Norml2();
+        trace_hypre_error("independent residual norm");
     } catch (const std::exception &ex) {
         error = std::string("Hypre Poisson residual certification failed: ") + ex.what();
         if (!rollback_rejected_candidate()) {
@@ -535,6 +560,7 @@ bool solve_demag_poisson_hypre(
     }
 
     zero_poisson_essential_values(ctx, x_par);
+    trace_hypre_error("essential values finalization");
     solved_solution = &x_par;
     poisson_hypre_workspace->x_par_contains_solution = true;
 

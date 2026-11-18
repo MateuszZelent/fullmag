@@ -1,10 +1,8 @@
 /*
  * multilayer_exchange.cu - Layer-local exchange field for staged FDM v2 layers.
  *
- * This owner intentionally implements the conservative first v2 exchange slice:
- * a uniform-A six-neighbor stencil on each layer native grid, with open
- * Neumann boundaries and active-mask clamping. Cross-layer exchange and region
- * LUT coupling are not part of this boundary yet.
+ * The uniform-A six-neighbor stencil uses the layer's native grid, open
+ * Neumann boundaries or periodic seams, and active-mask clamping.
  */
 
 #include "context.hpp"
@@ -28,11 +26,15 @@ __device__ __forceinline__ uint64_t layer_neighbor_index(
     uint32_t dim,
     uint64_t stride,
     uint64_t idx,
-    int delta)
+    int delta,
+    bool periodic)
 {
-    if (delta < 0 && coord == 0) return idx;
-    if (delta > 0 && coord + 1 >= dim) return idx;
-    return static_cast<uint64_t>(static_cast<int64_t>(idx) + delta * static_cast<int64_t>(stride));
+    if (delta < 0) {
+        if (coord > 0) return idx - stride;
+        return periodic ? idx + (dim - 1u) * stride : idx;
+    }
+    if (coord + 1 < dim) return idx + stride;
+    return periodic ? idx - (dim - 1u) * stride : idx;
 }
 
 template <typename Scalar>
@@ -48,6 +50,8 @@ __global__ void multilayer_exchange_field_kernel(
     uint32_t nx,
     uint32_t ny,
     uint32_t nz,
+    bool periodic_x,
+    bool periodic_y,
     double inv_dx2,
     double inv_dy2,
     double inv_dz2,
@@ -69,12 +73,12 @@ __global__ void multilayer_exchange_field_kernel(
     const uint32_t y = static_cast<uint32_t>(rem / nx);
     const uint32_t x = static_cast<uint32_t>(rem - static_cast<uint64_t>(y) * nx);
 
-    uint64_t xm = layer_neighbor_index(x, nx, 1, idx, -1);
-    uint64_t xp = layer_neighbor_index(x, nx, 1, idx, +1);
-    uint64_t ym = layer_neighbor_index(y, ny, nx, idx, -1);
-    uint64_t yp = layer_neighbor_index(y, ny, nx, idx, +1);
-    uint64_t zm = layer_neighbor_index(z, nz, xy, idx, -1);
-    uint64_t zp = layer_neighbor_index(z, nz, xy, idx, +1);
+    uint64_t xm = layer_neighbor_index(x, nx, 1, idx, -1, periodic_x);
+    uint64_t xp = layer_neighbor_index(x, nx, 1, idx, +1, periodic_x);
+    uint64_t ym = layer_neighbor_index(y, ny, nx, idx, -1, periodic_y);
+    uint64_t yp = layer_neighbor_index(y, ny, nx, idx, +1, periodic_y);
+    uint64_t zm = layer_neighbor_index(z, nz, xy, idx, -1, false);
+    uint64_t zp = layer_neighbor_index(z, nz, xy, idx, +1, false);
 
     if (active_mask) {
         if (active_mask[xm] == 0) xm = idx;
@@ -153,6 +157,8 @@ void launch_multilayer_exchange_field_impl(Context &ctx, const char *operation) 
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
+            layer.periodic_x,
+            layer.periodic_y,
             inv_dx2,
             inv_dy2,
             inv_dz2,

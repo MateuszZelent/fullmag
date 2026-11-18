@@ -1,0 +1,7 @@
+# file: examples/bimeron-cylinder-relax/scenario-matrix/cases
+# owner: kkingstoun
+# group: kkingstoun
+user::rwx
+group::r-x
+other::r-x
+

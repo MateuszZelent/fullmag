@@ -3802,5 +3802,22 @@ class BackendPackageTests(unittest.TestCase):
             )
 
 
+class LiveSourceCopyErrorTests(unittest.TestCase):
+    def test_live_source_copy_preserves_io_error_with_normalized_inventory_entry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.rs"
+            source.write_bytes(b"source")
+            entry = backend._source_manifest_inventory(
+                BackendPackageTests._capsule("a" * 64, {"source.rs": b"source"})
+            )["source.rs"]
+            with patch.object(backend.os, "read", side_effect=OSError("source read failed")):
+                with self.assertRaisesRegex(
+                    backend.BackendBuildError,
+                    "cannot synchronize live source source.rs: source read failed",
+                ):
+                    backend._copy_live_regular_file(source, root / "shadow/source.rs", "source.rs", entry)
+
+
 if __name__ == "__main__":
     unittest.main()

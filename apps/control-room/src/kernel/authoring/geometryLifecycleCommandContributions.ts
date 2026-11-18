@@ -34,6 +34,7 @@ import type {
   LiveStatusResource,
   MeshCapabilitiesResource,
   RequestOptions,
+  RuntimeCommandPrecondition,
 } from "../api/apiTypes";
 import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
@@ -64,7 +65,13 @@ import {
   prepareAuthoringMutation,
   recordAuthoringMutationHistory,
 } from "./authoringHistoryMutation";
+import {
+  importStlSourceGeometry,
+  STL_LENGTH_UNITS,
+  type StlLengthUnit,
+} from "./importedStlImport";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
+import { studyComputeDraftBlockedReason } from "./studyComputeDraftGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import {
   resolveActiveLaneOperation,
@@ -765,6 +772,8 @@ async function observeMeshBuildOperation(
   }
   const terminal = await awaitMeshCommandTerminal(api, commandId, {
     baseMeshRevision: operation.baseMeshRevision,
+    // The compound command separately checks which build owns the published domain.
+    allowSameMeshRevision: Boolean(context.meshBuildPin),
     requestOptions: operation.scopeKey ? { sessionScopeKey: operation.scopeKey } : undefined,
   });
   const obsoleteAfterPoll = obsoleteSessionResult(context);
@@ -812,14 +821,19 @@ function trackMeshBuildOperation(
     const obsolete = obsoleteSessionResult(context);
     operation.observationPaused = result.status === "pending" || (operation.submitted && Boolean(obsolete));
     if (result.status !== "pending" && (!obsolete || !operation.submitted)) releaseMeshOperation(api, operation);
-    return result;
+    return context.meshBuildPin && operation.submitted
+      ? { ...result, clientIntentId: operation.requestId, clientIntentKind: operation.commandKind }
+      : result;
   }).finally(() => { operation.promise = undefined; });
   return operation.promise;
 }
 
 /** Resume only the retained command identity or client intent; never confirm or submit another build. */
-export function resumeMeshBuildObservation(context: CommandContext): Promise<CommandResult> {
+export function resumeMeshBuildObservation(context: CommandContext, expectedIntent?: string): Promise<CommandResult> {
   const operation = currentMeshOperation(context);
+  if (expectedIntent && operation?.requestId !== expectedIntent) {
+    return Promise.resolve({ message: "The requested mesh intent is no longer observed here.", status: "cancelled" });
+  }
   if (!operation) return Promise.resolve({ message: "No mesh command observation is available to resume.", status: "cancelled" });
   return operation.promise ?? trackMeshBuildOperation(context, operation, () => observeMeshBuildOperation(context, operation));
 }
@@ -905,6 +919,35 @@ function meshSubmissionRejection(
   context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
   return result;
 }
+function meshBuildPinChanged(context: CommandContext, requestId: string): CommandResult {
+  const result = {
+    status: "failed" as const,
+    message: "The scene or mesh changed before confirming Build + Study. Review the current model and try again.",
+  };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId });
+  return result;
+}
+
+function rejectCompoundMeshBuildDraft(context: CommandContext, requestId: string): CommandResult | null {
+  if (!context.meshBuildPin) return null;
+  const message = studyComputeDraftBlockedReason(context);
+  if (!message) return null;
+  const result = { message, status: "failed" as const };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId });
+  return result;
+}
+
+function meshPreconditionAfterConfirmation(
+  context: CommandContext,
+  confirmed: RuntimeCommandPrecondition | undefined,
+): RuntimeCommandPrecondition | undefined | false {
+  const pin = context.meshBuildPin;
+  if (!pin) return confirmed;
+  if (confirmed && (confirmed.scene_revision !== pin.scene_revision ||
+      confirmed.mesh_revision !== pin.mesh_revision)) return false;
+  return { ...confirmed, ...pin };
+}
+
 function runMeshBuildOperation(
   context: CommandContext,
   registryCommandId: MeshBuildConfirmCommandId,
@@ -913,7 +956,7 @@ function runMeshBuildOperation(
   const api = context.api!.commands;
   const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
   const sceneRevision = asRecord(status?.resources)?.scene_revision ?? sceneBaseRevision(context);
-  const key = JSON.stringify({ scene_revision: sceneRevision, mesh_options: request.mesh_options ?? null, mesh_target: request.mesh_target });
+  const key = JSON.stringify({ scene_revision: sceneRevision, mesh_options: request.mesh_options ?? null, mesh_target: request.mesh_target, compound: context.meshBuildPin });
   const previous = currentMeshOperation(context);
   if (previous) {
     if (previous.key === key && !previous.observationPaused && previous.promise) return previous.promise;
@@ -939,13 +982,17 @@ function runMeshBuildOperation(
     const obsoleteAfterConfirmation = obsoleteSessionResult(context);
     if (obsoleteAfterConfirmation) return obsoleteAfterConfirmation;
     if (!confirmation.confirmed) return { status: "cancelled" };
-    operation.baseMeshRevision = confirmation.precondition?.mesh_revision ?? operation.baseMeshRevision;
+    const draftBlocked = rejectCompoundMeshBuildDraft(context, confirmation.requestId);
+    if (draftBlocked) return draftBlocked;
+    const precondition = meshPreconditionAfterConfirmation(context, confirmation.precondition);
+    if (precondition === false) return meshBuildPinChanged(context, confirmation.requestId);
+    operation.baseMeshRevision = precondition?.mesh_revision ?? operation.baseMeshRevision;
     operation.submitted = true;
     try {
       const meshRequest = {
         ...request,
         client_intent_id: operation.requestId,
-        ...(confirmation.precondition ? { precondition: confirmation.precondition } : {}),
+        ...(precondition ? { precondition } : {}),
       };
       const requestOptions = sessionRequestOptions(context);
       const response = requestOptions
@@ -999,6 +1046,7 @@ export function runFdmGridRefreshOperation(
     kind: request.kind,
     precondition: request.precondition ?? null,
     reason: request.reason ?? null,
+    compound: context.meshBuildPin,
   });
   const previous = currentMeshOperation(context);
   if (previous) {
@@ -1452,6 +1500,133 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
   primitiveDraftCommand("geometry.add-cylinder", "Add Cylinder", "cylinder"),
   primitiveDraftCommand("geometry.add-sphere", "Add Sphere", "sphere"),
   {
+    id: "geometry.import-stl",
+    title: "Import STL Surface",
+    category: "Geometry",
+    group: "geometry",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.api && context.sessionScopeKey),
+    disabledReason: (context) => !context.api
+      ? "Control-room API is unavailable."
+      : !context.sessionScopeKey
+        ? "Open a project workspace before importing an STL surface."
+        : null,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      if (!context.sessionScopeKey) {
+        return { message: "Open a project workspace before importing an STL surface.", status: "failed" };
+      }
+      const input = asRecord(context.input);
+      const file = input?.file;
+      const units = input?.units;
+      const scale = input?.scale;
+      if (
+        !file ||
+        typeof file !== "object" ||
+        typeof (file as { arrayBuffer?: unknown }).arrayBuffer !== "function" ||
+        typeof (file as { name?: unknown }).name !== "string" ||
+        typeof (file as { size?: unknown }).size !== "number" ||
+        !STL_LENGTH_UNITS.includes(units as StlLengthUnit) ||
+        typeof scale !== "number" ||
+        !Number.isFinite(scale) ||
+        scale <= 0
+      ) {
+        return {
+          message: "Choose an STL file, its coordinate length unit, and a positive scale.",
+          status: "failed",
+        };
+      }
+
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      const preparation = await prepareAuthoringMutation(context);
+      const scene = preparation.before ?? await context.api.model.scene(sessionRequestOptions(context));
+      assertCurrentSessionScope(context);
+      const baseRevision = sceneDocumentRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before importing an STL surface.",
+          status: "failed",
+        };
+      }
+      preparation.before ??= scene;
+      preparation.baseRevision = baseRevision;
+
+      let imported: Awaited<ReturnType<typeof importStlSourceGeometry>>;
+      try {
+        imported = await importStlSourceGeometry(
+          context.api,
+          file as Parameters<typeof importStlSourceGeometry>[1],
+          units as StlLengthUnit,
+          scale,
+          sessionRequestOptions(context),
+        );
+      } catch (error) {
+        const obsoleteAfterUpload = obsoleteSessionResult(context);
+        if (obsoleteAfterUpload) return obsoleteAfterUpload;
+        return {
+          message: error instanceof Error ? error.message : "Could not import the STL source asset.",
+          status: "failed",
+        };
+      }
+      const obsoleteAfterUpload = obsoleteSessionResult(context);
+      if (obsoleteAfterUpload) return obsoleteAfterUpload;
+
+      const objectName = uniqueObjectName(imported.name, scene);
+      let objectId = draftObjectId("stl");
+      let suffix = 2;
+      const usedIds = new Set(sceneObjects(scene).flatMap((object) => {
+        const id = object.object_id ?? object.id;
+        return typeof id === "string" ? [id] : [];
+      }));
+      while (usedIds.has(objectId)) {
+        objectId = draftObjectId("stl") + "-" + suffix;
+        suffix += 1;
+      }
+
+      let response: Awaited<ReturnType<typeof createObjectTransaction>>;
+      try {
+        response = await createObjectTransaction(context.api, {
+          base_revision: baseRevision,
+          geometry: imported.geometry,
+          material_ref: "",
+          magnetization_ref: "",
+          name: objectName,
+          object_id: objectId,
+          transform: {
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            translation: [0, 0, 0],
+          },
+        }, sessionRequestOptions(context));
+      } catch (error) {
+        const obsoleteAfterWrite = obsoleteSessionResult(context);
+        if (obsoleteAfterWrite) return obsoleteAfterWrite;
+        const reason = error instanceof Error ? error.message : "scene transaction failed";
+        return {
+          message: "The STL asset was uploaded, but the scene object could not be created: " + reason,
+          status: "failed",
+        };
+      }
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+
+      selectCommittedObject(context, objectId, objectName);
+      await recordAuthoringMutationHistory(
+        context,
+        "Import STL surface: " + objectName,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { message: objectName + " was added as an STL surface.", status: "completed" };
+    },
+  },
+  {
     id: "builder-build-geometry",
     title: "Build Geometry",
     category: "Geometry",
@@ -1501,9 +1676,15 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!confirmation.confirmed) {
         return { status: "cancelled" };
       }
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      const draftBlocked = rejectCompoundMeshBuildDraft(context, confirmation.requestId);
+      if (draftBlocked) return draftBlocked;
+      const precondition = meshPreconditionAfterConfirmation(context, confirmation.precondition);
+      if (precondition === false) return meshBuildPinChanged(context, confirmation.requestId);
       return runFdmGridRefreshOperation(context, {
         kind: "fdm_grid_refresh",
-        precondition: confirmation.precondition ?? { scene_revision: sceneRevision },
+        precondition: precondition ?? { scene_revision: sceneRevision },
         reason: "explicit_build_grid",
       }, confirmation.requestId);
     },

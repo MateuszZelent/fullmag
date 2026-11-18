@@ -102,6 +102,18 @@ pub struct RuntimeCapabilityMatrix {
     pub engines: Vec<HostEngineEntry>,
 }
 
+/// Input identity of an authored initial-state publication. It has its own
+/// generation even when its domain and solver clock have not changed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredInitialStateOrigin {
+    pub preparation_id: String,
+    pub plan_fingerprint: String,
+    pub scene_revision: u64,
+    pub initial_state_revision: u64,
+    pub values_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct AcceptedObservationFrameRef {
     pub observation_frame_id: String,
@@ -111,6 +123,8 @@ pub struct AcceptedObservationFrameRef {
     pub source_step: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_time_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_initial_state: Option<AuthoredInitialStateOrigin>,
 }
 
 impl AcceptedObservationFrameRef {
@@ -138,7 +152,22 @@ impl AcceptedObservationFrameRef {
             topology_revision: topology_revision.to_string(),
             source_step,
             source_time_seconds,
+            authored_initial_state: None,
         }
+    }
+
+    pub(crate) fn with_authored_initial_state(
+        mut self,
+        origin: AuthoredInitialStateOrigin,
+    ) -> Self {
+        let digest = fullmag_session::canonical_json_sha256(&serde_json::json!({
+            "schema": "fullmag.authored_initial_state_frame.v1",
+            "clock_domain": self.observation_frame_id,
+            "origin": origin,
+        }));
+        self.observation_frame_id = format!("authored-initial-state:{digest}");
+        self.authored_initial_state = Some(origin);
+        self
     }
 }
 

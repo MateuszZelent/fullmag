@@ -81,29 +81,62 @@ export function projectTensorField(
   let cache = projections.get(field);
   const cached = cache?.get(token);
   if (cached) return cached;
-  const vector = tensorProjectionOutputKind(token) === "vector";
-  const nComp = vector ? 3 : 1;
-  const values = new Float64Array(field.pointCount * nComp);
-  const spin = vector ? "xyz".indexOf(token.at(-1)!) : 0;
-  const component = token.startsWith("c") ? Number(token.slice(1)) : 0;
-  for (let point = 0; point < field.pointCount; point += 1) {
-    const start = point * 9;
-    if (vector) {
-      for (let flow = 0; flow < 3; flow += 1) {
-        values[point * 3 + flow] = field.values[start + flow * 3 + spin];
-      }
-    } else if (token === "frobenius") {
-      let norm = 0;
-      for (let index = 0; index < 9; index += 1) norm = Math.hypot(norm, field.values[start + index]);
-      values[point] = norm;
-    } else {
-      values[point] = field.values[start + component];
-    }
+  const nComp = tensorProjectionOutputKind(token) === "vector" ? 3 : 1;
+  let projected: DecodedFieldVector;
+  if (field.dtype === "float32") {
+    const values = projectTensorValues(field.values, field.pointCount, nComp, token);
+    projected = { ...field, dtype: "float32", nComp, valueCount: values.length, values, projectionToken: token };
+  } else {
+    const values = projectTensorValues(field.values, field.pointCount, nComp, token);
+    projected = { ...field, dtype: "float64", nComp, valueCount: values.length, values, projectionToken: token };
   }
-  const projected = { ...field, nComp, valueCount: values.length, values, projectionToken: token };
   if (!cache) { cache = new Map(); projections.set(field, cache); }
   cache.set(token, projected);
   return projected;
+}
+
+function projectTensorValues(
+  source: Float32Array,
+  pointCount: number,
+  nComp: number,
+  token: TensorProjectionToken,
+): Float32Array;
+function projectTensorValues(
+  source: Float64Array,
+  pointCount: number,
+  nComp: number,
+  token: TensorProjectionToken,
+): Float64Array;
+function projectTensorValues(
+  source: Float32Array | Float64Array,
+  pointCount: number,
+  nComp: number,
+  token: TensorProjectionToken,
+): Float32Array | Float64Array {
+  const vector = tensorProjectionOutputKind(token) === "vector";
+  const values = source instanceof Float32Array
+    ? new Float32Array(pointCount * nComp)
+    : new Float64Array(pointCount * nComp);
+  const spin = vector ? "xyz".indexOf(token.at(-1)!) : 0;
+  const component = token.startsWith("c") ? Number(token.slice(1)) : 0;
+  for (let point = 0; point < pointCount; point += 1) {
+    const start = point * 9;
+    if (vector) {
+      for (let flow = 0; flow < 3; flow += 1) {
+        values[point * 3 + flow] = source[start + flow * 3 + spin];
+      }
+    } else if (token === "frobenius") {
+      let norm = 0;
+      for (let index = 0; index < 9; index += 1) norm = Math.hypot(norm, source[start + index]);
+      values[point] = norm;
+    } else {
+      values[point] = source[start + component];
+    }
+  }
+  if (values instanceof Float32Array && values.some((value) => !Number.isFinite(value))) {
+    throw new Error("Tensor projection produced non-finite float32 display values");
+  }
+  return values;
 }
 
 export interface TensorSurfaceField {

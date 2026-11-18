@@ -1,3 +1,4 @@
+import { CONTROL_ROOM_JSON_BODY_LIMIT_BYTES } from "./src/kernel/api/transportLimits";
 import type { NextConfig } from "next";
 import { realpathSync } from "node:fs";
 import path from "node:path";
@@ -409,7 +410,10 @@ function securityHeaders() {
 export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
 
 const nextConfig: NextConfig = {
-  experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
+  experimental: {
+    proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS,
+    proxyClientMaxBodySize: CONTROL_ROOM_JSON_BODY_LIMIT_BYTES,
+  },
   allowedDevOrigins,
   distDir,
   env: {

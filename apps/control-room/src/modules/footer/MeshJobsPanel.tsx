@@ -104,7 +104,7 @@ export function MeshJobsPanelView({
             {model.phaseRows.length} phases
           </span>
         </div>
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Mesh build pipeline" className="fm-footer-diagnostics__profile-table">
           <thead>
             <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
               <th scope="col">Phase</th>
@@ -116,7 +116,7 @@ export function MeshJobsPanelView({
           <tbody>
             {model.phaseRows.map((phase) => (
               <tr className="fm-footer-diagnostics__profile-row" key={phase.id}>
-                <td>{phase.label}</td>
+                <th scope="row">{phase.label}</th>
                 <td>{phase.status}</td>
                 <td>
                   {phase.progressPercent === null ? "-" : `${phase.progressPercent}%`}
@@ -135,7 +135,7 @@ export function MeshJobsPanelView({
             resources
           </span>
         </div>
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Published mesh output" className="fm-footer-diagnostics__profile-table">
           <tbody>
             {model.publishedRows.map((row) => (
               <tr className="fm-footer-diagnostics__profile-row" key={row.label}>
@@ -154,7 +154,7 @@ export function MeshJobsPanelView({
             {historyCount} builds
           </span>
         </div>
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Latest successful mesh" className="fm-footer-diagnostics__profile-table">
           <tbody>
             {model.latestRows.map((row) => (
               <tr className="fm-footer-diagnostics__profile-row" key={row.label}>
@@ -173,7 +173,7 @@ export function MeshJobsPanelView({
             {historyCount} builds
           </span>
         </div>
-        <table className="fm-footer-diagnostics__profile-table">
+        <table aria-label="Mesh build history" className="fm-footer-diagnostics__profile-table">
           <thead>
             <tr className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header">
               <th scope="col">Mesh</th>

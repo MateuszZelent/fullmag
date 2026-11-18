@@ -106,6 +106,15 @@ No separate airbox Robin surface energy is added because this realization has no
 operator. The reported energy is the same magnetic-field functional used by the Poisson path,
 evaluated with the Fredkin–Koehler recovered field.
 
+```{figure} /_static/diagrams/demag-fem-bem-fredkin-koehler-pipeline.svg
+:alt: Two-panel diagram of Fullmag's Fredkin-Koehler FEM-BEM demagnetization method on a closed body-only mesh Omega_m without an airbox: (a) seven-stage dataflow from magnetic RHS assembly, gauge pin b_{1,0}=0, Neumann solve u_1, surface trace gamma u_1 on Gamma_m, dense solid-angle BEM operator B, Dirichlet data g_2 = B gamma u_1, harmonic Laplace solve u_2, to combined field H_d = -grad(u_1 + u_2) and energy E_d; (b) analytical sphere potential splitting u = u_1 + u_2, solid-angle geometry omega_T(x_i), and FEM CPU/GPU lane contract.
+:width: 100%
+:name: fig-demag-fem-bem-fredkin-koehler-pipeline
+:figclass: fm-physics-figure
+
+Fullmag's two-solve Fredkin–Koehler algorithm on a body-only tetrahedral domain $\Omega_m$ without an airbox: sequential sparse solves and dense boundary map $\mathcal{B}$ in panel (a), with exact potential splitting ($u = u_1 + u_2$), solid-angle diagonal $\mathcal{B}_{ii} = \sum_{T\ni x_i}\omega_T/(4\pi) - 1$, and strict FEM CPU/GPU boundaries in panel (b) (Fredkin & Koehler 1990; Hertel *et al.* 2019; Abert *et al.* 2013).
+```
+
 (demag-bem-symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -307,6 +316,10 @@ and executed-device validation.
 | Orchestration | `context_compute_demag_fem_bem` | Orders all stages and publishes solve telemetry. |
 | Field and energy | `recover_demag_poisson_field` and `demag_poisson_energy_from_field` | Reuses the common field recovery and energy contract. |
 
+### Control Room support
+
+When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes FEM–BEM demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-bem-validation)=
 ## 10. Validation and qualification
 
@@ -333,10 +346,21 @@ demag do not constitute a GPU BEM implementation or executed-device proof.
 (demag-bem-scientific-bibliography)=
 ## 12. Scientific bibliography
 
-1. D. R. Fredkin and T. R. Koehler, “A boundary-element method for computing the magnetostatic
-   energy of domain walls,” *IEEE Transactions on Magnetics*, 26, 4154–4156 (1990).
-2. W. F. Brown, *Micromagnetics*, Wiley, 1963.
-3. FullMag internal reference: `docs/physics/0870-fem-bem-demag-open-boundary.md`.
+1. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE
+   Transactions on Magnetics* **26**(2), 415–417 (1990),
+   [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+2. R. Hertel, S. Christophersen, and S. Börm, “Large-scale magnetostatic field calculation in
+   finite element micromagnetics with $\mathcal{H}^2$-matrices,” *Journal of Magnetism and
+   Magnetic Materials* **477**, 118–123 (2019),
+   [doi:10.1016/j.jmmm.2018.12.103](https://doi.org/10.1016/j.jmmm.2018.12.103), Open Access
+   preprint: [arXiv:1811.05731](https://arxiv.org/abs/1811.05731).
+3. C. Abert, L. Exl, F. Bruckner, A. Drews, and D. Suess, “magnum.fe: A micromagnetic
+   finite-element simulation code based on FEniCS,” *Journal of Magnetism and Magnetic Materials*
+   **345**, 29–35 (2013),
+   [doi:10.1016/j.jmmm.2013.05.051](https://doi.org/10.1016/j.jmmm.2013.05.051), Open Access
+   preprint: [arXiv:1301.3061](https://arxiv.org/abs/1301.3061).
+4. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
 
 (demag-bem-source-code-index)=
 ## 13. Source-code index
@@ -354,18 +378,4 @@ demag do not constitute a GPU BEM implementation or executed-device proof.
 | `backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp` | `combine_demag_fem_bem_total_potential` | Potential sum. | FEM CPU |
 | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Common field recovery and energy handoff. | FEM CPU |
 | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | Common demagnetization energy reduction. | FEM CPU |
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
 

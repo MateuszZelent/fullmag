@@ -235,14 +235,14 @@ export function AntennaSourceSpectrumPayloadView({
         <AntennaSpectrumExport spectrum={spectrum} amplitudes={payloads.value.amplitudes}
           kU={payloads.value.kU} kV={payloads.value.kV} power={payloads.value.power} />
       </SpectrumPowerGrid>
-      <div className="fm-antenna-spectrum__axes" aria-label="Source spectrum axes">
+      <div role="group" className="fm-antenna-spectrum__axes" aria-label="Source spectrum axes">
         <span>u: {Math.min(MAX_AXIS_CELLS, payloads.value.kU.length)} / {payloads.value.kU.length} · {spectrum.wave_vector_unit}</span>
         <span>v: {Math.min(MAX_AXIS_CELLS, payloads.value.kV.length)} / {payloads.value.kV.length} · {spectrum.wave_vector_unit}</span>
         <span>k_u range: {formatScientific(rangeU?.minimum)} … {formatScientific(rangeU?.maximum)} {spectrum.wave_vector_unit}</span>
         <span>k_v range: {formatScientific(rangeV?.minimum)} … {formatScientific(rangeV?.maximum)} {spectrum.wave_vector_unit}</span>
         <span>cells: {renderedCellCount}{isBinned ? " (max-pooled)" : ""}</span>
       </div>
-      <div className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
+      <div role="group" className="fm-antenna-spectrum__summary" aria-label="Source spectrum peak">
         <span>
           Peak {peak ? formatScientific(peak.value) : "unavailable"} {powerUnit}
         </span>
@@ -446,7 +446,7 @@ function SpectrumPowerGrid({
       <span>k_v {formatScientific(selected ? kV[selected.kVIndex] : undefined)} {waveVectorUnit}</span>
       <span>|H̃|² {formatScientific(selected?.power)} {powerUnit}</span>
     </div>
-    {cuts ? <div className="fm-antenna-spectrum__cuts" aria-label="Selected source spectrum cross-sections">
+    {cuts ? <div role="group" className="fm-antenna-spectrum__cuts" aria-label="Selected source spectrum cross-sections">
       {cuts.map((cut) => <SpectrumCutFigure key={cut.direction} cut={cut}
         waveVectorUnit={waveVectorUnit} powerUnit={powerUnit} scale={powerScale}
         powerMinimum={powerMinimum} powerMaximum={powerMaximum} minimumPositivePower={minimumPositivePower} />)}

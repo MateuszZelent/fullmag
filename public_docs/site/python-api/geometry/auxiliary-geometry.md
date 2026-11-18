@@ -14,52 +14,42 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 (python-api-geometry-auxiliary-geometry-problem-statement)=
 ## Problem statement
 
-Waveguide helpers are current geometry constructors with explicit dimensional validation.
+Waveguide helpers are geometric domain constructors with explicit dimensional validation.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+Construction validates typed geometric parameters in Python; calling `to_ir()` lowers each waveguide into its canonical `ProblemIR` geometry descriptor before meshing.
 
 (python-api-geometry-auxiliary-geometry-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-waveguide_geometry
-
-q_{\mathrm{IR}} = \mathrm{waveguide_geometry}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object waveguide_geometry. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+`SinWaveguide` and `ArchWaveguide` define parametric curved three-dimensional domains $\Omega_m \subset \mathbb{R}^3$ for magnonic waveguide simulations (with sinusoidal height modulation $z(x) = z_0 + A\sin(2\pi x/\lambda + \varphi)$ or smooth arch modulation). Geometry lowering to structured FDM cells or conforming FEM tetrahedra is documented in {doc}`../../physics/geometry-and-materials` and {doc}`../../numerical-methods/meshing/index`.
 
 (python-api-geometry-auxiliary-geometry-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+Waveguide `length`, `width`, `height`, `period`, `amplitude`, `z0`, and `arch_height` use SI metres ($\mathrm{m}$); `phase` uses radians ($\mathrm{rad}$); object `name` strings are dimensionless ($1$).
 
 (python-api-geometry-auxiliary-geometry-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`length`, `width`, `height`, and `period` must be finite and strictly positive; `amplitude`, `phase`, `z0`, and `arch_height` must be finite; and `name` must be non-empty. Invalid dimensions fail closed during construction or lowering rather than being silently rescaled.
 
 (python-api-geometry-auxiliary-geometry-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.SinWaveguide(...) and fm.ArchWaveguide(...)
+`fm.SinWaveguide(...)` and `fm.ArchWaveguide(...)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `length/width/height/period` | `float` | `required` | `m` | positive | waveguide dimensions and period | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `parameters` |
-| `amplitude` | `float` | `required` | `m` | finite | sinusoidal amplitude | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `amplitude` |
-| `phase` | `float` | `0.0` | `rad` | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | `phase` |
-| `z0` | `float` | `0.0` | `m` | finite | vertical offset | FEM/FDM CPU/GPU: IR; resolver-specific | `z0` |
-| `arch_height` | `float` | `required` | `m` | finite for ArchWaveguide | arch height | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `arch_height` |
-| `name` | `str` | `sin_waveguide/arch_waveguide` | `1` | non-empty | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `length/width/height/period` | `float` | `required` | $\mathrm{m}$ | positive | waveguide dimensions and period | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `parameters` |
+| `amplitude` | `float` | `required` | $\mathrm{m}$ | finite | sinusoidal amplitude | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `amplitude` |
+| `phase` | `float` | `0.0` | $\mathrm{rad}$ | finite | phase offset | FEM/FDM CPU/GPU: IR; resolver-specific | `phase` |
+| `z0` | `float` | `0.0` | $\mathrm{m}$ | finite | vertical offset | FEM/FDM CPU/GPU: IR; resolver-specific | `z0` |
+| `arch_height` | `float` | `required` | $\mathrm{m}$ | finite for `ArchWaveguide` | arch height | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | `arch_height` |
+| `name` | `str` | `sin_waveguide/arch_waveguide` | $1$ | non-empty | stable name | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
 
 ### Stage-first example
 
@@ -80,52 +70,46 @@ value = fm.SinWaveguide(length=1.0e-6, width=1.0e-7, height=5.0e-8, period=5.0e-
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, pass the constructed waveguide geometry directly to `study.geometry(...)`.
 
 (python-api-geometry-auxiliary-geometry-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed waveguide_geometry record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits a typed dictionary with `"kind": "sin_waveguide"` (or `"arch_waveguide"`), `"name"`, and its validated dimensional fields (`"length"`, `"width"`, `"height"`, `"period"`, `"amplitude"`, `"phase"`, `"z0"` or `"arch_height"`).
 
 (python-api-geometry-auxiliary-geometry-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` is preserved in `ProblemIR` independently of `resolved execution`. `Validation errors` reject invalid types, missing parameters, non-finite coordinates, and non-positive lengths or periods, while `unsupported combinations` fail closed at the mesher or backend boundary.
 
 (python-api-geometry-auxiliary-geometry-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies geometric parameters and canonical `ProblemIR` only; discrete tetrahedral/voxel mesh generation and boundary evaluation are owned by the FEM/FDM meshing backends documented in {doc}`../../numerical-methods/meshing/index`.
 
 (python-api-geometry-auxiliary-geometry-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/geometry.py symbol class SinWaveguide. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/geometry.py` (`class SinWaveguide` and `class ArchWaveguide`). Constructor arguments, validation branches, defaults, and `to_ir()` keys come directly from that module.
 
 (python-api-geometry-auxiliary-geometry-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_waveguide_geometries_export_canonical_ir, test_waveguide_geometry_validation_rejects_invalid_dimensions. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering authoring and IR serialization include `test_waveguide_geometries_export_canonical_ir` and `test_waveguide_geometry_validation_rejects_invalid_dimensions`. Mesh realization and solver convergence require separate backend qualification.
 
 (python-api-geometry-auxiliary-geometry-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Control Room has no dedicated interactive editor route for `SinWaveguide` or `ArchWaveguide`; author these shapes in Python scripts and inspect the resulting object geometry in active session views. See {doc}`/frontend/capability-register`.
 
 (python-api-geometry-auxiliary-geometry-scientific-bibliography)=
 ## Scientific bibliography
 
-- C. Geuzaine and J.-F. Remacle, Gmsh: a three-dimensional finite element mesh generator, Int. J. Numer. Meth. Eng. 79 (2009), DOI: https://doi.org/10.1002/nme.2579
+- C. Geuzaine and J.-F. Remacle, “Gmsh: A 3-D finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79**(11), 1309–1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579) | [Open-access HAL PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf).
 
 (python-api-geometry-auxiliary-geometry-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/geometry.py | class SinWaveguide | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/geometry.py::class SinWaveguide
-- Source-map: geometry/auxiliary-geometry.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/geometry.py` | `class SinWaveguide` | public constructor and IR lowering |

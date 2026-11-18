@@ -373,7 +373,7 @@ function CommittedPlanarMonitorEditor({
       </div>
       {errors.length > 0 ? (
         <div className="fm-help-text" role="alert">
-          {errors.map((error) => <p key={error}>{error}</p>)}
+          {[...new Set(errors)].map((error) => <p key={error}>{error}</p>)}
         </div>
       ) : null}
       {feedback ? <p role="alert">{feedback}</p> : null}

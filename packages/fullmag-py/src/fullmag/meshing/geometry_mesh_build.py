@@ -144,6 +144,104 @@ def build_geometry_only_mesh(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"schema": GEOMETRY_MESH_BUILD_SCHEMA, "mesh": mesh, **result}
 
 
+def _ordinary_shared_workflow(workflow: Mapping[str, Any]) -> bool:
+    if workflow.get("domain_mesh_mode") not in (None, "generated_shared_domain_mesh"):
+        return False
+    if workflow.get("operations") or workflow.get("domain_mesh_source"):
+        return False
+    return all(
+        isinstance(entry, Mapping)
+        and entry.get("mode") == "inherit"
+        and set(entry) <= {"geometry", "geometry_name", "object_id", "mode"}
+        for entry in workflow.get("per_geometry", ())
+    )
+
+
+def _geometry_shapes(entries, owner_ids):
+    """Compare geometry by stable owner and physical parameters."""
+    def shape(entry):
+        kind = entry["kind"]
+        if kind not in {"box", "cylinder", "ellipsoid", "sphere", "sin_waveguide", "arch_waveguide", "translate"}:
+            raise ValueError("geometry requires its native materialization")
+        result = {key: value for key, value in entry.items() if key != "name"}
+        if kind == "translate":
+            result["base"] = shape(result["base"])
+        return result
+
+    return [(owner_ids[entry["name"]], shape(entry)) for entry in entries]
+
+
+def matches_solver_geometry_reuse(payload: Mapping[str, Any], recipes: list[dict]) -> bool:
+    """Qualify a geometry-only publication against the actual solver recipes.
+
+    Nontrivial object recipes, conformal regions, imported sources, and mixed
+    topology go through their canonical geometry preparation.
+    """
+    from ._gmsh_swept import _disconnected_mixed_p1_pair
+    from .asset_pipeline import (
+        _mesh_options_from_runtime_metadata,
+        _resolve_requested_partition_hmaxs,
+        _shared_domain_size_field_default_hmax,
+        _study_universe_airbox_options,
+        _validate_domain_mesh_workflow,
+    )
+
+    try:
+        geometries, universe, hmax, order = _validated_payload(payload)
+        build_shapes = _geometry_shapes(payload["geometries"], payload["geometry_object_ids"])
+        if order != 1 or not recipes or _disconnected_mixed_p1_pair(geometries) is not None:
+            return False
+        build_options = payload["mesh_options"]
+        build_workflow = {
+            "mesh_options": build_options,
+            "per_geometry": build_options.get("per_geometry", ()),
+        }
+        if build_options.get("adaptive_enabled") or not _ordinary_shared_workflow(build_workflow):
+            return False
+        hints = FEM(order=order, maximum_element_size=hmax)
+        build_airbox = _study_universe_airbox_options(geometries, universe)
+        if build_airbox is None:
+            return False
+
+        def options(workflow):
+            return (
+                _mesh_options_from_runtime_metadata(
+                    workflow, geometries=geometries, default_hmax=hmax,
+                    include_size_fields=False,
+                ),
+                _mesh_options_from_runtime_metadata(
+                    workflow, geometries=geometries,
+                    default_hmax=_shared_domain_size_field_default_hmax(hints, build_airbox),
+                    component_aware=True,
+                ),
+                _resolve_requested_partition_hmaxs(
+                    geometries, hints, airbox=build_airbox,
+                    mesh_workflow=workflow, per_object_recipes=None,
+                ),
+            )
+
+        build_resolved = options(build_workflow)
+        if build_resolved[0].mesh_strategy not in (None, "auto", "free_tetrahedral"):
+            return False
+        for recipe in recipes:
+            workflow = recipe["mesh_workflow"]
+            if not isinstance(workflow, Mapping) or not _ordinary_shared_workflow(workflow):
+                return False
+            if _validate_domain_mesh_workflow(workflow) is not None:
+                return False
+            if recipe["order"] != order or recipe["hmax"] != hmax or recipe["mesh"] is not None:
+                return False
+            if _geometry_shapes(recipe["geometries"], recipe["geometry_object_ids"]) != build_shapes:
+                return False
+            if _study_universe_airbox_options(geometries, recipe["study_universe"]) != build_airbox:
+                return False
+            if options(workflow) != build_resolved:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read())

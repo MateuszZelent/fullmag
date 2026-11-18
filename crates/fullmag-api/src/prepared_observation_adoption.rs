@@ -63,11 +63,19 @@ pub(crate) fn adopt_prepared_observation(
     {
         return Err(ApiError::conflict("prepared observation bundle differs from its record"));
     }
-    let frame = crate::session::accepted_observation_frame_ref(
-        snapshot,
-        0,
-        Some(bundle.clock.time_seconds),
-    );
+    let Some(publication) = crate::live_authored_initial_state::current_publication(snapshot) else {
+        return Ok(false);
+    };
+    let frame = publication.frame.clone();
+    if frame.source_time_seconds != Some(bundle.clock.time_seconds)
+        || !frame.authored_initial_state.as_ref().is_some_and(|origin| {
+            origin.preparation_id == record.preparation_id
+                && origin.plan_fingerprint == record.plan_fingerprint
+                && origin.values_sha256 == record.magnetization_values_sha256
+        })
+    {
+        return Ok(false);
+    }
     let provenance = json!({
         "source": PROVENANCE_SOURCE,
         "preparation_id": record.preparation_id,

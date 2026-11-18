@@ -41,7 +41,8 @@ pub use self_kernel::{
 };
 pub use shifted_kernel::{
     compute_shifted_kernel, compute_shifted_kernel_f32, compute_shifted_kernel_irregular,
-    compute_shifted_kernel_pair, compute_shifted_kernel_pair_f32, try_compute_shifted_kernel_pair,
+    compute_shifted_kernel_pair, compute_shifted_kernel_pair_f32, try_compute_periodic_xy_kernel,
+    try_compute_shifted_kernel_pair,
 };
 pub use transfer::{
     pull_h, pull_h_f32, pull_h_f32_with_boundary_policy, pull_h_with_boundary_policy, push_m,

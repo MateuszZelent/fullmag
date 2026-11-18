@@ -4,6 +4,7 @@ mod accepted_fem_state;
 mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_fem_frequency_response_worker;
 mod accepted_antenna_inspection_worker;
 mod accepted_field_binary;
 mod accepted_field_materialization_worker;
@@ -14,6 +15,7 @@ mod error;
 mod accepted_study_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_project_storage;
+mod study_execution_contract;
 
 mod worker_startup_gate;
 

@@ -445,6 +445,7 @@ export function resolveMeshSharedDomainManifestRevision(
     revision,
     manifest?.source_scene_revision ?? "unknown",
     manifest?.geometry_realization_revision ?? "unknown",
+    manifest?.validated_for_scene_revision ?? "unknown",
   ].join(":");
 }
 

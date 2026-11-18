@@ -6,11 +6,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import docker_backend_volume_cache as cache  # noqa: E402
 import docker_shared_build_storage as shared_storage  # noqa: E402
+import bootstrap_docker_toolchain as bootstrap  # noqa: E402
 
 IMAGE = "sha256:" + "a" * 64
 REFRESHED_IMAGE = "sha256:" + "c" * 64
@@ -218,6 +220,100 @@ def _container(profile, *, socket=False):
 
 
 class BackendVolumeCacheTests(unittest.TestCase):
+    def test_generated_leading_underscore_worktree_key_and_plan_are_valid(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        with tempfile.TemporaryDirectory() as tmp:
+            profile, _, source, *_ = _profile(tmp, worktree_id=worktree_id)
+            identity = cache.cache_key(source, worktree_id, TOOLCHAIN)
+            self.assertEqual(identity, profile["identity"])
+            self.assertEqual(identity["inputs"]["worktree_id"], worktree_id)
+            self.assertEqual(profile["worktree_id"], worktree_id)
+
+            for invalid in (
+                ".codex_ci_fix-43689414c43ecd3c",
+                "-codex_ci_fix-43689414c43ecd3c",
+                "../codex_ci_fix",
+                "codex/../ci_fix",
+                "codex ci fix",
+                "codex\tci-fix",
+            ):
+                with self.subTest(invalid=repr(invalid)), self.assertRaises(
+                        cache.BackendVolumeCacheError):
+                    cache.cache_key(source, invalid, TOOLCHAIN)
+
+            with self.assertRaises(cache.BackendVolumeCacheError):
+                cache._safe_project_id({"project_id": "_codex_ci_fix"})
+
+    def test_registered_maintenance_accepts_leading_underscore_worktree(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        with tempfile.TemporaryDirectory() as tmp:
+            profile, *_ = _profile(tmp, shared_packages=True, worktree_id=worktree_id)
+            config = _container(profile)["Config"]
+            labels = config["Labels"]
+            labels.update({
+                "com.docker.compose.project": profile["control_project"],
+                "com.docker.compose.service": cache.MAINTENANCE_SERVICE,
+            })
+            config["User"] = "0:0"
+            config["Entrypoint"] = list(cache.MAINTENANCE_ENTRYPOINT)
+            config["Cmd"] = ["ensure"]
+            environment = dict(item.split("=", 1) for item in config["Env"] if "=" in item)
+            environment["FULLMAG_BACKEND_CACHE_MAINTENANCE_PROFILE"] = cache.MAINTENANCE_PROFILE
+            environment["FULLMAG_BACKEND_CACHE_MAINTENANCE_ACTION"] = "ensure"
+            config["Env"] = [f"{key}={value}" for key, value in environment.items()]
+
+            registered = cache._is_registered_shared_maintenance(
+                config, labels, profile["project_id"]
+            )
+
+        self.assertIsNotNone(registered)
+        self.assertEqual(registered[0], profile["unit_key"])
+
+    def test_historical_group_root_worktree_label_accepts_only_safe_leading_underscore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            repo = root / "repo"
+            storage = root / "storage"
+            runroot = storage / "runs" / "run-1"
+            for path in (source, repo, runroot):
+                path.mkdir(parents=True, exist_ok=True)
+            compose_project = "fullmag-worktree-current-wt"
+            profile = cache.prepare(
+                {"storage_root": str(storage), "project_id": "fullmag",
+                 "worktree_id": "current-wt", "compose_project": compose_project},
+                repo, IMAGE, runroot,
+                source_root=source,
+                toolchain_image=TOOLCHAIN,
+                control_volume_name=bootstrap.control_volume_name(compose_project),
+                shared_packages=True,
+                group_volume=True,
+            )
+            document = DockerVolumeFixture(profile)._document(cache.BUILD_VOLUME_ROLE)
+            document["Labels"].update({
+                "org.fullmag.build-control.schema": "fullmag.build-control.v1",
+                "org.fullmag.compose.project": compose_project,
+                "org.fullmag.source.worktree-id": "_codex_ci_fix-43689414c43ecd3c",
+                "org.fullmag.build.role": "control",
+            })
+
+            with mock.patch.object(cache, "_validated_prepared_group_owner", return_value={"owned": True}):
+                validated = cache._validate_volume_document(
+                    document, profile, cache.BUILD_VOLUME_ROLE
+                )
+                self.assertEqual(
+                    validated["Labels"]["org.fullmag.source.worktree-id"],
+                    "_codex_ci_fix-43689414c43ecd3c",
+                )
+                for invalid in (".codex_ci_fix-43689414c43ecd3c",
+                                "-codex_ci_fix-43689414c43ecd3c", "../codex-ci-fix"):
+                    document["Labels"]["org.fullmag.source.worktree-id"] = invalid
+                    with self.subTest(invalid=repr(invalid)), self.assertRaises(
+                            cache.BackendVolumeCacheError):
+                        cache._validate_volume_document(
+                            document, profile, cache.BUILD_VOLUME_ROLE
+                        )
+
     def test_shared_packages_reuse_project_volume_with_private_groups_and_builds(self):
         with tempfile.TemporaryDirectory() as tmp_a, tempfile.TemporaryDirectory() as tmp_b, tempfile.TemporaryDirectory() as tmp_other:
             first, *_ = _profile(

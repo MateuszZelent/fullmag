@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
@@ -46,6 +47,7 @@ import {
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type {
   CommandActiveResource,
+  CommandContext,
   CommandContribution,
 } from "@/kernel/commands/commandTypes";
 import {
@@ -181,18 +183,23 @@ function commandContextForNode(
   node: ExplorerNode,
   commandId: string,
   resourceData: Readonly<Record<string, unknown>>,
-) {
+  sessionScopeKey?: CommandContext["sessionScopeKey"],
+): CommandContext {
   const input = node.contextCommandInputs?.[commandId];
   return createCommandContext("explorer", kernel, {
     ...(input !== undefined ? { input } : {}),
     resourceData,
+    sessionScopeKey,
   });
 }
+
+const MENU_SCOPE_CHANGED_REASON = "The workspace changed. Reopen the context menu.";
 
 export interface ExplorerContextCommandItem {
   active: boolean;
   activeResource: CommandActiveResource | null;
   command: CommandContribution;
+  context: CommandContext;
   disabled: boolean;
   disabledReason: string | null;
 }
@@ -201,26 +208,33 @@ export function contextCommandItemsForNode({
   kernel,
   node,
   resourceData,
+  sessionScopeKey,
 }: {
   kernel: KernelApi;
   node: ExplorerNode;
   resourceData: Readonly<Record<string, unknown>>;
+  sessionScopeKey?: CommandContext["sessionScopeKey"];
 }): ExplorerContextCommandItem[] {
+  const scopeChanged = sessionScopeKey !== undefined &&
+    (kernel.commands.getSessionScopeKey() ?? null) !== sessionScopeKey;
   return contextCommandsForNode(kernel, node).map((command) => {
     const context = commandContextForNode(
       kernel,
       node,
       command.id,
       resourceData,
+      sessionScopeKey,
     );
-    const active = kernel.commands.isActive(command.id, context);
+    const active = !scopeChanged && kernel.commands.isActive(command.id, context);
     return {
       active,
       activeResource: active ? command.activeResource?.(context) ?? null : null,
       command,
-      disabled: !kernel.commands.isEnabled(command.id, context),
-      disabledReason:
-        kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
+      context,
+      disabled: scopeChanged || !kernel.commands.isEnabled(command.id, context),
+      disabledReason: scopeChanged
+        ? MENU_SCOPE_CHANGED_REASON
+        : command.disabledReason?.(context) ?? null,
     };
   });
 }
@@ -323,6 +337,91 @@ export function flattenVisibleExplorerRows(
   return rows;
 }
 
+function ExplorerContextCommands({
+  kernel,
+  node,
+  resourceData,
+  onInspectCommand,
+  onSelectNode,
+}: {
+  kernel: KernelApi;
+  node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
+  onInspectCommand: (commandId: string) => void;
+  onSelectNode?: () => void;
+}) {
+  const { commands } = kernel;
+  const [menuScopeKey] = useState(() => commands.getSessionScopeKey() ?? null);
+  const subscribe = useCallback((listener: () => void) => commands.subscribe(listener), [commands]);
+  const getVersion = useCallback(() => commands.getVersion(), [commands]);
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  const subscribeScope = useCallback((listener: () => void) => commands.subscribeSessionScope(listener), [commands]);
+  const getScope = useCallback(() => commands.getSessionScopeKey() ?? null, [commands]);
+  const currentScopeKey = useSyncExternalStore(subscribeScope, getScope, getScope);
+  const scopeChanged = currentScopeKey !== menuScopeKey;
+  const menuScopeIsCurrent = () => getScope() === menuScopeKey;
+
+  const commandItems = contextCommandItemsForNode({
+    kernel,
+    node,
+    resourceData,
+    sessionScopeKey: menuScopeKey,
+  });
+  const activeCommandItems = commandItems.reduce<typeof commandItems>((items, item) => {
+    if (item.activeResource?.kind === "command") items.push(item);
+    return items;
+  }, []);
+  return (
+    <>
+      {onSelectNode ? (
+        <ContextMenuItem
+          disabled={scopeChanged}
+          title={scopeChanged ? MENU_SCOPE_CHANGED_REASON : undefined}
+          onSelect={() => {
+            if (menuScopeIsCurrent()) onSelectNode();
+          }}
+        >
+          Select
+        </ContextMenuItem>
+      ) : null}
+      {commandItems.map(({ active, command, context, disabled, disabledReason }) => (
+        <ContextMenuItem
+          key={command.id}
+          data-active={active}
+          disabled={disabled}
+          title={disabledReason ?? (active ? "Command active" : undefined)}
+          onSelect={() => {
+            if (!disabled && menuScopeIsCurrent()) {
+              void commands.execute(command.id, context);
+            }
+          }}
+        >
+          <span>{command.title}</span>
+          {active ? (
+            <span className="fm-context-menu-item__meta">active</span>
+          ) : null}
+        </ContextMenuItem>
+      ))}
+      {activeCommandItems.length > 0 ? (
+        <>
+          <ContextMenuSeparator />
+          {activeCommandItems.map((item) => (
+              <ContextMenuItem
+                key={`${item.command.id}:detail`}
+                onSelect={() => {
+                  const commandId = item.activeResource?.commandId;
+                  if (commandId && menuScopeIsCurrent()) onInspectCommand(commandId);
+                }}
+              >
+                <span>{item.command.title} detail</span>
+              </ContextMenuItem>
+            ))}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 const ExplorerTreeRow = memo(function ExplorerTreeRow({
   active,
   depth,
@@ -351,15 +450,6 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   const statusReasonId = useId();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
-  const commandItems = contextCommandItemsForNode({
-    kernel,
-    node,
-    resourceData,
-  });
-  const activeCommandItems = commandItems.reduce<typeof commandItems>((items, item) => {
-    if (item.activeResource?.kind === "command") items.push(item);
-    return items;
-  }, []);
   const selectable = node.selectable !== false;
 
   function handleSelect(): void {
@@ -510,42 +600,13 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       <ContextMenuContent>
         <ContextMenuLabel>{node.label}</ContextMenuLabel>
         <ContextMenuSeparator />
-        {selectable ? <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem> : null}
-        {commandItems.map(({ active, command, disabled, disabledReason }) => (
-          <ContextMenuItem
-            key={command.id}
-            data-active={active}
-            disabled={disabled}
-            title={disabledReason ?? (active ? "Command active" : undefined)}
-            onSelect={() => {
-              void kernel.commands.execute(
-                command.id,
-                commandContextForNode(kernel, node, command.id, resourceData),
-              );
-            }}
-          >
-            <span>{command.title}</span>
-            {active ? (
-              <span className="fm-context-menu-item__meta">active</span>
-            ) : null}
-          </ContextMenuItem>
-        ))}
-        {activeCommandItems.length > 0 ? (
-          <>
-            <ContextMenuSeparator />
-            {activeCommandItems.map((item) => (
-                <ContextMenuItem
-                  key={`${item.command.id}:detail`}
-                  onSelect={() => {
-                    const commandId = item.activeResource?.commandId;
-                    if (commandId) setSelectedCommandId(commandId);
-                  }}
-                >
-                  <span>{item.command.title} detail</span>
-                </ContextMenuItem>
-              ))}
-          </>
-        ) : null}
+        <ExplorerContextCommands
+          kernel={kernel}
+          node={node}
+          resourceData={resourceData}
+          onInspectCommand={setSelectedCommandId}
+          onSelectNode={selectable ? handleSelect : undefined}
+        />
       </ContextMenuContent>
       <CommandDetailDialog
         commandId={selectedCommandId}
@@ -566,6 +627,7 @@ interface ExplorerTreeViewProps {
   moduleId: ModuleId;
   nodes: readonly ExplorerNode[];
   sceneResourceData: unknown;
+  sharedCommandResources: Readonly<Record<string, unknown>>;
   tabId: ExplorerTabId;
 }
 
@@ -577,6 +639,7 @@ export function ExplorerTreeView({
   moduleId,
   nodes,
   sceneResourceData,
+  sharedCommandResources,
   tabId,
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
@@ -589,10 +652,11 @@ export function ExplorerTreeView({
   const commandResourceData = useMemo(
     () => ({
       ...runtimeResourceData,
+      ...sharedCommandResources,
       [MODEL_SCENE_PATH]: sceneResourceData,
       [VISUALIZATION_STATE_PATH]: visualizationState.data,
     }),
-    [runtimeResourceData, sceneResourceData, visualizationState.data],
+    [runtimeResourceData, sceneResourceData, sharedCommandResources, visualizationState.data],
   );
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),

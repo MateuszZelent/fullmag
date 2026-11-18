@@ -1080,7 +1080,7 @@ pub(crate) fn pack_mesh_by_analysis(
             roles
                 .iter()
                 .find(|entry| entry.role == fullmag_ir::BoundaryRole::GammaOut)
-                .and_then(|entry| u32::try_from(entry.marker).ok())
+                .map(|entry| entry.marker)
         })
         .map(|outer_boundary_marker| {
             reordered_mesh
@@ -2425,13 +2425,7 @@ fn certified_airbox_boundary_marker(
                 mesh.mesh_name
             )
         })?;
-    let marker = u32::try_from(outer.marker).map_err(|_| {
-        format!(
-            "FEM airbox mesh '{}' has invalid certified Gamma_out marker {}",
-            mesh.mesh_name, outer.marker
-        )
-    })?;
-    Ok((marker, "certified_gamma_out"))
+    Ok((outer.marker, "certified_gamma_out"))
 }
 
 fn derive_air_box_factor(mesh: &MeshIR, study_universe: Option<&StudyUniverseMetadata>) -> f64 {

@@ -1,5 +1,5 @@
 import { HelpCircle } from "lucide-react";
-import { useId, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { homeView } from "@/kernel/layout/homeView";
 import {
@@ -16,6 +16,7 @@ import { Button } from "@/shared/ui/Button";
 import { controlVariants } from "@/shared/ui/controlVariants";
 import { cn } from "@/shared/utils/className";
 
+import { announceFieldError, clearFieldErrorAnnouncement } from "./fieldErrorAnnouncer";
 import { InspectorPropertyRow } from "./InspectorPropertyRow";
 
 export interface FormFieldHelp {
@@ -178,6 +179,47 @@ function FormFieldHelpButton({
 }
 
 /**
+ * Announces a field error through the shared polite region when the user
+ * commits the value (blur, or change for select/checkbox), never per keystroke.
+ * An error is announced once per invalid episode and cleared when resolved.
+ */
+function useFieldErrorAnnouncement(label: string, error: string | undefined) {
+  const [owner] = useState(() => ({}));
+  const committedRef = useRef(false);
+  const announcedRef = useRef(false);
+  const errorRef = useRef(error);
+  const labelRef = useRef(label);
+  useEffect(() => {
+    errorRef.current = error;
+    labelRef.current = label;
+    if (!error) {
+      if (announcedRef.current) clearFieldErrorAnnouncement(owner);
+      announcedRef.current = false;
+      return;
+    }
+    // A select/checkbox change re-renders with the new error after the commit.
+    if (committedRef.current && !announcedRef.current) {
+      announcedRef.current = true;
+      announceFieldError(owner, `${label}: ${error}`);
+    }
+  }, [error, label, owner]);
+  useEffect(() => () => clearFieldErrorAnnouncement(owner), [owner]);
+  const commit = () => {
+    committedRef.current = true;
+    const current = errorRef.current;
+    if (current && !announcedRef.current) {
+      announcedRef.current = true;
+      announceFieldError(owner, `${labelRef.current}: ${current}`);
+    }
+  };
+  // Typing is not a commit: only blur/change may announce.
+  const edit = () => {
+    committedRef.current = false;
+  };
+  return { commit, edit };
+}
+
+/**
  * Compatibility form API for Inspector panels.
  * New label/control geometry is owned by InspectorPropertyRow. The fm-inspector-*
  * classes remain temporarily for unmigrated domain selectors during the gated rollout.
@@ -186,10 +228,15 @@ export function FormField(props: FormFieldProps) {
   const { label, unit, unitControl, hint, error, help, inline = true, disabled, invalid } =
     props;
   const fieldId = useId();
+  const announcement = useFieldErrorAnnouncement(label, error);
+  const choiceHandlers = { onBlurCapture: announcement.commit, onChangeCapture: announcement.commit };
+  const textHandlers = { onBlurCapture: announcement.commit, onInputCapture: announcement.edit };
   const hintText = error ?? hint;
   const feedbackId = hintText
     ? `${fieldId}-${error ? "error" : "hint"}`
     : undefined;
+  const unitId = unit && !unitControl ? `${fieldId}-unit` : undefined;
+  const describedBy = [unitId, feedbackId].filter(Boolean).join(" ") || undefined;
   const invalidValue = invalid || Boolean(error);
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
@@ -198,12 +245,7 @@ export function FormField(props: FormFieldProps) {
     ? "fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
     : "fm-inspector-form-field__hint";
   const feedback = hintText ? (
-    <span
-      aria-live={error ? "assertive" : undefined}
-      className={hintClass}
-      id={feedbackId}
-      role={error ? "alert" : undefined}
-    >
+    <span className={hintClass} id={feedbackId}>
       {hintText}
     </span>
   ) : null;
@@ -220,13 +262,13 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout={layout}
       >
-        <div className="fm-inspector-form-field__control w-full">
+        <div {...choiceHandlers} className="fm-inspector-form-field__control w-full">
           <input
             id={fieldId}
             aria-label={label}
             aria-describedby={feedbackId}
             aria-errormessage={error ? feedbackId : undefined}
-            aria-invalid={invalidValue || undefined}
+            aria-invalid={invalidValue}
             checked={checked}
             className="fm-inspector-checkbox size-4 shrink-0 accent-fm-accent disabled:cursor-not-allowed disabled:opacity-100"
             disabled={disabled}
@@ -256,14 +298,14 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout={layout}
       >
-        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+        <div {...choiceHandlers} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <select
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
             aria-describedby={feedbackId}
             aria-errormessage={error ? feedbackId : undefined}
-            aria-invalid={invalidValue || undefined}
+            aria-invalid={invalidValue}
             className={cn(
               "fm-inspector-select w-full appearance-none",
               controlVariants({ invalid: Boolean(invalid) }),
@@ -300,14 +342,14 @@ export function FormField(props: FormFieldProps) {
         label={labelNode}
         layout="stacked"
       >
-        <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+        <div {...textHandlers} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
           <textarea
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
             aria-describedby={feedbackId}
             aria-errormessage={error ? feedbackId : undefined}
-            aria-invalid={invalidValue || undefined}
+            aria-invalid={invalidValue}
             className={cn(
               "fm-inspector-textarea h-auto min-h-24 w-full resize-y py-2",
               controlVariants({ invalid: Boolean(invalid) }),
@@ -352,18 +394,18 @@ export function FormField(props: FormFieldProps) {
       layout={layout}
       unit={
         unitControl ?? (unit ? (
-          <span className="fm-inspector-form-field__unit">{unit}</span>
+          <span className="fm-inspector-form-field__unit" id={unitId}>{unit}</span>
         ) : undefined)
       }
     >
-      <div className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
+      <div {...textHandlers} className="fm-inspector-form-field__control flex w-full flex-col items-stretch gap-1">
         <input
           {...(rest as object)}
           id={fieldId}
           aria-label={label}
-          aria-describedby={feedbackId}
+          aria-describedby={describedBy}
           aria-errormessage={error ? feedbackId : undefined}
-          aria-invalid={invalidValue || undefined}
+          aria-invalid={invalidValue}
           className={inputClass}
           disabled={disabled}
           inputMode={resolvedInputMode}

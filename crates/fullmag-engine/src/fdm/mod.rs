@@ -17,6 +17,10 @@ pub use cpu::fft::{
     FftWorkspaceTelemetry, FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
 };
 
+pub use shared::exchange_operator::{
+    build_exchange_operator, first_decoupled_connection, harmonic_exchange, ExchangeFaces,
+    ExchangeOperator, ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
+};
 pub use shared::problem::ExchangeLlgProblem;
 
 /// Maximum RK23 RHS evaluations for the canonical adaptive CPU oracle workload.
@@ -42,8 +46,8 @@ pub use shared::observables::{
 pub use shared::VectorFieldSoA;
 
 pub use shared::terms::{
-    CubicAnisotropyConfig, EffectiveFieldTerms, MagnetoelasticTermConfig, OerstedCylinderConfig,
-    RegionalFieldDriveTerm, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula,
+    CubicAnisotropyConfig, DriveTimeFunction, EffectiveFieldTerms, MagnetoelasticTermConfig,
+    OerstedCylinderConfig, RegionalFieldDriveTerm, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula,
     UniaxialAnisotropyConfig, ZhangLiFormula, ZhangLiSttConfig,
 };
 pub use shared::types::{

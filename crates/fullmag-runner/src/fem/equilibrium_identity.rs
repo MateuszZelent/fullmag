@@ -310,6 +310,7 @@ pub(crate) fn validate_supported_relax_source(plan: &FemPlanIR) -> Result<(), Ru
         || plan.rotated_interfacial_dmi.is_some()
         || !plan.antenna_zeeman_masks.is_empty()
         || !plan.field_drives.is_empty()
+        || !plan.mask_field_term_bases.is_empty()
         || !plan.field_drive_geometry_masks.is_empty()
         || !plan.current_modules.is_empty()
         || !plan.spin_transport_plans.is_empty()

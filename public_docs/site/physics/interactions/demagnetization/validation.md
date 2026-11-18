@@ -138,6 +138,8 @@ An artifact that omits any of these fields is not sufficient for a CPU/GPU quali
 
 FDM compares cell fields and volume-weighted energy. FEM compares recovered nodal/element fields,
 integrated energy, and residuals. CPU/GPU parity requires the same precision and tolerance.
+See {numref}`fig-demag-solver-families-comparison` on {doc}`index` for the operator distinctions
+between FDM convolution, FEM Poisson airbox, FEM–BEM Fredkin–Koehler, and periodic demagnetization.
 
 For FDM, the reference comparison must fix cell dimensions, padding, kernel convention, FFT
 normalization, self-term, and periodic-image policy. For FEM, it must fix the magnetic/air domain,
@@ -177,6 +179,10 @@ Contract tests include `batched_demag_fft_contract.cpp`, `cuda_demag_robin_energ
 and `cuda_periodic_demag_contract.cpp`; production qualification additionally needs managed runtime
 and executed-device evidence.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes demagnetization settings under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a UI control must be configured in Python or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-validation-validation)=
 ## Validation matrix
 
@@ -198,23 +204,24 @@ as a production qualification claim without current evidence.
 (demag-validation-scientific-bibliography)=
 ## Scientific bibliography
 
-- Newell, A. J., Williams, W. and Dunlop, D. J., *Geophysical Research Letters* 21, 1994.
-- FullMag validation sources: `backends/fdm/tests/` and `backends/fem/tests/` demagnetization contracts.
+1. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for
+   nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555
+   (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+2. A. Aharoni, “Demagnetizing factors for rectangular ferromagnetic prisms,” *Journal of Applied
+   Physics* **83**(6), 3432–3434 (1998),
+   [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).
+3. D. Chernyshenko and H. Fangohr, “Computing the demagnetizing tensor for finite difference
+   micromagnetic simulations via numerical integration,” *Journal of Magnetism and Magnetic
+   Materials* **381**, 440–445 (2015),
+   [doi:10.1016/j.jmmm.2015.01.013](https://doi.org/10.1016/j.jmmm.2015.01.013), Open Access
+   preprint: [arXiv:1403.1978](https://arxiv.org/abs/1403.1978).
+4. R. Bjørk, E. B. Poulsen, K. K. Nielsen, and A. R. Insinga, “MagTense: A micromagnetic
+   framework using the analytical demagnetization tensor,” *Journal of Magnetism and Magnetic
+   Materials* **535**, 168057 (2021),
+   [doi:10.1016/j.jmmm.2021.168057](https://doi.org/10.1016/j.jmmm.2021.168057), Open Access
+   preprint: [arXiv:2107.05364](https://arxiv.org/abs/2107.05364).
 
 (demag-validation-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

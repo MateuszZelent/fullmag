@@ -8934,6 +8934,46 @@ fn execute_synthetic_stage_with_interrupt(
                 message: format!("Added regional field drive {}", drive.id),
             })
         }
+        ResolvedScriptStageAction::AddMaskFieldDrive { drive } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "add_mask_field_drive",
+                    "drive": drive,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Added mask antenna {}", drive.id),
+            })
+        }
+        ResolvedScriptStageAction::UpdateMaskFieldDrive {
+            drive_id,
+            term,
+            mask_parameters,
+            time_parameters,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "update_mask_field_drive",
+                    "drive_id": drive_id,
+                    "term": term,
+                    "mask_parameters": mask_parameters,
+                    "time_parameters": time_parameters,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Updated mask antenna {}", drive_id),
+            })
+        }
         ResolvedScriptStageAction::RemoveFieldDrive { drive_id } => {
             let vectors =
                 current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
@@ -18928,6 +18968,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         })
     }
@@ -19088,6 +19129,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -19232,6 +19274,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -19371,6 +19414,7 @@ mod tests {
             },
             planar_monitors: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             current_modules: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),

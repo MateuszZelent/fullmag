@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
+import { FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET } from "@/shared/domain/mesh/fdmDisplaySampling";
 import { resolveViewport3DFdmNativeLayerFieldRequests } from "../model/viewport3DFieldDataPlan";
 
 const fallbackTopologyMeshLayerSource = readFileSync(
@@ -133,6 +134,30 @@ describe("viewport 3D layer performance contracts", () => {
     expect(topChanged.get("layer:top")?.requestId).toBe(
       "fdm-native-layer:layer:top:H_demag:full",
     );
+  });
+
+  it("uses the bounded native-layer display budget for scoped field requests", () => {
+    expect(viewport3dSceneModelSource).toContain(
+      "maxSamples: FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET",
+    );
+
+    const requests = resolveViewport3DFdmNativeLayerFieldRequests({
+      available: true,
+      layers: [
+        {
+          layerId: "layer:film",
+          settings: {
+            activeQuantityId: "m",
+            shaderVisible: true,
+            vectorsVisible: false,
+            visible: true,
+          },
+        },
+      ],
+      maxSamples: FDM_NATIVE_LAYER_DISPLAY_CELL_BUDGET,
+    });
+
+    expect(requests.get("layer:film")?.query.max_samples).toBe(250_000);
   });
 
   it("isolates tensor projection requests without changing another layer's owner", () => {

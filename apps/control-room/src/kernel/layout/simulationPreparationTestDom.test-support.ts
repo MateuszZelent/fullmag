@@ -51,6 +51,10 @@ export class TestNode {
     return this.childNodes[0] ?? null;
   }
 
+  get parentElement(): TestElement | null {
+    return this.parentNode instanceof TestElement ? this.parentNode : null;
+  }
+
   get nextSibling(): TestNode | null {
     if (!this.parentNode) return null;
     const index = this.parentNode.childNodes.indexOf(this);
@@ -211,6 +215,14 @@ export class TestElement extends TestNode {
 
   private optionSelected = false;
 
+  get className(): string {
+    return this.getAttribute("class") ?? "";
+  }
+
+  set className(value: string) {
+    this.setAttribute("class", value);
+  }
+
   get selected(): boolean {
     return this.optionSelected;
   }
@@ -309,6 +321,14 @@ export class TestElement extends TestNode {
     this.style = style;
   }
 
+  append(...nodes: Array<TestNode | string>): void {
+    for (const node of nodes) {
+      this.appendChild(
+        typeof node === "string" ? this.ownerDocument.createTextNode(node) : node,
+      );
+    }
+  }
+
   click(): void {
     const event = new TestEvent("click", { bubbles: true });
     this.dispatchEvent(event);
@@ -357,9 +377,11 @@ export class TestElement extends TestNode {
     return this.attributes.has(this.normalizeAttributeName(name));
   }
 
-  /** Matches tag, single-class, and single-attribute selectors used by this test DOM. */
+  /** Matches tag, class, tag.class, and single-attribute selectors used by this test DOM. */
   matches(selector: string): boolean {
     const normalized = selector.trim();
+    const tagClass = /^([A-Za-z_][A-Za-z0-9_-]*)\.([A-Za-z_][A-Za-z0-9_-]*)$/.exec(normalized);
+    if (tagClass) return this.matches(tagClass[1]!) && this.matches(`.${tagClass[2]!}`);
     if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(normalized)) {
       return this.tagName.toLowerCase() === normalized.toLowerCase();
     }
@@ -773,7 +795,12 @@ export function installSimulationPreparationTestDom({
       return [];
     }
   }
-  const getComputedStyle = () => ({ direction: "ltr" });
+  // Mirror the CSSStyleDeclaration read API used by layout hooks; unset custom
+  // properties resolve to the empty string as in browsers.
+  const getComputedStyle = () => ({
+    direction: "ltr",
+    getPropertyValue: (_name: string) => "",
+  });
   const requestAnimationFrame = (callback: FrameRequestCallback) => {
     callback(0);
     return 1;

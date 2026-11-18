@@ -16,9 +16,23 @@ use super::{
     PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 
+/// Nearest discretization node of a probe point; see
+/// [`ResolvedSpatialTarget::nearest_node`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlanarNearestNode {
+    /// `fem_node` or `fdm_cell_center`.
+    pub kind: &'static str,
+    /// Global mesh node index or cell index.
+    pub node_id: u32,
+    pub world_m: [f64; 3],
+    /// Raw nodal (FEM) or cell (FDM) components, without interpolation.
+    pub values: Vec<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedSpatialScope {
     MonitorTarget,
+    Object { object_id: String },
     MeshPart { scope_id: String },
     Airbox { scope_id: Option<String> },
     FdmNativeLayer { layer_id: String },
@@ -77,6 +91,74 @@ impl ResolvedSpatialTarget {
                 super::fdm::cell_value_at(field, point).map(|(cell, value)| (cell, value.to_vec()))
             }
             TargetField::Fem(field) => super::fem::interpolate_at(field, point),
+        }
+    }
+
+    /// Nearest discretization node of `point` in the entity that contains it
+    /// (`eq-planar-nearest-node`). FEM: among the vertices of element
+    /// `entity_id`, the one at the smallest 3D distance from `point`, ties to
+    /// the lower node index, with its nodal values. FDM: the centre of cell
+    /// `entity_id` with the cell value. `None` when the entity is not part of
+    /// the selected target.
+    pub(crate) fn nearest_node(&self, point: [f64; 3], entity_id: u32) -> Option<PlanarNearestNode> {
+        match &self.field {
+            TargetField::Fem(field) => {
+                let element_index = entity_id as usize;
+                if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
+                    return None;
+                }
+                let element = field.elements().get(element_index)?;
+                let mut best: Option<(u32, f64)> = None;
+                for node in element.nodes().iter().copied() {
+                    let position = *field.nodes().get(node as usize)?;
+                    let distance_sq = (0..3)
+                        .map(|axis| (position[axis] - point[axis]).powi(2))
+                        .sum::<f64>();
+                    let closer = match best {
+                        None => true,
+                        Some((best_node, best_distance_sq)) => {
+                            distance_sq < best_distance_sq
+                                || (distance_sq == best_distance_sq && node < best_node)
+                        }
+                    };
+                    if closer {
+                        best = Some((node, distance_sq));
+                    }
+                }
+                let (node, _) = best?;
+                let n_comp = field.n_comp();
+                let start = node as usize * n_comp;
+                let values = field.values().get(start..start + n_comp)?.to_vec();
+                Some(PlanarNearestNode {
+                    kind: "fem_node",
+                    node_id: node,
+                    world_m: field.nodes()[node as usize],
+                    values,
+                })
+            }
+            TargetField::Fdm(field) => {
+                let cell = entity_id as usize;
+                let grid = field.grid();
+                let cell_count = grid.iter().map(|axis| *axis as usize).product::<usize>();
+                if cell >= cell_count || !field.contains_cell(cell) {
+                    return None;
+                }
+                let nx = grid[0] as usize;
+                let ny = grid[1] as usize;
+                let index = [cell % nx, (cell / nx) % ny, cell / (nx * ny)];
+                let origin = field.origin();
+                let spacing = field.spacing();
+                let world_m =
+                    [0, 1, 2].map(|axis| origin[axis] + (index[axis] as f64 + 0.5) * spacing[axis]);
+                let n_comp = field.n_comp();
+                let values = field.values().get(cell * n_comp..(cell + 1) * n_comp)?.to_vec();
+                Some(PlanarNearestNode {
+                    kind: "fdm_cell_center",
+                    node_id: entity_id,
+                    world_m,
+                    values,
+                })
+            }
         }
     }
 
@@ -232,6 +314,10 @@ pub(crate) struct PlanarSampleIdentity {
     pub source_device: Option<String>,
     pub source_precision: Option<String>,
     pub frame: PlanarFrameIR,
+    /// Resolved sampling window (`eq-planar-sampling-window`); omitted from
+    /// the token without a window so existing identities are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_uv_m: Option<[f64; 4]>,
     pub operator: PlanarOperatorIR,
     pub resolution: [u32; 2],
     pub quality: String,
@@ -297,10 +383,10 @@ pub(crate) fn resolve_spatial_target(
             }
             if !matches!(
                 scope,
-                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Region { .. }
+                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Object { .. } | ResolvedSpatialScope::Region { .. }
             ) {
                 return Err(ApiError::unprocessable(
-                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target or region only",
+                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target, object or region only",
                 ));
             }
             let origin = origin_m.ok_or_else(|| {
@@ -315,6 +401,11 @@ pub(crate) fn resolve_spatial_target(
                 membership_error.as_deref(),
                 target,
             )?;
+            if let ResolvedSpatialScope::Object { object_id } = &scope {
+                let object = select_fdm_target(*cells, membership.as_ref(), membership_error.as_deref(),
+                    &MonitorTargetIR::Object { object_id: object_id.clone() })?;
+                intersect_masks(&mut selected, &object);
+            }
             if let ResolvedSpatialScope::Region {
                 object_id,
                 region_id,
@@ -354,6 +445,7 @@ pub(crate) fn resolve_spatial_target(
             origin_m,
             cell_size_m,
             carrier_fingerprint,
+            air_membership,
             ..
         } => {
             if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
@@ -371,13 +463,12 @@ pub(crate) fn resolve_spatial_target(
                     "empty_target: Airbox carrier is legal only for a domain monitor target",
                 ));
             }
-            let selected = vec![true; cell_count(*cells)?];
             build_fdm_target(
                 field,
                 *cells,
                 *origin_m,
                 *cell_size_m,
-                selected,
+                air_membership.to_vec(),
                 carrier_fingerprint,
                 target,
                 None,
@@ -603,6 +694,14 @@ fn build_fem_target(
     let elements = fem_planar_elements(mesh)?;
     let runtime_scope = match scope {
         ResolvedSpatialScope::MonitorTarget => vec![true; elements.len()],
+        ResolvedSpatialScope::Object { object_id } => {
+            let object = select_fem_monitor_target(mesh, &elements,
+                &MonitorTargetIR::Object { object_id: object_id.clone() });
+            if !object.iter().any(|selected| *selected) {
+                return Err(ApiError::unprocessable(format!("empty_target: FEM object scope not found: {object_id}")));
+            }
+            object
+        }
         ResolvedSpatialScope::MeshPart { scope_id } => {
             select_fem_parts(mesh, elements.len(), |part| part.id == *scope_id)
         }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { savedCameraDistance, savedFrameColors, savedGridGeometry, savedSurfaceGeometry } from "./savedResultsPlaybackModel";
+import { savedCameraDistance, savedFrameColors, savedGridGeometry, savedStudyGeometry, savedSurfaceGeometry } from "./savedResultsPlaybackModel";
 import type { SavedPlaybackResource } from "@/kernel/api/savedResultsPlayback";
 describe("saved FDM field adapter",()=>{
   it("keeps x-fastest physical cell centers in micrometre render units",()=>{
@@ -59,4 +59,25 @@ it("fits a volumetric saved mesh inside both perspective axes including a narrow
     expect(Math.asin(radius/distance)).toBeLessThan(halfAngle);
   }
   expect(savedCameraDistance([1,1,1],0.5)).toBeGreaterThan(savedCameraDistance([1,1,1],1));
+});
+
+
+describe("saved Study domain mapping", () => {
+  it("uses layer offsets and original coordinates when inactive samples are omitted", () => {
+    const result = savedStudyGeometry({
+      project_id: "project", source: { run_id: "old", task_id: "task", step_id: "relax", case_id: "nominal", attempt_id: "attempt", ownership_epoch: 1 },
+      artifact_id: "state", artifact_sha256: "a".repeat(64), step: 3, time_s: 3e-12, sample_count: 4,
+      domain_generation_id: "b".repeat(64), topology_fingerprint: "c".repeat(64),
+      geometry: { kind: "fdm_multilayer", layers: [
+        { layer_id: "first", object_id: "a", grid_cells: [2, 1, 1], origin_m: [0, 0, 0], cell_size_m: [1e-6, 1e-6, 1e-6], value_offset: 0, value_count: 2 },
+        { layer_id: "second", object_id: "b", grid_cells: [1, 1, 2], origin_m: [0, 0, 3e-6], cell_size_m: [2e-6, 2e-6, 2e-6], value_offset: 2, value_count: 2 },
+      ] },
+      support_available: true,
+    }, null, { nodeCount: 4, bits: new Uint8Array([0b1001]) });
+    expect(result.kind).toBe("grids");
+    if (result.kind !== "grids") throw new Error("Expected saved native grids");
+    expect(result.grids.map((grid) => [...grid.sampleIndices!])).toEqual([[0], [3]]);
+    expect(result.grids.map((grid) => [...grid.positions])).toEqual([[0.5, 0.5, 0.5], [1, 1, 6]]);
+    expect([...result.activeNodes!]).toEqual([1, 0, 0, 1]);
+  });
 });

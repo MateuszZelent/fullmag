@@ -51,12 +51,12 @@ All backends must use exactly these names when publishing outputs. This ensures 
 
 ## 3. Output scheduling
 
-**Current implementation at base `e5a1c01864455737acc4134a650cf7861a6202c5`
+**Current implementation at base `96b352aa8861a7dfcea5e51b424eed177cc2aa5a`
 (source inspection):** periodic `OutputIR` variants carry `every_seconds`;
 automatic variants must be resolved before schedule collection
-(`OutputIR`, `crates/fullmag-ir/src/study.rs:1824-1858`;
+(`OutputIR`, `crates/fullmag-ir/src/study.rs`;
 `require_resolved_periodic_outputs`,
-`crates/fullmag-runner/src/schedules.rs:18-29`). The cadence must be positive.
+`crates/fullmag-runner/src/schedules.rs`). The cadence must be positive.
 
 The schedules start at `next_time = 0`. The runner samples the first accepted
 state at or after that grid time, within `OUTPUT_TIME_TOLERANCE = 1e-18 s`.
@@ -65,16 +65,16 @@ is beyond the sampled time. It does **not** reset the grid to
 `last_output_time + every_seconds`. A step that crosses multiple grid times
 produces one sample, without interpolation
 (`collect_scalar_schedules`, `collect_field_schedules`, `is_due`, and
-`advance_due_schedules`, `crates/fullmag-runner/src/schedules.rs:8-179`).
+`advance_due_schedules`, `crates/fullmag-runner/src/schedules.rs`).
 
 The initial-state schedule is due at `t = 0`. Terminal-state output is a
 separate finalization action; the CPU reference implementation avoids
 repeating a field already sampled at that time
 (`record_final_outputs`,
-`crates/fullmag-runner/src/fdm/cpu/reference.rs:3893-3943`).
+`crates/fullmag-runner/src/fdm/cpu/reference.rs`).
 Time-cadenced tables also advance a fixed grid and label overshoot
 `coalesced_to_step` (`TableStore::append_if_due`,
-`crates/fullmag-runner/src/table_autosave.rs:166-198`).
+`crates/fullmag-runner/src/table_autosave.rs`).
 
 ## 4. Validation rules
 
@@ -149,15 +149,15 @@ Canonical product target:
 The observable names and SI semantics from this document must stay identical regardless of whether
 the concrete container is JSON, CSV, Zarr, or HDF5.
 
-**Current implementation at base `e5a1c01864455737acc4134a650cf7861a6202c5`
+**Current implementation at base `96b352aa8861a7dfcea5e51b424eed177cc2aa5a`
 (source inspection):** `writer_loop` writes CSV scalar rows and routes host
 field snapshots to JSON or Zarr; native snapshot jobs use Zarr. These branches
-do not emit an OVF sidecar (`crates/fullmag-runner/src/artifact_pipeline.rs:1738-2169`,
+do not emit an OVF sidecar (`crates/fullmag-runner/src/artifact_pipeline.rs`,
 `writer_loop`). `ZarrFieldSeriesWriter::open` uses `fields/<observable>.zarr`
 and `samples.csv`, and `write_zarray_metadata` uses uncompressed
 `[sample, component, cell]` arrays with `<f4` or `<f8`. This writer is compiled
 only with `cuda` or `fem-gpu`
-(`crates/fullmag-runner/src/artifact_pipeline.rs:1398-1497,1651-1683`,
+(`crates/fullmag-runner/src/artifact_pipeline.rs`,
 `ZarrFieldSeriesWriter`, `zarr_dtype`).
 
 Container-role clarification:

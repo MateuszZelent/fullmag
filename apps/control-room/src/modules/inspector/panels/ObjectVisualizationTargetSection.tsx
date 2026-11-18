@@ -105,6 +105,11 @@ const GEOMETRY_SCOPES = [
   { label: "Full", value: "full" },
 ];
 
+const WIREFRAME_GEOMETRY_SCOPES = [
+  { label: "Surface mesh", value: "surface" },
+  { label: "Full volume mesh", value: "full" },
+];
+
 const RENDER_MODE_VALUES: readonly VisualizationRenderModeValue[] = [
   "surface",
   "surface+edges",
@@ -593,7 +598,7 @@ export function ScalarColorbarControl({
           ))}
         </FormField>
       ) : null}
-      <div
+      <div role="img"
         className="fm-inspector-colorbar"
         aria-label={
           minLabel && maxLabel
@@ -1216,6 +1221,38 @@ export function VisualizationGeometryScopeSection({
   );
 }
 
+export function VisualizationWireframeGeometryScopeSection({
+  passControlsDisabled,
+  isFieldPending,
+  patch,
+  settings,
+}: {
+  passControlsDisabled: boolean;
+  isFieldPending: IsVisualizationFieldPending;
+  patch: PatchVisualizationTarget;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorGroup title="Wireframe mesh">
+      <SegmentedControl
+        aria-label="Wireframe mesh"
+        disabled={passControlsDisabled}
+        pending={isFieldPending("wireframeGeometryScope")}
+        options={WIREFRAME_GEOMETRY_SCOPES}
+        value={settings.wireframeGeometryScope}
+        onValueChange={(value) =>
+          void patch({ wireframeGeometryScope: value as VisualizationGeometryScope })
+        }
+      />
+      <p className="m-0 text-fm-help leading-snug text-fm-muted">
+        Surface mesh limits edges to the outside. Full volume mesh includes interior edges.
+        During navigation, the viewport shows a lighter surface preview; after movement stops,
+        the selected edge set returns.
+      </p>
+    </InspectorGroup>
+  );
+}
+
 export function VisualizationOverridesSection({
   childRegionOverrideCount,
   childRegionTargets,
@@ -1424,6 +1461,7 @@ export function NumberField({
         max={max}
         min={min}
         step={step}
+        valueText={(v) => `${formatNumericControlValue(v, step)}${unit ?? ""}`}
         value={[displayValue]}
         onValueChange={([nextValue]: number[]) => {
           if (nextValue !== undefined) setDraftOverride(nextValue);

@@ -37,12 +37,16 @@ pub use fdm::constant_z_field_llg_from_positive_x;
 pub use fdm::neighbor_index;
 pub use fdm::shared::frozen_spins::FrozenSpinsState;
 pub use fdm::{
+    build_exchange_operator, first_decoupled_connection, harmonic_exchange, ExchangeFaces,
+    ExchangeOperator, ExchangeOperatorInputs, ExchangePairMode, ExchangePairRule,
+};
+pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, Abm3CheckpointHistoryV1,
     Abm3StepTelemetry, AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
     AdaptiveAttemptRecord, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
     AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau, CubicAnisotropyConfig,
-    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
+    DemagKernelSpectra, DriveTimeFunction, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
     EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1, FdmCpuStateCopyTelemetry,
     FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
@@ -479,7 +483,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });
@@ -525,7 +529,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0], [0.0, -1.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });

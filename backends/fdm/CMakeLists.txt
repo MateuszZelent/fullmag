@@ -31,6 +31,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/runtime/device_info.cpp
         gpu/cuda/runtime/streams.cu
         gpu/cuda/runtime/adaptive_graph.cu
+        gpu/cuda/runtime/multilayer_bb.cu
         gpu/cuda/runtime/reductions_fp64.cu
         gpu/cuda/interactions/exchange_fp64.cu
         gpu/cuda/interactions/exchange_fp32.cu
