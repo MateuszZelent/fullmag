@@ -3740,6 +3740,11 @@ mod tests {
             mesh.cells = FemConnectivityIR::from_tet4(magnetic);
             assert_eq!(mesh.nodes.len(), mesh.cell_count());
         }
+        let fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. }, ..
+        } = &mut problem.study else { panic!("fixture requires LLG time evolution") };
+        // The refined tetrahedra have sub-nanometre edges.
+        *fixed_timestep = Some(1e-17);
         let mut model = prepared_fem_read_model(true);
         model.execution_plan = fullmag_plan::plan(&problem).unwrap();
         let layout = fullmag_runner::study_magnetization_layout_for_plan(&model.execution_plan).unwrap();
