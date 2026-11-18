@@ -225,12 +225,17 @@ RUN [[ "${FULLMAG_MFEM_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] && \
     cmake --build /tmp/build/mfem/build --target mfem -j"${FULLMAG_MFEM_BUILD_JOBS}" && \
     cmake --install /tmp/build/mfem/build
 
+# CPU-prefix compilation (HYPRE, libCEED, MFEM, PETSc, SLEPc) needs far less
+# memory per job than MFEM CUDA templates, so it has its own bound.
+ARG FULLMAG_CPU_DEPENDENCY_BUILD_JOBS=2
+RUN [[ "${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || \n    { echo "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS must be a positive integer" >&2; exit 2; }
+
 # CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
 RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
       -DBUILD_SHARED_LIBS=ON -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON \
       -DHYPRE_ENABLE_CUDA=OFF -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
-    cmake --build /tmp/build/hypre/build-cpu -j2 && \
+    cmake --build /tmp/build/hypre/build-cpu -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     cmake --install /tmp/build/hypre/build-cpu
 
 # Keep the complete CPU dependency closure separate, including PETSc/SLEPc.
@@ -238,7 +243,7 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
 # Separate source trees avoid reusing GPU objects or generated configuration.
 RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
     test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}" && \
-    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
       install prefix=/opt/fullmag-mfem-cpu
 
@@ -260,7 +265,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
       -DCEED_DIR=/opt/fullmag-mfem-cpu \
       -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
       -DMFEM_ENABLE_TESTING=OFF && \
-    cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
+    cmake --build /tmp/build/mfem/build-cpu --target mfem -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     cmake --install /tmp/build/mfem/build-cpu
 
 # Task 9 modal GPU contract: PETSc and SLEPc must use the same CUDA-enabled
@@ -327,7 +332,7 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
       --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
       --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu \
       ${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS} && \
-    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j2 all && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" all && \
     make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install && \
     python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
       --prefix /opt/fullmag-mfem-cpu --require MUMPS METIS SCALAPACK OPENBLAS
@@ -339,7 +344,7 @@ RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
     env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
       python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
     env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
-      make -j2 all && \
+      make -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" all && \
     env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
       make install
 
