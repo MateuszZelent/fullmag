@@ -2440,6 +2440,7 @@ fn prepare_live_accepted(
         )
     })?;
     let mut step_ids = Vec::new();
+    let mut response_outputs_derived = false;
     for execution_step in &lowered.steps {
         if !matches!(execution_step.status, fullmag_plan::StudyStepLoweringStatus::Planned) {
             continue;
@@ -2480,14 +2481,8 @@ fn prepare_live_accepted(
             let step = study.steps.iter_mut().find(|step| step.step_id == execution_step.step_id)
                 .ok_or_else(|| ApiError::internal("missing response step for output binding"))?;
             let count = plan.frequencies_hz.values_hz.len();
-            if step.outputs.is_empty() {
-                use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
-                step.outputs = std::iter::once("response".to_owned())
-                    .chain((0..count).map(|index| format!("response-frequency-{index:06}")))
-                    .map(|port_id| StudyOutputPort { port_id, data_kind: StudyPortDataKind::Artifact })
-                    .collect();
-            }
-            crate::accepted_fem_frequency_response_worker::validate_declared_outputs(&step.outputs, count)
+            response_outputs_derived |= step.outputs.is_empty();
+            bind_live_frequency_response_outputs(step, count)
                 .map_err(|error| unsupported(error.to_string()))?;
             let estimate = fullmag_runner::preflight_frequency_response_artifact_resources(plan, Default::default())
                 .map_err(|error| unsupported(error.to_string()))?;
@@ -2530,6 +2525,15 @@ fn prepare_live_accepted(
             "accepted_execution_plan_invalid",
             "accepted study has no planned executable steps",
         ));
+    }
+    // Lowering supplied the exact sweep sizes above. Output declarations are
+    // part of the Study digest, so bind the preserved captured inputs to the
+    // final derived Study before RunIntent materialization lowers it again.
+    if response_outputs_derived {
+        catalog = rebind_live_frequency_response_catalog(&study, catalog)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_execution_materialization_failed", error.to_string(),
+            ))?;
     }
     requested_execution.minimum_resources = run_budget;
 
@@ -2877,6 +2881,29 @@ fn select_live_step(
         "accepted_study_step_ambiguous",
         "a live Run/Relax command must target exactly one enabled StudyPlan step",
     ))
+}
+
+fn bind_live_frequency_response_outputs(
+    step: &mut fullmag_authoring::StudyStep,
+    frequency_count: usize,
+) -> anyhow::Result<()> {
+    if step.outputs.is_empty() {
+        use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
+        step.outputs = std::iter::once("response".to_owned())
+            .chain((0..frequency_count).map(|index| format!("response-frequency-{index:06}")))
+            .map(|port_id| StudyOutputPort { port_id, data_kind: StudyPortDataKind::Artifact })
+            .collect();
+    }
+    crate::accepted_fem_frequency_response_worker::validate_declared_outputs(
+        &step.outputs, frequency_count,
+    )
+}
+
+fn rebind_live_frequency_response_catalog(
+    study: &fullmag_authoring::StudyPlan,
+    catalog: fullmag_plan::StudyProblemCatalog,
+) -> Result<fullmag_plan::StudyProblemCatalog, fullmag_plan::StudyCatalogError> {
+    fullmag_plan::StudyProblemCatalog::from_entries(study, catalog.into_entries())
 }
 
 /// Supply the accepted-live observation outputs required by the shared FDM/FEM
@@ -3571,6 +3598,43 @@ mod tests {
         }).collect();
         let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, entries).unwrap();
         (scene, study, catalog, problem)
+    }
+
+    #[test]
+    fn accepted_frequency_response_output_binding_rebinds_derived_study_catalog() {
+        let (_, mut study, catalog, _) = selected_b_scene_plan();
+        let original_entries = catalog.entries().to_vec();
+        let revision = study.revision;
+        // The live response branch declares outputs only after the first
+        // lowering resolves the native sweep size (204 in the pilot).
+        assert!(study.steps[0].outputs.is_empty());
+        super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).unwrap();
+        assert_eq!(study.steps[0].outputs.len(), 205);
+        assert_eq!(study.steps[0].outputs[0].port_id, "response");
+        assert_eq!(study.steps[0].outputs[204].port_id, "response-frequency-000203");
+        assert!(catalog.validate_for(&study).unwrap_err().to_string()
+            .contains("different study revision or digest"));
+
+        let rebound = super::rebind_live_frequency_response_catalog(&study, catalog).unwrap();
+        assert_eq!(study.revision, revision);
+        assert_eq!(rebound.entries(), original_entries.as_slice());
+        rebound.validate_for(&study).unwrap();
+        fullmag_plan::lower_study_plan_with_catalog(&study, &rebound).unwrap();
+        // Repeated preparation preserves explicit valid ports and the catalog.
+        super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).unwrap();
+        assert_eq!(super::rebind_live_frequency_response_catalog(&study, rebound.clone()).unwrap(), rebound);
+    }
+
+    #[test]
+    fn accepted_frequency_response_output_binding_rejects_explicit_invalid_ports() {
+        let (_, mut study, _, _) = selected_b_scene_plan();
+        study.steps[0].outputs = vec![fullmag_authoring::StudyOutputPort {
+            port_id: "final_state".into(),
+            data_kind: fullmag_authoring::StudyPortDataKind::State,
+        }];
+        let explicit = study.steps[0].outputs.clone();
+        assert!(super::bind_live_frequency_response_outputs(&mut study.steps[0], 204).is_err());
+        assert_eq!(study.steps[0].outputs, explicit);
     }
 
     fn selected_b_authored_stage_command(scene_revision: u64) -> crate::types::SessionCommand {
