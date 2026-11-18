@@ -269,6 +269,14 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
 # pair from source into the shared managed prefix.
 COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
 ARG FULLMAG_PETSC_CUDA_ARCHITECTURES="80,89,90"
+# Sparse direct and dense kernels for both PETSc installations: MUMPS (with
+# ScaLAPACK) and METIS ordering for the exact modal Poisson LU, and OpenBLAS
+# instead of the reference netlib BLAS/LAPACK.  PETSc pins the downloaded
+# package versions for this PETSC_SOURCE_COMMIT; the resolved macros are
+# recorded in share/fullmag/petsc-build-metadata.json of each prefix.
+ARG FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS="--download-openblas --download-metis --download-scalapack --download-mumps"
+ENV FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS=${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS}
+COPY --chmod=755 docker/fem-gpu/write_petsc_build_metadata.py /usr/local/sbin/fullmag-write-petsc-build-metadata.py
 RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
     test "$(git -C /tmp/build/petsc rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
     cd /tmp/build/petsc && \
@@ -291,9 +299,12 @@ RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git
       --with-cuda-dir=${CUDA_HOME} \
       --with-cuda-arch="${FULLMAG_PETSC_CUDA_ARCHITECTURES}" \
       --with-hypre=1 \
-      --with-hypre-dir=${INSTALL_PREFIX} && \
+      --with-hypre-dir=${INSTALL_PREFIX} \
+      ${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS} && \
     make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
-    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install
+    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install && \
+    python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
+      --prefix "${INSTALL_PREFIX}" --require MUMPS METIS SCALAPACK OPENBLAS
 
 RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
     test "$(git -C /tmp/build/slepc rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
@@ -314,9 +325,12 @@ RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
       --with-debugging=0 --with-shared-libraries=1 \
       --with-scalar-type=real --with-precision=double \
       --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
-      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu && \
+      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu \
+      ${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS} && \
     make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j2 all && \
-    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install && \
+    python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
+      --prefix /opt/fullmag-mfem-cpu --require MUMPS METIS SCALAPACK OPENBLAS
 
 RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
     test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
