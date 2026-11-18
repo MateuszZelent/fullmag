@@ -111,6 +111,12 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run absorbing boundary scene validation
+        run: |
+          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
 
@@ -446,12 +452,6 @@ jobs:
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
-
-      - name: Run absorbing boundary scene validation
-        run: |
-          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
-          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
-          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
 
       - name: Run scene thermal intent preservation contracts
         run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib

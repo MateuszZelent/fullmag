@@ -1,6 +1,10 @@
 //! Re-evaluate edited Gilbert damping on an already prepared Live domain.
 //! Keep the immutable run receipt and the solver's magnetization untouched.
 
+pub(crate) mod geometry;
+#[cfg(test)]
+mod geometry_tests;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 
@@ -30,7 +34,7 @@ pub(crate) fn mark_prepared_domain_changed(snapshot: &mut SessionStateResponse, 
     let Some(metadata) = snapshot.metadata.as_mut() else {
         return;
     };
-    if !matches!(
+    if metadata.get(PUBLICATION).is_none() && !matches!(
         metadata
             .pointer("/execution_plan/backend_plan/kind")
             .and_then(Value::as_str),
@@ -71,6 +75,7 @@ pub(crate) struct PreparedDamping {
     session_epoch: u64,
     domain: crate::session::LiveFieldDomainIdentity,
     previous_metadata: Option<u64>,
+    previous_mesh_workspace: Option<u64>,
     previous_scene_revision: u64,
     previous_preparation_revision: u64,
     binding: Value,
@@ -87,6 +92,7 @@ impl PreparedDamping {
             || self.session_epoch != state.current_live_session_epoch.load(Ordering::Acquire)
             || self.domain != crate::session::current_live_field_domain_identity(snapshot)
             || self.previous_metadata != snapshot.metadata.as_ref().map(SharedJson::version)
+            || self.previous_mesh_workspace != snapshot.mesh_workspace.as_ref().map(SharedJson::version)
             || self.previous_scene_revision
                 != snapshot
                     .scene_document
@@ -129,11 +135,15 @@ pub(crate) async fn prepare(
         if before_layers == after_layers {
             // The common scene commit already compares authoritative domain
             // signatures, even when no absorber has ever been authored.
-            if before_layers.is_empty() && publication_revision(snapshot).is_none() {
+            let material_became_available = snapshot.mesh_workspace.as_ref()
+                .is_some_and(|workspace| workspace.get(crate::live_geometry_mesh_build::GEOMETRY_REUSE_KEY).is_some())
+                && !geometry::has_material_inputs(before) && geometry::has_material_inputs(scene);
+            if before_layers.is_empty() && publication_revision(snapshot).is_none()
+                && !material_became_available {
                 return Ok(None);
             }
             let impact = fullmag_authoring::classify_region_realization_impact(before, scene);
-            if !impact.coefficients && !impact.topology && !impact.membership {
+            if !impact.coefficients && !impact.topology && !impact.membership && !material_became_available {
                 return Ok(None);
             }
         }
@@ -148,13 +158,22 @@ pub(crate) async fn prepare(
         &context,
         state.current_live_session_epoch.load(Ordering::Acquire),
     )?;
+    let revision = scene.revision.saturating_add(1);
+    prepare_snapshot(state, context, snapshot, scene.clone(), revision).await.map(Some)
+}
+
+async fn prepare_snapshot(
+    state: &std::sync::Arc<AppState>,
+    context: CurrentLiveRequestContext,
+    snapshot: SessionStateResponse,
+    scene: SceneDocument,
+    revision: u64,
+) -> Result<PreparedDamping, ApiError> {
     let repo = state.repo_root.clone();
     let workspace = state.current_workspace_root.clone();
     let store = state.submit_store_root.clone();
-    let scene = scene.clone();
     tokio::task::spawn_blocking(move || {
         let previous_metadata = snapshot.metadata.as_ref().map(SharedJson::version);
-        let revision = scene.revision.saturating_add(1);
         let metadata = snapshot.metadata.as_ref();
         if metadata.is_some_and(|m| !m.is_object()) {
             return Err(ApiError::conflict(
@@ -190,21 +209,26 @@ pub(crate) async fn prepare(
                     None
                 }
             }
+        } else if !requires_domain_rebuild {
+            geometry::evaluate(
+                &repo, &workspace, store.as_deref(), &context, &snapshot, &scene, revision,
+            )?
         } else {
             None
         };
         let mut binding = binding(revision, field.as_ref());
         binding["requires_domain_rebuild"] = requires_domain_rebuild.into();
-        Ok(Some(PreparedDamping {
+        Ok(PreparedDamping {
             session_id: context.session_id,
             session_epoch: context.session_epoch,
             previous_scene_revision: scene.revision,
             previous_preparation_revision: snapshot.simulation_preparation_revision,
             domain: crate::session::current_live_field_domain_identity(&snapshot),
             previous_metadata,
+            previous_mesh_workspace: snapshot.mesh_workspace.as_ref().map(SharedJson::version),
             binding,
             field,
-        }))
+        })
     })
     .await
     .map_err(|error| ApiError::internal(format!("evaluate authored damping: {error}")))?
