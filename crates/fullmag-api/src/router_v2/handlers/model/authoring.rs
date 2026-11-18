@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde_json::Value;
 
@@ -16,7 +17,11 @@ use crate::schemas::authoring::{
     CurrentTransportListResource, CurrentTransportMutationRequest, FieldDriveCreateRequest,
     FieldDriveDeleteRequest, FieldDriveListResource, FieldDriveReplaceRequest,
     GeometryRealizationRequest, MagnetizationAssetPatchRequest, MagnetizationAssetResource,
+    MaskFieldDriveCreateRequest, MaskFieldDriveListResource, MaskFieldDriveReplaceRequest,
+    MaskFieldDriveResource, MaskTermResource, ReadyAntennaListResource, ReadyAntennaTermsRequest,
+    ReadyAntennaTermsResource,
     MaterialParameterFieldListResource, MaterialParameterFieldResource, MaterialPatchRequest,
+    MagnetizationApplyRequest, MagnetizationApplyScope, MagnetizationApplyTarget,
     MaterialPropertiesResource, MaterialReferenceResource, MaterialResource, NullableF64PatchValue,
     NullableParallelExecutionPatchValue, NullableStringPatchValue, NullableU32PatchValue,
     ObjectCreateRequest,
@@ -1006,7 +1011,9 @@ pub async fn delete_oersted_field(
 pub async fn get_authoring_scene(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SceneResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    // Read the committed scene while Compute prepares its next immutable run.
+    // The loader still validates this identity before returning/publishing it.
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
@@ -1782,6 +1789,186 @@ pub async fn delete_authoring_field_drive(
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
             .await?;
     authoring_transaction_response("delete_field_drive", committed)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/mask-field-drives",
+    responses(
+        (status = 200, description = "Hand-written mask antennas", body = MaskFieldDriveListResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_mask_field_drives(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MaskFieldDriveListResource>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    let drives = scene
+        .field_drives
+        .mask_drives
+        .into_iter()
+        .map(MaskFieldDriveResource::from_ir)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ApiError::internal(format!("failed to serialize mask antenna: {error}")))?;
+    Ok(Json(MaskFieldDriveListResource {
+        scene_revision: scene.revision,
+        drives,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/mask-field-drives",
+    request_body = MaskFieldDriveCreateRequest,
+    responses(
+        (status = 200, description = "Created a mask antenna", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid mask antenna"),
+        (status = 409, description = "Revision conflict or duplicate field drive"),
+    ),
+    tag = "model"
+)]
+pub async fn create_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MaskFieldDriveCreateRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_create_mask_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        mask_field_drive_from_resource(req.drive)?,
+    )?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("create_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable mask antenna id")),
+    request_body = MaskFieldDriveReplaceRequest,
+    responses(
+        (status = 200, description = "Replaced a mask antenna", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid mask antenna"),
+        (status = 404, description = "Mask antenna not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn replace_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<MaskFieldDriveReplaceRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_replace_mask_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        &drive_id,
+        mask_field_drive_from_resource(req.drive)?,
+    )?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("replace_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable mask antenna id")),
+    request_body = FieldDriveDeleteRequest,
+    responses(
+        (status = 200, description = "Deleted a mask antenna", body = AuthoringTransactionResponse),
+        (status = 404, description = "Mask antenna not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn delete_authoring_mask_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<FieldDriveDeleteRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let mut scene =
+        crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
+            .await?;
+    apply_delete_mask_field_drive_transaction(&mut scene, req.base_revision, &drive_id)?;
+    let committed =
+        crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
+            .await?;
+    authoring_transaction_response("delete_mask_field_drive", committed)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/ready-antennas",
+    responses(
+        (status = 200, description = "Ready antennas of fullmag.antennas", body = ReadyAntennaListResource),
+    ),
+    tag = "model"
+)]
+pub async fn get_ready_antennas(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ReadyAntennaListResource>, ApiError> {
+    let repo_root = state.repo_root.clone();
+    let registry = tokio::task::spawn_blocking(move || {
+        crate::script::ready_antennas_via_python_helper(&repo_root)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("ready-antenna registry task failed: {error}")))??;
+    serde_json::from_value(registry).map(Json).map_err(|error| {
+        ApiError::internal(format!("invalid ready-antenna registry: {error}"))
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/ready-antennas/terms",
+    request_body = ReadyAntennaTermsRequest,
+    responses(
+        (status = 200, description = "Mask terms returned by one ready-antenna call", body = ReadyAntennaTermsResource),
+        (status = 400, description = "Unknown antenna or invalid arguments"),
+    ),
+    tag = "model"
+)]
+pub async fn build_ready_antenna_terms(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ReadyAntennaTermsRequest>,
+) -> Result<Json<ReadyAntennaTermsResource>, ApiError> {
+    if req.arguments.values().any(|value| !value.is_finite()) {
+        return Err(ApiError::bad_request(
+            "ready_antenna_rejected: every argument must be a finite number",
+        ));
+    }
+    let repo_root = state.repo_root.clone();
+    let terms = tokio::task::spawn_blocking(move || {
+        crate::script::rebuild_ready_antenna_terms_via_python_helper(
+            &repo_root,
+            &req.function,
+            &req.arguments,
+        )
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("ready-antenna task failed: {error}")))??;
+    let terms = terms
+        .into_iter()
+        .map(|term| serde_json::from_value(serde_json::to_value(term)?))
+        .collect::<Result<Vec<MaskTermResource>, serde_json::Error>>()
+        .map_err(|error| ApiError::internal(format!("failed to serialize mask term: {error}")))?;
+    Ok(Json(ReadyAntennaTermsResource { terms }))
 }
 
 #[utoipa::path(
@@ -2992,16 +3179,7 @@ pub async fn patch_authoring_material(
     let mut scene =
         crate::get_or_load_current_live_scene_document_for_context(&state, &request_context)
             .await?;
-    let material = scene
-        .materials
-        .iter_mut()
-        .find(|entry| entry.id == material_id)
-        .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
-
-    apply_material_patch_to_asset(material, req)?;
-
-    sync_interfacial_dmi_for_material(&mut scene, &material_id);
-    sync_bulk_dmi_for_material(&mut scene, &material_id);
+    apply_patch_material_transaction(&mut scene, None, &material_id, req)?;
 
     let committed =
         crate::commit_current_live_scene_document_for_context(&state, &request_context, scene)
@@ -3220,6 +3398,7 @@ pub async fn patch_authoring_object_interaction(
 #[utoipa::path(
     post,
     path = "/v2/sessions/current/model/transactions",
+    params(("idempotency-key" = Option<String>, Header, description = "Required for a scoped magnetization apply")),
     request_body = AuthoringTransactionRequest,
     responses(
         (status = 200, description = "Committed authoring transaction", body = AuthoringTransactionResponse),
@@ -3231,14 +3410,44 @@ pub async fn patch_authoring_object_interaction(
 )]
 pub async fn commit_authoring_transaction(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let (transaction_kind, committed) = match req {
+        AuthoringTransactionRequest::ApplyMagnetization {
+            base_revision, operation_id, target,
+        } => {
+            return commit_scoped_magnetization_transaction(
+                &state, &request_context, &headers, base_revision, operation_id, target,
+            ).await;
+        }
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
             scene,
+            magnetization_apply,
         } => {
+            if let Some(request) = magnetization_apply {
+                if crate::router_v2::middleware::session_scope::current_expected_session_scope().is_none() {
+                    return Err(ApiError::bad_request("magnetization apply requires a session scope"));
+                }
+                let base_revision = base_revision.filter(|revision| *revision < u64::MAX)
+                    .ok_or_else(|| ApiError::bad_request("magnetization apply requires a valid base_revision"))?;
+                let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+                    request, base_revision, &scene,
+                    headers.get("idempotency-key").and_then(|value| value.to_str().ok()),
+                )?;
+                let mut proposed: SceneDocument = serde_json::from_value(scene)
+                    .map_err(|error| ApiError::bad_request(format!("invalid scene document payload: {error}")))?;
+                proposed.revision = base_revision;
+                let (committed, receipt) = crate::commit_current_live_magnetization_apply(
+                    &state, &request_context, proposed, &apply,
+                ).await?;
+                crate::validate_current_live_request_context(&state, &request_context).await?;
+                let Json(mut response) = authoring_transaction_response("apply_magnetization", committed)?;
+                response.magnetization_apply = Some(receipt);
+                return Ok(Json(response));
+            }
             let mut scene_document: SceneDocument =
                 serde_json::from_value(scene).map_err(|error| {
                     ApiError::bad_request(format!("invalid scene document payload: {error}"))
@@ -3285,6 +3494,104 @@ pub async fn commit_authoring_transaction(
     authoring_transaction_response(transaction_kind, committed)
 }
 
+async fn commit_scoped_magnetization_transaction(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    headers: &HeaderMap,
+    base_revision: u64,
+    operation_id: String,
+    target: MagnetizationApplyTarget,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    if crate::router_v2::middleware::session_scope::current_expected_session_scope().is_none()
+        || base_revision == u64::MAX
+    {
+        return Err(ApiError::bad_request(
+            "magnetization apply requires a session scope and a valid base_revision",
+        ));
+    }
+    let scope = match &target {
+        MagnetizationApplyTarget::Object { object_id, .. } => MagnetizationApplyScope {
+            object_id: object_id.clone(), region_id: None,
+        },
+        MagnetizationApplyTarget::Region { object_id, region_id, .. } => MagnetizationApplyScope {
+            object_id: object_id.clone(), region_id: Some(region_id.clone()),
+        },
+    };
+    let payload = serde_json::to_value(&target)
+        .map_err(|error| ApiError::internal(format!("encode magnetization apply target: {error}")))?;
+    let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+        MagnetizationApplyRequest { operation_id, scopes: vec![scope] },
+        base_revision,
+        &payload,
+        headers.get("idempotency-key").and_then(|value| value.to_str().ok()),
+    )?;
+    let (replay, scene) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot, context, state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let replay = snapshot.magnetization_applies.replay(&apply, context, snapshot.scene_document.as_ref())?;
+        let scene = if replay.is_none() { snapshot.scene_document.clone() } else { None };
+        (replay, scene)
+    };
+    let (committed, receipt) = if let Some(replay) = replay {
+        replay
+    } else {
+        let mut scene = scene.ok_or_else(|| ApiError::conflict("magnetization apply requires a committed scene"))?;
+        check_base_scene_revision(&scene, Some(base_revision))?;
+        apply.validate_scopes(&scene)?;
+        apply_magnetization_target(&mut scene, target)?;
+        crate::commit_current_live_magnetization_apply(state, context, scene, &apply).await?
+    };
+    crate::validate_current_live_request_context(state, context).await?;
+    let Json(mut response) = authoring_transaction_response("apply_magnetization", committed)?;
+    response.magnetization_apply = Some(receipt);
+    Ok(Json(response))
+}
+
+fn apply_magnetization_target(
+    scene: &mut SceneDocument,
+    target: MagnetizationApplyTarget,
+) -> Result<(), ApiError> {
+    match target {
+        MagnetizationApplyTarget::Object { object_id, asset } => {
+            let asset: Option<MagnetizationAsset> = serde_json::from_value(asset)
+                .map_err(|error| ApiError::bad_request(format!("invalid magnetization asset payload: {error}")))?;
+            let mut reference = None;
+            if let Some(mut asset) = asset {
+                if scene.magnetization_assets.iter().any(|existing| existing.id == asset.id && existing != &asset)
+                    && scene.objects.iter().any(|other| {
+                        (other.id != object_id && other.magnetization_ref.as_deref() == Some(asset.id.as_str()))
+                            || other.region_overrides.values().any(|region| region.magnetization_ref.as_deref() == Some(asset.id.as_str()))
+                    })
+                {
+                    let digest = fullmag_session::canonical_json_sha256(&serde_json::json!([object_id, asset]));
+                    asset.id = format!("mag:scoped:{digest}");
+                    if scene.magnetization_assets.iter().any(|existing| existing.id == asset.id && existing != &asset) {
+                        return Err(ApiError::conflict("scoped magnetization asset identity conflict"));
+                    }
+                }
+                reference = Some(asset.id.clone());
+                upsert_magnetization_asset(scene, asset);
+            }
+            let object = scene.objects.iter_mut().find(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply object not found"))?;
+            object.magnetization_ref = reference;
+        }
+        MagnetizationApplyTarget::Region { object_id, region_id, texture_override } => {
+            let object = scene.objects.iter_mut().find(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply object not found"))?;
+            let region = object.regions.iter_mut().find(|region| region.region_id == region_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply region not found"))?;
+            region.texture_override = texture_override;
+            object.region_overrides.remove(&region_id);
+        }
+    }
+    Ok(())
+}
+
 fn apply_authoring_transaction(
     current_scene: &mut SceneDocument,
     req: AuthoringTransactionRequest,
@@ -3304,8 +3611,9 @@ fn apply_authoring_transaction(
             *current_scene = assigned;
             Ok("assign_study_execution")
         }
-        AuthoringTransactionRequest::ReplaceScene { .. } => Err(ApiError::internal(
-            "replace_scene transaction must use the dedicated replacement path",
+        AuthoringTransactionRequest::ReplaceScene { .. }
+        | AuthoringTransactionRequest::ApplyMagnetization { .. } => Err(ApiError::internal(
+            "scoped or replacement transaction must use its dedicated commit path",
         )),
         AuthoringTransactionRequest::MergePatch {
             base_revision,
@@ -3384,6 +3692,8 @@ fn apply_authoring_transaction(
             name,
             properties,
             references,
+            source,
+            assign_to_object_id,
         } => {
             apply_create_material_transaction(
                 current_scene,
@@ -3392,6 +3702,8 @@ fn apply_authoring_transaction(
                 name,
                 properties,
                 references,
+                source,
+                assign_to_object_id,
             )?;
             Ok("create_material")
         }
@@ -3556,6 +3868,7 @@ fn authoring_transaction_response(
         transaction_kind: transaction_kind.to_string(),
         scene_revision,
         committed_scene,
+        magnetization_apply: None,
     }))
 }
 
@@ -4029,6 +4342,8 @@ fn apply_create_material_transaction(
     name: String,
     properties: MaterialPropertiesResource,
     references: Vec<MaterialReferenceResource>,
+    source: Option<fullmag_authoring::SceneMaterialSource>,
+    assign_to_object_id: Option<String>,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, base_revision)?;
     let material_id = material_id.trim();
@@ -4044,6 +4359,31 @@ fn apply_create_material_transaction(
     if name.is_empty() {
         return Err(ApiError::bad_request("material name must not be empty"));
     }
+    crate::material_library::validate_properties(&properties)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if let Some(source) = &source {
+        fullmag_authoring::validate_material_source(source).map_err(ApiError::bad_request)?;
+    }
+    let references = material_references_from_resources(
+        references,
+        source.is_some() || assign_to_object_id.is_some(),
+    )?;
+    let target_index = assign_to_object_id
+        .as_deref()
+        .map(|object_id| {
+            let index = scene.objects.iter().position(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+            if scene.objects[index].role != "magnet" {
+                return Err(ApiError::bad_request(
+                    "material assignment requires a magnetic object",
+                ));
+            }
+            Ok(index)
+        })
+        .transpose()?;
+
+    // Validate both sides before changing the scene so failed assignment
+    // cannot leave an unassigned material asset behind.
     scene.materials.push(SceneMaterialAsset {
         id: material_id.to_string(),
         name: name.to_string(),
@@ -4054,9 +4394,72 @@ fn apply_create_material_transaction(
             dind: properties.dind,
             dbulk: properties.dbulk,
         },
-        references: material_references_from_resources(references)?,
+        references,
+        source,
     });
+    if let Some(index) = target_index {
+        assign_object_material(
+            &mut scene.objects[index], &scene.materials, material_id.to_owned(), true,
+        );
+    }
     Ok(())
+}
+
+/// Keep explicit activation and preserve legacy enablement when assigning a copy.
+fn assign_object_material(
+    object: &mut SceneObject,
+    materials: &[SceneMaterialAsset],
+    material_id: String,
+    independent_copy: bool,
+) {
+    if object.role == "magnet" && material_id != object.material_ref {
+        let previous = materials.iter().find(|entry| entry.id == object.material_ref);
+        let next = materials.iter().find(|entry| entry.id == material_id);
+        if independent_copy || previous.is_some_and(|entry| entry.source.is_some())
+            || next.is_some_and(|entry| entry.source.is_some())
+        {
+            sync_object_dmi_parameters(
+                object,
+                previous.map(|entry| &entry.properties),
+                next.map(|entry| &entry.properties),
+                true,
+            );
+        }
+    }
+    object.material_ref = material_id;
+}
+
+fn sync_object_dmi_parameters(
+    object: &mut SceneObject,
+    previous: Option<&fullmag_authoring::ScriptBuilderMaterialState>,
+    next: Option<&fullmag_authoring::ScriptBuilderMaterialState>,
+    preserve_implicit: bool,
+) {
+    use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
+
+    for (kind, key, before, after) in [
+        (InterfacialDmi, "dind", previous.and_then(|value| value.dind), next.and_then(|value| value.dind)),
+        (BulkDmi, "dbulk", previous.and_then(|value| value.dbulk), next.and_then(|value| value.dbulk)),
+    ] {
+        let coefficient = Value::from(after.unwrap_or(0.0));
+        if let Some(entry) = object.physics_stack.iter_mut().find(|entry| entry.kind == kind) {
+            let mut params = match entry.params.take() {
+                Some(Value::Object(params)) => params,
+                _ => Default::default(),
+            };
+            params.insert(key.to_owned(), coefficient);
+            entry.params = Some(Value::Object(params));
+        } else if preserve_implicit {
+            let enabled = before.is_some_and(|value| value != 0.0);
+            if enabled != after.is_some_and(|value| value != 0.0) {
+                object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                    kind,
+                    enabled,
+                    params: Some(Value::Object([(key.to_owned(), coefficient)].into_iter().collect())),
+                });
+            }
+        }
+    }
 }
 
 fn apply_patch_material_transaction(
@@ -4071,9 +4474,12 @@ fn apply_patch_material_transaction(
         .iter_mut()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
+    let previous = material.source.as_ref().map(|_| material.properties.clone());
     apply_material_patch_to_asset(material, patch)?;
-    sync_interfacial_dmi_for_material(scene, material_id);
-    sync_bulk_dmi_for_material(scene, material_id);
+    for object in scene.objects.iter_mut().filter(|object| object.material_ref == material_id) {
+        let preserve_implicit = previous.is_some() && object.role == "magnet";
+        sync_object_dmi_parameters(object, previous.as_ref(), Some(&material.properties), preserve_implicit);
+    }
     Ok(())
 }
 
@@ -4143,30 +4549,35 @@ fn apply_material_patch_to_asset(
         }
     }
     if let Some(references) = req.references {
-        material.references = material_references_from_resources(references)?;
+        material.references = material_references_from_resources(references, false)?;
     }
     Ok(())
 }
 
 fn material_references_from_resources(
     references: Vec<MaterialReferenceResource>,
+    preserve_text: bool,
 ) -> Result<Vec<SceneMaterialReference>, ApiError> {
     references
         .into_iter()
         .map(|reference| {
-            let label = trimmed_optional(reference.label);
-            let url = trimmed_optional(reference.url);
-            if let Some(url) = &url {
-                if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    return Err(ApiError::bad_request(
-                        "material reference url must start with http:// or https://",
-                    ));
-                }
+            let url = trimmed_optional(reference.url.clone());
+            if url.as_deref().is_some_and(|url| {
+                !(url.starts_with("https://") || url.starts_with("http://"))
+            }) {
+                return Err(ApiError::bad_request(
+                    "material reference url must start with http:// or https://",
+                ));
             }
-            Ok(SceneMaterialReference {
-                label,
-                url,
-                citation: trimmed_optional(reference.citation),
+            // Assigning a copy preserves effective references byte for byte.
+            Ok(if preserve_text {
+                SceneMaterialReference { label: reference.label, url: reference.url, citation: reference.citation }
+            } else {
+                SceneMaterialReference {
+                    label: trimmed_optional(reference.label),
+                    url,
+                    citation: trimmed_optional(reference.citation),
+                }
             })
         })
         .collect()
@@ -4540,6 +4951,115 @@ fn validate_field_drive_scene(scene: &SceneDocument) -> Result<(), ApiError> {
         .map_err(|error| ApiError::bad_request(format!("invalid field drive scene: {error}")))
 }
 
+/// A mask antenna from its resource, with every equation, array and name
+/// checked before it enters the scene (the codes of `mask-function-v1`).
+fn mask_field_drive_from_resource(
+    resource: MaskFieldDriveResource,
+) -> Result<fullmag_ir::MaskFieldDriveIR, ApiError> {
+    let drive = resource
+        .into_ir()
+        .map_err(|error| ApiError::bad_request(format!("invalid mask antenna: {error}")))?;
+    let mut errors = Vec::new();
+    drive.validate_definition("drive", &mut errors);
+    if errors.is_empty() {
+        Ok(drive)
+    } else {
+        Err(ApiError::bad_request(errors.join("\n")))
+    }
+}
+
+fn mask_field_drive_identity_taken(
+    scene: &SceneDocument,
+    drive: &fullmag_ir::MaskFieldDriveIR,
+    except_index: Option<usize>,
+) -> bool {
+    scene
+        .field_drives
+        .drives
+        .iter()
+        .any(|entry| entry.id == drive.id || entry.name == drive.name)
+        || scene
+            .field_drives
+            .mask_drives
+            .iter()
+            .enumerate()
+            .any(|(index, entry)| {
+                Some(index) != except_index && (entry.id == drive.id || entry.name == drive.name)
+            })
+}
+
+fn apply_create_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive: fullmag_ir::MaskFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if mask_field_drive_identity_taken(scene, &drive, None) {
+        return Err(ApiError::conflict(format!(
+            "field drive id or name already exists: {}/{}",
+            drive.id, drive.name
+        )));
+    }
+    scene.field_drives.mask_drives.push(drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives.pop();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_replace_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+    drive: fullmag_ir::MaskFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if drive.id != drive_id {
+        return Err(ApiError::bad_request(
+            "mask antenna replacement cannot modify the stable id",
+        ));
+    }
+    let index = scene
+        .field_drives
+        .mask_drives
+        .iter()
+        .position(|entry| entry.id == drive_id)
+        .ok_or_else(|| ApiError::not_found(format!("mask antenna not found: {drive_id}")))?;
+    if mask_field_drive_identity_taken(scene, &drive, Some(index)) {
+        return Err(ApiError::conflict(format!(
+            "field drive name already exists: {}",
+            drive.name
+        )));
+    }
+    let previous = std::mem::replace(&mut scene.field_drives.mask_drives[index], drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives[index] = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_delete_mask_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let index = scene
+        .field_drives
+        .mask_drives
+        .iter()
+        .position(|entry| entry.id == drive_id)
+        .ok_or_else(|| ApiError::not_found(format!("mask antenna not found: {drive_id}")))?;
+    let removed = scene.field_drives.mask_drives.remove(index);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.mask_drives.insert(index, removed);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn apply_create_field_drive_transaction(
     scene: &mut SceneDocument,
     base_revision: Option<u64>,
@@ -4679,7 +5199,7 @@ fn apply_object_patch(
     req: ObjectPatchRequest,
 ) -> Result<(), ApiError> {
     check_base_scene_revision(scene, req.base_revision)?;
-    let object = find_scene_object_mut(scene, object_id)?;
+    let object = find_object_mut(&mut scene.objects, object_id)?;
     let mut mesh_dirty = false;
     if let Some(name) = req.name {
         let name = name.trim();
@@ -4700,12 +5220,8 @@ fn apply_object_patch(
         object.visible = visible;
     }
     if let Some(material_ref) = req.material_ref {
-        // Clients may resend unchanged references with metadata edits; only a
-        // real change affects the realized domain.
-        if object.material_ref != material_ref {
-            object.material_ref = material_ref;
-            mesh_dirty = true;
-        }
+        // RegionRealizationImpact independently checks magnetic support.
+        assign_object_material(object, &scene.materials, material_ref, false);
     }
     if let Some(region_name) = req.region_name {
         let region_name = region_name.trim();
@@ -4776,9 +5292,14 @@ fn find_scene_object_mut<'a>(
     scene: &'a mut SceneDocument,
     object_id: &str,
 ) -> Result<&'a mut SceneObject, ApiError> {
-    scene
-        .objects
-        .iter_mut()
+    find_object_mut(&mut scene.objects, object_id)
+}
+
+fn find_object_mut<'a>(
+    objects: &'a mut [SceneObject],
+    object_id: &str,
+) -> Result<&'a mut SceneObject, ApiError> {
+    objects.iter_mut()
         .find(|entry| entry.id == object_id || entry.name == object_id)
         .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))
 }
@@ -5208,6 +5729,7 @@ fn build_material_resource(
                 citation: reference.citation.clone(),
             })
             .collect(),
+        source: material.source.clone(),
     }
 }
 
@@ -5227,58 +5749,6 @@ fn build_magnetization_asset_resource(
         region_initial_state_revision: Some(region_initial_state_revision),
         asset: asset.into_iter().collect(),
     })
-}
-
-fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
-    let material_dind = scene
-        .materials
-        .iter()
-        .find(|entry| entry.id == material_id)
-        .and_then(|entry| entry.properties.dind)
-        .unwrap_or(0.0);
-    for object in &mut scene.objects {
-        if object.material_ref != material_id {
-            continue;
-        }
-        if let Some(interaction) = object
-            .physics_stack
-            .iter_mut()
-            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::InterfacialDmi)
-        {
-            let mut params = match interaction.params.clone() {
-                Some(Value::Object(map)) => map,
-                _ => Default::default(),
-            };
-            params.insert("dind".to_string(), Value::from(material_dind));
-            interaction.params = Some(Value::Object(params));
-        }
-    }
-}
-
-fn sync_bulk_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {
-    let material_dbulk = scene
-        .materials
-        .iter()
-        .find(|entry| entry.id == material_id)
-        .and_then(|entry| entry.properties.dbulk)
-        .unwrap_or(0.0);
-    for object in &mut scene.objects {
-        if object.material_ref != material_id {
-            continue;
-        }
-        if let Some(interaction) = object
-            .physics_stack
-            .iter_mut()
-            .find(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::BulkDmi)
-        {
-            let mut params = match interaction.params.clone() {
-                Some(Value::Object(map)) => map,
-                _ => Default::default(),
-            };
-            params.insert("dbulk".to_string(), Value::from(material_dbulk));
-            interaction.params = Some(Value::Object(params));
-        }
-    }
 }
 
 fn parse_interaction_kind(raw: &str) -> Result<ScriptBuilderMagneticInteractionKind, ApiError> {
@@ -5653,3 +6123,7 @@ mod antenna_scene_roundtrip_tests {
         assert_eq!(serialized["antenna_spectrum_requests"][0]["id"], "spectrum_1");
     }
 }
+
+#[cfg(test)]
+#[path = "material_library_authoring_tests.rs"]
+mod material_library_authoring_tests;

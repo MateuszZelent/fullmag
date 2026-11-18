@@ -31,3 +31,8 @@ export type {
   Viewport3DAppearanceSection,
   Viewport3DEffectDiagnostic,
 } from "./viewport3dAppearancePreferences";
+export { VIEW_DIRECTION_COMMANDS } from "./viewport3dViewDirections";
+
+export { useViewport3DInspectorContext, useViewport3DInspectorVisited, setViewport3DInspectorContext } from "./viewport3dInspectorState";
+
+export { Viewport3DInspectorOutlet } from "./components/Viewport3DInspectorOutlet";

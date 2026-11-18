@@ -775,6 +775,12 @@ bool validate_supported_physics_topology(
             ctx.mesh.facet_types.begin(), ctx.mesh.facet_types.end(),
             [](uint32_t type) { return type == FULLMAG_FEM_FACET_TRI3; });
     if (tetrahedral) {
+        if (plan.precision != FULLMAG_FEM_PRECISION_DOUBLE) {
+            error =
+                "native FEM tetrahedral scope rejected: required=double; "
+                "failed_predicates=[double_precision]; fallback=none";
+            return false;
+        }
         return true;
     }
 

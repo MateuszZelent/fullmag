@@ -796,6 +796,32 @@ Planowani ownerzy kandydata: `crates/fullmag-application/src/study_artifact.rs` 
 `load_execution_context`; `crates/fullmag-runner/src/fdm/cpu/reference.rs` +
 `execute_reference_fdm_with_terminal_context`. To prerejestracja, nie dowód runtime.
 
+#### Przebieg zaakceptowany FDM CUDA FP64 — zachowanie tej samej maski
+
+Zakres implementacji źródłowej obejmuje pojedynczą siatkę FDM CUDA FP64,
+aktywne frozen spins, brak transportu i przejście między etapami o identycznym
+planie ograniczenia. Relacja z `eq-frozen-constraint` nadal obowiązuje na zbiorze
+zamrożonym, a wektory magnetyzacji są bezwymiarowe. Python i `ProblemIR`
+zachowują dotychczasowe parametry.
+
+Runner porównuje bity całego stanu wejściowego z terminalnym stanem etapu
+źródłowego. Wartości na masce muszą odpowiadać zapisanej referencji przed
+startem i po zakończeniu obliczeń. Konstruktor CUDA otrzymuje referencję z tych
+samych wartości początkowych. Zakończenie zapisuje `FrozenOutputLifecycleV1`
+z niezmienionym licznikiem aktywacji. Zaakceptowany worker opakowuje go
+istniejącym kodekiem stanu. Zmiana maski, niezgodny stan lub inne źródło
+kończą wykonanie z błędem.
+
+Kwalifikacja wymaga świeżego przebiegu GPU FP64 z etapami Relax i Run,
+zgodności hashy maski i referencji, zerowego dryfu spinów na masce oraz
+natywnego Zarr ze zgodnym stanem końcowym relaksacji i początkiem hold.
+Weryfikacja urządzeniowa pozostaje otwarta. Samodzielny headless oraz
+ścieżka C+D z pełną historią terminalną zachowują osobny zakres.
+
+Źródła: `crates/fullmag-runner/src/constraints/activation.rs::cuda_frozen_stage_state`,
+`crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs::execute_cuda_fdm`,
+`crates/fullmag-api/src/accepted_study_worker.rs::collect_runner_study_outputs_with_lifecycle`.
+
 Aneks planned contract [§14.12](../specs/frozen-spins-v1.md#cd-terminal-completion-receipt-clock)
 wersjonuje istniejący completed receipt, bounded cold histories i metadata clock
 nowego envelope. Exact M oraz rzeczywisty terminal child są wymagane przed zmianą

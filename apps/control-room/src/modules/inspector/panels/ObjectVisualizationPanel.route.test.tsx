@@ -302,10 +302,14 @@ vi.mock("./ObjectVisualizationTargetSection", () => {
   const DisplayPasses = () => (
     <div data-slot="visualization-display-passes">Display passes</div>
   );
+  const WireframeGeometryScope = () => (
+    <div data-slot="visualization-wireframe-geometry-scope">Wireframe mesh</div>
+  );
   return {
     ColorField: Component,
     VisualizationDisplayPassesSection: DisplayPasses,
     VisualizationGeometryScopeSection: Component,
+    VisualizationWireframeGeometryScopeSection: WireframeGeometryScope,
     VisualizationOverridesSection: Component,
     VisualizationPointsSection: Component,
     VisualizationQuantitySection: Component,
@@ -646,6 +650,31 @@ describe("ObjectVisualizationPanel lane routing", () => {
         { name: "visualization-state", enabled: true },
         { name: "scene", enabled: true },
       ]),
+    );
+  });
+
+  it("offers wireframe mesh scope only for a FEM object target", () => {
+    testState.discretization = "fdm";
+    const fdmObject = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={selection} />,
+    );
+
+    testState.discretization = "fem";
+    const femObject = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={selection} />,
+    );
+    const femAirbox = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={airboxSelection} />,
+    );
+
+    expect(fdmObject).not.toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
+    );
+    expect(femObject).toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
+    );
+    expect(femAirbox).not.toContain(
+      'data-slot="visualization-wireframe-geometry-scope"',
     );
   });
 

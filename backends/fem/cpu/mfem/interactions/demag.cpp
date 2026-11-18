@@ -36,6 +36,7 @@ struct FreshDemagSolveSideEffects {
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
+    uint32_t linear_iterations_current_step = 0;
 
     explicit FreshDemagSolveSideEffects(const Context &ctx)
         : h_visual_xyz(ctx.demag.h_visual_xyz)
@@ -51,6 +52,7 @@ struct FreshDemagSolveSideEffects {
         , step_energy_wall_time_ns(ctx.poisson_demag.step_energy_wall_time_ns)
         , last_solver_setup_reused(ctx.poisson_demag.last_solver_setup_reused)
         , solves_current_step(ctx.poisson_demag.solves_current_step)
+        , linear_iterations_current_step(ctx.poisson_demag.linear_iterations_current_step)
     {
     }
 
@@ -69,6 +71,7 @@ struct FreshDemagSolveSideEffects {
         ctx.poisson_demag.step_energy_wall_time_ns = step_energy_wall_time_ns;
         ctx.poisson_demag.last_solver_setup_reused = last_solver_setup_reused;
         ctx.poisson_demag.solves_current_step = solves_current_step;
+        ctx.poisson_demag.linear_iterations_current_step = linear_iterations_current_step;
     }
 };
 
@@ -172,12 +175,10 @@ bool compute_demag_field_for_magnetization(
 {
     demag_energy = 0.0;
 
-    if (!demag_poisson_operator_dependencies_current(ctx, error)) {
-        return false;
-    }
-
     DemagFieldUpdateDecision decision{};
     if (!plan_demag_field_update(ctx, decision, error)) {
+        // Preserve the dependency diagnostic for a previously invalidated operator.
+        demag_poisson_operator_dependencies_current(ctx, error);
         return false;
     }
 
@@ -189,12 +190,16 @@ bool compute_demag_field_for_magnetization(
             }
             break;
         case DemagFieldUpdateAction::FreshPoissonSolve:
+            // The Poisson solve validates operator dependencies before using them.
             if (!context_compute_demag_poisson(
                     ctx, m_xyz, h_demag_xyz, demag_energy, allow_interrupt, timings, error)) {
                 return false;
             }
             break;
         case DemagFieldUpdateAction::UseCachedField:
+            if (!demag_poisson_operator_dependencies_current(ctx, error)) {
+                return false;
+            }
             if (demag_poisson_try_load_cached_field(ctx, h_demag_xyz)) {
                 demag_energy = demag_poisson_cached_energy_from_field(
                     ctx,

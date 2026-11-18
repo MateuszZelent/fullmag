@@ -26,6 +26,7 @@ from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.cuda_device_identity import legacy_cuda_binding
 from fullmag.model._incomplete import IncompletePhysicsError
 from fullmag.init.textures import PresetTexture
+from fullmag.model.mask_field_drive import MaskAntenna
 from fullmag.model.antenna import (
     AntennaFieldSolveStage,
     AntennaSpectrumRequest,
@@ -326,6 +327,8 @@ def _materialize_preset_texture_initial_conditions(
     magnets_ir: list[dict[str, Any]],
     magnets: Sequence["Ferromagnet"],
     geometry_assets: dict[str, Any] | None,
+    *,
+    preserve_fdm_multilayer_presets: bool = False,
 ) -> list[dict[str, Any]]:
     if not geometry_assets:
         return magnets_ir
@@ -387,6 +390,12 @@ def _materialize_preset_texture_initial_conditions(
             # fragile full-domain array here.
             continue
         elif geometry_name in fdm_assets:
+            if preserve_fdm_multilayer_presets:
+                # The FDM multilayer planner samples analytic presets after it
+                # resolves each object's native grid and active mask. Sampling
+                # here would instead bind the texture to the padded study-wide
+                # asset grid, which may have a different cell count.
+                continue
             asset = fdm_assets[geometry_name]
             sample_points = _fdm_cell_centers_from_asset(asset)
             sampled = prepare_initial_magnetization(
@@ -1224,7 +1233,10 @@ def build_geometry_assets_for_request(
                 )
 
                 if source_suffix == ".fullmag-mesh":
-                    artifact = load_mesh_artifact(explicit_domain_mesh_source)
+                    artifact = load_mesh_artifact(
+                        explicit_domain_mesh_source,
+                        expected_sha256=(mesh_workflow or {}).get("domain_mesh_sha256"),
+                    )
                 elif source_suffix == ".mphtxt":
                     artifact = import_comsol_mesh(explicit_domain_mesh_source)
                 else:
@@ -2736,6 +2748,7 @@ class Problem:
     auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
+    mask_field_drives: Sequence[MaskAntenna] = ()
     # Composition-first microwave antenna resources.  These are immutable
     # authoring records; the solved field asset is produced by a dedicated
     # stage and is never inferred from a field drive.
@@ -2830,7 +2843,13 @@ class Problem:
         if field_only:
             if not self.auxiliary_geometries:
                 raise ValueError("FieldOnly requires explicitly authored non-magnetic geometry")
-            if self.magnets or self.energy or self.field_drives or self.solved_antenna_drives:
+            if (
+                self.magnets
+                or self.energy
+                or self.field_drives
+                or self.mask_field_drives
+                or self.solved_antenna_drives
+            ):
                 raise ValueError("FieldOnly cannot contain magnetic state, energy or LLG drives")
             if self.spin_torque is not None or self.spin_torques or self.spin_transports or self.magnetization_constraints:
                 raise ValueError("FieldOnly cannot contain magnetic torque, spin transport or constraints")
@@ -2923,6 +2942,19 @@ class Problem:
             ],
             "object_ids",
         )
+        magnetic_object_ids = {
+            magnet.object_id if magnet.object_id is not None else magnet.name
+            for magnet in self.magnets
+        }
+        for term in self.energy:
+            if not isinstance(term, RotatedInterfacialDMI) or term.object_ids is None:
+                continue
+            unknown_dmi_object_ids = sorted(set(term.object_ids) - magnetic_object_ids)
+            if unknown_dmi_object_ids:
+                raise ValueError(
+                    "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+                    + ", ".join(unknown_dmi_object_ids)
+                )
         self._validate_magnetization_constraints()
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
@@ -2931,6 +2963,13 @@ class Problem:
         ensure_unique_names((drive.name for drive in self.field_drives), "field drive names")
         if any(not isinstance(drive, RegionalFieldDrive) for drive in self.field_drives):
             raise TypeError("Problem.field_drives must contain RegionalFieldDrive objects")
+        if any(not isinstance(drive, MaskAntenna) for drive in self.mask_field_drives):
+            raise TypeError("Problem.mask_field_drives must contain MaskAntenna objects")
+        ensure_unique_names(
+            [drive.id for drive in self.field_drives]
+            + [drive.id for drive in self.mask_field_drives],
+            "field drive ids",
+        )
         for name, values, expected in (
             ("antenna_port_modes", self.antenna_port_modes, AntennaPortMode),
             ("antenna_field_solve_stages", self.antenna_field_solve_stages, AntennaFieldSolveStage),
@@ -2948,6 +2987,21 @@ class Problem:
         geometry_ids = {
             getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
         }
+        magnet_aliases = magnetic_object_ids | {
+            magnet.object_id for magnet in self.magnets if magnet.object_id is not None
+        }
+        for antenna in self.mask_field_drives:
+            target = antenna.target
+            if target.kind == "object" and target.object_id not in magnet_aliases:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target "
+                    f"{target.object_id!r} is not a magnet"
+                )
+            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+                raise ValueError(
+                    f"mask_target_unknown: antenna {antenna.id!r} target region "
+                    f"{target.object_id!r}/{target.region_id!r} does not exist"
+                )
         for drive in self.field_drives:
             target = drive.target
             if target.kind in {"object", "region"} and target.object_id not in magnetic_object_ids:
@@ -3256,10 +3310,24 @@ class Problem:
                 _copy_cached_assets=_copy_cached_geometry_assets,
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
+        fdm_hints = discretization.fdm if discretization is not None else None
+        demag_strategy = (
+            fdm_hints.demag.strategy
+            if fdm_hints is not None and fdm_hints.demag is not None
+            else "auto"
+        )
+        preserve_fdm_multilayer_presets = (
+            runtime.backend_target == BackendTarget.FDM
+            and (
+                demag_strategy == "multilayer_convolution"
+                or (len(self.magnets) > 1 and demag_strategy == "auto")
+            )
+        )
         magnets_ir = _materialize_preset_texture_initial_conditions(
             magnets_ir,
             self.magnets,
             geometry_assets,
+            preserve_fdm_multilayer_presets=preserve_fdm_multilayer_presets,
         )
 
         spin_torque_payload: dict[str, object] = {}
@@ -3313,6 +3381,11 @@ class Problem:
             "couplings": [coupling.to_ir() for coupling in self.couplings],
             "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "field_drives": [drive.to_ir() for drive in self.field_drives],
+            **(
+                {"mask_field_drives": [antenna.to_ir() for antenna in self.mask_field_drives]}
+                if self.mask_field_drives
+                else {}
+            ),
             "antenna_port_modes": [mode.to_ir() for mode in self.antenna_port_modes],
             "antenna_field_solve_stages": [
                 stage.to_ir() for stage in self.antenna_field_solve_stages

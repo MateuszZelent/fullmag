@@ -39,17 +39,19 @@ stale. **Apply & Build Shared-Domain Mesh** then executes `mesh.build-shared-dom
 
 The read-only effective section comes from backend `effective_config`; it must not be inferred from
 the current text fields.
-## Control Room crosswalk
 
-This page is the Control Room surface itself. The status is `partial` unless every listed field has a named inspector and transaction. Fields not present in the cited component are `TODO: frontend support`; runtime/result-only views are `inspection-only`. See {doc}`/frontend/capability-register`.
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Airbox Mesh Overview inspector showing policy and manifest revision 4 match, carrier part_airbox, element size limits, and build growth rate
+:align: center
+:width: 100%
+```
 
-## Python/API crosswalk
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport showing exterior airbox domain wireframe framing the FEM object geometry
+:align: center
+:width: 100%
+```
 
-Python remains the authoritative authoring contract. Use the linked {doc}`/python-api/index` pages for exact constructors, functions, arguments, units, and failure semantics; this page must not invent a Python signature.
-
-## Physics and bibliography scope
-
-This UI page introduces no independent physical model. It presents controls for an existing backend contract. Bibliography: not applicable unless a terminal page below introduces a scientific model; implementation references are the cited frontend component and linked API page.
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

@@ -20,6 +20,10 @@
 #include <mfem.hpp>
 #endif
 
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <cuda_runtime.h>
+#endif
+
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -133,6 +137,77 @@ int copy_torque_observable_f64(
 }
 
 #if FULLMAG_HAS_MFEM_STACK
+#if FULLMAG_HAS_CUDA_RUNTIME
+// Strict GPU Poisson demag solves into the device true-DOF vector
+// gpu.demag_poisson.poisson_solution; the host gf_potential is never written
+// on that lane.  Export the device solution that H_demag was recovered from.
+int copy_gpu_poisson_demag_phi_f64(
+    const Context &ctx,
+    double *out,
+    uint64_t out_len,
+    std::string &error)
+{
+    const auto &poisson = ctx.gpu_state.device.demag_poisson;
+    const uint64_t rows = poisson.scalar_dof_count;
+    if (poisson.poisson_solution == nullptr || rows == 0) {
+        error = "GPU Poisson demag scalar potential has not been allocated";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const cudaError_t sync_status = cudaStreamSynchronize(
+        reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
+    std::vector<double> true_dofs(static_cast<size_t>(rows));
+    const cudaError_t copy_status = sync_status != cudaSuccess
+        ? sync_status
+        : cudaMemcpy(
+              true_dofs.data(),
+              poisson.poisson_solution,
+              sizeof(double) * static_cast<size_t>(rows),
+              cudaMemcpyDeviceToHost);
+    if (copy_status != cudaSuccess) {
+        error = std::string("GPU Poisson demag scalar-potential download failed: ") +
+            cudaGetErrorString(copy_status);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * rows);
+
+    const auto &mesh = ctx.mesh;
+    if (mesh.periodic_reduced_node.size() == static_cast<size_t>(out_len) &&
+        mesh.periodic_reduced_node_count == rows) {
+        // Periodic lane: node-class-reduced P1 potential, lifted to mesh nodes.
+        for (uint64_t node = 0; node < out_len; ++node) {
+            const uint32_t reduced = mesh.periodic_reduced_node[static_cast<size_t>(node)];
+            if (reduced >= rows) {
+                error = "GPU Poisson demag periodic scalar-potential lift map is invalid";
+                return FULLMAG_FEM_ERR_INVALID;
+            }
+            out[node] = true_dofs[reduced];
+        }
+        return FULLMAG_FEM_OK;
+    }
+    auto *potential_fes = ctx.poisson_demag.potential_fes;
+    if (potential_fes == nullptr ||
+        static_cast<uint64_t>(potential_fes->GetTrueVSize()) != rows) {
+        error = "GPU Poisson demag scalar potential does not match the potential space: rows=" +
+            std::to_string(rows);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    mfem::Vector solution(true_dofs.data(), static_cast<int>(rows));
+    mfem::GridFunction potential(potential_fes);
+    potential.SetFromTrueDofs(solution);
+    mfem::Vector nodal_values;
+    potential.GetNodalValues(nodal_values);
+    if (nodal_values.Size() != static_cast<int>(out_len)) {
+        error = "GPU Poisson demag scalar-potential nodal projection size mismatch";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::memcpy(
+        out,
+        audited_host_read(nodal_values),
+        static_cast<size_t>(sizeof(double) * out_len));
+    return FULLMAG_FEM_OK;
+}
+#endif
+
 int copy_demag_phi_observable_f64(
     const Context &ctx,
     double *out,
@@ -147,6 +222,15 @@ int copy_demag_phi_observable_f64(
     if (out_len != expected_len) {
         error = "demag scalar-potential output length mismatch";
         return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (ctx.gpu_state.device.lifecycle.allocated &&
+        ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+#if FULLMAG_HAS_CUDA_RUNTIME
+        return copy_gpu_poisson_demag_phi_f64(ctx, out, out_len, error);
+#else
+        error = "GPU Poisson demag scalar potential requires the CUDA runtime";
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+#endif
     }
     if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
         const auto *workspace = ctx.demag_fem_bem.workspace;
@@ -170,9 +254,11 @@ int copy_demag_phi_observable_f64(
             error = "Fredkin-Koehler demag scalar-potential nodal projection size mismatch";
             return FULLMAG_FEM_ERR_INVALID;
         }
+        // Vector::Read() returns the device pointer once MFEM runs on CUDA;
+        // the host memcpy below needs the host mirror.
         std::memcpy(
             out,
-            nodal_values.Read(),
+            audited_host_read(nodal_values),
             static_cast<size_t>(sizeof(double) * out_len));
         record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);
         return FULLMAG_FEM_OK;
@@ -198,9 +284,11 @@ int copy_demag_phi_observable_f64(
                     std::to_string(nodal_values.Size()) + " values";
             return FULLMAG_FEM_ERR_INVALID;
         }
+        // GetNodalValues may leave the projection device-resident on CUDA;
+        // read the host mirror, never Vector::Read(), before the host memcpy.
         std::memcpy(
             out,
-            nodal_values.Read(),
+            audited_host_read(nodal_values),
             static_cast<size_t>(sizeof(double) * out_len));
     }
     record_device_to_host(ctx.transfer_audit.audit, sizeof(double) * out_len);

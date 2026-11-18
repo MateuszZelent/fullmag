@@ -50,10 +50,10 @@ export function resolveFdmMultilayerAirboxTargetInspectorModel(
     status: "ready",
     targetGridRows: [
       { label: "Target-only", value: "yes" },
-      { label: "Cells", value: tuple(target.cells) },
+      { label: "Grid shape", value: tuple(target.cells) },
       { label: "Origin", value: tuple(target.origin), unit: "m" },
       { label: "Cell size", value: tuple(target.cellSize), unit: "m" },
-      { label: "Samples", value: String(target.sampleCount) },
+      { label: "Total cells", value: target.sampleCount.toLocaleString("en-US") },
       { label: "Values", value: String(target.valueCount) },
     ],
     fieldCapabilityRows: [

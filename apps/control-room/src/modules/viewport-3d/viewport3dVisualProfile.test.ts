@@ -70,6 +70,17 @@ describe("viewport3d visual profiles", () => {
     ).toBe(1.25);
   });
 
+  it("supersamples Figure at 2x even on a standard-density display", () => {
+    const figure = getViewport3DVisualProfile("figure");
+    for (const devicePixelRatio of [1, 1.25, 2, 3, Number.NaN]) {
+      expect(resolveViewport3DCanvasDpr({ devicePixelRatio, profile: figure })).toBe(2);
+    }
+    expect(resolveViewport3DCanvasDpr({
+      devicePixelRatio: 1,
+      profile: getViewport3DVisualProfile("interactive"),
+    })).toBe(1);
+  });
+
   it("uses preserveDrawingBuffer only for capture", () => {
     expect(
       resolveViewport3DCanvasGlOptions(

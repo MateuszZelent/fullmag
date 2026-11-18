@@ -575,6 +575,8 @@ pub struct AbsorbingBoundaryLayerIR {
     pub faces: Vec<AbsorbingBoundaryFaceIR>,
     pub profile: AbsorbingBoundaryProfileIR,
     pub frame: AbsorbingBoundaryFrameIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -599,6 +601,9 @@ pub enum AbsorbingBoundaryProfileIR {
     Linear,
     Quadratic,
     Smootherstep,
+    Logarithmic,
+    Tanh,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

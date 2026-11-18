@@ -18,6 +18,7 @@ use crate::types::FmsRunIntent;
 pub const ACCEPTED_RUN_START_POLICY_KEY: &str = "fullmag.accepted_run_start";
 const POLICY_SCHEMA: &str = "accepted_run_start_policy.v1";
 const RELEASE_SCHEMA: &str = "accepted_run_start_release.v1";
+const LIVE_RELEASE_SCHEMA: &str = "accepted_run_start_release.v2";
 const MAX_RELEASE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,6 +35,39 @@ enum StartMode {
     Manual,
 }
 
+/// HTTP request identity stored at the same durable boundary as live Compute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveComputeRequestReceipt {
+    pub key_sha256: String,
+    pub request_sha256: String,
+    pub command_id: String,
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_intent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_target: Option<Value>,
+}
+
+impl LiveComputeRequestReceipt {
+    pub fn validate(&self) -> Result<()> {
+        validate_digest(&self.key_sha256)?;
+        validate_digest(&self.request_sha256)?;
+        validate_store_id(&self.command_id)?;
+        if self.command_kind.as_deref().is_some_and(|kind| !matches!(kind, "solve" | "run" | "relax")) {
+            bail!("invalid live Compute command kind");
+        }
+        if self.requested_target.as_ref().is_some_and(|target| {
+            target.get("kind").and_then(Value::as_str).is_none()
+        }) {
+            bail!("invalid live Compute requested target");
+        }
+        Ok(())
+    }
+}
+
 /// Immutable evidence that the operator released this exact accepted run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +77,8 @@ pub struct AcceptedRunStartRelease {
     pub specification_sha256: String,
     pub request_id: String,
     pub released_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_request: Option<LiveComputeRequestReceipt>,
 }
 
 fn manual_policy(intent: &FmsRunIntent) -> Result<bool> {
@@ -87,7 +123,11 @@ impl AcceptedRunStartRelease {
         validate_store_id(&self.run_id)?;
         validate_store_id(&self.request_id)?;
         validate_digest(&self.specification_sha256)?;
-        if self.schema_version != RELEASE_SCHEMA
+        if let Some(receipt) = &self.live_request {
+            receipt.validate()?;
+        }
+        let schema = if self.live_request.is_some() { LIVE_RELEASE_SCHEMA } else { RELEASE_SCHEMA };
+        if self.schema_version != schema
             || self.run_id != intent.run_id
             || self.specification_sha256 != intent.payload_sha256
             || !manual_policy(intent)?
@@ -109,6 +149,17 @@ impl SessionStore {
             return Ok(true);
         }
         Ok(self.read_start_release_for_intent(&intent)?.is_some())
+    }
+
+    /// Read the immutable start grant without changing run readiness.
+    pub fn read_accepted_run_start_release(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<AcceptedRunStartRelease>> {
+        let intent = self
+            .read_run_intent(run_id)?
+            .context("accepted start release requires its immutable run intent")?;
+        self.read_start_release_for_intent(&intent)
     }
 
     fn read_start_release_for_intent(
@@ -138,6 +189,29 @@ impl SessionStore {
         expected_specification_sha256: &str,
         request_id: &str,
     ) -> Result<AcceptedRunStartRelease> {
+        self.release_accepted_run_start_inner(run_id, expected_specification_sha256, request_id, None)
+    }
+
+    pub fn release_accepted_run_start_for_live_request(
+        &self,
+        run_id: &str,
+        expected_specification_sha256: &str,
+        request_id: &str,
+        live_request: &LiveComputeRequestReceipt,
+    ) -> Result<AcceptedRunStartRelease> {
+        live_request.validate()?;
+        self.release_accepted_run_start_inner(
+            run_id, expected_specification_sha256, request_id, Some(live_request),
+        )
+    }
+
+    fn release_accepted_run_start_inner(
+        &self,
+        run_id: &str,
+        expected_specification_sha256: &str,
+        request_id: &str,
+        live_request: Option<&LiveComputeRequestReceipt>,
+    ) -> Result<AcceptedRunStartRelease> {
         validate_store_id(run_id)?;
         validate_store_id(request_id)?;
         validate_digest(expected_specification_sha256)?;
@@ -149,15 +223,26 @@ impl SessionStore {
             bail!("start release does not match an immutable manual RunSpec");
         }
         if let Some(existing) = self.read_start_release_for_intent(&intent)? {
+            if let Some(receipt) = live_request {
+                if existing.request_id != request_id || existing.live_request.as_ref() != Some(receipt) {
+                    bail!("accepted run start was released by a different request");
+                }
+            }
             return Ok(existing);
+        }
+        // The immutable cancellation is written before its catalog revision.
+        // Even a partial replacement must keep the old run held.
+        if !self.list_task_cancellation_intents(run_id)?.is_empty() {
+            bail!("cannot release an accepted start with pre-claim cancellation intents");
         }
         self.ensure_development_admission_open_unlocked()?;
         let release = AcceptedRunStartRelease {
-            schema_version: RELEASE_SCHEMA.into(),
+            schema_version: if live_request.is_some() { LIVE_RELEASE_SCHEMA } else { RELEASE_SCHEMA }.into(),
             run_id: run_id.into(),
             specification_sha256: expected_specification_sha256.into(),
             request_id: request_id.into(),
             released_at: Utc::now(),
+            live_request: live_request.cloned(),
         };
         release.validate_for(&intent)?;
         let path = create_parent(self.root(), &format!("runs/{run_id}/start_release.json"))?;
@@ -237,6 +322,34 @@ mod tests {
         drop(store);
         let reopened = SessionStore::open_existing(directory.path()).unwrap();
         assert!(reopened.accepted_run_start_permitted("run-held").unwrap());
+    }
+
+    #[test]
+    fn accepted_start_gate_retains_live_compute_receipt_with_the_original_grant() {
+        let (directory, store, intent) = fixture(manual());
+        let receipt = LiveComputeRequestReceipt {
+            key_sha256: "a".repeat(64),
+            request_sha256: "b".repeat(64),
+            command_id: "compute-first".into(),
+            request_id: Some("trace-first".into()),
+            command_kind: Some("solve".into()),
+            client_intent_id: Some("compute-intent".into()),
+            requested_target: Some(serde_json::json!({"kind": "study"})),
+        };
+        let grant = store.release_accepted_run_start_for_live_request(
+            "run-held", &intent.payload_sha256, "compute-first", &receipt,
+        ).unwrap();
+        assert_eq!(grant.live_request.as_ref(), Some(&receipt));
+        drop(store);
+        let reopened = SessionStore::open_existing(directory.path()).unwrap();
+        assert_eq!(
+            reopened.read_accepted_run_start_release("run-held").unwrap(),
+            Some(grant),
+        );
+        let changed = LiveComputeRequestReceipt { request_sha256: "c".repeat(64), ..receipt };
+        assert!(reopened.release_accepted_run_start_for_live_request(
+            "run-held", &intent.payload_sha256, "compute-first", &changed,
+        ).is_err());
     }
 
     #[test]

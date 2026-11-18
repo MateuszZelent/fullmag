@@ -292,6 +292,28 @@ class StoreAndPhaseTests(unittest.TestCase):
 
 
 class ProjectInventoryScopeTests(unittest.TestCase):
+    def test_shared_consumer_proof_cannot_bypass_private_volume_fence(self):
+        from unittest.mock import patch, Mock
+        from docker_volume_empty_quarantine import _project_inventory
+        foreign = "1" * 64
+        rows = [
+            {"Id": CONTAINER, "Config": {"Labels": {"com.docker.compose.project": "fullmag-demo"}},
+             "Mounts": [], "HostConfig": {}},
+            {"Id": foreign, "Config": {"Labels": {"com.docker.compose.project": "other"}},
+             "Mounts": [{"Name": "private-control"}], "HostConfig": {}},
+        ]
+        for error in (None, BuildControlError("unregistered shared consumer")):
+            validator = Mock(side_effect=error)
+            outputs = [SimpleNamespace(stdout=(CONTAINER + "\n" + foreign + "\n").encode()),
+                       SimpleNamespace(stdout=json.dumps(rows).encode())]
+            with patch("docker_volume_empty_quarantine.docker_capture", side_effect=outputs):
+                with self.assertRaisesRegex(BuildControlError, "another consumer|unregistered shared consumer"):
+                    _project_inventory(SimpleNamespace(project="fullmag-demo"),
+                        {"backend": {"id": CONTAINER}}, protected_volumes={"private-control"},
+                        state_root=Path("/state"), ledger_volume="private-control",
+                        shared_consumer_validator=validator)
+            validator.assert_called_once_with(rows[1])
+
     def test_selected_inventory_is_stable_as_unrelated_container_ids_change(self) -> None:
         pair = [CONTAINER, "f" * 64]
         helper_id = "3" * 64
@@ -450,13 +472,45 @@ class ProjectInventoryScopeTests(unittest.TestCase):
                     {"Destination": "/store", "Source": source, "RW": False},
                     {"Destination": "/ledger", "Name": "ledger-volume", "RW": False},
                 ]}
-            def check(value):
+            def check(value, ledger_subpath=""):
                 with patch.object(module, "docker_capture", return_value=SimpleNamespace(
                         stdout=json.dumps([value]).encode())), \
                         patch("docker_compose_identity.source_labels", return_value={}):
                     return module._inspect_transaction_helper(
-                        control, "helper", "script", root, "ledger-volume")
+                        control, "helper", "script", root, "ledger-volume", ledger_subpath)
             self.assertEqual(check(row), CONTAINER)
+            if os.name != "nt":
+                # Docker Desktop rewrites both inspect sources to the same
+                # opaque WSL alias. Only actual directory identity admits it.
+                aliases = root / "aliases"
+                alias = aliases / "Ubuntu2" / ("a" * 64)
+                alias.parent.mkdir(parents=True)
+                alias.symlink_to(root, target_is_directory=True)
+                desktop_source = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+                aliased = deepcopy(row)
+                aliased["HostConfig"]["Mounts"][1]["Source"] = desktop_source
+                aliased["Mounts"][1]["Source"] = desktop_source
+                with patch("docker_dev_browser_qa.LOCAL_WSL_BIND_MOUNT_ROOT", aliases):
+                    self.assertEqual(check(aliased), CONTAINER)
+                    alias.unlink()
+                    alias.mkdir()
+                    with self.assertRaises(BuildControlError): check(aliased)
+                    alias.rmdir()
+                    with self.assertRaises(BuildControlError): check(aliased)
+                    alias.symlink_to(root, target_is_directory=True)
+                    for location in ("host", "runtime"):
+                        changed = deepcopy(aliased)
+                        mount = changed["HostConfig"]["Mounts"][1] if location == "host" else changed["Mounts"][1]
+                        mount["Source"] = desktop_source + "/../" + "a" * 64
+                        with self.subTest(location=location), self.assertRaises(BuildControlError):
+                            check(changed)
+            private = deepcopy(row)
+            private["HostConfig"]["Mounts"][2]["VolumeOptions"]["Subpath"] = "private/ledger"
+            self.assertEqual(check(private, "private/ledger"), CONTAINER)
+            with self.assertRaises(BuildControlError): check(row, "private/ledger")
+            with self.assertRaises(BuildControlError): check(private)
+            private["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = "private/backend"
+            with self.assertRaises(BuildControlError): check(private, "private/ledger")
             for location, key in (("host", "Source"), ("runtime", "Source"),
                                   ("host", "ReadOnly"), ("runtime", "RW")):
                 changed = deepcopy(row)
@@ -601,6 +655,14 @@ class ProjectInventoryScopeTests(unittest.TestCase):
             {"phase": "activation", "state": "outcome-unknown-resources-retained"}), "activation")
         self.assertEqual(module._validate_operation_phase(
             {"phase": "iteration", "state": "starting"}), "iteration")
+        self.assertEqual(module._validate_operation_phase(
+            {"phase": "iteration", "state": "restarting-idle-backend"}), "iteration")
+        for phase, state in (("development", "restarting-idle-backend"),
+                             ("activation", "restarting-idle-backend"),
+                             ("iteration", "succeeded"), ("iteration", "failed-confirmed"),
+                             ("iteration", []), ("iteration", {})):
+            with self.subTest(phase=phase, state=state), self.assertRaises(BuildControlError):
+                module._validate_operation_phase({"phase": phase, "state": state})
 
     def test_plan_digest_must_match_expected_sha(self) -> None:
         with self.assertRaises(BuildControlError):
@@ -715,6 +777,115 @@ class ActivationMarkerAbsenceTests(unittest.TestCase):
             non_directory = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
                                            capture_output=True, check=False)
             self.assertNotEqual(non_directory.returncode, 0)
+
+
+class InterruptedIdleRestartTests(unittest.TestCase):
+    def test_transaction_mount_preserves_authenticated_ledger_subpath(self):
+        command = ["docker", "run", "--entrypoint", "/bin/bash"]
+        module._transaction_mounts(command, store_root=Path("/state/store"),
+                                   ledger_volume="control-volume", ledger_subpath="private/ledger")
+        self.assertIn("type=volume,src=control-volume,dst=/ledger,readonly,volume-nocopy,volume-subpath=private/ledger", command)
+        with self.assertRaises(BuildControlError):
+            module._transaction_mounts(command, store_root=Path("/state/store"),
+                                       ledger_volume="control-volume", ledger_subpath="private/backend")
+
+    def test_stopped_backend_cannot_have_restarted_after_retained_incarnation(self):
+        record = {"state": "restarting-idle-backend", "backend_container": CONTAINER,
+                  "backend_started_at": "2026-11-06T10:33:41Z"}
+        backend = {"id": CONTAINER, "started_at": record["backend_started_at"]}
+        module._validate_iteration_incarnation(record, backend)
+        for key, value in (("id", "f" * 64), ("started_at", "2026-11-06T10:34:41Z")):
+            with self.subTest(key=key), self.assertRaises(BuildControlError):
+                module._validate_iteration_incarnation(record, {**backend, key: value})
+
+    def test_ledger_snapshot_keeps_private_subpath_and_rejects_foreign_role(self):
+        import copy
+        import docker_group_ledger as ledger
+        from bootstrap_docker_toolchain import control_volume_name
+        project = "fullmag-demo"
+        for private in (False, True):
+            volume = control_volume_name(project) if private else ledger.VOLUME_PREFIX + "a" * 24
+            profile = ledger.profile("d" * 64, project, volume, IMAGE,
+                                     ledger_subpath="private/ledger" if private else "")
+            document = {"name": project, "services": {"backend": {**profile["backend"], "image": IMAGE}},
+                        "volumes": {ledger.COMPOSE_VOLUME: profile["compose_volume"]}}
+            name, mount = module._group_ledger_volume(document, project)
+            self.assertEqual(name, volume)
+            self.assertIn(",dst=/ledger,readonly,volume-nocopy", mount)
+            self.assertEqual(",volume-subpath=private/ledger" in mount, private)
+            for subpath in ("private/backend", "../private/ledger", "namespaces/" + "a" * 32 + "/private/ledger"):
+                bad = copy.deepcopy(document)
+                bad["services"]["backend"]["volumes"][0]["volume"]["subpath"] = subpath
+                with self.subTest(private=private, subpath=subpath), self.assertRaises(BuildControlError):
+                    module._group_ledger_volume(bad, project)
+            with self.assertRaises(BuildControlError):
+                module._group_ledger_volume(document, project + "-other")
+
+    def test_retained_restart_requires_exact_identity_and_absent_helper(self):
+        from unittest.mock import patch
+        record = {
+            "schema": module.OPERATION_SCHEMA, "phase": "iteration",
+            "state": "restarting-idle-backend", "attempt": TOKEN,
+            "compose_project": "fullmag-demo", "control_volume": "fullmag-demo-control",
+            "helper_container": "fullmag-control-" + TOKEN,
+            "backend_container": CONTAINER, "backend_started_at": "2026-11-06T10:33:41Z",
+            "inputs": {"attempt": OPERATION, "source_root": "/selected", "config_sha256": CONFIG,
+                       "image_id": IMAGE},
+        }
+        path = f"iteration/attempts/{TOKEN}/receipt.json"
+        records = {path: canonical(record) + b"\n"}
+        control = MemoryControl(records)
+        def read():
+            return module._read_operation(control, (TOKEN + "\n").encode(),
+                development_attempt=OPERATION, selected_source="/selected", config_sha256=CONFIG,
+                image_id=IMAGE, backend_id=CONTAINER)
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value="f" * 64):
+            result = read()
+            self.assertEqual(result[0], "iteration")
+            self.assertEqual(result[2], record)
+            self.assertIsNone(result[4])
+            for key, value in (("backend_container", "f" * 64), ("backend_started_at", ""),
+                               ("state", "succeeded"), ("helper_container", "foreign")):
+                with self.subTest(key=key), self.assertRaises(BuildControlError):
+                    records[path] = canonical({**record, key: value}) + b"\n"
+                    read()
+            records[path] = canonical(record) + b"\n"
+            records[f"iteration/attempts/{TOKEN}/terminal.json"] = b'{}\n'
+            with self.assertRaises(BuildControlError): read()
+            del records[f"iteration/attempts/{TOKEN}/terminal.json"]
+        with patch("docker_volume_activation_reconcile._probe_helper_absence", return_value=None):
+            with self.assertRaises(BuildControlError): read()
+        self.assertEqual(records, {path: canonical(record) + b"\n"})
+
+    def test_restart_transaction_preserves_original_failure_and_verified_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            active = (TOKEN + "\n").encode()
+            original = canonical({"state": "restarting-idle-backend", "phase": "iteration"}) + b"\n"
+            pinned = {"active": active, f"iteration/attempts/{TOKEN}/receipt.json": original,
+                      "iteration/current.json": original,
+                      "iteration/verified.json": b'{"state":"succeeded","attempt":"older"}\n'}
+            (root / "operation.lock").touch()
+            for relative, raw in pinned.items():
+                target = root / relative; target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+            _control, plan, receipt = offline_fixture()
+            plan["control_pins"] = {key: hashlib.sha256(raw).hexdigest() for key, raw in pinned.items()}
+            plan["original_operation_receipt_sha256"] = hashlib.sha256(original).hexdigest()
+            plan["plan_sha256"] = hashlib.sha256(canonical(plan)).hexdigest()
+            intent, receipt = module._operation_records(plan)
+            script, preamble = module._transaction_script(control_root=root, active_token=TOKEN,
+                active_sha256=hashlib.sha256(active).hexdigest(), pins=plan["control_pins"],
+                intent=intent, receipt=receipt)
+            result = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
+                input=preamble + b"COMMIT\n", capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "active").exists())
+            self.assertFalse((root / f"iteration/attempts/{TOKEN}/terminal.json").exists())
+            self.assertEqual((root / f"iteration/attempts/{TOKEN}/receipt.json").read_bytes(), original)
+            self.assertEqual((root / "iteration/current.json").read_bytes(), original)
+            self.assertEqual((root / "iteration/verified.json").read_bytes(), pinned["iteration/verified.json"])
+            self.assertEqual(receipt["proof"]["iteration_outcome"], "interrupted-retained")
 
 
 class DurableTransactionTests(unittest.TestCase):
@@ -885,6 +1056,35 @@ class DurableTransactionTests(unittest.TestCase):
 
 
 class PreparedRetryTests(unittest.TestCase):
+    def test_collection_keeps_policy_before_current_publication(self):
+        for shared in (False, True):
+            for receipt_written in (False, True):
+                pair = {"containers": {}, "network": {}}
+                if shared: pair["shared_cache"] = {"profile_sha256": "f" * 64}
+                control, _plan, _receipt = offline_fixture(active=(TOKEN + "\n").encode(),
+                    plan_extra={"stopped_pair": pair})
+                del control.records[module.CURRENT]
+                if not receipt_written:
+                    del control.records[f"offline-reconciliation/{OPERATION}/receipt.json"]
+                self.assertIs(module._collection_shared_cache_mode(control, OPERATION, TOKEN), shared)
+                intent_path = f"offline-reconciliation/{OPERATION}/intent.json"
+                control.records[intent_path] += b" "
+                with self.assertRaises(BuildControlError):
+                    module._collection_shared_cache_mode(control, OPERATION, TOKEN)
+
+    def test_collection_preserves_verified_legacy_or_shared_policy_after_partial_commit(self):
+        for shared in (False, True):
+            pair = {"containers": {}, "network": {}}
+            if shared: pair["shared_cache"] = {"profile_sha256": "f" * 64}
+            control, _plan, _receipt = offline_fixture(active=(TOKEN + "\n").encode(),
+                plan_extra={"stopped_pair": pair})
+            self.assertIs(module._collection_shared_cache_mode(control, OPERATION, TOKEN), shared)
+            original = f"iteration/attempts/{TOKEN}/receipt.json"
+            control.records[original] += b" "
+            with self.assertRaises(BuildControlError):
+                module._collection_shared_cache_mode(control, OPERATION, TOKEN)
+        self.assertTrue(module._collection_shared_cache_mode(MemoryControl({}), OPERATION, TOKEN))
+
     def test_published_pending_chain_is_verified_but_not_reported_complete(self) -> None:
         active = (TOKEN + "\n").encode()
         control, plan, _receipt = offline_fixture(active=active)

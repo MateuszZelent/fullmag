@@ -1,5 +1,7 @@
 "use client";
 
+import { resolveViewport3DPresentationQuality } from "./viewport3dPresentation";
+
 import { useCallback, useSyncExternalStore } from "react";
 
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
@@ -57,8 +59,15 @@ export interface Viewport3DCommandState {
   fitRevision: number;
   renderedScalarRanges: Viewport3DRenderedScalarRange[];
   resetCameraRevision: number;
+  /** Keyboard/command equivalent of a ViewCube face click; consumed by the orientation HUD. */
+  viewDirectionRequest: Viewport3DViewDirectionRequest | null;
   visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
+}
+
+export interface Viewport3DViewDirectionRequest {
+  direction: [number, number, number];
+  revision: number;
 }
 
 type Viewport3DListener = () => void;
@@ -189,6 +198,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   fitRevision: 0,
   renderedScalarRanges: [],
   resetCameraRevision: 0,
+  viewDirectionRequest: null,
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraDialogOpen: false,
@@ -231,6 +241,17 @@ class Viewport3DStore {
     this.snapshot = {
       ...this.snapshot,
       fitRevision: this.snapshot.fitRevision + 1,
+    };
+    this.notify();
+  }
+
+  requestViewDirection(direction: [number, number, number]): void {
+    this.snapshot = {
+      ...this.snapshot,
+      viewDirectionRequest: {
+        direction,
+        revision: (this.snapshot.viewDirectionRequest?.revision ?? 0) + 1,
+      },
     };
     this.notify();
   }
@@ -310,10 +331,22 @@ class Viewport3DStore {
   }
 
   setAppearance(patch: Partial<Viewport3DAppearancePreferences>): void {
-    const appearance = applyViewport3DAppearancePatch(this.snapshot.appearance, patch);
-    if (sameViewport3DAppearancePreferences(this.snapshot.appearance, appearance)) return;
+    const current = this.snapshot;
+    const appearance = applyViewport3DAppearancePatch(current.appearance, patch);
+    if (sameViewport3DAppearancePreferences(current.appearance, appearance)) return;
+    const next = { ...current, appearance };
+    const preset = current.appearance.renderMode !== "presentation" && appearance.renderMode === "presentation"
+      ? applyFigurePresentationPreset(next)
+      : next;
     this.markPersistedPreferenceChange();
-    this.snapshot = { ...this.snapshot, appearance };
+    this.snapshot = {
+      ...preset,
+      appearanceDiagnostics: preset.widgets === current.widgets
+        ? current.appearanceDiagnostics
+        : buildViewport3DAppearanceDiagnostics(
+          preset.widgets, preset.visualProfileId, this.postProcessingDataProtected, this.postProcessingAvailable,
+        ),
+    };
     this.notify();
   }
 
@@ -351,6 +384,10 @@ class Viewport3DStore {
     if (resetAll || section === "lighting") {
       appearance = {
         ...appearance,
+        renderMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.renderMode,
+        materialRoughness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialRoughness,
+        materialMetalness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialMetalness,
+        softShadows: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.softShadows,
         lightingMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingMode,
         lightingIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingIntensity,
         lightingAzimuth: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingAzimuth,
@@ -363,6 +400,7 @@ class Viewport3DStore {
         ...appearance,
         aoIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoIntensity,
         aoRadius: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoRadius,
+        exportScale: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportScale,
         exportAnnotations: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportAnnotations,
       };
       widgets = {
@@ -608,19 +646,25 @@ class Viewport3DStore {
   }
 
   setVisualProfile(profileId: Viewport3DVisualProfileId): void {
+    const current = this.snapshot;
+    const preset = applyFigurePresentationPreset({
+      ...current,
+      captureReturnProfileId: null,
+      visualProfileId: profileId,
+    });
     if (
-      this.snapshot.visualProfileId === profileId &&
-      this.snapshot.captureReturnProfileId === null
+      current.visualProfileId === profileId &&
+      current.captureReturnProfileId === null &&
+      preset.appearance === current.appearance &&
+      preset.widgets === current.widgets
     ) {
       return;
     }
     if (profileId !== "capture") this.markPersistedPreferenceChange();
     this.snapshot = {
-      ...this.snapshot,
-      captureReturnProfileId: null,
-      visualProfileId: profileId,
+      ...preset,
       appearanceDiagnostics: buildViewport3DAppearanceDiagnostics(
-        this.snapshot.widgets,
+        preset.widgets,
         profileId,
         this.postProcessingDataProtected,
         this.postProcessingAvailable,
@@ -875,6 +919,22 @@ class Viewport3DStore {
 
 export const viewport3dStore = new Viewport3DStore();
 
+/** Apply the Figure preset on explicit selection or entry into Presentation.
+ * Subsequent individual effect edits and PNG export preserve user choices.
+ */
+function applyFigurePresentationPreset(state: Viewport3DCommandState): Viewport3DCommandState {
+  if ((state.captureReturnProfileId ?? state.visualProfileId) !== "figure" || state.appearance.renderMode !== "presentation") return state;
+  const { appearance, widgets } = state;
+  if (appearance.lightingMode === "studio" && appearance.softShadows && widgets.effectAmbientOcclusion) return state;
+  return {
+    ...state,
+    appearance: appearance.lightingMode === "studio" && appearance.softShadows
+      ? appearance
+      : { ...appearance, lightingMode: "studio", softShadows: true },
+    widgets: widgets.effectAmbientOcclusion ? widgets : { ...widgets, effectAmbientOcclusion: true },
+  };
+}
+
 ensureViewport3DPreferencesHydrated = createViewport3DPreferencesHydrationAdapter({
   applyPreferences: (preferences) =>
     viewport3dStore.hydratePersistedPreferences(preferences),
@@ -1017,6 +1077,7 @@ function buildViewport3DAppearanceDiagnostics(
     antialiasRequested: widgets.effectAntialias,
     bloomRequested: widgets.effectBloom,
     profileAllowsAntialias: getViewport3DVisualProfile(profileId).antialias,
+    profileAllowsAmbientOcclusion: resolveViewport3DPresentationQuality(profileId).aoEnabled,
     postProcessingAvailable,
     postProcessingDataProtected,
   });
@@ -1044,7 +1105,12 @@ function sameViewport3DAppearancePreferences(
   left: Viewport3DAppearancePreferences,
   right: Viewport3DAppearancePreferences,
 ): boolean {
-  return left.backgroundMode === right.backgroundMode &&
+  return left.renderMode === right.renderMode &&
+    left.materialRoughness === right.materialRoughness &&
+    left.materialMetalness === right.materialMetalness &&
+    left.softShadows === right.softShadows &&
+    left.exportScale === right.exportScale &&
+    left.backgroundMode === right.backgroundMode &&
     left.backgroundStrength === right.backgroundStrength &&
     left.lightingMode === right.lightingMode &&
     left.lightingIntensity === right.lightingIntensity &&

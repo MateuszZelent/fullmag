@@ -676,7 +676,7 @@ fn mesh_topology_binary_identity(
     Ok(Some((body.len(), sha256_hex(&body))))
 }
 
-fn estimated_fmmt_v2_len(mesh: &fullmag_runner::FemMeshPayload) -> Result<usize, ApiError> {
+pub(super) fn estimated_fmmt_v2_len(mesh: &fullmag_runner::FemMeshPayload) -> Result<usize, ApiError> {
     let sections = [
         (mesh.nodes.len(), 24_usize),
         (mesh.cells.types.len(), 4),

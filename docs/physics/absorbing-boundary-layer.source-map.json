@@ -2,14 +2,15 @@
   "document": {"path": "docs/physics/absorbing-boundary-layer.md"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "reference executable"},
-    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "Native CUDA rejects cellwise damping fields before launch."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "reason": "Single-grid planner and local alpha CUDA kernels exist; new-profile managed runtime qualification is separate."},
     {"solver": "FEM", "device": "CPU", "status": "implemented"},
     {"solver": "FEM", "device": "GPU", "status": "implemented", "reason": "The native material-field lane carries alpha_field; managed qualification is separate."}
   ],
   "equations": [
     {"id": "eq-alpha-additive", "symbols": ["alpha", "alpha0", "alpha_max", "w"], "sources": ["planner-profile"]},
     {"id": "eq-profile-coordinate", "symbols": ["t", "W", "d", "R"], "sources": ["planner-profile"]},
-    {"id": "eq-smootherstep", "symbols": ["p"], "sources": ["planner-profile"]}
+    {"id": "eq-smootherstep", "symbols": ["p"], "sources": ["ramp-evaluator"]},
+    {"id": "eq-abl-normalized-profiles", "symbols": ["p", "t"], "sources": ["ramp-evaluator"]}
   ],
   "symbols": [
     {"id": "alpha", "latex": "\\alpha(\\mathbf r)", "meaning": "local Gilbert damping supplied to LLG", "si_unit": "1"},
@@ -29,14 +30,18 @@
     {"id": "ir-validation", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "validate_absorbing_boundary", "responsibility": "Store and validate the optional typed absorbing-boundary module and its face/profile/frame enums."},
     {"id": "planner-profile", "path": "crates/fullmag-plan/src/material.rs", "symbol": "apply_absorbing_boundary_layer", "responsibility": "Evaluate the profile at FDM cells or FEM nodes and add it to resolved alpha."},
     {"id": "fem-materialization", "path": "crates/fullmag-plan/src/fem.rs", "symbol": "build_region_material_fields", "responsibility": "Carry the resolved FEM alpha field into the material plan."},
-    {"id": "cuda-gate", "path": "crates/fullmag-plan/src/validate.rs", "symbol": "validate_region_owned_planning", "responsibility": "Fail closed for FDM CUDA cellwise damping before native launch."},
+    {"id": "cuda-planner", "path": "crates/fullmag-plan/src/tests.rs", "symbol": "fdm_cuda_absorbing_boundary_plans_cellwise_damping", "responsibility": "Verify single-grid FDM CUDA planner materializes cellwise alpha."},
+    {"id": "ramp-evaluator", "path": "crates/fullmag-ir/src/absorbing_boundary.rs", "symbol": "ResolvedAbsorbingBoundaryProfile", "responsibility": "Evaluate normalized presets and validated authored expressions."},
+    {"id": "python-expression", "path": "packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py", "symbol": "compile_expression", "responsibility": "Validate the DSL expression and support Python analytic sampling."},
+    {"id": "script-expression", "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py", "symbol": "_render_absorbing_boundary", "responsibility": "Preserve authored expression and scalar precision in editable script export."},
     {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."},
     {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"}
   ],
   "public_api": {
     "parameters": [
-      {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "finite and >= 0", "meaning": "Base Gilbert damping", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA only when no cellwise field is produced", "problem_ir": "magnets[].material.damping"},
-      {"python": "film.alpha.absorbing_boundary(total_width=...)", "type": "module", "default": "disabled", "si_unit": "m and 1 by parameter", "validation": "positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame", "meaning": "Per-object additive damping layer", "backend_support": "FDM CPU/FEM CPU/FEM GPU; FDM CUDA rejects cellwise alpha", "problem_ir": "magnets[].absorbing_boundary"}
+      {"python": "film.alpha", "type": "float", "default": "required", "si_unit": "1", "validation": "finite and >= 0", "meaning": "Base Gilbert damping", "backend_support": "FDM CPU, single-grid FDM CUDA, FEM CPU/GPU", "problem_ir": "magnets[].material.damping"},
+      {"python": "film.alpha.absorbing_boundary(total_width=...)", "type": "module", "default": "disabled", "si_unit": "m and 1 by parameter", "validation": "positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame", "meaning": "Per-object additive damping layer", "backend_support": "FDM CPU, single-grid FDM CUDA, FEM CPU/GPU", "problem_ir": "magnets[].absorbing_boundary"},
+      {"python": "film.alpha.absorbing_boundary(expression=...)", "type": "str or None", "default": "None", "si_unit": "1", "validation": "Required for custom; finite normalized scalar ramp with endpoints 0 and 1", "meaning": "Formula in dimensionless ramp position u", "backend_support": "Common material-field planner", "problem_ir": "magnets[].absorbing_boundary.expression"}
     ]
   }
 }

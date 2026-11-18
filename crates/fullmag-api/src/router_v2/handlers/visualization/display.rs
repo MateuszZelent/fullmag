@@ -193,6 +193,7 @@ pub async fn replace_visualization_state(
     validate_planar_target_override_identities(&state, &replacement.planar.target_overrides)
         .await?;
     validate_planar_source_selection(&state, &replacement.planar.source).await?;
+    validate_planar_object_scope_identities(&state, Some(&replacement.planar.view_scope), Some(&replacement.planar.field_overlays)).await?;
     {
         let live_snapshot = state.current_live_state.read().await;
         let targets = build_visualization_target_registry(
@@ -298,6 +299,7 @@ pub async fn patch_visualization_state(
     crate::validate_current_live_request_context(&state, &request_context).await?;
     validate_visualization_state_patch(&update)?;
     if let Some(planar) = &update.planar {
+        validate_planar_object_scope_identities(&state, planar.view_scope.as_ref(), planar.field_overlays.as_deref()).await?;
         if let Some(target_overrides) = &planar.target_overrides {
             validate_planar_target_override_identities(&state, target_overrides).await?;
         }
@@ -664,7 +666,8 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         }
     }
     if let Some(
-        crate::schemas::visualization_state::PlanarViewScopeState::MeshPart { scope_id }
+        crate::schemas::visualization_state::PlanarViewScopeState::Object { scope_id }
+        | crate::schemas::visualization_state::PlanarViewScopeState::MeshPart { scope_id }
         | crate::schemas::visualization_state::PlanarViewScopeState::Layer { scope_id },
     ) = &patch.view_scope
     {
@@ -791,6 +794,40 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             "planar interaction must contain finite values and positive zoom",
         ));
     }
+    if let Some(overlays) = patch.field_overlays.as_ref() {
+        if overlays.len() > crate::schemas::visualization_state::PLANAR_FIELD_LAYERS_MAX {
+            return Err(ApiError::bad_request(format!(
+                "planar.field_overlays must contain at most {} entries",
+                crate::schemas::visualization_state::PLANAR_FIELD_LAYERS_MAX
+            )));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for overlay in overlays {
+            if overlay.id.trim().is_empty() || !ids.insert(overlay.id.trim()) {
+                return Err(ApiError::bad_request("planar.field_overlays requires unique non-empty ids"));
+            }
+            if overlay.quantity_id.trim().is_empty()
+                || fullmag_quantities::quantity_spec(&overlay.quantity_id).is_none()
+                || overlay.colormap.trim().is_empty()
+            {
+                return Err(ApiError::bad_request("planar.field_overlays requires a known quantity and non-empty colormap"));
+            }
+            let mut overlay_state = default_planar_visualization_state();
+            overlay_state.quantity_id = overlay.quantity_id.clone();
+            overlay_state.component = overlay.component;
+            validate_planar_tensor_projection(&overlay_state)?;
+            validate_planar_visualization_patch(&PlanarVisualizationPatch {
+                view_scope: Some(overlay.view_scope.clone()),
+                range: Some(overlay.range.clone()),
+                raster_opacity: Some(overlay.raster_opacity),
+                vector_style: Some(overlay.vector_style.clone()),
+                ..PlanarVisualizationPatch::default()
+            })?;
+        }
+    }
+    if let Some(Some(crop)) = patch.crop.as_ref() {
+        validate_planar_crop(crop)?;
+    }
     if let Some(multislice) = patch.multislice.as_ref() {
         let count = multislice.position_fractions.len();
         if !(crate::schemas::visualization_state::PLANAR_MULTISLICE_MIN_PANELS
@@ -805,6 +842,21 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
                 "planar.multislice requires 2 to 4 finite position fractions between 0 and 1",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_planar_crop(
+    crop: &crate::schemas::visualization_state::PlanarCropState,
+) -> Result<(), ApiError> {
+    let values = [crop.u_min_m, crop.u_max_m, crop.v_min_m, crop.v_max_m];
+    if values.iter().any(|value| !value.is_finite())
+        || crop.u_min_m >= crop.u_max_m
+        || crop.v_min_m >= crop.v_max_m
+    {
+        return Err(ApiError::bad_request(
+            "invalid_planar_crop: planar.crop requires finite u_min_m < u_max_m and v_min_m < v_max_m",
+        ));
     }
     Ok(())
 }
@@ -916,6 +968,8 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
     validate_planar_tensor_projection(state)?;
     validate_planar_visualization_patch(&PlanarVisualizationPatch {
         source: Some(state.source.clone()),
+        field_overlays: Some(state.field_overlays.clone()),
+        view_scope: Some(state.view_scope.clone()),
         default_slice: Some(state.default_slice.clone()),
         range: Some(state.range.clone()),
         raster_opacity: Some(state.raster_opacity),
@@ -924,8 +978,34 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         point_style: Some(state.point_style.clone()),
         vector_style: Some(state.vector_style.clone()),
         multislice: Some(state.multislice.clone()),
+        crop: Some(state.crop.clone()),
         ..PlanarVisualizationPatch::default()
     })
+}
+
+async fn validate_planar_object_scope_identities(
+    state: &Arc<AppState>,
+    view_scope: Option<&crate::schemas::visualization_state::PlanarViewScopeState>,
+    overlays: Option<&[crate::schemas::visualization_state::PlanarFieldOverlayState]>,
+) -> Result<(), ApiError> {
+    use crate::schemas::visualization_state::PlanarViewScopeState;
+    let object_ids = view_scope.into_iter()
+        .chain(overlays.unwrap_or_default().iter().map(|overlay| &overlay.view_scope))
+        .filter_map(|scope| match scope { PlanarViewScopeState::Object { scope_id } => Some(scope_id), _ => None })
+        .collect::<Vec<_>>();
+    if object_ids.is_empty() { return Ok(()); }
+    let targets = {
+        let selection = state.current_display_selection.read().await;
+        let presentation = state.current_display_presentation.read().await;
+        let live_snapshot = state.current_live_state.read().await;
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref()).targets
+    };
+    for object_id in object_ids {
+        if !targets.objects.iter().any(|target| target.scope_id == *object_id) {
+            return Err(ApiError::bad_request(format!("unknown_planar_object_scope: '{object_id}' is absent from the current target registry")));
+        }
+    }
+    Ok(())
 }
 
 async fn validate_planar_target_override_identities(
@@ -994,11 +1074,29 @@ fn apply_planar_visualization_patch(
     if let Some(visible) = patch.visible {
         state.visible = visible;
     }
+    // A crop lives in the u/v axes of one frame: a new source or plane makes
+    // it meaningless, so it is cleared unless the same patch supplies one.
+    let frame_changed = patch
+        .source
+        .as_ref()
+        .is_some_and(|source| *source != state.source)
+        || patch
+            .default_slice
+            .as_ref()
+            .is_some_and(|slice| slice.plane != state.default_slice.plane);
     if let Some(source) = &patch.source {
         state.source = source.clone();
     }
     if let Some(default_slice) = &patch.default_slice {
         state.default_slice = default_slice.clone();
+    }
+    match &patch.crop {
+        Some(crop) => state.crop = crop.clone(),
+        None if frame_changed => state.crop = None,
+        None => {}
+    }
+    if let Some(layer_model) = patch.layer_model {
+        state.layer_model = layer_model;
     }
     if let Some(view_scope) = &patch.view_scope {
         state.view_scope = view_scope.clone();
@@ -1047,6 +1145,9 @@ fn apply_planar_visualization_patch(
     }
     if let Some(interaction) = &patch.interaction {
         state.interaction = interaction.clone();
+    }
+    if let Some(field_overlays) = &patch.field_overlays {
+        state.field_overlays = field_overlays.clone();
     }
     if let Some(multislice) = &patch.multislice {
         state.multislice = multislice.clone();
@@ -1873,6 +1974,7 @@ fn empty_visualization_target_display_override() -> VisualizationTargetDisplayOv
         vectors: None,
         opacity: None,
         geometry_scope: None,
+        wireframe_geometry_scope: None,
     }
 }
 
@@ -2467,6 +2569,19 @@ fn observation_quantities_for_visualization_state(
     if planar_requests_spatial_observation(&visualization.planar) {
         candidates.push(visualization.planar.quantity_id.clone());
     }
+    if visualization.planar.visible {
+        for overlay in &visualization.planar.field_overlays {
+            if overlay.visible
+                && (overlay.raster_visible
+                    || overlay.vectors_visible
+                    || overlay.points_visible
+                    || overlay.contours_visible
+                    || overlay.streamlines_visible)
+            {
+                candidates.push(overlay.quantity_id.clone());
+            }
+        }
+    }
 
     let mut canonical = CurrentDisplaySelection::default();
     canonical.observation_quantities = candidates;
@@ -2763,6 +2878,7 @@ fn object_target_settings(
         bounds_visible: layers.bounds.visible,
         bounds_opacity: layers.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
+        wireframe_geometry_scope: Some(VisualizationTargetGeometryScope::Surface),
         opacity: layers.surface.opacity,
         point_color: "var(--fm-border-strong)".to_string(),
         point_opacity: layers.points.opacity,
@@ -2805,6 +2921,7 @@ fn airbox_target_settings(
         bounds_visible: layers.airbox.bounds.visible,
         bounds_opacity: layers.airbox.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
+        wireframe_geometry_scope: None,
         opacity: layers.airbox.surface.opacity,
         point_color: "var(--fm-info)".to_string(),
         point_opacity: layers.airbox.points.opacity,
@@ -2891,6 +3008,9 @@ fn apply_visualization_target_override(
         }
         if let Some(geometry_scope) = display.geometry_scope {
             settings.geometry_scope = geometry_scope;
+        }
+        if let Some(wireframe_geometry_scope) = display.wireframe_geometry_scope {
+            settings.wireframe_geometry_scope = Some(wireframe_geometry_scope);
         }
     }
     if let Some(style) = &override_state.style {
@@ -3235,3 +3355,7 @@ mod visualization_override_migration_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "display_field_overlay_tests.rs"]
+mod field_overlay_tests;

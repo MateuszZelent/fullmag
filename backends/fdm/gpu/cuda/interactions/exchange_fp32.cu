@@ -35,18 +35,21 @@ __global__ void exchange_field_fp32_kernel(
     const float * __restrict__ my,
     const float * __restrict__ mz,
     const uint8_t * __restrict__ active_mask,
-    const uint32_t * __restrict__ region_mask,
-    const double * __restrict__ exchange_lut,
+    const double * __restrict__ face_xp,
+    const double * __restrict__ face_yp,
+    const double * __restrict__ face_zp,
+    const double * __restrict__ ms_field,
     float * __restrict__ hx,
     float * __restrict__ hy,
     float * __restrict__ hz,
     int nx, int ny, int nz,
     int has_active_mask,
-    int has_region_mask,
-    int max_regions,
+    int has_faces,
     float inv_dx2, float inv_dy2, float inv_dz2,
     float prefactor,
     float inv_mu0_ms,
+    double two_over_mu0,
+    double two_a_over_mu0,
     bool periodic_x, bool periodic_y, bool periodic_z)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -64,8 +67,6 @@ __global__ void exchange_field_fp32_kernel(
         hz[idx] = 0.0f;
         return;
     }
-
-    uint32_t center_region = has_region_mask ? region_mask[idx] : 0u;
 
     int xm = pbc_neighbor_fp32(x, nx, 1, idx, -1, periodic_x);
     int xp = pbc_neighbor_fp32(x, nx, 1, idx, +1, periodic_x);
@@ -85,20 +86,13 @@ __global__ void exchange_field_fp32_kernel(
 
     float cx = mx[idx], cy = my[idx], cz = mz[idx];
 
-    if (has_region_mask) {
-        uint32_t r_xm = region_mask[xm];
-        uint32_t r_xp = region_mask[xp];
-        uint32_t r_ym = region_mask[ym];
-        uint32_t r_yp = region_mask[yp];
-        uint32_t r_zm = region_mask[zm];
-        uint32_t r_zp = region_mask[zp];
-
-        float A_xm = static_cast<float>(exchange_lut[center_region * max_regions + r_xm]);
-        float A_xp = static_cast<float>(exchange_lut[center_region * max_regions + r_xp]);
-        float A_ym = static_cast<float>(exchange_lut[center_region * max_regions + r_ym]);
-        float A_yp = static_cast<float>(exchange_lut[center_region * max_regions + r_yp]);
-        float A_zm = static_cast<float>(exchange_lut[center_region * max_regions + r_zm]);
-        float A_zp = static_cast<float>(exchange_lut[center_region * max_regions + r_zp]);
+    if (has_faces) {
+        float A_xm = static_cast<float>(face_xp[xm]);
+        float A_xp = static_cast<float>(face_xp[idx]);
+        float A_ym = static_cast<float>(face_yp[ym]);
+        float A_yp = static_cast<float>(face_yp[idx]);
+        float A_zm = static_cast<float>(face_zp[zm]);
+        float A_zp = static_cast<float>(face_zp[idx]);
 
         float ex = A_xp * (mx[xp] - cx) * inv_dx2 + A_xm * (mx[xm] - cx) * inv_dx2
                  + A_yp * (mx[yp] - cx) * inv_dy2 + A_ym * (mx[ym] - cx) * inv_dy2
@@ -112,9 +106,12 @@ __global__ void exchange_field_fp32_kernel(
                  + A_yp * (mz[yp] - cz) * inv_dy2 + A_ym * (mz[ym] - cz) * inv_dy2
                  + A_zp * (mz[zp] - cz) * inv_dz2 + A_zm * (mz[zm] - cz) * inv_dz2;
 
-        hx[idx] = inv_mu0_ms * ex;
-        hy[idx] = inv_mu0_ms * ey;
-        hz[idx] = inv_mu0_ms * ez;
+        const float scale = ms_field
+            ? static_cast<float>(two_over_mu0 / ms_field[idx])
+            : inv_mu0_ms;
+        hx[idx] = scale * ex;
+        hy[idx] = scale * ey;
+        hz[idx] = scale * ez;
     } else {
         float lap_x = (mx[xp] - 2.0f * cx + mx[xm]) * inv_dx2
                     + (mx[yp] - 2.0f * cx + mx[ym]) * inv_dy2
@@ -128,9 +125,12 @@ __global__ void exchange_field_fp32_kernel(
                     + (mz[yp] - 2.0f * cz + mz[ym]) * inv_dy2
                     + (mz[zp] - 2.0f * cz + mz[zm]) * inv_dz2;
 
-        hx[idx] = prefactor * lap_x;
-        hy[idx] = prefactor * lap_y;
-        hz[idx] = prefactor * lap_z;
+        const float scale = ms_field
+            ? static_cast<float>(two_a_over_mu0 / ms_field[idx])
+            : prefactor;
+        hx[idx] = scale * lap_x;
+        hy[idx] = scale * lap_y;
+        hz[idx] = scale * lap_z;
     }
 }
 
@@ -154,18 +154,21 @@ void launch_exchange_field_fp32(Context &ctx, cudaStream_t stream) {
         static_cast<const float*>(ctx.m.y),
         static_cast<const float*>(ctx.m.z),
         ctx.active_mask,
-        ctx.region_mask,
-        ctx.exchange_lut,
+        ctx.exchange_face_xp,
+        ctx.exchange_face_yp,
+        ctx.exchange_face_zp,
+        ctx.ms_field,
         static_cast<float*>(ctx.h_ex.x),
         static_cast<float*>(ctx.h_ex.y),
         static_cast<float*>(ctx.h_ex.z),
         ctx.nx, ctx.ny, ctx.nz,
         ctx.has_active_mask ? 1 : 0,
-        ctx.has_region_mask ? 1 : 0,
-        FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+        ctx.has_exchange_faces ? 1 : 0,
         inv_dx2, inv_dy2, inv_dz2,
         prefactor,
         inv_mu0_ms,
+        2.0 / MU0,
+        2.0 * ctx.A / MU0,
         ctx.periodic_x, ctx.periodic_y, ctx.periodic_z);
     const cudaError_t launch_error = cudaGetLastError();
     if (launch_error != cudaSuccess) {

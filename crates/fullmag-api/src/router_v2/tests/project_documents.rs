@@ -784,6 +784,24 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
         material_transition: None,
         realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
     });
+    let authored_reference =
+        fullmag_plan::authored_initial_state_reference(&study.steps[0].step_id, &problem).unwrap();
+    study.steps[0].inputs.push(fullmag_authoring::StudyInputPort {
+        port_id: "initial_state".into(),
+        data_kind: StudyPortDataKind::State,
+        required: true,
+        source: fullmag_authoring::StudyInputSource::AuthoredInitialState {
+            reference: authored_reference,
+        },
+    });
+    let mut foreign_study = study.clone();
+    foreign_study.steps[0].inputs[0].source = fullmag_authoring::StudyInputSource::AuthoredInitialState {
+        reference: fullmag_plan::authored_initial_state_reference("another-step", &problem).unwrap(),
+    };
+    assert!(StudyProblemCatalog::from_entries(
+        &foreign_study,
+        vec![StudyProblemCatalogEntry::from_step(&foreign_study.steps[0], problem.clone())],
+    ).is_err());
     let catalog = StudyProblemCatalog::from_entries(
         &study,
         vec![StudyProblemCatalogEntry::from_step(
@@ -2226,6 +2244,7 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     .unwrap();
     assert_eq!(queued.task, queued_replay.task);
     assert_eq!(queued.resolved_inputs, queued_replay.resolved_inputs);
+    assert!(queued.resolved_inputs.is_empty(), "authored state has no CAS input");
     assert_eq!(queued.step_id, step.step_id);
     let queued_inputs = queued.resolved_inputs;
     let mut task = queued.task;
@@ -2508,6 +2527,16 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
             case_id: "default".into(),
         },
     }];
+    assert_eq!(
+        crate::accepted_study_worker::materialize_resolved_study_inputs(&store, &worker_step).unwrap(),
+        accepted_execution_plan,
+    );
+    let mut authored_with_unexpected_artifact = worker_step.clone();
+    authored_with_unexpected_artifact.resolved_input.inputs = resolved_inputs.clone();
+    assert!(crate::accepted_study_worker::materialize_resolved_study_inputs(
+        &store, &authored_with_unexpected_artifact,
+    ).is_err());
+
     let mut worker_step_with_input = worker_step.clone();
     worker_step_with_input.study_inputs = declared_inputs.to_vec();
     worker_step_with_input.resolved_input.inputs = resolved_inputs;
@@ -3617,11 +3646,83 @@ async fn explicit_project_run_submit_is_durable_and_replays_without_live_session
     );
     assert!(terminal_scalar.study_output.is_none());
     assert!(!solution_artifact_ids.contains(terminal_scalar.artifact_id.as_str()));
+    let terminal_completion_entries = output_catalog
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.artifact_type
+                == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_completion_entries.len(), 1);
+    let terminal_completion = terminal_completion_entries[0];
+    assert_eq!(terminal_completion.task_id, claim.task_id.as_str());
+    assert_eq!(terminal_completion.attempt_id, claim.attempt_id.as_str());
+    assert_eq!(
+        terminal_completion.ownership_epoch,
+        claim.ownership_epoch.value()
+    );
+    assert_eq!(
+        terminal_completion.status,
+        fullmag_session::FmsArtifactStatus::Published
+    );
+    assert!(!terminal_completion.required);
+    assert!(terminal_completion.study_output.is_none());
+    // Completion is separately pinned system evidence, not an authored output
+    // or a SolutionSet member. Validate its CAS digest and exact terminal state
+    // before excluding this specific artifact from the membership comparison.
+    let completion_record = crate::accepted_field_materialization_worker::read_terminal_completion(
+        &store,
+        terminal_completion,
+    )
+    .expect("terminal completion evidence is durably stored with a valid CAS digest");
+    assert_eq!(completion_record.run_id, accepted_run_id.as_str());
+    assert_eq!(completion_record.step_id, step.step_id);
+    assert_eq!(completion_record.source, *accepted_state_ref);
+    assert_eq!(
+        completion_record.state_object_ref,
+        output_entry.content_sha256
+    );
+    assert_eq!(
+        completion_record.input_fingerprint,
+        published_task.input_fingerprint
+    );
+    assert_eq!(
+        completion_record.resolved_input_fingerprint,
+        published_task.resolved_input_fingerprint
+    );
+    let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+        fullmag_application::decode_study_artifact_bytes(
+            "state",
+            &observation_source.state_codec_id,
+            &observation_source.state_codec_version,
+            &output_bytes,
+        )
+        .unwrap()
+    else {
+        panic!("final state must decode as accepted magnetization");
+    };
+    assert_eq!(completion_record.clock.accepted_step, final_state.step);
+    assert_eq!(
+        completion_record.clock.time_seconds.to_bits(),
+        final_state.time_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.solver_dt_s.to_bits(),
+        final_state.solver_dt_s.to_bits()
+    );
+    assert_eq!(
+        completion_record.clock.dt_seconds,
+        (final_state.solver_dt_s > 0.0).then_some(final_state.solver_dt_s)
+    );
+    assert_eq!(completion_record.completion.status, "completed");
+    assert!(!solution_artifact_ids.contains(terminal_completion.artifact_id.as_str()));
     let expected_solution_artifact_ids = output_catalog
         .entries
         .iter()
         .filter(|entry| {
             entry.artifact_id != accepted_quantity_bundle.artifact_id
+                && entry.artifact_id != terminal_completion.artifact_id
                 && entry.artifact_type
                     != crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE
         })

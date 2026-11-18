@@ -247,14 +247,15 @@ def resolve_defaults(
     port: int | str | None = None,
     environ: Mapping[str, str] | None = None,
     cwd: Path | str | None = None,
+    include_host_settings: bool = True,
 ) -> ScriptDefaults:
-    """Resolve source and port with explicit, deterministic precedence."""
+    """Resolve defaults; image-only callers can omit host storage settings."""
     repo = Path(repo).resolve(strict=True)
     environ = os.environ if environ is None else environ
     known = _known_checkouts(repo)
     main = known[0]
     dotenv = _read_dotenv(main / ".env")
-    settings = _read_host_settings(repo, main, dotenv, environ)
+    settings = _read_host_settings(repo, main, dotenv, environ) if include_host_settings else {}
 
     if source_root is not None and str(source_root).strip():
         selected = _registered_source(source_root, known, "explicit source root")
@@ -375,8 +376,18 @@ def _verified_original_attempts(control: BuildControl, current: Mapping[str, obj
     return candidates
 
 
-def _validate_live_network(backend_id: str, frontend_id: str, project: str, port: int) -> None:
-    """Require the exact loopback frontend and unpublished private backend."""
+def _validate_live_network(
+    backend_id: str,
+    frontend_id: str,
+    project: str,
+    port: int,
+    *,
+    frontend_required: bool = True,
+    expected_network: str | None = None,
+) -> None:
+    """Require the private backend and exact running or explicitly stopped frontend."""
+    if type(frontend_required) is not bool:
+        raise DiscoveryError("frontend readiness policy must be boolean")
     import docker_volume_activate as activate
 
     records = {}
@@ -391,7 +402,16 @@ def _validate_live_network(backend_id: str, frontend_id: str, project: str, port
     for service, record in records.items():
         state = record.get("State")
         health = state.get("Health") if isinstance(state, Mapping) else None
-        if not isinstance(state, Mapping) or state.get("Running") is not True:
+        if not isinstance(state, Mapping):
+            raise DiscoveryError(f"{service} state is invalid")
+        if service == "frontend" and not frontend_required:
+            if state.get("Running") is not False or state.get("Status") not in {"created", "exited"}:
+                raise DiscoveryError("headless frontend must be stopped")
+            if (state.get("Status") == "exited"
+                    and (state.get("ExitCode") != 0 or state.get("OOMKilled") is not False)):
+                raise DiscoveryError("headless frontend has an unexpected exit or OOM outcome")
+            continue
+        if state.get("Running") is not True:
             raise DiscoveryError(f"running {service} is not running")
         if not isinstance(health, Mapping) or health.get("Status") != "healthy":
             raise DiscoveryError(f"running {service} health is not healthy")
@@ -408,7 +428,8 @@ def _validate_live_network(backend_id: str, frontend_id: str, project: str, port
     if not isinstance(networks, Mapping) or len(networks) != 1:
         raise DiscoveryError("running backend does not have one private application network")
     network_name = next(iter(networks))
-    if not isinstance(network_name, str) or not network_name:
+    if (not isinstance(network_name, str) or not network_name
+            or (expected_network is not None and network_name != expected_network)):
         raise DiscoveryError("running backend network name is invalid")
     try:
         network = json.loads(activate._docker_text("network", "inspect", network_name))
@@ -421,10 +442,17 @@ def _validate_live_network(backend_id: str, frontend_id: str, project: str, port
     consumers = network_record.get("Containers", {})
     if not isinstance(labels, Mapping):
         raise DiscoveryError("running application network labels are invalid")
+    consumer_ids = set(consumers) if isinstance(consumers, Mapping) else set()
+    consumers_match = (
+        consumer_ids == {backend_id, frontend_id}
+        if frontend_required
+        else backend_id in consumer_ids and consumer_ids.issubset({backend_id, frontend_id})
+    )
     if (network_record.get("Driver") != "bridge"
             or labels.get("com.docker.compose.project") != project
+            or (expected_network is not None and labels.get("com.docker.compose.network") != "fullmag")
             or not isinstance(consumers, Mapping)
-            or set(consumers) != {backend_id, frontend_id}):
+            or not consumers_match):
         raise DiscoveryError("running application network has unknown ownership or consumers")
     frontend_network_settings = records["frontend"].get("NetworkSettings", {})
     if not isinstance(frontend_network_settings, Mapping):
@@ -446,6 +474,9 @@ def _discover_pins(
     defaults: ScriptDefaults,
     *,
     requested_port: int | None = None,
+    expected_attempt: str | None = None,
+    expected_config_sha256: str | None = None,
+    frontend_required: bool = True,
 ) -> ScriptPins:
     from docker_dev import _compose_identity, STORAGE_PROFILE
     from docker_development_inputs import select_checkout
@@ -477,11 +508,19 @@ def _discover_pins(
             or volume.get("Options") or not isinstance(labels, Mapping)
             or any(labels.get(key) != value for key, value in control.shared_labels.items())):
         raise DiscoveryError("existing DEV control volume belongs to another group")
-    current = control.read("development/current.json", optional=True)
-    if not isinstance(current, Mapping):
-        raise DiscoveryError("development/current.json is missing or is not an object")
+    if (expected_attempt is None) != (expected_config_sha256 is None):
+        raise DiscoveryError("explicit attempt and configuration pins must be paired")
+    if expected_attempt is not None:
+        if not ATTEMPT_RE.fullmatch(expected_attempt) or not SHA256_RE.fullmatch(expected_config_sha256):
+            raise DiscoveryError("explicit attempt or configuration pin is invalid")
+        attempts = [expected_attempt]
+    else:
+        current = control.read("development/current.json", optional=True)
+        if not isinstance(current, Mapping):
+            raise DiscoveryError("development/current.json is missing or is not an object")
+        attempts = _verified_original_attempts(control, current)
     candidates: dict[tuple[str, str, str, str], int] = {}
-    for attempt in _verified_original_attempts(control, current):
+    for attempt in attempts:
         root = "development/attempts/" + attempt
         terminal = control.read(root + "/terminal.json")
         document = control.read(root + "/compose.json")
@@ -490,6 +529,8 @@ def _discover_pins(
         if terminal.get("compose_project") != control.project or document.get("name") != control.project:
             continue
         config_sha256 = hashlib.sha256(canonical(document)).hexdigest()
+        if expected_config_sha256 is not None and config_sha256 != expected_config_sha256:
+            continue
         if terminal.get("config_sha256") not in (None, config_sha256):
             continue
         inputs = terminal.get("inputs")
@@ -512,17 +553,25 @@ def _discover_pins(
                 backend_id, frontend_id = activate._validate_running_group(
                     control, identity, document, runtime_terminal, image,
                     source_root=str(selected),
+                    frontend_required=frontend_required,
                 )
                 actual_port = _document_port(document)
                 if requested_port is not None and actual_port != requested_port:
                     continue
-                _validate_live_network(backend_id, frontend_id, control.project, actual_port)
+                _validate_live_network(
+                    backend_id, frontend_id, control.project, actual_port,
+                    frontend_required=frontend_required,
+                    expected_network=identity.get("network_name"),
+                )
             except BuildControlError:
                 continue
             candidates[(attempt, config_sha256, backend_id, frontend_id)] = actual_port
     if len(candidates) != 1:
         if not candidates:
-            raise DiscoveryError("no exactly validated running DEV group matches the selected source")
+            mode = "headless" if not frontend_required else "GUI"
+            raise DiscoveryError(
+                f"no exactly validated {mode} DEV group matches the selected source"
+            )
         raise DiscoveryError("multiple validated running DEV groups match the selected source")
     (attempt, config_sha256, backend_id, frontend_id), actual_port = next(iter(candidates.items()))
     return ScriptPins(attempt=attempt, config_sha256=config_sha256,
@@ -533,6 +582,9 @@ def _discover_pins(
 
 def activate_discovered(args) -> None:
     """Resolve pins, then invoke the unchanged explicit activation operation."""
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DiscoveryError("Script activation cuda trace opt-in must be a boolean")
     require_host()
     repo = Path(args.repo_root).resolve(strict=True)
     defaults = resolve_defaults(repo, source_root=getattr(args, "source_root", None),
@@ -541,6 +593,7 @@ def activate_discovered(args) -> None:
         repo,
         defaults,
         requested_port=(defaults.port if getattr(args, "port", None) is not None else None),
+        frontend_required=not bool(getattr(args, "headless", False)),
     )
     from docker_volume_activate import activate
     activate(argparse.Namespace(
@@ -550,4 +603,6 @@ def activate_discovered(args) -> None:
         source_root=pins.source_root,
         script=args.script,
         request_id=getattr(args, "request_id", None),
+        headless=bool(getattr(args, "headless", False)),
+        cuda_trace=cuda_trace,
     ))

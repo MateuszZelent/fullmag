@@ -32,9 +32,9 @@ source_of_truth: "FDM schema and runner preflight"
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $\mathbf H_a$ | field on layer $a$ | A m^-1 |
-| $\mathcal N_{ab}$ | cross-kernel | 1 |
-| $\mathbf M_b$ | magnetization on layer $b$ | A m^-1 |
+| $\mathbf H_a$ | field on layer $a$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathcal N_{ab}$ | cross-kernel | $1$ |
+| $\mathbf M_b$ | magnetization on layer $b$ | $\mathrm{A\,m^{-1}}$ |
 
 (fdm-multi-magnet-grids-assumptions-and-validity)=
 ## Assumptions and validity
@@ -93,19 +93,19 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `FDMGrid.cell` | `Sequence[float]` | required | m | exactly three positive finite values | native cell dimensions | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `per_magnet.<name>.cell` |
-| `FDM.cell` | `Sequence[float] \| None` | `None` | m | exclusive with `default_cell`; three positive finite values | compatibility alias for default grid | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `cell` and `default_cell` |
-| `FDM.default_cell` | `Sequence[float] \| None` | `None` | m | three positive finite values | default grid | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `default_cell` |
-| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | m | non-empty names and `FDMGrid` values | named grid overrides | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `per_magnet` |
-| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | `FDMDemag` annotation; no constructor type guard; `.to_ir()` is called when present | nested demag policy | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag` |
-| `FDMDemag.strategy` | `str` | `auto` | 1 | `auto`, `single_grid`, or `multilayer_convolution`; `single_grid` rejects multiple magnets | demag strategy | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.strategy` |
-| `FDMDemag.mode` | `str` | `auto` | 1 | `auto`, `two_d_stack`, `three_d` | grid topology mode | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.mode` |
+| `FDMGrid.cell` | `Sequence[float]` | required | $\mathrm{m}$ | exactly three positive finite values | native cell dimensions | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `per_magnet.<name>.cell` |
+| `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | exclusive with `default_cell`; three positive finite values | compatibility alias for default grid | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `cell` and `default_cell` |
+| `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | three positive finite values | default grid | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `default_cell` |
+| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $\mathrm{m}$ | non-empty names and `FDMGrid` values | named grid overrides | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `per_magnet` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | `FDMDemag` annotation; no constructor type guard; `.to_ir()` is called when present | nested demag policy | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag` |
+| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, or `multilayer_convolution`; `single_grid` rejects multiple magnets | demag strategy | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.strategy` |
+| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, `three_d` | grid topology mode | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.mode` |
 | `FDMDemag.common_cells` | `tuple[int, int, int] \| None` | `None` | cells | three positive integers; exclusive with `common_cells_xy` and `common_cell_size`; incompatible with `two_d_stack` | common 3-D cell counts | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.common_cells` |
 | `FDMDemag.common_cells_xy` | `tuple[int, int] \| None` | `None` | cells | positive values; only `auto` or `two_d_stack` | common in-plane cells | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.common_cells_xy` |
-| `FDMDemag.common_cell_size` | `tuple[float, float, float] \| None` | `None` | m | positive finite; exclusive with count fields; forbidden with explicit `two_d_stack`; must divide every common extent without rounding | common convolution cell size | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.common_cell_size` |
-| `FDMDemag.fft_backend` | `str` | `auto` | 1 | explicit choice requires active demag; `fftw` and `mkl` unavailable; `rustfft` CPU; `cufft` CUDA | requested FFT backend | `auto` resolves by lane; `rustfft` CPU; `cufft` CUDA; `fftw`/`mkl` unsupported | `demag.fft_backend` |
-| `FDMDemag.explain` | `bool` | `True` | 1 | no runtime type guard | authoring-only explanation flag | authoring only; not a backend capability | not lowered |
-| `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | 1 | any non-`None` value raises `ValueError` | removed compatibility input | unsupported on all lanes | no field; construction fails |
+| `FDMDemag.common_cell_size` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m}$ | positive finite; exclusive with count fields; forbidden with explicit `two_d_stack`; must divide every common extent without rounding | common convolution cell size | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `demag.common_cell_size` |
+| `FDMDemag.fft_backend` | `str` | `auto` | $1$ | explicit choice requires active demag; `fftw` and `mkl` unavailable; `rustfft` CPU; `cufft` CUDA | requested FFT backend | `auto` resolves by lane; `rustfft` CPU; `cufft` CUDA; `fftw`/`mkl` unsupported | `demag.fft_backend` |
+| `FDMDemag.explain` | `bool` | `True` | $1$ | no runtime type guard | authoring-only explanation flag | authoring only; not a backend capability | not lowered |
+| `FDMDemag.allow_single_grid_fallback` | `bool \| None` | `None` | $1$ | any non-`None` value raises `ValueError` | removed compatibility input | unsupported on all lanes | no field; construction fails |
 
 (fdm-multi-magnet-grids-problem-ir)=
 ## ProblemIR

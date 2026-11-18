@@ -13,7 +13,15 @@ import {
 } from "@/shared/ui/Dialog";
 import { Button } from "@/shared/ui/Button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
+import {
+  VIEWPORT_3D_CAPTURE_PROFILE_DESCRIPTION,
+  VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS,
+  VIEWPORT_3D_QUALITY_PROFILE_LABELS,
+  VIEWPORT_3D_QUALITY_PROFILE_OPTIONS,
+  type Viewport3DQualityProfileId,
+} from "@/shared/viewport3dQualityLabels";
 
+import { Viewport3DVisualizationModeControl } from "./Viewport3DVisualizationModeControl";
 import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
 
 function EffectToggle({
@@ -59,6 +67,21 @@ function EffectToggle({
 export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string) => void }) {
   const state = useViewport3DCommandState();
   const a = state.appearance;
+  const isTemporaryCapture = state.visualProfileId === "capture" &&
+    state.captureReturnProfileId !== null;
+  const selectedQuality = state.visualProfileId === "capture" &&
+    state.captureReturnProfileId !== null
+    ? state.captureReturnProfileId
+    : state.visualProfileId;
+  const currentQualityLabel = selectedQuality === "capture"
+    ? "Capture"
+    : VIEWPORT_3D_QUALITY_PROFILE_LABELS[selectedQuality];
+  const qualityDescription = selectedQuality === "capture"
+    ? VIEWPORT_3D_CAPTURE_PROFILE_DESCRIPTION
+    : VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS[selectedQuality as Viewport3DQualityProfileId];
+  const qualityOptions = selectedQuality === "capture"
+    ? [...VIEWPORT_3D_QUALITY_PROFILE_OPTIONS, ["capture", "Capture"] as const]
+    : VIEWPORT_3D_QUALITY_PROFILE_OPTIONS;
 
   const isOpen = state.widgets.settingsDialogOpen;
   const { effectAmbientOcclusion, effectAntialias, effectBloom } = state.widgets;
@@ -77,6 +100,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
         </DialogHeader>
 
         <div className="fm-viewport-3d__settings-body">
+          <Viewport3DVisualizationModeControl />
           <SettingsSection title="Background" onReset={() => onCommand("viewport-3d.reset-appearance-background")}>
             <Choice id="fm-view-background" label="Background" value={a.backgroundMode} options={[["gradient", "Subtle gradient"], ["solid", "Solid"]]} onChange={(v) => viewport3dStore.setAppearance({ backgroundMode: v as typeof a.backgroundMode })} />
             <Range id="fm-view-background-strength" label="Gradient strength" value={a.backgroundStrength} min={0} max={1} step={0.05} disabled={a.backgroundMode === "solid"} onChange={(backgroundStrength) => viewport3dStore.setAppearance({ backgroundStrength })} />
@@ -98,6 +122,11 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             <Range id="fm-view-light-azimuth" label="Light azimuth (deg)" value={a.lightingAzimuth} min={-180} max={180} step={1} disabled={a.lightingMode === "flat"} onChange={(lightingAzimuth) => viewport3dStore.setAppearance({ lightingAzimuth })} />
             <Range id="fm-view-light-elevation" label="Light elevation (deg)" value={a.lightingElevation} min={-85} max={85} step={1} disabled={a.lightingMode === "flat"} onChange={(lightingElevation) => viewport3dStore.setAppearance({ lightingElevation })} />
             {a.lightingMode === "flat" ? <p>Flat geometry uses unlit materials; studio light controls are inactive.</p> : null}
+            {a.renderMode === "presentation" ? <>
+              <Range id="fm-view-roughness" label="Surface roughness" value={a.materialRoughness} min={0.05} max={1} step={0.05} onChange={(materialRoughness) => viewport3dStore.setAppearance({ materialRoughness })} />
+              <Range id="fm-view-metalness" label="Surface metalness" value={a.materialMetalness} min={0} max={1} step={0.05} onChange={(materialMetalness) => viewport3dStore.setAppearance({ materialMetalness })} />
+              <EffectToggle id="fm-view-shadows" label="Soft shadows" description={`Filtered geometry shadows; unavailable in ${VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"]} quality.`} enabled={a.softShadows} onToggle={(softShadows) => viewport3dStore.setAppearance({ softShadows })} />
+            </> : null}
           </SettingsSection>
           <SettingsSection title="Camera">
             <p>Camera position and target use meters (SI). Camera state belongs to the current session or inspected dataset.</p>
@@ -107,12 +136,15 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
             </div>
           </SettingsSection>
           <SettingsSection title="Quality and effects" onReset={() => onCommand("viewport-3d.reset-appearance-effects")}>
-          <Choice id="fm-view-quality" label="Render quality" value={state.visualProfileId === "capture" ? state.captureReturnProfileId ?? "interactive" : state.visualProfileId} options={[["interactive-lite", "Interactive Lite"], ["interactive", "Interactive"], ["balanced", "Balanced"], ["figure", "Figure"]]} onChange={(v) => viewport3dStore.setVisualProfile(v as typeof state.visualProfileId)} />
+          <Choice id="fm-view-quality" label="Quality profile" value={selectedQuality} options={qualityOptions} describedBy="fm-view-quality-dialog-help fm-view-quality-dialog-description" onChange={(v) => viewport3dStore.setVisualProfile(v as typeof selectedQuality)} />
+          <p id="fm-view-quality-dialog-help">Quality controls render detail and GPU cost. Scientific preserves exact field colors.</p>
+          <p id="fm-view-quality-dialog-description">{qualityDescription}</p>
+          <p id="fm-view-quality-dialog-status" role="status">{isTemporaryCapture ? `Active quality: ${currentQualityLabel}. Exporting PNG.` : `Active quality: ${currentQualityLabel}.`}</p>
           <EffectToggle id="fm-viewport-3d-effect-antialias" label="Anti-Aliasing" description="Smooths polygon boundaries within the selected quality profile." enabled={effectAntialias} onToggle={(v) => viewport3dStore.setEffectAntialias(v)} />
           <EffectToggle
             id="fm-viewport-3d-effect-ambient-occlusion"
             label="Ambient occlusion"
-            description="Contact and crevice shading for geometry. Disabled where it would alter quantitative field colors."
+            description="Contact and crevice shading, including on field-colored surfaces in Presentation."
             enabled={effectAmbientOcclusion}
             onToggle={(v) => viewport3dStore.setEffectAmbientOcclusion(v)}
           />
@@ -120,7 +152,7 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           <EffectToggle
             id="fm-viewport-3d-effect-bloom"
             label="Bloom (Glow)"
-            description="Presentation effect for geometry; unavailable for quantitative field colors."
+            description="Glow for Presentation geometry and field-colored surfaces. Scientific preserves exact field colors."
             enabled={effectBloom}
             onToggle={(v) => viewport3dStore.setEffectBloom(v)}
           />
@@ -130,7 +162,8 @@ export function Viewport3DSettingsDialog({ onCommand }: { onCommand: (id: string
           </SettingsSection>
           <SettingsSection title="Image export">
             <Choice id="fm-view-export-background" label="PNG background" value={a.exportBackground} options={[["view", "Match viewport"], ["transparent", "Transparent"]]} onChange={(v) => viewport3dStore.setAppearance({ exportBackground: v as typeof a.exportBackground })} />
-            {a.exportBackground === "transparent" ? <p>Transparent PNG preserves field colors and omits AO and Bloom.</p> : null}
+            <Choice id="fm-view-export-scale" label="PNG resolution" value={String(a.exportScale)} options={[["1", "1× viewport"], ["2", "2× viewport"], ["4", "4× viewport"]]} onChange={(v) => viewport3dStore.setAppearance({ exportScale: Number(v) as typeof a.exportScale })} />
+            <p>PNG is rendered at the selected resolution with the current geometry effects. Large exports may require a lower scale on this device.</p>
             <EffectToggle id="fm-view-export-annotations" label="Include annotations" description="Include the reference scale, legend and orientation in the captured image." enabled={a.exportAnnotations} onToggle={(exportAnnotations) => viewport3dStore.setAppearance({ exportAnnotations })} />
             <Button variant="secondary" onClick={() => { viewport3dStore.setSettingsDialogOpen(false); onCommand("viewport-3d.capture-frame"); }}>Export PNG</Button>
           </SettingsSection>
@@ -153,10 +186,10 @@ function SettingsSection({ title, onReset, children }: { title: string; onReset?
   return <fieldset className="fm-viewport-3d__settings-section"><legend>{title}</legend>{children}{onReset ? <Button size="sm" variant="secondary" onClick={onReset}>Reset {title.toLowerCase()}</Button> : null}</fieldset>;
 }
 
-function Choice({ id, label, value, options, disabled = false, onChange }: { id: string; label: string; value: string; options: readonly (readonly [string, string])[]; disabled?: boolean; onChange: (value: string) => void }) {
-  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label}</label><Select value={value} disabled={disabled} onValueChange={onChange}><SelectTrigger id={id}><SelectValue /></SelectTrigger><SelectContent>{options.map(([key, text]) => <SelectItem key={key} value={key}>{text}</SelectItem>)}</SelectContent></Select></div>;
+function Choice({ id, label, value, options, disabled = false, describedBy, onChange }: { id: string; label: string; value: string; options: readonly (readonly [string, string])[]; disabled?: boolean; describedBy?: string; onChange: (value: string) => void }) {
+  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label}</label><Select value={value} disabled={disabled} onValueChange={onChange}><SelectTrigger id={id} aria-describedby={describedBy}><SelectValue>{options.find(([key]) => key === value)?.[1]}</SelectValue></SelectTrigger><SelectContent>{options.map(([key, text]) => <SelectItem key={key} value={key}>{text}</SelectItem>)}</SelectContent></Select></div>;
 }
 
 function Range({ id, label, value, min, max, step, disabled = false, onChange }: { id: string; label: string; value: number; min: number; max: number; step: number; disabled?: boolean; onChange: (value: number) => void }) {
-  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label} <output htmlFor={id}>{Number(value.toFixed(3))}</output></label><input id={id} type="range" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /></div>;
+  return <div className="fm-viewport-3d__settings-field"><label htmlFor={id}>{label} <output htmlFor={id}>{Number(value.toFixed(3))}</output></label><input id={id} type="range" aria-valuetext={String(Number(value.toFixed(3)))} value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.currentTarget.valueAsNumber)} /></div>;
 }

@@ -15,50 +15,40 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The prescribed SOT contract is canonical v1 and requires a typed target and drive.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates the module name, typed target region, drive object, spin-orbit torque efficiencies, and free-layer thickness in Python, while `to_ir_module()` emits the canonical `prescribed_sot.v1` `ProblemIR` module record.
 
 (python-api-interactions-spin-orbit-torque-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-spin_orbit_torque
-
-q_{\mathrm{IR}} = \mathrm{spin_orbit_torque}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object spin_orbit_torque. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+Prescribed spin–orbit torque applies damping-like ($\xi_{\mathrm{DL}}$) and field-like ($\xi_{\mathrm{FL}}$) torques proportional to an injected charge current density $\mathbf{J}_c$ over a free layer of thickness $t_F$: $\mathbf{T}_{\mathrm{SOT}} \propto \frac{\hbar}{2 e M_s t_F}\big[\xi_{\mathrm{DL}}\,\mathbf{m}\times(\mathbf{m}\times\boldsymbol{\sigma}) + \xi_{\mathrm{FL}}\,\mathbf{m}\times\boldsymbol{\sigma}\big]$. Full continuum definitions and formula versioning are documented in {doc}`../../physics/interactions/spin-orbit-torque/index`.
 
 (python-api-interactions-spin-orbit-torque-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+`free_layer_thickness_m` ($t_F$) is authored in SI metres ($\mathrm{m}$). Prescribed current-density drives carry amplitudes in amperes per square metre ($\mathrm{A\,m^{-2}}$) or source-linked descriptors ($1$); `name`, `target`, and efficiencies (`xi_dl`, `xi_fl`) are dimensionless ($1$).
 
 (python-api-interactions-spin-orbit-torque-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`name` must be non-empty, `target` must be a typed `RegionRef`, `drive` must be a typed scalar or vector current drive, `xi_dl` and `xi_fl` must be finite, and `free_layer_thickness_m` must be strictly positive. Legacy or unversioned migration payloads fail closed at construction or lowering.
 
 (python-api-interactions-spin-orbit-torque-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.PrescribedSpinOrbitTorque(name, target, drive, ..., free_layer_thickness_m)
+`fm.PrescribedSpinOrbitTorque(name, target, drive, ..., free_layer_thickness_m)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `name` | `str` | `required` | `1` | non-empty | torque module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
-| `target` | `RegionRef` | `required` | `1` | typed region reference | free-layer target | FEM/FDM CPU/GPU: IR; resolver-specific | `target` |
-| `drive` | `SignedScalarDrive or VectorCurrentDrive` | `required` | `A/m^2 or source` | typed drive | FEM/FDM CPU/GPU: IR; resolver-specific | drive | `see_constructor_to_ir` |
-| `xi_dl` | `float` | `required` | `1` | finite | damping-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_dl` |
-| `xi_fl` | `float` | `0.0` | `1` | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_fl` |
-| `free_layer_thickness_m` | `float` | `required` | `m` | positive | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | `free_layer_thickness_m` |
+| `name` | `str` | `required` | $1$ | non-empty | torque module identifier | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `target` | `RegionRef` | `required` | $1$ | typed region reference | free-layer target | FEM/FDM CPU/GPU: IR; resolver-specific | `target` |
+| `drive` | `SignedScalarDrive or VectorCurrentDrive` | `required` | $\mathrm{A\,m^{-2}}$ or $1$ | typed drive | prescribed current or vector drive | FEM/FDM CPU/GPU: IR; resolver-specific | `drive` |
+| `xi_dl` | `float` | `required` | $1$ | finite | damping-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_dl` |
+| `xi_fl` | `float` | `0.0` | $1$ | finite | field-like efficiency | FEM/FDM CPU/GPU: IR; resolver-specific | `xi_fl` |
+| `free_layer_thickness_m` | `float` | `required` | $\mathrm{m}$ | positive | free-layer thickness | FEM/FDM CPU/GPU: IR; resolver-specific | `free_layer_thickness_m` |
 
 ### Stage-first example
 
@@ -79,52 +69,63 @@ value = fm.PrescribedSpinOrbitTorque(name="sot", target=fm.RegionRef("film"), dr
 canonical_ir = value.to_ir_module()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, attach the lowered SOT module to the study spin-torque registry alongside its target region and drive source.
 
 (python-api-interactions-spin-orbit-torque-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed spin_orbit_torque record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir_module()` emits a typed `"kind": "prescribed_sot"` module record (`"schema_version": "prescribed_sot.v1"`, `"formula_version": "prescribed_sot.fullmag.v1"`) containing `"id"`, nested `"target"`, `"drive"`, `"xi_dl"`, `"xi_fl"`, and `"free_layer_thickness_m"`.
 
 (python-api-interactions-spin-orbit-torque-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves target references, drive records, efficiencies, and thickness in `ProblemIR` independently of `resolved execution`. `Validation errors` reject untyped targets/drives, non-positive `free_layer_thickness_m`, or legacy payloads, while `unsupported combinations` fail closed at planning.
 
 (python-api-interactions-spin-orbit-torque-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies typed module inputs in `ProblemIR` only; evaluating SOT source terms and LLG torque contributions on FEM meshes or FDM grids is implemented by the solver backends.
 
 (python-api-interactions-spin-orbit-torque-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/spin_torque.py symbol class PrescribedSpinOrbitTorque. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/spin_torque.py` (`class PrescribedSpinOrbitTorque`). Constructor validation, defaults, and `to_ir_module()` keys come directly from that module.
 
 (python-api-interactions-spin-orbit-torque-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_prescribed_sot_canonical_defaults_and_v1_wire_shape, test_prescribed_sot_rejects_invalid_target_and_drive_boundaries, test_prescribed_sot_rejects_legacy_migration_payload. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering `PrescribedSpinOrbitTorque` authoring and wire schema include `test_prescribed_sot_canonical_defaults_and_v1_wire_shape`, `test_prescribed_sot_rejects_invalid_target_and_drive_boundaries`, and `test_prescribed_sot_rejects_legacy_migration_payload`. Live solver runtime and Control Room browser behavior require separate qualification.
 
 (python-api-interactions-spin-orbit-torque-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Prescribed spin–orbit torques (`prescribed_sot`: $\xi_{\text{DL}}$, $\xi_{\text{FL}}$, stack normal, bound to prescribed current density or an upstream `current_transport` source) are edited in Control Room through `SpinAuthoringInspector` (`SpinTorqueInspectorPanel`) under `spin-torque` selection, subject to active-lane capability gating (`useActiveLaneCapabilities`). Spatially varying scripted torque coefficients without inspector widgets remain `Python-only`.
+
+### Control Room support
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| `prescribed_sot` efficiencies ($\xi_{\text{DL}}$, $\xi_{\text{FL}}$), normal, & current source binding | `Model Explorer -> Physics -> Spin Torque` (`SpinAuthoringInspector`, `SpinTorqueInspectorPanel`) | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
+| Spatial torque coefficient maps without a named UI field | Python DSL | `Python-only` | Author in Python |
+
+```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
+:alt: Control Room Spin Torque (SOT/STT) and Spin Transport inspector panel
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-antennas-and-transport`.
 
 (python-api-interactions-spin-orbit-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-- A. Manchon et al., Current-induced spin-orbit torques, Rev. Mod. Phys. 91 (2019), DOI: https://doi.org/10.1103/RevModPhys.91.035004
+- A. Manchon, J. Zelezný, I. M. Miron, T. Jungwirth, J. Sinova, A. Thiaville, K. Garello, and P. Gambardella, “Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems,” *Reviews of Modern Physics* **91**(3), 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://doi.org/10.1103/RevModPhys.91.035004) | [arXiv:1801.09636](https://arxiv.org/abs/1801.09636).
+- L. Liu, O. J. Lee, T. J. Gudmundsen, D. C. Ralph, and R. A. Buhrman, “Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect,” *Physical Review Letters* **109**(9), 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://doi.org/10.1103/PhysRevLett.109.096602) | [arXiv:1110.6846](https://arxiv.org/abs/1110.6846).
+- J. Sinova, S. O. Valenzuela, J. Wunderlich, C. H. Back, and T. Jungwirth, “Spin Hall effects,” *Reviews of Modern Physics* **87**(4), 1213–1260 (2015), [doi:10.1103/RevModPhys.87.1213](https://doi.org/10.1103/RevModPhys.87.1213) | [arXiv:1411.3249](https://arxiv.org/abs/1411.3249).
 
 (python-api-interactions-spin-orbit-torque-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/spin_torque.py | class PrescribedSpinOrbitTorque | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/spin_torque.py::class PrescribedSpinOrbitTorque
-- Source-map: interactions/spin-orbit-torque.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class PrescribedSpinOrbitTorque` | public constructor and IR lowering |

@@ -1244,6 +1244,8 @@ fn spawn_attached_runtime(
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    // The canonical session script owns the attached runtime's device selection.
+    command.env_remove("FULLMAG_FDM_EXECUTION");
     command.env_remove("FULLMAG_ATTACHED_GRID_REFRESH_COMMAND_ID");
     if let Some(command_id) = grid_refresh_command_id {
         command.env("FULLMAG_ATTACHED_GRID_REFRESH_COMMAND_ID", command_id);

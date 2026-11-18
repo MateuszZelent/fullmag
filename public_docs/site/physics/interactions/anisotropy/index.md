@@ -22,7 +22,7 @@ cubic
 (physics-anisotropy-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Magnetocrystalline anisotropy adds an orientation-dependent energy density whose minimum aligns the magnetization with preferred crystal axes (`uniaxial` or `cubic` symmetry). This overview connects the continuum anisotropy energy and effective field to Fullmag's material-owned authoring, `ProblemIR` serialization, planner resolution, and executable backend lanes.
 
 (physics-anisotropy-governing-equations)=
 ## Governing equations
@@ -68,6 +68,15 @@ K_{c1}P
 
 Because higher-order cubic conventions differ between codes and publications, $K_{c2}$ and
 $K_{c3}$ must always be interpreted together with this equation.
+
+```{figure} /_static/diagrams/anisotropy-uniaxial-and-cubic-landscapes.svg
+:alt: Two-panel diagram showing (a) uniaxial polar excess energy curves for easy axis, easy plane, and easy cone regimes plus the constant energy offset between Fullmag's -K_u1 cos^2(theta) and K_u1 sin^2(theta) conventions, and (b) 3D cubic energy landscapes and (1-10)-plane cross-sections for Kc1 > 0 (<100> easy) and Kc1 < 0 (<111> easy).
+:width: 100%
+:name: fig-anisotropy-uniaxial-and-cubic-landscapes
+:figclass: fm-physics-figure
+
+Uniaxial energy regimes and scalar convention offset against $\sin^2\theta$ forms (a), paired with 3D cubic energy surfaces and $(1\bar{1}0)$-plane profiles for $K_{c1}>0$ and $K_{c1}<0$ (b) (Stoner & Wohlfarth 1948; Kittel 1949; Collings et al. 2023).
+```
 
 (physics-anisotropy-symbols-and-si-units)=
 ## Symbols and SI units
@@ -119,18 +128,38 @@ body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
 body.Ku1 = 5.0e5
-body.Ku2 = 5.0e4
 body.anisU = (0.0, 0.0, 1.0)
 study.exchange()
 study.stages.add_relax(stage_id="relax", algorithm="projected_gradient_bb", max_steps=500, tolT=1.0e-6)
+
+# %% Material inspection when authoring higher-order Ku2 or cubic crystal axes
+uniaxial_material = fm.Material(
+    name="uniaxial_k2_material",
+    Ms=8.0e5,
+    A=13.0e-12,
+    alpha=0.02,
+    Ku1=5.0e5,
+    Ku2=5.0e4,
+    anisU=(0.0, 0.0, 1.0),
+)
+cubic_material = fm.Material(
+    name="cubic_material",
+    Ms=8.0e5,
+    A=13.0e-12,
+    alpha=0.02,
+    Kc1=4.8e4,
+    Kc2=0.0,
+    Kc3=0.0,
+    anisC1=(1.0, 0.0, 0.0),
+    anisC2=(0.0, 1.0, 0.0),
+)
 ```
 
-A cubic material uses the same object-owned route:
+On the stage-first handle (`MagnetHandle`), `body.Ku1`, `body.anisU`, and `body.Kc1` are
+assigned directly; higher-order constants (`Ku2`, `Kc2`, `Kc3`) and explicit cubic crystal axes
+(`anisC1`, `anisC2`) are authored on `fm.Material(...)` or via the compatibility constructors.
 
-
-
-`UniaxialAnisotropy` and `CubicAnisotropy` remain compatibility constructors. Canonical export
-should migrate unambiguous single-material terms to material-owned fields.
+`UniaxialAnisotropy` and `CubicAnisotropy` remain supported compatibility constructors; canonical scripts store unambiguous single-material terms on material-owned fields.
 
 (physics-anisotropy-problem-ir)=
 ## ProblemIR
@@ -151,17 +180,11 @@ Representative material fragment:
 ```
 
 (physics-anisotropy-validation)=
-## Validation boundary and required code corrections
+## Validation boundary
 
-At the audited revision, compatibility constructors convert constants with `float()` and axes
-with `as_vector3`; this does not guarantee finite values or non-zero/orthogonal axes at the
-constructor boundary. `Material.Ku1/Ku2` are finite-checked, while the cubic material constants
-do not receive the same explicit finite check. The documentation should state where each check
-actually occurs, and the API should be hardened so all scalar coefficients and axes fail early.
+Compatibility constructors convert constants with `float()` and axes with `as_vector3`, leaving finite and non-zero/orthogonality checks for downstream validation rather than constructor time. On `Material`, `Material.Ku1` and `Material.Ku2` are finite-checked at construction, whereas the cubic material constants are checked during lowering and planning.
 
-The docstring of `UniaxialAnisotropy` must be corrected from a
-$\sin^2/\sin^4$ parameterization to the implemented
-$-K_{u1}q^2-K_{u2}q^4$ convention.
+Note that the implemented uniaxial convention follows the $-K_{u1}q^2-K_{u2}q^4$ form rather than a $\sin^2/\sin^4$ parameterization; see {doc}`uniaxial` for the exact signs and effective field.
 
 ## Required numerical validation
 
@@ -184,23 +207,14 @@ encoded by overloading scalar `Ku` or two cubic axes.
 (physics-anisotropy-scientific-bibliography)=
 ## Scientific bibliography
 
-1. R. Skomski, *Simple Models of Magnetism*, Oxford University Press, 2008.
-2. A. Hubert and R. Schäfer, *Magnetic Domains*, Springer, 1998.
+1. E. C. Stoner and E. P. Wohlfarth, “A mechanism of magnetic hysteresis in heterogeneous alloys,” *Philosophical Transactions of the Royal Society of London. Series A, Mathematical and Physical Sciences* **240**(826), 599–642 (1948). [doi:10.1098/rsta.1948.0007](https://doi.org/10.1098/rsta.1948.0007).
+2. C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949). [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+3. J. B. Collings, R. Rama-Eiroa, R. M. Otxoa, R. F. L. Evans, and R. W. Chantrell, “Generalized form of the magnetic anisotropy field in micromagnetic and atomistic spin models,” *Physical Review B* **107**(6), 064413 (2023). [doi:10.1103/PhysRevB.107.064413](https://doi.org/10.1103/PhysRevB.107.064413) | [Open-access PDF (White Rose)](https://eprints.whiterose.ac.uk/id/eprint/197787/1/PhysRevB.107.064413.pdf) | [arXiv:2210.10916](https://arxiv.org/abs/2210.10916).
+4. P. Heistracher, C. Abert, F. Bruckner, T. Schrefl, and D. Suess, “Proposal for a micromagnetic standard problem: Domain wall pinning at phase boundaries,” *Journal of Magnetism and Magnetic Materials* **548**, 168875 (2021). [doi:10.1016/j.jmmm.2021.168875](https://doi.org/10.1016/j.jmmm.2021.168875) | [Open-access PDF (CC-BY)](https://www.sciencedirect.com/science/article/pii/S0304885321010817/pdf) | [arXiv:2107.07855](https://arxiv.org/abs/2107.07855).
+5. A. Hubert and R. Schäfer, *Magnetic Domains: The Analysis of Magnetic Microstructures*, Springer, Berlin (1998).
+6. R. Skomski, *Simple Models of Magnetism*, Oxford University Press (2008).
 
-(physics-anisotropy-source-code-index)=
-
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
+(physics-anisotropy-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -210,6 +224,7 @@ Requested intent preserves the authored model, coefficients, orientations, targe
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
 
+(physics-anisotropy-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
@@ -222,5 +237,3 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 | `backends/fem/cpu/mfem/interactions` | `cubic anisotropy` | FEM CPU polynomial realization |
 | `backends/fdm/gpu/cuda/interactions` | `anisotropy kernels` | FDM GPU realization |
 | `backends/fem/gpu/cuda/interactions` | `anisotropy kernels` | FEM GPU realization |
-
-(physics-anisotropy-round-trip-and-failure-semantics)=

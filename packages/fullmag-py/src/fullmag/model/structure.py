@@ -323,6 +323,15 @@ class RegionTextureOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class MagnetizationAssignment:
+    """An explicit authored texture operation, in script order."""
+
+    object_id: str
+    region_id: str | None
+    initializer: InitialMagnetization | None
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialTransitionSpec:
     kind: str
     cells: int | None = None
@@ -391,6 +400,12 @@ class ObjectRegion:
     texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     _context_guard: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _texture_assignment_callback: Callable[[ObjectRegion], None] | None = field(
+        default=None, repr=False, compare=False
+    )
+    _simpleantenna_factory: Callable[[], object] | None = field(
+        default=None, repr=False, compare=False
+    )
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
@@ -424,6 +439,19 @@ class ObjectRegion:
         self.material = ObjectRegionMaterialProxy(self)
 
     @property
+    def add_simpleantenna(self) -> object:
+        """Antennas that act on this region: ``region.add_simpleantenna.arbitrary_mask(...)``."""
+        if self._context_guard is not None:
+            self._context_guard()
+        factory = self._simpleantenna_factory
+        if factory is None:
+            raise RuntimeError(
+                "region.add_simpleantenna is available for regions created with "
+                "magnet.add_region(...) in an active study"
+            )
+        return factory()
+
+    @property
     def texture(self) -> InitialMagnetization | None:
         if self.texture_override is None:
             return None
@@ -432,15 +460,26 @@ class ObjectRegion:
     @texture.setter
     def texture(self, value: InitialMagnetization | None) -> None:
         if value is None:
-            self.texture_override = None
+            self._assign_texture_override(None)
         else:
             self.set_texture(value)
 
     def set_texture(self, value: InitialMagnetization) -> "ObjectRegion":
         if self._context_guard is not None:
             self._context_guard()
-        self.texture_override = RegionTextureOverride(value)
+        self._assign_texture_override(RegionTextureOverride(value))
         return self
+
+    def _assign_texture_override(self, override: RegionTextureOverride | None) -> None:
+        callback = self._texture_assignment_callback
+        if callback is None:
+            self.texture_override = override
+            return
+        from fullmag.live._hooks import dsl_call
+
+        with dsl_call():
+            self.texture_override = override
+            callback(self)
 
     def set_material(
         self,

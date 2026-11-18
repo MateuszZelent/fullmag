@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { ControlRoomApi } from "../api/ControlRoomApi";
+import type { RuntimeCommandPrecondition } from "../api/apiTypes";
 import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import type { SelectionController } from "../selection/SelectionController";
@@ -43,6 +44,8 @@ export interface CommandContext {
   chartViewportHandoff?: ChartViewportHandoffController;
   cameraRegistry?: CameraRegistryController;
   input?: unknown;
+  /** Original scene, mesh and run behind a compound Build + Study request. */
+  meshBuildPin?: Pick<RuntimeCommandPrecondition, "scene_revision" | "mesh_revision" | "current_run">;
   layout?: LayoutController;
   objectMoveTool?: ObjectMoveToolController;
   projectDocument?: ProjectDocumentController;

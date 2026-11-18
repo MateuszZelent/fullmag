@@ -227,12 +227,12 @@ export class PendingFormRegistry {
     this.notify();
   }
 
-  update(owner: symbol, form: PendingForm | null): void {
+  update(owner: symbol, form: PendingForm | null): boolean {
     if (form === null) {
       this.unregister(owner);
-      return;
+      return false;
     }
-    if (!this.forms.has(owner)) return;
+    if (!this.forms.has(owner)) return false;
     const previousGeneration = this.generation;
     const preparation = this.preparation;
     const canAdoptCleanUpdate = Boolean(
@@ -255,6 +255,7 @@ export class PendingFormRegistry {
       preparation.expectedForms.set(owner, this.captureFormState(owner, form));
     }
     this.notify();
+    return true;
   }
 
   unregister(owner: symbol): void {

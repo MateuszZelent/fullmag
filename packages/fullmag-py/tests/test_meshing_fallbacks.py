@@ -231,9 +231,17 @@ class BuildReportTests(unittest.TestCase):
         self.assertIn("component_aware_import_failed", report.fallbacks_triggered)
         self.assertEqual(len(region_markers), 2)
 
-    def test_single_imported_stl_routes_directly_to_concatenated_fallback(self):
+    def test_single_imported_stl_uses_component_aware_meshing_and_component_sizing(self):
         imported = fm.ImportedGeometry(source="shape.stl", name="shape")
         mesh = _make_mesh_3elem()
+        fake_result = SharedDomainMeshResult(
+            mesh=mesh,
+            component_marker_tags={"shape": 1},
+            component_volume_tags={"shape": [11]},
+            component_surface_tags={"shape": [21]},
+            interface_surface_tags=[21],
+            outer_boundary_surface_tags=[31, 32],
+        )
 
         with patch(
             "fullmag.meshing.asset_pipeline._import_trimesh",
@@ -246,31 +254,39 @@ class BuildReportTests(unittest.TestCase):
             return_value=False,
         ), patch(
             "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
-            side_effect=AssertionError("component-aware path should be skipped"),
+            return_value=fake_result,
         ) as component_aware_mock, patch(
-            "fullmag.meshing.asset_pipeline._match_geometry_bounds_to_source_markers",
-            return_value={"shape": 1},
-        ), patch(
-            "fullmag.meshing.asset_pipeline._contains_points_in_geometry",
-            side_effect=AssertionError("should not hit point containment"),
-        ), patch(
             "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
             return_value=mesh,
-        ):
+        ) as fallback_mesh_mock, patch(
+            "fullmag.meshing.asset_pipeline._match_geometry_bounds_to_source_markers",
+            return_value={"shape": 1},
+        ) as fallback_marker_mock:
             _, region_markers, report = (
                 realize_fem_domain_mesh_asset_from_components_with_report(
                     [imported], fm.FEM(order=1, hmax=100e-9),
                     study_universe=_STUDY_UNIVERSE,
+                    mesh_workflow={
+                        "per_geometry": [
+                            {"geometry": "shape", "mode": "custom", "hmax": "20e-9"},
+                        ],
+                    },
                 )
             )
 
-        component_aware_mock.assert_not_called()
-        self.assertEqual(report.build_mode, "concatenated_stl_fallback")
-        self.assertIn(
+        component_aware_mock.assert_called_once()
+        fallback_mesh_mock.assert_not_called()
+        fallback_marker_mock.assert_not_called()
+        descriptors = component_aware_mock.call_args.args[0]
+        self.assertEqual(len(descriptors), 1)
+        self.assertEqual(descriptors[0].geometry_name, "shape")
+        self.assertEqual(report.build_mode, "component_aware")
+        self.assertNotIn(
             "single_imported_stl_preemptive_fallback",
             report.fallbacks_triggered,
         )
         self.assertNotIn("component_aware_import_failed", report.fallbacks_triggered)
+        self.assertIn("ComponentVolumeConstant", report.used_size_field_kinds)
         self.assertEqual(region_markers, [{"geometry_name": "shape", "marker": 1}])
 
     def test_imported_nm_stl_exports_ascii_and_builds_3d_mesh(self):

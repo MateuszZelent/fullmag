@@ -465,3 +465,20 @@ fn antenna_action_snapshots_preserve_complete_ordered_enabled_coverage() {
     let mut reordered = antenna_action_snapshots(); reordered.stages.swap(0, 1);
     for input in [missing, duplicate, disabled, reordered] { assert!(validate_snapshot_gate(&input).is_err()); }
 }
+
+#[test]
+fn physical_clock_crosses_relaxation_and_macro_expansion_without_advancing_during_relax() {
+    let mut input = config();
+    input.ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(4e-12));
+    input.study_pipeline = Some(serde_json::from_value(json!({"version":"study_pipeline.v1","nodes":[
+        {"node_kind":"macro","id":"first","label":"First","macro_kind":"relax_run","config":{"run_until_seconds":1e-12}},
+        {"node_kind":"macro","id":"second","label":"Second","macro_kind":"relax_run","config":{"run_until_seconds":2e-12}}
+    ]})).unwrap());
+    let compiled = materialize_script_pipeline_with_output_policy_bounded(input,
+        fullmag_ir::configure_project_autosave_policy, 4).unwrap();
+    assert_eq!(compiled.executions.len(), 4);
+    let starts: Vec<_> = compiled.executions.iter()
+        .filter(|execution| matches!(execution.stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. }))
+        .map(|execution| read_physical_stage_start(&execution.stage.ir).unwrap()).collect();
+    assert_eq!(starts, vec![4e-12, 4e-12 + 1e-12]);
+}

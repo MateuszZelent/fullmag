@@ -10,13 +10,11 @@ owner: fullmag-public-docs
 # Time Integrator Selection (`LLG.integrator`)
 
 (python-api-dynamics-integrators-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Physical problem and overview
 
 `LLG.integrator` (and `study.solver(integrator=...)`) selects the numerical time-integration scheme used to advance the semi-discrete Landau–Lifshitz–Gilbert (LLG) equation across time-evolution and overdamped relaxation stages. Fullmag distinguishes fixed-step schemes (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`), embedded adaptive Runge–Kutta pairs (`rk23`, `rk45`), and the planner-resolved `"auto"` mode.
 
 (python-api-dynamics-integrators-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 For an $S$-stage explicit Runge–Kutta scheme with Butcher tableau $(a_{j\ell}, b_j, \widetilde{b}_j, c_j)$, advancing active spin state $y_n = \{\mathbf{m}_i(t_n)\}_{i \in \mathcal{A}}$ by $\Delta t$ evaluates
@@ -40,7 +38,6 @@ y_{n+1} = \mathcal{N}\!\left(y_n + \frac{\Delta t}{12}\left(5 F(t_{n+1}, y_{n+1}
 ```
 
 (python-api-dynamics-integrators-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -56,7 +53,6 @@ y_{n+1} = \mathcal{N}\!\left(y_n + \frac{\Delta t}{12}\left(5 F(t_{n+1}, y_{n+1}
 | $t_n$ | Accepted step start time | $\mathrm{s}$ |
 
 (python-api-dynamics-integrators-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and limits of validity
 
 - **Alias normalization**: `"euler"` normalizes to `"heun"` (two-stage second-order predictor–corrector) and `"dopri5"` normalizes to `"rk45"` (Dormand–Prince 5(4)).
@@ -64,7 +60,6 @@ y_{n+1} = \mathcal{N}\!\left(y_n + \frac{\Delta t}{12}\left(5 F(t_{n+1}, y_{n+1}
 - **Provenance preservation**: `"auto"` is preserved verbatim in `ProblemIR` (`requested intent`) and resolved by the planner to `"rk45"` (or the appropriate lane default) in the execution plan and receipt (`resolved execution`).
 
 (python-api-dynamics-integrators-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API and parameter contract
 
 ### Constructor signature
@@ -129,7 +124,6 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 ```
 
 (python-api-dynamics-integrators-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. `ProblemIR` and canonical script representation
 
 ```json
@@ -146,7 +140,6 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 ```
 
 (python-api-dynamics-integrators-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip, provenance, and failure semantics
 
 - **Requested intent vs. resolved execution**: `ProblemIR` stores the canonicalized `integrator` string (`requested intent`), while the execution plan and receipt record the concrete backend stepper (`resolved execution`).
@@ -154,7 +147,6 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 - **Unsupported combinations**: Requesting `abm3` or `coupled_imex_ark2` on `target="fem"` is rejected as an unsupported combination by the planner.
 
 (python-api-dynamics-integrators-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization and numerical operators
 
 - **FEM CPU**: `context_step_explicit_rk_mfem` (`heun`, `rk4`, `rk23`, `rk45`).
@@ -163,7 +155,6 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 - **FDM GPU**: CUDA `heun`, `rk4`, `rk23`, `rk45`, and `coupled_imex_ark2`.
 
 (python-api-dynamics-integrators-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Backend and device implementation mapping
 
 | Solver | Device | Status | Supported integrators |
@@ -174,26 +165,22 @@ assert study_abm3.to_problem_ir()["study"]["dynamics"]["integrator"] == "abm3"
 | FDM | GPU | `documented` | `heun`, `rk4`, `rk23`, `rk45`, `coupled_imex_ark2`, `auto` |
 
 (python-api-dynamics-integrators-validation)=
-<!-- (validation)= -->
 ## 10. Validation and benchmark gates
 
 - Validated in `packages/fullmag-py/tests/test_llg_solver_contract.py` and `backends/fem/tests/rk_explicit_contract.cpp`.
 
 (python-api-dynamics-integrators-limitations)=
-<!-- (limitations)= -->
 ## 11. Known limitations and operational constraints
 
 - `abm3` requires uniform $\Delta t$ across steps; changing external stage fields discontinuously across stage boundaries resets the multistep history unless resumed from a matching `FdmCpuSolverCheckpointV1`.
 
 (python-api-dynamics-integrators-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 1. J. R. Dormand and P. J. Prince, *A family of embedded Runge–Kutta formulae*, J. Comput. Appl. Math. **6**, 19–26 (1980).
 2. P. Bogacki and L. F. Shampine, *A 3(2) pair of Runge–Kutta formulas*, Appl. Math. Lett. **2**, 321–325 (1989).
 
 (python-api-dynamics-integrators-source-code-index)=
-<!-- (source-code-index)= -->
 ## 13. Source-code index
 
 | Layer | File | Symbol / entrypoint | Responsibility |

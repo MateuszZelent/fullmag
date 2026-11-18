@@ -38,7 +38,10 @@ def test_sweep_spreads_points_over_groups_in_order(monkeypatch) -> None:
         assert relaxes == 4
         assert {result.group for result in results} <= {first.url, second.url}
         # Every point starts from a reset world: its first transaction replaces the scene.
-        replaces = [t for fake in (first, second) for t in fake.transactions if t["kind"] == "replace_scene"]
+        replaces = [
+            t for fake in (first, second) for t in fake.transactions
+            if t["kind"] == "replace_scene" and "magnetization_apply" not in t
+        ]
         assert len(replaces) == 4
 
 

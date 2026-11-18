@@ -17,7 +17,7 @@ use crate::Vector3;
 
 // ── FftWorkspace ───────────────────────────────────────────────────────
 
-pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v2";
+pub const FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION: &str = "fullmag.fdm.fft_workspace.v3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FftWorkspaceTelemetry {
@@ -50,6 +50,7 @@ fn execution_thread_count() -> u32 {
 
 fn fft_workspace_key_sha256(
     cells: [usize; 3],
+    padded: [usize; 3],
     cell_size: [f64; 3],
     periodic: [bool; 3],
     image_counts: [u32; 3],
@@ -59,6 +60,9 @@ fn fft_workspace_key_sha256(
     hasher.update(FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION.as_bytes());
     hasher.update(b"rustfft\0double\0half_spectrum_r2c");
     for value in cells {
+        hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
+    }
+    for value in padded {
         hasher.update(u64::try_from(value).unwrap_or(u64::MAX).to_le_bytes());
     }
     for value in cell_size {
@@ -85,7 +89,7 @@ pub struct FftWorkspace {
     pub(crate) ny: usize,
     pub(crate) nz: usize,
     transform: R2c3dPlan,
-    /// Padded grid dimensions (2×N per axis).
+    /// Transform grid dimensions after boundary-aware padding.
     pub px: usize,
     pub py: usize,
     pub pz: usize,
@@ -223,6 +227,33 @@ impl FftWorkspace {
             .unwrap_or_else(|reason| panic!("FDM FFT workspace rejected: {reason}"))
     }
 
+    pub(crate) fn new_open_single_layer(nx: usize, ny: usize, dx: f64, dy: f64, dz: f64) -> Self {
+        checked_workspace_budget([nx, ny, 1], [false; 3], [0; 3])
+            .unwrap_or_else(|reason| panic!("FDM FFT workspace rejected: {reason}"));
+        let mut kernels = newell::compute_newell_kernels(nx, ny, 1, dx, dy, dz);
+        assert_eq!(
+            kernels.pz, 2,
+            "open single-layer Newell builder shape changed"
+        );
+        let plane_len = kernels
+            .px
+            .checked_mul(kernels.py)
+            .expect("checked single-layer kernel plane length");
+        for component in [
+            &mut kernels.n_xx,
+            &mut kernels.n_yy,
+            &mut kernels.n_zz,
+            &mut kernels.n_xy,
+            &mut kernels.n_xz,
+            &mut kernels.n_yz,
+        ] {
+            assert_eq!(component.len(), plane_len * 2);
+            component.truncate(plane_len);
+        }
+        kernels.pz = 1;
+        Self::from_real_kernels(nx, ny, 1, dx, dy, dz, kernels, [false; 3], [0; 3])
+    }
+
     fn new_unchecked(nx: usize, ny: usize, nz: usize, dx: f64, dy: f64, dz: f64) -> Self {
         let kernels = newell::compute_newell_kernels(nx, ny, nz, dx, dy, dz);
         Self::from_real_kernels(nx, ny, nz, dx, dy, dz, kernels, [false; 3], [0; 3])
@@ -292,6 +323,7 @@ impl FftWorkspace {
                 lifecycle_revision: 1,
                 lifecycle_key_sha256: fft_workspace_key_sha256(
                     [nx, ny, nz],
+                    [px, py, pz],
                     [dx, dy, dz],
                     periodic,
                     image_counts,
@@ -998,7 +1030,10 @@ pub(crate) fn zero_vectors(len: usize) -> Vec<Vector3> {
 
 #[cfg(test)]
 mod normalization_tests {
-    use super::{compute_newell_kernel_spectra, fft3_core, padded_index};
+    use super::{
+        compute_newell_kernel_spectra, fft3_core, padded_index, FftWorkspace,
+        FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
+    };
     use crate::newell;
     use rustfft::{num_complex::Complex, FftPlanner};
     use std::f64::consts::TAU;
@@ -1133,6 +1168,30 @@ mod normalization_tests {
                 assert_complex_close(actual, expected, 3e-12);
             }
         }
+    }
+
+    #[test]
+    fn single_layer_workspace_shape_has_a_distinct_lifecycle_key() {
+        let legacy = FftWorkspace::new(3, 2, 1, 1.3e-9, 2.1e-9, 5.7e-9);
+        let single_layer = FftWorkspace::new_open_single_layer(3, 2, 1.3e-9, 2.1e-9, 5.7e-9);
+
+        assert_eq!(
+            FDM_FFT_WORKSPACE_TELEMETRY_SCHEMA_VERSION,
+            "fullmag.fdm.fft_workspace.v3"
+        );
+        assert_eq!([legacy.px, legacy.py, legacy.pz], [6, 4, 2]);
+        assert_eq!(
+            [single_layer.px, single_layer.py, single_layer.pz],
+            [6, 4, 1]
+        );
+        assert!(
+            single_layer.telemetry().workspace_bytes < legacy.telemetry().workspace_bytes,
+            "single-layer workspace should own fewer bytes than the legacy padded workspace"
+        );
+        assert_ne!(
+            legacy.telemetry().lifecycle_key_sha256,
+            single_layer.telemetry().lifecycle_key_sha256
+        );
     }
 }
 

@@ -10,11 +10,20 @@ namespace fullmag::fem {
 struct RegionalFieldDriveDeviceDesc {
     uint32_t kind;
     uint32_t time_origin;
+    /* PWL: first control point. HOST_EXPRESSION: slot of the host multiplier. */
     uint64_t point_offset;
     uint64_t point_count;
     double p0;
     double p1;
     double p2;
+};
+
+/*
+ * Time factors of the FULLMAG_FEM_TIME_HOST_EXPRESSION drives, evaluated on
+ * the host once per field build and passed to the kernel by value.
+ */
+struct RegionalFieldDriveHostMultipliers {
+    double value[FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES];
 };
 
 __device__ inline double stable_device_sinc(double x)
@@ -31,6 +40,7 @@ __device__ inline double evaluate_device_time_dependence(
     const RegionalFieldDriveDeviceDesc &waveform,
     const double *point_times,
     const double *point_values,
+    const RegionalFieldDriveHostMultipliers &host_multipliers,
     double evaluation_time_s,
     double stage_start_time_s)
 {
@@ -61,6 +71,9 @@ __device__ inline double evaluate_device_time_dependence(
     case FULLMAG_FEM_TIME_SINC_PULSE:
         return waveform.p2 * stable_device_sinc(
             kTwoPi * waveform.p0 * (time_s - waveform.p1));
+    case FULLMAG_FEM_TIME_HOST_EXPRESSION:
+        return waveform.point_offset < FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES
+            ? host_multipliers.value[waveform.point_offset] : 0.0;
     default:
         return 0.0;
     }

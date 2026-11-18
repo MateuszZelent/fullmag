@@ -21,6 +21,7 @@ __global__ void field_metric_blocks_kernel(
     const double *__restrict__ hy,
     const double *__restrict__ hz,
     const uint8_t *__restrict__ magnetic_node_mask,
+    const uint8_t *__restrict__ torque_node_mask,
     double *__restrict__ block_max_h,
     double *__restrict__ block_max_torque,
     int N)
@@ -32,11 +33,13 @@ __global__ void field_metric_blocks_kernel(
         const double lhx = hx[i], lhy = hy[i], lhz = hz[i];
         h_norm = sqrt(lhx * lhx + lhy * lhy + lhz * lhz);
 
-        const double lmx = mx[i], lmy = my[i], lmz = mz[i];
-        const double tx = lmy * lhz - lmz * lhy;
-        const double ty = lmz * lhx - lmx * lhz;
-        const double tz = lmx * lhy - lmy * lhx;
-        torque_norm = sqrt(tx * tx + ty * ty + tz * tz);
+        if (torque_node_mask == nullptr || torque_node_mask[i] != 0u) {
+            const double lmx = mx[i], lmy = my[i], lmz = mz[i];
+            const double tx = lmy * lhz - lmz * lhy;
+            const double ty = lmz * lhx - lmx * lhz;
+            const double tz = lmx * lhy - lmy * lhx;
+            torque_norm = sqrt(tx * tx + ty * ty + tz * tz);
+        }
     }
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
@@ -101,7 +104,8 @@ void fullmag_cuda_field_metric_blocks(
     double *block_max_h,
     double *block_max_torque,
     int N,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const uint8_t *torque_node_mask)
 {
     const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
     field_metric_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
@@ -112,6 +116,7 @@ void fullmag_cuda_field_metric_blocks(
         hy,
         hz,
         magnetic_node_mask,
+        torque_node_mask != nullptr ? torque_node_mask : magnetic_node_mask,
         block_max_h,
         block_max_torque,
         N);

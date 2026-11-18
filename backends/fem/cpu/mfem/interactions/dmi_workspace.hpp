@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <memory>
 #include <vector>
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -29,6 +30,12 @@ struct DmiElementWorkspace {
     void prepare_thread_residuals(int thread_count, size_t field_len);
     void prepare_thread_local(int thread_index, int local_ndof);
     void reduce_thread_residuals(size_t field_len);
+    // Serial preparation warms MFEM lazy FE/rule caches before worker entry.
+    void prepare_element_evaluation(mfem::FiniteElementSpace &fes, int thread_count);
+    std::vector<const mfem::FiniteElement *> element_fes;
+    std::vector<const mfem::IntegrationRule *> element_rules;
+    std::vector<std::unique_ptr<mfem::IsoparametricTransformation>> transformations_by_thread;
+    bool element_parallel_active = false;
 
     mfem::Array<int> dofs;
     mfem::Vector mx_elem;
@@ -37,6 +44,9 @@ struct DmiElementWorkspace {
     mfem::DenseMatrix dshape;
     mfem::Vector shape;
     std::vector<double> residual_xyz;
+    std::vector<double> periodic_lumped_mass;
+    std::vector<double> periodic_reduced_residual;
+    std::vector<double> periodic_reduced_mass;
     std::vector<double> projected_m_xyz;
 
     std::vector<mfem::Array<int>> dofs_by_thread;
@@ -64,6 +74,14 @@ bool prepare_dmi_periodic_input(
 bool refresh_dmi_grid_functions_from_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    std::string &error);
+
+// Sums the weak residual and the lumped mass over each periodic node class
+// and writes the class sums back to every member (docs/physics/0810).
+bool accumulate_dmi_periodic_residual_and_mass(
+    const Context &ctx,
+    std::vector<double> &residual_xyz,
+    DmiElementWorkspace &workspace,
     std::string &error);
 #endif
 

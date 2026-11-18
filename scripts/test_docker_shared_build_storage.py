@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import subprocess
+import shutil
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -54,6 +55,31 @@ class VolumeFixture:
 
 
 class SharedBuildStorageTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("bash"), "Linux Docker Bash contract")
+    def test_initializer_delivers_complete_program_without_writable_temporary_directory(self):
+        # Compile the real payload without executing its volume mutations.
+        # /proc cannot host Bash here-document temporary files, even as root.
+        program = storage._INITIALIZER_PYTHON + "\n#" + " readonly regression" * 4000 + "\n"
+        command = storage._initializer_script(program)
+        self.assertEqual(storage.INITIALIZER_SCRIPT, storage._initializer_script(storage._INITIALIZER_PYTHON))
+        with tempfile.TemporaryDirectory() as directory:
+            wrapper = Path(directory) / "python3"
+            wrapper.write_text(
+                "#!" + sys.executable + "\n"
+                "import hashlib,sys\n"
+                "source = sys.stdin.read() if sys.argv[1:] == ['-'] else sys.argv[2]\n"
+                "compile(source, '<shared-initializer>', 'exec')\n"
+                "print(hashlib.sha256(source.encode()).hexdigest())\n"
+            )
+            wrapper.chmod(0o755)
+            result = subprocess.run(
+                [shutil.which("bash"), "-euo", "pipefail", "-c", command],
+                env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "TMPDIR": "/proc"},
+                capture_output=True, text=True, timeout=10,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), hashlib.sha256(program.encode()).hexdigest())
+
     def test_volume_names_and_labels_are_project_stable_and_task_independent(self):
         first = storage.shared_volume_names("fullmag")
         second = storage.shared_volume_names("fullmag")

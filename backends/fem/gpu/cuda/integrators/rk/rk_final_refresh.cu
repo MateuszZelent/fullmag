@@ -11,6 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/integrators/llg/llg_rhs_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
@@ -129,9 +130,11 @@ bool gpu_rk_finalize_accepted_step(
     if (!endpoint_rhs_ready) {
         GpuPerformanceCounterDelta final_rhs_delta{};
         final_rhs_delta.rhs_evaluations = 1;
-        final_rhs_delta.demag_solves =
-            ctx.poisson_demag.solves_current_step -
-            demag_solves_before_final_rhs;
+        if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            final_rhs_delta.demag_solves =
+                ctx.poisson_demag.solves_current_step -
+                demag_solves_before_final_rhs;
+        }
         gpu_performance_note(
             ctx.gpu_state.performance_counters,
             final_rhs_delta);
@@ -166,6 +169,24 @@ bool gpu_rk_finalize_accepted_step(
         reason = "GPU RK device max requires preallocated CUB reduction temp storage";
         gpu.rk.fsal_valid = false;
         return false;
+    }
+    if (endpoint_rhs_ready) {
+        const uint8_t *active_mask =
+            (ctx.frozen_spins.enabled() && gpu.mesh_regions.free_node_mask != nullptr)
+                ? gpu.mesh_regions.free_node_mask
+                : gpu.mesh_regions.magnetic_node_mask;
+        fullmag_cuda_rhs_norm_blocks(
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            active_mask,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU RK endpoint FSAL RHS metric blocks", reason)) {
+            gpu.rk.fsal_valid = false;
+            return false;
+        }
     }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
     fullmag_cuda_device_max(

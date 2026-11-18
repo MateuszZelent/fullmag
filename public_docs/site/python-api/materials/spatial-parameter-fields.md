@@ -305,7 +305,7 @@ the consuming interaction's interface contract. In particular:
   field API;
 - DMI boundary/interface terms remain owned by the DMI formulation;
 - a region override does not automatically introduce RKKY or other spacer coupling;
-- mesh-relative transitions for `Ms` and `Aex` are explicit authoring policy, not an undocumented
+- mesh-relative transitions for `Ms` and `Aex` are explicit authoring policy, rather than an implicit
   smoothing pass.
 
 (python-api-materials-spatial-parameter-fields-implementation-mapping)=
@@ -363,21 +363,25 @@ requires interaction-specific observables, convergence, and device evidence.
 - O. C. Zienkiewicz, R. L. Taylor, and J. Z. Zhu, *The Finite Element Method: Its Basis and
   Fundamentals*, 7th ed., Butterworth-Heinemann, 2013.
 
-(python-api-materials-spatial-parameter-fields-source-code-index)=
+## Control Room support
 
-## Control Room crosswalk
-
-Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain not implemented.
+Status: Scalar magnetic constants (per-object and per-region) are `partial`; analytical `MaterialParameterField` laws and elastic/magnetoelastic parameters remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `not implemented` | Python-only until implemented |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` / `Regions` | `partial` | Apply scalar material or region draft (`ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel`, `ObjectRegionMagneticParametersPanel`); dependent physics and mesh resources become stale |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
+Scalar material constants are editable in `ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel`, and `ObjectRegionMagneticParametersPanel`; analytical spatial parameter fields (`linear`, `radial`, `sampled`) and unlisted tensors remain Python-only.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx` (`ObjectMaterialPanel`) and `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMagneticParametersPanel.tsx` (`ObjectRegionMagneticParametersPanel`).
 
+```{image} /_static/images/ui/inspector-material-and-regions.png
+:alt: Control Room Object Regions inspector showing Pinning Annulus and Skyrmion Core regions on obj_yig_film for region-owned parameter overrides
+:width: 92%
+```
+
+(python-api-materials-spatial-parameter-fields-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
@@ -386,4 +390,6 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMat
 | scoped assignment | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L597) | [`class MaterialParameterAssignment`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L597) | object/region ownership and conflict metadata | region-field tests |
 | region overrides | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L351) | [`class ObjectRegion`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L351) | local material and transition policy | region transition tests |
 | canonical object owner | [`packages/fullmag-py/src/fullmag/model/structure.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | [`class Ferromagnet`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/structure.py#L745) | `material_parameter_fields` collection in the magnetic object graph | problem-lowering tests |
+| Rust field evaluator | `crates/fullmag-plan/src/material.rs` | `resolve_spatial_parameter` | spatial parameter resolution across cells and nodes | planner tests |
+| Rust region transitions | `crates/fullmag-plan/src/material_transition.rs` | `resolved_region_transition` | boundary smoothing and transition resolution | planner tests |
 | runnable example | `examples/region_owned_gradient_ms.py` | module-level stage-first study | region-owned FEM gradient scenario | documentation example validation |

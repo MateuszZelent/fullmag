@@ -44,23 +44,33 @@ export async function decodeSavedSupport(
   if (buffer.byteLength !== savedSupportByteLimit(expected)) {
     throw new Error("FMSP body length differs from its pinned identity.");
   }
+  const support = decodeSavedSupportBody(buffer, Number(counter(expected.nodeCount)));
+  const hash = await crypto.subtle.digest("SHA-256", buffer);
+  signal?.throwIfAborted();
+  const actual = Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, "0")).join("");
+  if (actual !== expected.sha256) throw new Error("FMSP checksum differs from its pinned identity.");
+  return support;
+}
+
+/** Read support after a project-owned binary response has been bound to the saved result. */
+export function decodeSavedSupportBody(buffer: ArrayBuffer, nodeCount: number): DecodedSavedSupport {
+  if (!Number.isSafeInteger(nodeCount) || nodeCount <= 0 ||
+      buffer.byteLength > MAX_SAVED_SUPPORT_BYTES ||
+      buffer.byteLength !== SAVED_SUPPORT_HEADER_BYTES + Math.ceil(nodeCount / 8)) {
+    throw new Error("FMSP body length differs from its pinned sample count.");
+  }
   const view = new DataView(buffer);
   if (String.fromCharCode(...new Uint8Array(buffer, 0, 4)) !== "FMSP" ||
       view.getUint16(4, true) !== 1 || view.getUint16(6, true) !== 0 ||
-      view.getBigUint64(8, true) !== counter(expected.nodeCount) ||
+      view.getBigUint64(8, true) !== BigInt(nodeCount) ||
       view.getBigUint64(16, true) !== BigInt(buffer.byteLength - SAVED_SUPPORT_HEADER_BYTES)) {
     throw new Error("Unsupported or mismatched FMSP header.");
   }
-  const nodeCount = Number(counter(expected.nodeCount));
   const bits = new Uint8Array(buffer, SAVED_SUPPORT_HEADER_BYTES);
   const remainder = nodeCount % 8;
   if (remainder !== 0 && (bits[bits.length - 1]! & (0xff << remainder)) !== 0) {
     throw new Error("FMSP padding bits must be zero.");
   }
-  const hash = await crypto.subtle.digest("SHA-256", buffer);
-  signal?.throwIfAborted();
-  const actual = Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, "0")).join("");
-  if (actual !== expected.sha256) throw new Error("FMSP checksum differs from its pinned identity.");
   return { nodeCount, bits };
 }
 

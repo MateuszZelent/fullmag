@@ -1,5 +1,7 @@
 "use client";
 
+import { Viewport3DWireframeGestureContext } from "./Viewport3DInteractionWireframe";
+
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -338,6 +340,7 @@ interface Viewport3DSceneProps {
   scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
+  qualityProfileId?: Viewport3DVisualProfileId;
 }
 
 interface Viewport3DViewportSize {
@@ -1171,7 +1174,12 @@ export function resolveViewport3DRealizedFdmObjectIds({
     ),
   );
   for (const view of fdmNativeLayerViews) {
-    objectIds.add(view.domain.objectId);
+    // The layout can arrive before the asynchronous native cuboid build. Keep
+    // the primitive preview until the replacement has a non-empty model to
+    // render; otherwise the primitive disappears during the build handoff.
+    if (view.model && view.model.count > 0) {
+      objectIds.add(view.domain.objectId);
+    }
   }
   return objectIds;
 }
@@ -1972,6 +1980,7 @@ export function Viewport3DScene({
   scaleUnitMode,
   viewCubeVisible,
   visualProfileId,
+  qualityProfileId,
 }: Viewport3DSceneProps) {
   const appearance = useViewport3DAppearance();
   const invalidate = useBatchedInvalidate("camera");
@@ -2044,7 +2053,7 @@ export function Viewport3DScene({
         if (!surfaceActive && !wireframeActive) continue;
         if (topologyIndexStatus === "ready") {
           const wireframeIndices =
-            partSettings.geometryScope === "full"
+            partSettings.wireframeGeometryScope === "full"
               ? partModel.volumeEdgeIndices
               : partModel.edgeIndices;
           const matchingIndexReady =
@@ -2148,8 +2157,8 @@ export function Viewport3DScene({
     [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
-    () => getViewport3DVisualProfile(visualProfileId),
-    [visualProfileId],
+    () => getViewport3DVisualProfile(qualityProfileId ?? visualProfileId),
+    [qualityProfileId, visualProfileId],
   );
   const materialProfile = useMemo(
     () => resolveViewport3DMaterialProfile(visualProfile, appearance),
@@ -2329,13 +2338,14 @@ export function Viewport3DScene({
   );
 
   return (
+    <Viewport3DWireframeGestureContext.Provider value={cameraGestureRef}>
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <ArtifactFieldLayer adoptionRegistry={adoptionRegistry} model={artifactFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <AntennaFieldLayer model={antennaFieldOverlay ?? null} colors={colors} tracker={tracker} sessionIdentity={sessionIdentity ?? null} />
       <SavedAntennaSourceLayer model={savedAntennaSourceModel ?? null} colors={colors} tracker={tracker} />
       <Viewport3DBackground colors={colors} mode={appearance.backgroundMode} strength={appearance.backgroundStrength} tracker={tracker} />
       <Viewport3DCaptureSource onFrameReady={onCaptureFrameReady} />
-      <Viewport3DLightingRig profileId={visualProfileId} appearance={appearance} />
+      <Viewport3DLightingRig profileId={qualityProfileId ?? visualProfileId} appearance={appearance} bounds={bounds} tracker={tracker} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       ) : null}
@@ -2511,5 +2521,6 @@ export function Viewport3DScene({
         moveGestureActive={moveGestureActive}
       />
     </VectorGlyphDerivedBufferCacheProvider>
+    </Viewport3DWireframeGestureContext.Provider>
   );
 }

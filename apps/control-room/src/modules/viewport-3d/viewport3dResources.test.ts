@@ -535,12 +535,36 @@ describe("viewport3dResources", () => {
           ...previous.get("target-a")!,
           data: {
             ...previous.get("target-a")!.data,
+            dtype: "float64",
             values: new Float64Array([4, 5, 6]),
           },
           etag: '"field-m-2"',
         },
       ],
     ]);
+
+    const preparedSource = {
+      scene_revision: 8, initial_state_revision: 3, publication_id: "publication",
+      observation_frame_id: "prepared-frame", domain_generation_id: "generation-1",
+      values_sha256: "b".repeat(64),
+    };
+    const preparedRequests = new Map([["target-a", { ...requests.get("target-a")!, preparedSource }]]);
+    expect(resolveViewport3DFieldVectorCollectionLastGood({
+      current: replacement, previous, requests: preparedRequests, status: "loading",
+    }).size).toBe(0);
+    const prepared = new Map([["target-a", {
+      ...replacement.get("target-a")!,
+      responseMetadata: fieldResponseMetadata({
+        domainGenerationId: "generation-1", quantityId: "m", scopeId: "target-a", scopeKind: "part",
+        preparedObservationFrameId: "prepared-frame",
+      }),
+    }]]);
+    expect(resolveViewport3DFieldVectorCollectionLastGood({
+      current: prepared, previous, requests: preparedRequests, status: "ready",
+    }).get("target-a")?.responseMetadata?.preparedObservationFrameId).toBe("prepared-frame");
+    expect(resolveViewport3DFieldVectorCollectionLastGood({
+      current: null, previous: prepared, requests, status: "loading",
+    }).size).toBe(0);
 
     // A revalidating collection keeps showing its newest matching member.
     expect(

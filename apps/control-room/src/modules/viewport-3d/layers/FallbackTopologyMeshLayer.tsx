@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useState } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import {
   RENDER_POLICIES,
@@ -33,6 +33,7 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
@@ -50,6 +51,7 @@ import {
   updateScalarSurfaceShaderMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { prepareViewport3DFieldPresentationNormals } from "../viewport3dFieldPresentationMaterial";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
@@ -145,7 +147,7 @@ export function FallbackTopologyMeshLayer({
   });
 
   const edgeIndices =
-    renderSettings.geometryScope === "full"
+    renderSettings.wireframeGeometryScope === "full"
       ? topologyModel?.fallbackVolumeEdgeIndices ?? null
       : topologyModel?.fallbackSurfaceEdgeIndices ?? null;
   const createEdgeGeometry = useCallback(() => {
@@ -163,7 +165,7 @@ export function FallbackTopologyMeshLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `fallback-topology-wireframe:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `fallback-topology-wireframe:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -308,13 +310,16 @@ export function FallbackTopologyMeshLayer({
       createScalarSurfaceShaderMaterial(shaderSurfaceBuffer, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
-        shadeStrength: 0,
+        shadeStrength: materialProfile.magneticSurface.shadeStrength,
         toneMapped: materialProfile.magneticSurface.toneMapped,
+        presentation: materialProfile.magneticSurface.presentation,
       }),
     );
   }, [
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.shadeStrength,
+    materialProfile.magneticSurface.presentation,
     meshQualityColors,
     shaderSurfaceBuffer,
     surfaceOpacity,
@@ -332,8 +337,13 @@ export function FallbackTopologyMeshLayer({
       scalarShaderMaterial,
       shaderSurfaceBuffer,
       surfaceOpacity,
+      materialProfile.magneticSurface.shadeStrength,
+      materialProfile.magneticSurface.presentation,
     );
-  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity]);
+  }, [scalarShaderMaterial, shaderSurfaceBuffer, surfaceOpacity, materialProfile.magneticSurface]);
+  useLayoutEffect(() => {
+    if (prepareViewport3DFieldPresentationNormals(geometry, Boolean(materialProfile.magneticSurface.presentation))) invalidate();
+  }, [geometry, invalidate, materialProfile.magneticSurface.presentation]);
 
   const surfaceOwnerId = `saved-surface:${useId()}`;
   const visibleSurfaceBuffer = renderSettings.visible && renderPlan.surface.visible && !meshQualityColors
@@ -386,6 +396,7 @@ export function FallbackTopologyMeshLayer({
       onVisibleColorScale={onVisibleColorScale}
       vectorColorScale={vectorColorScale}
       edgeGeometry={edgeGeometry}
+      surfaceEdgeIndices={topologyModel?.fallbackSurfaceEdgeIndices}
       geometry={geometry}
       hasScalarColors={hasScalarColors}
       materialProfile={materialProfile}
@@ -413,6 +424,7 @@ function FallbackTopologyMeshPrimitives({
   onVisibleColorScale,
   vectorColorScale,
   edgeGeometry,
+  surfaceEdgeIndices,
   geometry,
   hasScalarColors,
   materialProfile,
@@ -436,6 +448,7 @@ function FallbackTopologyMeshPrimitives({
   onVisibleColorScale?: (report: Viewport3DVisibleColorScaleReport) => void;
   vectorColorScale: Viewport3DVisibleColorScale | null;
   edgeGeometry: BufferGeometry | null;
+  surfaceEdgeIndices?: Uint32Array | null;
   geometry: BufferGeometry | null;
   hasScalarColors: boolean;
   materialProfile: Viewport3DMaterialProfile;
@@ -458,7 +471,9 @@ function FallbackTopologyMeshPrimitives({
     <group onPointerDown={onPointerDown}>
       {renderPlan.surface.visible && geometry ? (
         <mesh
+          castShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           geometry={geometry}
+          receiveShadow={materialProfile.magneticSurface.presentation?.shadows ?? false}
           renderOrder={
             surfacePolicy.transparent
               ? RENDER_POLICIES.contextSurface.renderOrder
@@ -467,6 +482,16 @@ function FallbackTopologyMeshPrimitives({
         >
           {scalarShaderMaterial ? (
             <primitive attach="material" object={scalarShaderMaterial} />
+          ) : materialProfile.magneticSurface.presentation ? (
+            <meshStandardMaterial
+              color={surfaceMaterialColorFromSettings(renderSettings, colors.mesh, hasScalarColors)}
+              opacity={surfaceOpacity}
+              roughness={materialProfile.magneticSurface.presentation.roughness}
+              metalness={materialProfile.magneticSurface.presentation.metalness}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
+              vertexColors={hasScalarColors}
+              {...surfacePolicy}
+            />
           ) : (
             <meshBasicMaterial
               key={hasScalarColors ? "fallback-vertex-colors" : "fallback-solid"}
@@ -476,7 +501,7 @@ function FallbackTopologyMeshPrimitives({
                 hasScalarColors,
               )}
               opacity={surfaceOpacity}
-              {...materialProfile.magneticSurface}
+              toneMapped={materialProfile.magneticSurface.toneMapped}
               vertexColors={hasScalarColors}
               {...surfacePolicy}
             />
@@ -484,16 +509,18 @@ function FallbackTopologyMeshPrimitives({
         </mesh>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={surfaceEdgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.points.visible && pointGeometry ? (
         <points

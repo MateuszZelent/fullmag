@@ -239,7 +239,7 @@ impl WorkerOrphanTeardownRequest {
 }
 
 impl WorkerOrphanContainerBinding {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         for (value, field) in [
             (self.container_id.as_str(), "container_id"),
             (self.image_id.as_str(), "image_id"),

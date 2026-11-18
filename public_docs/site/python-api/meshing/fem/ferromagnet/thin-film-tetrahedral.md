@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-thin-film-tetrahedral)=
 # Thin-Film Tetrahedral API
 
-(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-problem-statement)=
 ## 1. What it is and when to use it
 
 `object.mesh.thin_film(...)` requests a thickness-aware tetrahedral mesh: the
@@ -58,6 +47,7 @@ tetrahedral mode treats `layers` as a **resolution request**, not a guarantee �
 verify the realized subdivision in the mesh report
 ({doc}`../../../../frontend/meshing/quality-and-reports`).
 
+(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 This page introduces no physical equation of its own; it selects the discrete
@@ -123,6 +113,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-python-api)=
 ## 4. Exact API
 
 Signature: `object.mesh.thin_film(**kwargs)` — all arguments are keyword-only;
@@ -162,17 +153,14 @@ request into `mesh_strategy="swept_prism"` with
 the `prism` family, and `transition_policy="pyramid_to_tetrahedra"`.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -206,6 +194,7 @@ Transaction: **Apply Object Policy** writes the recipe and invalidates mesh
 resources; **Build Mesh** executes `mesh.build-selected` (applying a dirty draft
 first). Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 
+(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -214,16 +203,14 @@ first). Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 | FEM | GPU | capability-gated | identical content-addressed mesh; element/order coverage gated |
 | FDM | CPU/GPU | not applicable | use the FDM meshing API ({doc}`../../fdm/index`) |
 
-Page status: `partial` — `layers` is a resolution request; the realized route may
+`layers` is a resolution request; the realized route may
 not keep exact node planes. Always check the build report.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - `layers` does not guarantee node planes in tetrahedral mode — the exact-layer
@@ -234,31 +221,18 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   silent topology replacement.
 
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 2. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
 
-(python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-ferromagnet-thin-film-tetrahedral-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| thin-film tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | recipe validation tests |
 | helper signature and validation | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` | validation in method body; meshing tests |
-| prismatic → swept_prism canonicalization | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | recipe round-trip tests |
+| prismatic → `swept_prism` canonicalization | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | recipe round-trip tests |
 | object recipe and strategies | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.mesh_strategy` | strategy validation tests |
 | $h_\perp = t/N$ target | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (tetrahedral branch) | `body_hmin` derived from `classify_sweepability().thickness` |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Thin-film tetrahedral object policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Thin-film tetrahedral object policy and lowering. | Source-map validator and focused API tests |

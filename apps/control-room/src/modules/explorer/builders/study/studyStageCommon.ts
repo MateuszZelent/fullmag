@@ -23,6 +23,8 @@ export function buildStudyStageBaseNode({
 }: StudyStageNodeOptions): ExplorerNode {
   const nodeStageId = stage.stageId ?? `${stage.index}`;
   const nodeId = `model:study:stages:stage:${nodeStageId}`;
+  const canExecuteStage = kind === "study.stage.run" || kind === "study.stage.relax";
+  const target = { stageId: stage.authoredStageId ?? null };
   return {
     id: nodeId,
     kind,
@@ -34,10 +36,16 @@ export function buildStudyStageBaseNode({
     stageIndex: stage.index,
     status: stage.status ?? "ready",
     contextCommands: [
+      ...(canExecuteStage ? ["study.execute-stage"] : []),
       "study.remove-selected-stage",
       "study.skip",
       "workspace.focus-selection",
     ],
+    contextCommandInputs: {
+      ...(canExecuteStage ? { "study.execute-stage": target } : {}),
+      "study.remove-selected-stage": target,
+      "study.skip": target,
+    },
     children: buildStudyStageTransitionNodes(stage, nodeId, nodeStageId),
   };
 }

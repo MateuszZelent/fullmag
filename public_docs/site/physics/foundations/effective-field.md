@@ -13,7 +13,7 @@ source_of_truth: backends/fem/cpu/mfem/interactions/effective_field.cpp and back
 (foundation-effective-field-problem-statement)=
 # Effective field
 
-Field-form interactions are composed into H_eff in A/m. The LLG RHS consumes that field;
+Field-form interactions are composed into $\mathbf{H}_{\mathrm{eff}}$ in $\mathrm{A\,m^{-1}}$. The LLG RHS consumes that field;
 direct torque terms remain RHS quantities and are not reinterpreted as fields.
 
 (foundation-effective-field-governing-equations)=
@@ -35,6 +35,15 @@ direct torque terms remain RHS quantities and are not reinterpreted as fields.
 \left.\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}\right|_{\mathrm{total}}
 =\left.\frac{\mathrm{d}\mathbf{m}}{\mathrm{d}t}\right|_{\mathrm{LLG}(\mathbf{H}_{\mathrm{eff}})}
 +\boldsymbol{\tau}_{\mathrm{direct}}.
+```
+
+```{figure} /_static/diagrams/effective-field-and-direct-torque-composition.svg
+:alt: Three-panel diagram comparing (a) conservative variational derivation from micromagnetic energy functional E_k[m] to H_k and H_eff, (b) non-conservative direct spin torques T_G converted once into tau_direct without pseudo-field injection, and (c) geometric composition on the tangent plane T_m S^2 yielding the total explicit LLG right-hand side.
+:width: 100%
+:name: fig-effective-field-and-direct-torque-composition
+:figclass: fm-physics-figure
+
+Variational effective-field composition versus additive direct spin-torque assembly: **(a)** conservative energy functionals $E_k[\mathbf{m}]$ yield field contributions $\mathbf{H}_k$ summed into $\mathbf{H}_{\mathrm{eff}}$ (`compute_effective_fields_for_magnetization` on FEM CPU; `gpu_rk_accumulate_effective_field` on FEM GPU); **(b)** current-driven spin torques enter solely via a single Gilbert-to-explicit transform $\boldsymbol{\tau}_{\mathrm{direct}} = (\mathbf{T}_G + \alpha\,\mathbf{m}\times\mathbf{T}_G)/(1+\alpha^2)$; **(c)** both vectors compose additively in the tangent plane $T_{\mathbf{m}}\mathbb{S}^2$ (`llg_rhs_aos` / `fullmag_cuda_llg_rhs_fused`) so $\mathbf{m}\cdot\partial_t\mathbf{m}=0$ (Brown 1963; Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
 ```
 
 (foundation-effective-field-symbols-and-si-units)=
@@ -85,18 +94,18 @@ zeeman_ir = Zeeman(B=(0.0, 0.0, 1.0e-3)).to_ir()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
-Exchange has no constructor parameters. Zeeman.B is a three-component finite induction
+`Exchange` has no constructor parameters. `Zeeman.B` is a three-component finite induction
 vector at the Python boundary.
 
 | Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| Zeeman.B | Sequence[float] | required | $\mathrm{T}$ | exactly three finite components | external induction vector | FDM/FEM authoring; executable lane is planner-gated | energy_terms[].B |
+| `Zeeman.B` | `Sequence[float]` | required | $\mathrm{T}$ | exactly three finite components | external induction vector | FDM/FEM authoring; executable lane is planner-gated | `energy_terms[].B` |
 
 (foundation-effective-field-problem-ir)=
 ## ProblemIR
 
-Exchange.to_ir() and Zeeman.to_ir() produce typed energy-term fragments. A complete
-ProblemIR additionally contains geometry, materials, magnets, study, and backend policy;
+`Exchange.to_ir()` and `Zeeman.to_ir()` produce typed energy-term fragments. A complete
+`ProblemIR` additionally contains geometry, materials, magnets, study, and backend policy;
 lowering creates that complete object.
 
 (foundation-effective-field-round-trip-and-failure-semantics)=
@@ -113,20 +122,20 @@ Unsupported combinations fail closed and are not converted to another field path
 |---|---|---|
 | FDM CPU | cell fields and CPU dispatch | partial; numerical qualification is separate |
 | FDM GPU | device buffers and CUDA dispatch | partial; executed-device evidence is required |
-| FEM CPU | compute_effective_fields_for_magnetization | partial; weak/discrete details are lane-specific |
-| FEM GPU | gpu_rk_accumulate_effective_field | partial; build presence is not runtime proof |
+| FEM CPU | `compute_effective_fields_for_magnetization` | partial; weak/discrete details are lane-specific |
+| FEM GPU | `gpu_rk_accumulate_effective_field` | partial; build presence is not runtime proof |
 
 (foundation-effective-field-implementation-mapping)=
 ## Implementation mapping
 
-Python energy objects own authoring and to_ir serialization. FEM CPU and FEM GPU have
+Python energy objects own authoring and `to_ir()` serialization. FEM CPU and FEM GPU have
 separate effective-field composition functions; LLG kernels consume the composed field.
 
 (foundation-effective-field-validation)=
 ## Validation
 
-The source map checks every stable symbol and equation mapping. The example is parsed as
-Python. Field-energy derivative tests and executed GPU parity remain separate evidence.
+The stage-first Python example is verified against the repository authoring API. Field-energy
+derivative consistency tests and executed GPU parity remain separate evidence.
 
 (foundation-effective-field-limitations)=
 ## Limitations
@@ -137,11 +146,9 @@ equations and qualification evidence remain on canonical interaction pages.
 (foundation-effective-field-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
-   [WorldCat record](https://search.worldcat.org/title/536451).
-2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+3. C. Abert, F. Bruckner, A. Voronov, M. Lang, S. A. Pathak, S. Holt, R. Kraft, R. Allayarov, P. Flauger, S. Koraltan, T. Schrefl, A. Chumak, H. Fangohr, and D. Suess, "NeuralMag: an open-source nodal finite-difference code for inverse micromagnetics," *npj Computational Materials* **11**(1), 193 (2025). [doi:10.1038/s41524-025-01688-1](https://doi.org/10.1038/s41524-025-01688-1) · [Open Access (CC-BY PDF)](https://www.nature.com/articles/s41524-025-01688-1.pdf) · [arXiv:2411.11725](https://arxiv.org/abs/2411.11725).
 
 (foundation-effective-field-source-code-index)=
 ## Source-code index

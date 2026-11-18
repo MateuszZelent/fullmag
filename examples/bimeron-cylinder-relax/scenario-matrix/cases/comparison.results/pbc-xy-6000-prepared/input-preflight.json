@@ -1,0 +1,141 @@
+{
+  "algorithm": "projected_gradient_bb",
+  "authoring_validation": "12 ProblemIR documents checked against original inputs",
+  "backend": "fdm",
+  "baseline_manifest_sha256": "f91f41959ab6ed23866c98180d1247478ba1c02cd0c7e02d8fd52592db74db25",
+  "both_bodies_repeated": true,
+  "cases": [
+    {
+      "baseline_case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "ec9cec4471695dce971ce311f2d24a705422ace6ea0b021e0c44be01002a7320",
+      "script": "cases/pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "15d6faaeba3b285e25051524112b9b429ce537c636be245272ba22a7b2ad7020"
+    },
+    {
+      "baseline_case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "26ac716e4744acee89a61f1b97d008e3f77bd25f3651292b14c6d72da26ae53e",
+      "script": "cases/pbc_xy_6000__material_rdmi_current__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "0205db6c1cb523dd6d0faddfa94a756b7072bee1c0e811390d36a4cee7538665"
+    },
+    {
+      "baseline_case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "0eaf959cbb4e1281e043c2c70e1d68b8352d76f65912a959593860e91a525b0e",
+      "script": "cases/pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "d8929d47055e1df548086e8ee22f5dcab3aefbba4c61af4f81f35c4c209e5caa"
+    },
+    {
+      "baseline_case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "eca47dd2ef10f2c59a66ffe02e5785c56d1febcaad2f19634bbc0787397ee85e",
+      "script": "cases/pbc_xy_6000__material_rdmi_current__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "cdd7a169d25df0bda110966d9dba979c3edce3312a35b781eac18b7bfbe1ecb0"
+    },
+    {
+      "baseline_case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_yig__film_bimeron__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_yig__film_bimeron__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "6bf38724a4b2f7f2bff615bc1e8d06708ca991c953343082f6e2d3aedf57d4cc",
+      "script": "cases/pbc_xy_6000__material_yig__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "c1474875cc1d5fe980c117d9d355acc094b834e4ca930137101e0c843b830806"
+    },
+    {
+      "baseline_case_id": "material_yig__film_bimeron__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_yig__film_bimeron__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_yig__film_bimeron__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "eac5a6096bfed9c066df512bab6ef9bd2592ea28e39ccc81cb7e9eb74f008a1a",
+      "script": "cases/pbc_xy_6000__material_yig__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "d9388f6d091d3058f78239ec79a6a37fb7d2ec070293de6aaa4d079bec97eb06"
+    },
+    {
+      "baseline_case_id": "material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "24c6b4230e8e667f0387376fb2bb44b626af67546e4a64fc4894d0878f07774e",
+      "script": "cases/pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "c16d08fe9800223a3d3799931555ff7861b2f317a01551b06e3145e04993a6cc"
+    },
+    {
+      "baseline_case_id": "material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "19d102b1878bc78dd4c5a5ba4c00bfe90b56272488f77f8ebe318086bc3c2740",
+      "script": "cases/pbc_xy_6000__material_yig__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "52e480403a4593e1806664dcd6424d535d7360acff0f4e8127a3a993dc7e9b65"
+    },
+    {
+      "baseline_case_id": "material_permalloy__film_bimeron__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_permalloy__film_bimeron__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_permalloy__film_bimeron__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "32019ea2d403151cbde602ff32469577b2896b75ba2f4fa727b1a565d622eaac",
+      "script": "cases/pbc_xy_6000__material_permalloy__film_bimeron__cylinder_plus_x.py",
+      "script_sha256": "840b7d95e52190864332697c84be605a1d02104d5fb0f399d8f372544a5372d2"
+    },
+    {
+      "baseline_case_id": "material_permalloy__film_bimeron__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_permalloy__film_bimeron__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_permalloy__film_bimeron__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "31bf36f9321c9061b3d00133697540b51c0f72d77031698cf72c589350eda922",
+      "script": "cases/pbc_xy_6000__material_permalloy__film_bimeron__cylinder_minus_x.py",
+      "script_sha256": "59e20138e208eb3c708ef5c1f632397fe901d413ac9311a3898f5f7faf9232bc"
+    },
+    {
+      "baseline_case_id": "material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "case_id": "pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_plus_x.zarr",
+      "problem_ir_sha256": "06fc1d39eb22fa7a12f6140a95a2e68b32ff21251e2f8fce2e547652bc9a4ba8",
+      "script": "cases/pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_plus_x.py",
+      "script_sha256": "43053d6ff0bfb046f52981dca350516dbfe7dca4ceb25e6366af844c9a905e31"
+    },
+    {
+      "baseline_case_id": "material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "case_id": "pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "max_steps": 6000,
+      "output": "cases/pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_minus_x.zarr",
+      "problem_ir_sha256": "aebf0fba95006aeb02deea219d2fcecee27d06329e9578552cfb9a357f318a36",
+      "script": "cases/pbc_xy_6000__material_permalloy__film_uniform_plus_x__cylinder_minus_x.py",
+      "script_sha256": "dafa379cdc7d578b8e4beac7e6651a1033f99e64ba12c94fa222a350adfcdb28"
+    }
+  ],
+  "device": "gpu",
+  "max_steps": 6000,
+  "period_m": [
+    6e-07,
+    6e-07,
+    null
+  ],
+  "periodic_boundary_conditions": {
+    "axes": [
+      "periodic",
+      "periodic",
+      "open"
+    ],
+    "demag": "truncated_images",
+    "image_counts": [
+      10,
+      10,
+      0
+    ]
+  },
+  "precision": "double",
+  "runtime_status": "BLOCKED: current multilayer FDM GPU PG-BB requires open axes",
+  "schema": "fullmag.bimeron-periodic-repeat-inputs.v1",
+  "solve_invoked": false
+}

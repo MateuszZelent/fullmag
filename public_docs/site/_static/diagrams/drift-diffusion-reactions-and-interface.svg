@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 800" width="1360" height="800" role="img" aria-labelledby="title desc">
+  <title id="title">Spin Hall drift-diffusion face fluxes, mixing-conductance interface, and volumetric FM spin reactions</title>
+  <desc id="desc">Panel (a) shows spin-channel potential splitting V +/- mu_s/2 and the three finite-volume face flux terms Q_i. Panel (b) depicts the MixingConductanceSpinInterface separating longitudinal transmission and backflow from full transverse absorption. Panel (c) illustrates the triad of volumetric spin reactions R_sf, R_J, and R_phi inside the ferromagnet together with a computed spatial decay profile.</desc>
+  <defs>
+    <marker id="arrow-m" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arrow-h" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arrow-dl" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arrow-fl" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#147d75"/></marker>
+    <marker id="arrow-sigma" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arrow-jc" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#475569"/></marker>
+    <marker id="arrow-dark" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#18202c"/></marker>
+    <marker id="arrow-warn" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#d97706"/></marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0.5 1.2 L 9.2 5 L 0.5 8.8 z" fill="#059669"/></marker>
+    <style>
+      .fig-title { font: 700 18.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
+      .panel-title { font: 700 15px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
+      .badge-text { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #ffffff; }
+      .card-title { font: 700 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
+      .body { font: 400 12.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
+      .body-bold { font: 600 12.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #18202c; }
+      .small { font: 400 11.3px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
+      .small-bold { font: 600 11.3px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
+      .mono { font: 600 11.5px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace; fill: #18202c; }
+      .mono-sm { font: 500 10.8px 'JetBrains Mono', 'Cascadia Code', Consolas, monospace; fill: #334155; }
+      .math { font: 400 14.5px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
+      .math-sm { font: 400 12.8px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
+      .math-it { font: italic 14.5px 'Cambria Math', 'STIX Two Text', Georgia, serif; fill: #18202c; }
+      .tick { font: 400 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #5a687a; }
+      .axis-lbl { font: 600 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #334155; }
+    </style>
+    
+  </defs>
+  <rect x="4" y="4" width="1352" height="792" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
+  <text x="28" y="34" class="fig-title">Spin Hall Drift-Diffusion: Face Fluxes, Mixing-Conductance Interface, and FM Spin Reactions</text>
+  <text x="28" y="54" class="fig-subtitle">Finite-volume steady balance ∂_i Q_ia + R_sf,a + R_J,a + R_ϕ,a = 0 with e &gt; 0, conventional J_c, and angular-momentum current (ℏ / 2e) Q_ia</text>
+  <line x1="24" y1="66" x2="1336" y2="66" stroke="#d6dde8" stroke-width="1.2"/>
+  <rect x="22.0" y="80.0" width="648.0" height="340.0" rx="8" fill="#ffffff" stroke="#d6dde8" stroke-width="1.3"/>
+  <rect x="36.0" y="92.0" width="26" height="22" rx="5" fill="#246b8e"/>
+  <text x="49.0" y="107.5" text-anchor="middle" class="badge-text">a</text>
+  <text x="71.0" y="108.0" class="panel-title">Spin-channel splitting V ± μ_s/2 and face flux Q_i</text>
+  <rect x="690.0" y="80.0" width="648.0" height="340.0" rx="8" fill="#ffffff" stroke="#d6dde8" stroke-width="1.3"/>
+  <rect x="704.0" y="92.0" width="26" height="22" rx="5" fill="#6f3cc4"/>
+  <text x="717.0" y="107.5" text-anchor="middle" class="badge-text">b</text>
+  <text x="739.0" y="108.0" class="panel-title">MixingConductanceSpinInterface: transmission vs absorption</text>
+  <rect x="40.0" y="124" width="212" height="176" rx="6" fill="#eef4f9" stroke="#4d8098" stroke-width="1.4"/>
+  <text x="52.0" y="144" class="body-bold" fill="#164e63">Cell L (width h<tspan dy="3.5" font-size="10.5">L</tspan><tspan dy="-3.5">&#x200B;</tspan>, σ<tspan dy="3.5" font-size="10.5">s,L</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <rect x="284.0" y="124" width="212" height="176" rx="6" fill="#f9efe9" stroke="#b97a56" stroke-width="1.4"/>
+  <text x="296.0" y="144" class="body-bold" fill="#7c2d12">Cell R (width h<tspan dy="3.5" font-size="10.5">R</tspan><tspan dy="-3.5">&#x200B;</tspan>, σ<tspan dy="3.5" font-size="10.5">s,R</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <line x1="268.0" y1="120" x2="268.0" y2="306" stroke="#18202c" stroke-width="2.2" stroke-dasharray="5 3"/>
+  <rect x="242.0" y="114" width="52" height="18" rx="4" fill="#18202c"/>
+  <text x="268.0" y="126.5" text-anchor="middle" class="badge-text" style="font-size:11px">Face f</text>
+  <line x1="58.0" y1="226" x2="234.0" y2="226" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="60.0" y="222" class="tick">V_L</text>
+  <line x1="88.0" y1="184" x2="222.0" y2="184" stroke="#1d5fa7" stroke-width="2.4"/>
+  <text x="90.0" y="177" class="small-bold" fill="#1d5fa7">V + μ_s/2 (↑)</text>
+  <line x1="88.0" y1="268" x2="222.0" y2="268" stroke="#b8392b" stroke-width="2.4"/>
+  <text x="90.0" y="284" class="small-bold" fill="#b8392b">V − μ_s/2 (↓)</text>
+  <line x1="206.0" y1="187" x2="206.0" y2="265" stroke="#6f3cc4" stroke-width="1.7" marker-start="url(#arrow-sigma)" marker-end="url(#arrow-sigma)"/>
+  <text x="213.0" y="230" class="math-sm" fill="#6f3cc4" font-weight="700">μ<tspan dy="3.5" font-size="10.5">s,L</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
+  <line x1="302.0" y1="230" x2="478.0" y2="230" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="452.0" y="225" class="tick">V_R</text>
+  <line x1="316.0" y1="208" x2="442.0" y2="208" stroke="#1d5fa7" stroke-width="2.4"/>
+  <line x1="316.0" y1="252" x2="442.0" y2="252" stroke="#b8392b" stroke-width="2.4"/>
+  <line x1="332.0" y1="211" x2="332.0" y2="249" stroke="#6f3cc4" stroke-width="1.7" marker-start="url(#arrow-sigma)" marker-end="url(#arrow-sigma)"/>
+  <text x="340.0" y="234" class="math-sm" fill="#6f3cc4" font-weight="700">μ<tspan dy="3.5" font-size="10.5">s,R</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
+  <line x1="230.0" y1="204" x2="306.0" y2="204" stroke="#b86b11" stroke-width="3.6" marker-end="url(#arrow-dl)"/>
+  <rect x="252.0" y="178" width="32" height="19" rx="4" fill="#ffffff" stroke="#b86b11" stroke-width="1"/>
+  <text x="268.0" y="191.5" text-anchor="middle" class="math-sm" fill="#b86b11" font-weight="700">Q<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
+  <rect x="508.0" y="124" width="146" height="176" rx="6" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.1"/>
+  <text x="518.0" y="143" class="small-bold">3 flux pieces in Q<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan>:</text>
+  <text x="518.0" y="164" class="small-bold" fill="#246b8e">1. Drift (P<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan> m<tspan dy="3.5" font-size="10.5">up</tspan><tspan dy="-3.5">&#x200B;</tspan> J<tspan dy="3.5" font-size="10.5">c,i</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <text x="518.0" y="179" class="tick">Upwinded on sgn(P<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>J<tspan dy="3.5" font-size="10.5">c,i</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <text x="518.0" y="203" class="small-bold" fill="#6f3cc4">2. Direct SHE</text>
+  <text x="518.0" y="218" class="tick">θ<tspan dy="3.5" font-size="10.5">SH,f</tspan><tspan dy="-3.5">&#x200B;</tspan>σ<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>(e<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan> × E<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <text x="518.0" y="242" class="small-bold" fill="#b86b11">3. Spin diffusion</text>
+  <text x="518.0" y="257" class="tick">−Δμ_s / (R_L + R_R)</text>
+  <text x="518.0" y="283" class="tick">R_L = h_L / (2 σ_s,L)</text>
+  <rect x="40.0" y="312" width="612" height="94" rx="6" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.1"/>
+  <text x="52.0" y="334" class="math">Q<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan> = P<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>m<tspan dy="3.5" font-size="10.5">up</tspan><tspan dy="-3.5">&#x200B;</tspan>J<tspan dy="3.5" font-size="10.5">c,i</tspan><tspan dy="-3.5">&#x200B;</tspan> + θ<tspan dy="3.5" font-size="10.5">SH,f</tspan><tspan dy="-3.5">&#x200B;</tspan>σ<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>(e<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan>×E<tspan dy="3.5" font-size="10.5">f</tspan><tspan dy="-3.5">&#x200B;</tspan>) − (μ<tspan dy="3.5" font-size="10.5">s,R</tspan><tspan dy="-3.5">&#x200B;</tspan>−μ<tspan dy="3.5" font-size="10.5">s,L</tspan><tspan dy="-3.5">&#x200B;</tspan>) / [h_L/(2σ<tspan dy="3.5" font-size="10.5">s,L</tspan><tspan dy="-3.5">&#x200B;</tspan>) + h_R/(2σ<tspan dy="3.5" font-size="10.5">s,R</tspan><tspan dy="-3.5">&#x200B;</tspan>)]</text>
+  <text x="52.0" y="358" class="small"><tspan font-weight="700" fill="#b86b11">M1</tspan> uses charge face σ_f E_f from an accepted CurrentTransport snapshot (fv_spin_upwind_v1).</text>
+  <text x="52.0" y="376" class="small"><tspan font-weight="700" fill="#6f3cc4">M2</tspan> reciprocal FDM couples (V, μ_s) using σ_s in both Pσ_s and θ_SHσ_s terms (iSHE + AMR/PHE/AHE).</text>
+  <text x="52.0" y="394" class="small">Angular-momentum flux tensor: J^s_ia = (ℏ / 2e) Q_ia (first index i = flow, second index a = spin).</text>
+  <rect x="708.0" y="142" width="222" height="158" rx="6" fill="#e4eff5" stroke="#4d8098" stroke-width="1.5"/>
+  <text x="720.0" y="162" class="body-bold" fill="#164e63">HM (V<tspan dy="3.5" font-size="10.5">N</tspan><tspan dy="-3.5">&#x200B;</tspan>, μ<tspan dy="3.5" font-size="10.5">s,N</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <text x="720.0" y="179" class="mono-sm">normal_side</text>
+  <rect x="950.0" y="142" width="370" height="158" rx="6" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="964.0" y="162" class="body-bold" fill="#7c2d12">FM cell K (V<tspan dy="3.5" font-size="10.5">F</tspan><tspan dy="-3.5">&#x200B;</tspan>, μ<tspan dy="3.5" font-size="10.5">s,F</tspan><tspan dy="-3.5">&#x200B;</tspan>, m)</text>
+  <text x="964.0" y="179" class="mono-sm">ferromagnet_side</text>
+  <line x1="940.0" y1="138" x2="940.0" y2="304" stroke="#6f3cc4" stroke-width="3.2"/>
+  <rect x="832.0" y="119" width="216" height="19" rx="4" fill="#f5f3ff" stroke="#6f3cc4" stroke-width="1"/>
+  <text x="940.0" y="132" text-anchor="middle" class="small-bold" fill="#6f3cc4">ΔV = V_N−V_F, Δμ_s = μ_s,N−μ_s,F</text>
+  <line x1="804.0" y1="208" x2="1053.0" y2="208" stroke="#1d5fa7" stroke-width="3.0" marker-end="url(#arrow-h)"/>
+  <text x="808.0" y="199" class="small-bold" fill="#1d5fa7">Longitudinal (∥ m)</text>
+  <path d="M 928.0 222 C 888.0 222, 888.0 240, 928.0 240" fill="none" stroke="#1d5fa7" stroke-width="1.9" stroke-dasharray="4 3" marker-end="url(#arrow-h)"/>
+  <text x="722.0" y="236" class="tick" fill="#1d5fa7" font-weight="600">Backflow ∝ ½(G_↑+G_↓)(m·Δμ_s)</text>
+  <text x="964.0" y="227" class="small" fill="#1d5fa7">Transmitted into FM (G<tspan dy="3.5" font-size="10.5">↑</tspan><tspan dy="-3.5">&#x200B;</tspan>, G<tspan dy="3.5" font-size="10.5">↓</tspan><tspan dy="-3.5">&#x200B;</tspan>)</text>
+  <line x1="804.0" y1="274" x2="934.0" y2="274" stroke="#b86b11" stroke-width="3.2" marker-end="url(#arrow-dl)"/>
+  <text x="722.0" y="270" class="small-bold" fill="#b86b11">Transverse (⊥ m)</text>
+  <circle cx="940.0" cy="274" r="7" fill="#b86b11" stroke="#ffffff" stroke-width="1.6"/>
+  <path d="M 946.0 274 Q 984.0 254, 1016.0 272" fill="none" stroke="#b86b11" stroke-width="2.6" marker-end="url(#arrow-dl)"/>
+  <text x="1024.0" y="272" class="small-bold" fill="#b86b11">Full absorption (G<tspan dy="3.5" font-size="10.5">r</tspan><tspan dy="-3.5">&#x200B;</tspan>, G<tspan dy="3.5" font-size="10.5">i</tspan><tspan dy="-3.5">&#x200B;</tspan>) → T<tspan dy="3.5" font-size="10.5">f,K</tspan><tspan dy="-3.5">&#x200B;</tspan></text>
+  <text x="1024.0" y="289" class="tick">Zero transverse flux enters FM interface side</text>
+  <rect x="708.0" y="312" width="612" height="94" rx="6" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.1"/>
+  <text x="720.0" y="334" class="math-sm"><tspan fill="#1d5fa7" font-weight="700">q<tspan dy="3.5" font-size="10.5">s,∥</tspan><tspan dy="-3.5">&#x200B;</tspan></tspan> = [(G_↑−G_↓)ΔV + ½(G_↑+G_↓)(m·Δμ_s)] m   |   j<tspan dy="3.5" font-size="10.5">c,n</tspan><tspan dy="-3.5">&#x200B;</tspan> = (G_↑+G_↓)ΔV</text>
+  <text x="720.0" y="359" class="math-sm"><tspan fill="#b86b11" font-weight="700">q<tspan dy="3.5" font-size="10.5">abs,⊥</tspan><tspan dy="-3.5">&#x200B;</tspan></tspan> = G_r m×(Δμ_s×m) + G_i(Δμ_s×m)   [formula: magnetoelectronic.fullmag.v2]</text>
+  <text x="720.0" y="384" class="math-sm"><tspan fill="#b8392b" font-weight="700">T<tspan dy="3.5" font-size="10.5">f,K</tspan><tspan dy="-3.5">&#x200B;</tspan></tspan> = −(γ<tspan dy="3.5" font-size="10.5">e</tspan><tspan dy="-3.5">&#x200B;</tspan>/M<tspan dy="3.5" font-size="10.5">s</tspan><tspan dy="-3.5">&#x200B;</tspan>)(ℏ/2e)(A_f/V_K) q<tspan dy="3.5" font-size="10.5">abs,⊥</tspan><tspan dy="-3.5">&#x200B;</tspan>   [area-to-volume conversion in cell K]</text>
+  <rect x="22.0" y="434.0" width="1316.0" height="344.0" rx="8" fill="#ffffff" stroke="#d6dde8" stroke-width="1.3"/>
+  <rect x="36.0" y="446.0" width="26" height="22" rx="5" fill="#b86b11"/>
+  <text x="49.0" y="461.5" text-anchor="middle" class="badge-text">c</text>
+  <text x="71.0" y="462.0" class="panel-title">Volumetric spin reactions inside FM: ∂_i Q_ia + R_sf,a + R_J,a + R_ϕ,a = 0</text>
+  <rect x="40.0" y="480.0" width="320.0" height="280.0" rx="6" fill="#f4f7fb" stroke="#d6dde8" stroke-width="1.1"/>
+  <text x="52.0" y="501.0" class="card-title">Vector decomposition around m</text>
+  <line x1="150.0" y1="658.0" x2="150.0" y2="536.0" stroke="#b8392b" stroke-width="3.6" marker-end="url(#arrow-m)"/>
+  <text x="132.0" y="546.0" class="math" fill="#b8392b" font-weight="700">m</text>
+  <line x1="150.0" y1="658.0" x2="262.0" y2="580.0" stroke="#6f3cc4" stroke-width="3.2" marker-end="url(#arrow-sigma)"/>
+  <text x="270.0" y="576.0" class="math" fill="#6f3cc4" font-weight="700">μ_s</text>
+  <line x1="150.0" y1="580.0" x2="262.0" y2="580.0" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="262.0" y1="658.0" x2="262.0" y2="580.0" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="150.0" y1="658.0" x2="262.0" y2="658.0" stroke="#b86b11" stroke-width="2.4" stroke-dasharray="4 2" marker-end="url(#arrow-dl)"/>
+  <text x="210.0" y="651.0" text-anchor="middle" class="small-bold" fill="#b86b11">μ_s,⊥</text>
+  <line x1="262.0" y1="658.0" x2="310.0" y2="688.0" stroke="#147d75" stroke-width="2.5" marker-end="url(#arrow-fl)"/>
+  <text x="270.0" y="708.0" class="small-bold" fill="#147d75">R_J ∝ μ_s × m</text>
+  <line x1="262.0" y1="658.0" x2="214.0" y2="692.0" stroke="#1d5fa7" stroke-width="2.3" marker-end="url(#arrow-h)"/>
+  <text x="62.0" y="708.0" class="small-bold" fill="#1d5fa7">R_ϕ ∝ m×(μ_s×m)</text>
+  <text x="52.0" y="746.0" class="small">R_sf relaxes all components; only R_J + R_ϕ torque m.</text>
+  <rect x="376.0" y="480.0" width="480.0" height="68" rx="6" fill="#f8fafc" stroke="#475569" stroke-width="1.3"/>
+  <text x="388.0" y="502.0" class="body-bold" fill="#475569">1. Spin-Flip Relaxation (λ_sf) — ZERO magnetic torque</text>
+  <text x="388.0" y="523.0" class="math-sm">R_sf = [σ_s / (2 λ_sf²)] μ_s</text>
+  <text x="586.0" y="523.0" class="small">Dissipates spin to lattice; enters balance, not T_tr.</text>
+  <text x="388.0" y="540.0" class="small">Always active (λ_sf &gt; 0); anchors disconnected spin components without sinks.</text>
+  <rect x="376.0" y="556.0" width="480.0" height="64" rx="6" fill="#ecfdf5" stroke="#147d75" stroke-width="1.3"/>
+  <text x="388.0" y="578.0" class="body-bold" fill="#147d75">2. Precessional Exchange Reaction (λ_J) — Optional (None disables)</text>
+  <text x="388.0" y="599.0" class="math-sm">R_J = [σ_s / (2 λ_J²)] (μ_s × m)</text>
+  <text x="586.0" y="599.0" class="small">Larmor precession of transverse spin around local m.</text>
+  <rect x="376.0" y="628.0" width="480.0" height="64" rx="6" fill="#fff7ed" stroke="#b86b11" stroke-width="1.3"/>
+  <text x="388.0" y="650.0" class="body-bold" fill="#b86b11">3. Transverse Spin Dephasing (λ_ϕ) — Optional (None disables)</text>
+  <text x="388.0" y="671.0" class="math-sm">R_ϕ = [σ_s / (2 λ_ϕ²)] m × (μ_s × m)</text>
+  <text x="608.0" y="671.0" class="small">Rapidly damps μ_s,⊥ inside FM.</text>
+  <rect x="376.0" y="700.0" width="480.0" height="60" rx="6" fill="#f6e8df" stroke="#b97a56" stroke-width="1.5"/>
+  <text x="616.0" y="724.0" text-anchor="middle" class="math" fill="#7c2d12" font-weight="700">T<tspan dy="3.5" font-size="10.5">tr,G</tspan><tspan dy="-3.5">&#x200B;</tspan> = −(γ<tspan dy="3.5" font-size="10.5">e</tspan><tspan dy="-3.5">&#x200B;</tspan> / M<tspan dy="3.5" font-size="10.5">s</tspan><tspan dy="-3.5">&#x200B;</tspan>) (ℏ / 2e) (R_J + R_ϕ)</text>
+  <text x="616.0" y="746.0" text-anchor="middle" class="small">Negative sign transfers spin lost by conduction electrons into magnetization m.</text>
+  <rect x="872.0" y="480.0" width="446.0" height="280.0" rx="6" fill="#ffffff" stroke="#d6dde8" stroke-width="1.2"/>
+  <text x="1095.0" y="500.0" text-anchor="middle" class="card-title">FM spatial decay (1D reaction ODE, computed)</text>
+  <line x1="928.0" y1="668.2" x2="1298.0" y2="668.2" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="921.0" y="671.7" text-anchor="end" class="tick">0.0</text>
+  <line x1="928.0" y1="599.9" x2="1298.0" y2="599.9" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="921.0" y="603.4" text-anchor="end" class="tick">0.5</text>
+  <line x1="928.0" y1="531.7" x2="1298.0" y2="531.7" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="921.0" y="535.2" text-anchor="end" class="tick">1.0</text>
+  <line x1="928.0" y1="518.0" x2="928.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="928.0" y="731.0" text-anchor="middle" class="tick">0</text>
+  <line x1="1002.0" y1="518.0" x2="1002.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="1002.0" y="731.0" text-anchor="middle" class="tick">2</text>
+  <line x1="1076.0" y1="518.0" x2="1076.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="1076.0" y="731.0" text-anchor="middle" class="tick">4</text>
+  <line x1="1150.0" y1="518.0" x2="1150.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="1150.0" y="731.0" text-anchor="middle" class="tick">6</text>
+  <line x1="1224.0" y1="518.0" x2="1224.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="1224.0" y="731.0" text-anchor="middle" class="tick">8</text>
+  <line x1="1298.0" y1="518.0" x2="1298.0" y2="716.0" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="1298.0" y="731.0" text-anchor="middle" class="tick">10</text>
+  <rect x="928.0" y="518.0" width="370.0" height="198.0" fill="none" stroke="#94a3b8" stroke-width="1.2"/>
+  <polyline points="928.0,531.7 930.1,533.2 932.1,534.7 934.2,536.2 936.3,537.6 938.3,539.1 940.4,540.5 942.5,541.9 944.5,543.3 946.6,544.7 948.7,546.1 950.7,547.4 952.8,548.8 954.9,550.1 956.9,551.4 959.0,552.7 961.1,554.0 963.1,555.3 965.2,556.5 967.3,557.8 969.3,559.0 971.4,560.2 973.5,561.4 975.5,562.6 977.6,563.8 979.7,564.9 981.7,566.1 983.8,567.2 985.9,568.3 987.9,569.4 990.0,570.5 992.1,571.6 994.1,572.7 996.2,573.8 998.3,574.8 1000.3,575.9 1002.4,576.9 1004.5,577.9 1006.5,578.9 1008.6,579.9 1010.7,580.9 1012.7,581.8 1014.8,582.8 1016.9,583.7 1018.9,584.7 1021.0,585.6 1023.1,586.5 1025.2,587.4 1027.2,588.3 1029.3,589.2 1031.4,590.1 1033.4,591.0 1035.5,591.8 1037.6,592.7 1039.6,593.5 1041.7,594.3 1043.8,595.2 1045.8,596.0 1047.9,596.8 1050.0,597.6 1052.0,598.4 1054.1,599.1 1056.2,599.9 1058.2,600.7 1060.3,601.4 1062.4,602.2 1064.4,602.9 1066.5,603.6 1068.6,604.3 1070.6,605.0 1072.7,605.7 1074.8,606.4 1076.8,607.1 1078.9,607.8 1081.0,608.5 1083.0,609.1 1085.1,609.8 1087.2,610.4 1089.2,611.1 1091.3,611.7 1093.4,612.3 1095.4,613.0 1097.5,613.6 1099.6,614.2 1101.6,614.8 1103.7,615.4 1105.8,616.0 1107.8,616.5 1109.9,617.1 1112.0,617.7 1114.0,618.3 1116.1,618.8 1118.2,619.4 1120.2,619.9 1122.3,620.4 1124.4,621.0 1126.4,621.5 1128.5,622.0 1130.6,622.5 1132.6,623.0 1134.7,623.5 1136.8,624.0 1138.8,624.5 1140.9,625.0 1143.0,625.5 1145.0,626.0 1147.1,626.4 1149.2,626.9 1151.2,627.4 1153.3,627.8 1155.4,628.3 1157.4,628.7 1159.5,629.1 1161.6,629.6 1163.6,630.0 1165.7,630.4 1167.8,630.8 1169.8,631.3 1171.9,631.7 1174.0,632.1 1176.0,632.5 1178.1,632.9 1180.2,633.3 1182.2,633.7 1184.3,634.0 1186.4,634.4 1188.4,634.8 1190.5,635.2 1192.6,635.5 1194.6,635.9 1196.7,636.3 1198.8,636.6 1200.8,637.0 1202.9,637.3 1205.0,637.7 1207.1,638.0 1209.1,638.3 1211.2,638.7 1213.3,639.0 1215.3,639.3 1217.4,639.6 1219.5,640.0 1221.5,640.3 1223.6,640.6 1225.7,640.9 1227.7,641.2 1229.8,641.5 1231.9,641.8 1233.9,642.1 1236.0,642.4 1238.1,642.7 1240.1,642.9 1242.2,643.2 1244.3,643.5 1246.3,643.8 1248.4,644.0 1250.5,644.3 1252.5,644.6 1254.6,644.8 1256.7,645.1 1258.7,645.4 1260.8,645.6 1262.9,645.9 1264.9,646.1 1267.0,646.4 1269.1,646.6 1271.1,646.8 1273.2,647.1 1275.3,647.3 1277.3,647.5 1279.4,647.8 1281.5,648.0 1283.5,648.2 1285.6,648.4 1287.7,648.7 1289.7,648.9 1291.8,649.1 1293.9,649.3 1295.9,649.5 1298.0,649.7" fill="none" stroke="#1d5fa7" stroke-width="2.6"/>
+  <polyline points="928.0,531.7 930.1,538.6 932.1,545.2 934.2,551.6 936.3,557.8 938.3,563.8 940.4,569.5 942.5,575.1 944.5,580.3 946.6,585.4 948.7,590.3 950.7,594.9 952.8,599.3 954.9,603.6 956.9,607.6 959.0,611.5 961.1,615.1 963.1,618.6 965.2,621.9 967.3,625.1 969.3,628.1 971.4,630.9 973.5,633.6 975.5,636.1 977.6,638.5 979.7,640.8 981.7,642.9 983.8,644.9 985.9,646.8 987.9,648.6 990.0,650.3 992.1,651.9 994.1,653.3 996.2,654.7 998.3,656.0 1000.3,657.2 1002.4,658.3 1004.5,659.4 1006.5,660.4 1008.6,661.3 1010.7,662.1 1012.7,662.9 1014.8,663.6 1016.9,664.3 1018.9,664.9 1021.0,665.5 1023.1,666.0 1025.2,666.5 1027.2,666.9 1029.3,667.3 1031.4,667.7 1033.4,668.0 1035.5,668.3 1037.6,668.6 1039.6,668.8 1041.7,669.0 1043.8,669.2 1045.8,669.4 1047.9,669.5 1050.0,669.7 1052.0,669.8 1054.1,669.9 1056.2,669.9 1058.2,670.0 1060.3,670.1 1062.4,670.1 1064.4,670.1 1066.5,670.2 1068.6,670.2 1070.6,670.2 1072.7,670.2 1074.8,670.2 1076.8,670.2 1078.9,670.1 1081.0,670.1 1083.0,670.1 1085.1,670.1 1087.2,670.0 1089.2,670.0 1091.3,669.9 1093.4,669.9 1095.4,669.9 1097.5,669.8 1099.6,669.8 1101.6,669.7 1103.7,669.7 1105.8,669.6 1107.8,669.6 1109.9,669.5 1112.0,669.5 1114.0,669.4 1116.1,669.4 1118.2,669.3 1120.2,669.3 1122.3,669.3 1124.4,669.2 1126.4,669.2 1128.5,669.1 1130.6,669.1 1132.6,669.0 1134.7,669.0 1136.8,669.0 1138.8,668.9 1140.9,668.9 1143.0,668.9 1145.0,668.8 1147.1,668.8 1149.2,668.8 1151.2,668.7 1153.3,668.7 1155.4,668.7 1157.4,668.7 1159.5,668.6 1161.6,668.6 1163.6,668.6 1165.7,668.6 1167.8,668.5 1169.8,668.5 1171.9,668.5 1174.0,668.5 1176.0,668.5 1178.1,668.4 1180.2,668.4 1182.2,668.4 1184.3,668.4 1186.4,668.4 1188.4,668.4 1190.5,668.4 1192.6,668.3 1194.6,668.3 1196.7,668.3 1198.8,668.3 1200.8,668.3 1202.9,668.3 1205.0,668.3 1207.1,668.3 1209.1,668.3 1211.2,668.3 1213.3,668.3 1215.3,668.3 1217.4,668.3 1219.5,668.2 1221.5,668.2 1223.6,668.2 1225.7,668.2 1227.7,668.2 1229.8,668.2 1231.9,668.2 1233.9,668.2 1236.0,668.2 1238.1,668.2 1240.1,668.2 1242.2,668.2 1244.3,668.2 1246.3,668.2 1248.4,668.2 1250.5,668.2 1252.5,668.2 1254.6,668.2 1256.7,668.2 1258.7,668.2 1260.8,668.2 1262.9,668.2 1264.9,668.2 1267.0,668.2 1269.1,668.2 1271.1,668.2 1273.2,668.2 1275.3,668.2 1277.3,668.2 1279.4,668.2 1281.5,668.2 1283.5,668.2 1285.6,668.2 1287.7,668.2 1289.7,668.2 1291.8,668.2 1293.9,668.2 1295.9,668.2 1298.0,668.2" fill="none" stroke="#b86b11" stroke-width="2.4"/>
+  <polyline points="928.0,668.2 930.1,664.3 932.1,660.7 934.2,657.6 936.3,654.7 938.3,652.2 940.4,650.0 942.5,648.1 944.5,646.4 946.6,645.0 948.7,643.8 950.7,642.8 952.8,641.9 954.9,641.3 956.9,640.8 959.0,640.4 961.1,640.2 963.1,640.1 965.2,640.1 967.3,640.1 969.3,640.3 971.4,640.6 973.5,640.9 975.5,641.3 977.6,641.7 979.7,642.2 981.7,642.7 983.8,643.3 985.9,643.9 987.9,644.5 990.0,645.1 992.1,645.8 994.1,646.4 996.2,647.1 998.3,647.8 1000.3,648.4 1002.4,649.1 1004.5,649.8 1006.5,650.5 1008.6,651.2 1010.7,651.8 1012.7,652.5 1014.8,653.1 1016.9,653.7 1018.9,654.4 1021.0,655.0 1023.1,655.6 1025.2,656.1 1027.2,656.7 1029.3,657.2 1031.4,657.8 1033.4,658.3 1035.5,658.8 1037.6,659.2 1039.6,659.7 1041.7,660.2 1043.8,660.6 1045.8,661.0 1047.9,661.4 1050.0,661.8 1052.0,662.1 1054.1,662.5 1056.2,662.8 1058.2,663.2 1060.3,663.5 1062.4,663.8 1064.4,664.0 1066.5,664.3 1068.6,664.6 1070.6,664.8 1072.7,665.0 1074.8,665.2 1076.8,665.4 1078.9,665.6 1081.0,665.8 1083.0,666.0 1085.1,666.2 1087.2,666.3 1089.2,666.5 1091.3,666.6 1093.4,666.7 1095.4,666.9 1097.5,667.0 1099.6,667.1 1101.6,667.2 1103.7,667.3 1105.8,667.4 1107.8,667.5 1109.9,667.5 1112.0,667.6 1114.0,667.7 1116.1,667.7 1118.2,667.8 1120.2,667.8 1122.3,667.9 1124.4,667.9 1126.4,668.0 1128.5,668.0 1130.6,668.1 1132.6,668.1 1134.7,668.1 1136.8,668.2 1138.8,668.2 1140.9,668.2 1143.0,668.2 1145.0,668.2 1147.1,668.3 1149.2,668.3 1151.2,668.3 1153.3,668.3 1155.4,668.3 1157.4,668.3 1159.5,668.3 1161.6,668.3 1163.6,668.3 1165.7,668.3 1167.8,668.3 1169.8,668.3 1171.9,668.3 1174.0,668.3 1176.0,668.3 1178.1,668.3 1180.2,668.3 1182.2,668.3 1184.3,668.3 1186.4,668.3 1188.4,668.3 1190.5,668.3 1192.6,668.3 1194.6,668.3 1196.7,668.3 1198.8,668.3 1200.8,668.3 1202.9,668.3 1205.0,668.3 1207.1,668.3 1209.1,668.3 1211.2,668.3 1213.3,668.3 1215.3,668.3 1217.4,668.3 1219.5,668.3 1221.5,668.3 1223.6,668.3 1225.7,668.3 1227.7,668.3 1229.8,668.3 1231.9,668.3 1233.9,668.3 1236.0,668.3 1238.1,668.3 1240.1,668.3 1242.2,668.3 1244.3,668.3 1246.3,668.3 1248.4,668.3 1250.5,668.3 1252.5,668.2 1254.6,668.2 1256.7,668.2 1258.7,668.2 1260.8,668.2 1262.9,668.2 1264.9,668.2 1267.0,668.2 1269.1,668.2 1271.1,668.2 1273.2,668.2 1275.3,668.2 1277.3,668.2 1279.4,668.2 1281.5,668.2 1283.5,668.2 1285.6,668.2 1287.7,668.2 1289.7,668.2 1291.8,668.2 1293.9,668.2 1295.9,668.2 1298.0,668.2" fill="none" stroke="#147d75" stroke-width="2.1" stroke-dasharray="5 3"/>
+  <rect x="1090.0" y="528.0" width="200" height="62" rx="4" fill="#ffffff" fill-opacity="0.94" stroke="#d6dde8" stroke-width="1"/>
+  <line x1="1098.0" y1="543.0" x2="1118.0" y2="543.0" stroke="#1d5fa7" stroke-width="2.6"/>
+  <text x="1124.0" y="547.0" class="tick" fill="#1d5fa7">μ_∥ (λ_sf = 5.0 nm)</text>
+  <line x1="1098.0" y1="561.0" x2="1118.0" y2="561.0" stroke="#b86b11" stroke-width="2.4"/>
+  <text x="1124.0" y="565.0" class="tick" fill="#b86b11">μ_⊥,x (λ_J=1.0, λ_ϕ=1.4 nm)</text>
+  <line x1="1098.0" y1="579.0" x2="1118.0" y2="579.0" stroke="#147d75" stroke-width="2.1" stroke-dasharray="4 2"/>
+  <text x="1124.0" y="583.0" class="tick" fill="#147d75">μ_⊥,y (precessing)</text>
+  <text x="1113.0" y="749.0" text-anchor="middle" class="axis-lbl">Depth into FM from HM/FM interface (nm)</text>
+  <text x="892.0" y="617.0" text-anchor="middle" transform="rotate(-90 892.0 617.0)" class="axis-lbl">Normalized μ_s / μ_s(0)</text>
+</svg>

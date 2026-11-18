@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use super::projects::{encode_current, resource_from_application};
 use crate::error::ApiError;
+use crate::imported_geometry_sources;
 use crate::schemas::projects::{
     ProjectFromScriptRequest, ProjectFromScriptResource, ProjectScriptImportResource,
     ScriptFidelityResource, ScriptRoundTripState, PROJECT_ARCHIVE_MAX_BYTES,
@@ -304,7 +305,7 @@ fn build_project_from_script(
         &script_path,
         &["--source-snapshot", &source_snapshot_arg],
     );
-    let scene_value = match run_script_helper(
+    let mut scene_value = match run_script_helper(
         repo_root,
         &private_dir,
         &export_args,
@@ -326,7 +327,7 @@ fn build_project_from_script(
             "the helper did not return a scene.v2 document",
         ));
     }
-    let scene_document: SceneDocument =
+    let mut scene_document: SceneDocument =
         serde_json::from_value(scene_value.clone()).map_err(|error| {
             ApiError::with_status_and_code(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -350,10 +351,20 @@ fn build_project_from_script(
         ));
     }
 
-    // Return the canonical scene without a parallel browser ZIP parser.
-    let activation_scene = scene_value.as_object()
-        .ok_or_else(|| ApiError::internal("exported scene is not an object"))?
-        .iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+    // From-script accepts explicit local STL sources under the repository,
+    // current workspace, or user-data tree. The display filename is not a
+    // path, so relative declarations are rooted at the current workspace.
+    let allowed_roots = vec![
+        repo_root.to_path_buf(),
+        workspace_root.to_path_buf(),
+        FsPath::new("/user-data").to_path_buf(),
+    ];
+    let stl_assets = imported_geometry_sources::capture_and_bundle_stl_sources(
+        &mut scene_document,
+        workspace_root,
+        &allowed_roots,
+    )?;
+    imported_geometry_sources::patch_scene_asset_fields(&mut scene_value, &scene_document)?;
 
     // 3. Build the project: scene, embedded script, metadata, provenance.
     let sha256 = format!("{:x}", Sha256::digest(&script_bytes));
@@ -371,7 +382,7 @@ fn build_project_from_script(
         .ok_or_else(|| ApiError::internal("project application has no current document"))?;
     draft
         .replace_scene(
-            RawJsonEnvelope::from_value(scene_value)
+            RawJsonEnvelope::from_value(scene_value.clone())
                 .map_err(|error| ApiError::bad_request(format!("invalid scene document: {error}")))?,
         )
         .map_err(|error| ApiError::bad_request(format!("invalid scene document: {error}")))?;
@@ -413,6 +424,7 @@ fn build_project_from_script(
                 .map_err(|error| ApiError::internal(format!("invalid entry path: {error}")))?,
         );
     }
+    draft.assets.extend(stl_assets.iter().cloned());
     draft
         .validate_for_save()
         .map_err(|error| ApiError::bad_request(format!("invalid project archive: {error}")))?;
@@ -425,6 +437,25 @@ fn build_project_from_script(
             "project archive exceeds {PROJECT_ARCHIVE_MAX_BYTES} byte transport limit"
         )));
     }
+    // The project stores portable project/assets/... references. Activation
+    // receives a verified private cache path created only from those bytes.
+    let mut activation_scene_document = scene_document;
+    imported_geometry_sources::materialize_embedded_stl_sources(
+        &mut activation_scene_document,
+        &stl_assets,
+        workspace_root,
+    )?;
+    let mut activation_scene_value = scene_value;
+    imported_geometry_sources::patch_scene_asset_fields(
+        &mut activation_scene_value,
+        &activation_scene_document,
+    )?;
+    let activation_scene = activation_scene_value
+        .as_object()
+        .ok_or_else(|| ApiError::internal("exported scene is not an object"))?
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     let project = resource_from_application(&application, view, archive)?;
     Ok(ProjectFromScriptResource {
         scene_document: Some(activation_scene),

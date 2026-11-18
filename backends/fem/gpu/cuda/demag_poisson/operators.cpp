@@ -198,6 +198,7 @@ void destroy_scalar(DeviceCsrScalar &op)
 uint64_t csr_pattern_digest(const DeviceCsrScalar &op)
 {
     uint64_t hash = 14695981039346656037ull;
+    fnv1a_u64(hash, kFemCompactMarkerMapRevision);
     fnv1a_string(hash, "fullmag.fem.gpu.demag.recovery.csr-pattern.v1");
     fnv1a_u64(hash, op.rows);
     fnv1a_u64(hash, op.nnz);
@@ -439,22 +440,6 @@ bool validate_ctx_mfem_operator_mesh(
         error = "strict FEM GPU demag ctx/MFEM typed connectivity extent divergence";
         return false;
     }
-    uint32_t maximum_canonical_marker = 0u;
-    bool has_canonical_air = ctx.mesh.cell_markers.empty();
-    for (const uint32_t marker : ctx.mesh.cell_markers) {
-        maximum_canonical_marker = std::max(maximum_canonical_marker, marker);
-        has_canonical_air = has_canonical_air || marker == 0u;
-    }
-    if (has_canonical_air &&
-        maximum_canonical_marker >=
-            static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-        error = "strict FEM GPU demag ctx/MFEM cannot map canonical air marker";
-        return false;
-    }
-    const uint32_t mfem_air_attribute = has_canonical_air
-        ? maximum_canonical_marker + 1u
-        : 1u;
-
     for (int element = 0; element < mesh.GetNE(); ++element) {
         if (ctx.mesh.cell_types[static_cast<size_t>(element)] !=
             p1_cell_type_for_geometry(mesh.GetElementGeometry(element))) {
@@ -485,11 +470,8 @@ bool validate_ctx_mfem_operator_mesh(
         const uint32_t canonical_marker = ctx.mesh.cell_markers.empty()
             ? 1u
             : ctx.mesh.cell_markers[static_cast<size_t>(element)];
-        const uint32_t expected_mfem_attribute = canonical_marker == 0u
-            ? mfem_air_attribute
-            : canonical_marker;
-        if (expected_mfem_attribute !=
-            static_cast<uint32_t>(mesh.GetAttribute(element))) {
+        const int expected_mfem_attribute = ctx.mfem_context.marker_maps.domain.attribute(canonical_marker);
+        if (expected_mfem_attribute == 0 || expected_mfem_attribute != mesh.GetAttribute(element)) {
             error = "strict FEM GPU demag ctx/MFEM cell-marker divergence";
             return false;
         }
@@ -957,6 +939,72 @@ bool build_mixed_demag_operators(
                     }
                 }
             }
+        }
+    }
+
+    if (periodic_node_class_reduction) {
+        // The reduced-node map was validated against the P1 state rows above.
+        // Periodic images are one DOF: merge recovery weights and rows per
+        // class so every image recovers the same class field.
+        const size_t reduced_count =
+            static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
+        std::vector<double> reduced_visual_weight(reduced_count, 0.0);
+        std::vector<double> reduced_recovery_weight(reduced_count, 0.0);
+        std::vector<bool> reduced_magnetic_node(reduced_count, false);
+        std::vector<std::map<uint32_t, double>> reduced_vis_x(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_vis_y(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_vis_z(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_x(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_y(reduced_count);
+        std::vector<std::map<uint32_t, double>> reduced_rec_z(reduced_count);
+
+        auto merge_row_map = [&](std::map<uint32_t, double> &dst,
+                                 const std::map<uint32_t, double> &src,
+                                 const char *label) {
+            for (const auto &[col, val] : src) {
+                if (!add_finite(dst[col], val, label)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        for (size_t node = 0; node < visual_weight.size(); ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            if (!add_finite(
+                    reduced_visual_weight[reduced],
+                    visual_weight[node],
+                    "periodic visual recovery weight") ||
+                !add_finite(
+                    reduced_recovery_weight[reduced],
+                    recovery_weight[node],
+                    "periodic magnetic recovery weight") ||
+                !merge_row_map(reduced_vis_x[reduced], visual_x[node], "periodic visual recovery x") ||
+                !merge_row_map(reduced_vis_y[reduced], visual_y[node], "periodic visual recovery y") ||
+                !merge_row_map(reduced_vis_z[reduced], visual_z[node], "periodic visual recovery z") ||
+                !merge_row_map(reduced_rec_x[reduced], rec_x[node], "periodic magnetic recovery x") ||
+                !merge_row_map(reduced_rec_y[reduced], rec_y[node], "periodic magnetic recovery y") ||
+                !merge_row_map(reduced_rec_z[reduced], rec_z[node], "periodic magnetic recovery z")) {
+                return false;
+            }
+            if (magnetic_state_node[node]) {
+                reduced_magnetic_node[reduced] = true;
+            }
+        }
+
+        for (size_t node = 0; node < visual_weight.size(); ++node) {
+            const size_t reduced =
+                static_cast<size_t>(ctx.mesh.periodic_reduced_node[node]);
+            visual_weight[node] = reduced_visual_weight[reduced];
+            recovery_weight[node] = reduced_recovery_weight[reduced];
+            magnetic_state_node[node] = reduced_magnetic_node[reduced];
+            visual_x[node] = reduced_vis_x[reduced];
+            visual_y[node] = reduced_vis_y[reduced];
+            visual_z[node] = reduced_vis_z[reduced];
+            rec_x[node] = reduced_rec_x[reduced];
+            rec_y[node] = reduced_rec_y[reduced];
+            rec_z[node] = reduced_rec_z[reduced];
         }
     }
 

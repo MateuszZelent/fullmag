@@ -17,6 +17,53 @@ import test_docker_backend_dev as fixtures
 
 
 class SharedBackendIntegrationTests(unittest.TestCase):
+    def test_shared_publisher_refuses_recapture_or_receipt_identity_drift(self):
+        fixture = fixtures.BackendPackageTests()
+        for drift in ("recapture", "receipt", "none"):
+            with self.subTest(drift=drift), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                store_root = root / "shared"
+                store_root.mkdir()
+                package = store_root / "groups" / ("a" * 64)
+                package.mkdir(parents=True)
+                candidate, records = fixture._published_package(package / "candidate")
+                manifest_path, manifest = fixture._live_manifest(root)
+                toolchain = fixture._toolchain_fixture()
+                build_root = root / "build"
+                build_root.mkdir()
+
+                def prepare(*args, **kwargs):
+                    built_manifest = manifest
+                    if drift != "none":
+                        changed_path, built_manifest = fixture._live_manifest(
+                            root, commit="b" * 40, capture_id="recaptured")
+                        if drift == "recapture":
+                            manifest_path.write_bytes(changed_path.read_bytes())
+                    receipt = fixture._receipt_for_manifest(records, built_manifest, toolchain)
+                    receipt["build"]["cuda_architectures"] = None
+                    backend._write_json(candidate / "backend-build-receipt.json", receipt, "test receipt")
+                    return 0
+
+                with patch.object(shared, "ROOT", store_root), \
+                        patch.object(backend, "PACKAGE_ROOT", package), \
+                        patch.object(backend, "_dev_cuda_architectures", return_value=None), \
+                        patch.dict(os.environ, {"FULLMAG_SHARED_BACKEND_STORE": str(store_root),
+                            "FULLMAG_SHARED_BACKEND_GROUP": "groups/" + "a" * 64}), \
+                        patch.object(backend, "_prepare_locked", side_effect=prepare), \
+                        patch.object(shared.Entry, "publish") as publish:
+                    args = argparse.Namespace(manifest=manifest_path)
+                    if drift == "none":
+                        self.assertEqual(backend._prepare_with_shared_package(
+                            args, build_root, candidate, 2, toolchain, candidate), 0)
+                        publish.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(backend.BackendBuildError, "shared package.*identity"):
+                            backend._prepare_with_shared_package(
+                                args, build_root, candidate, 2, toolchain, candidate)
+                        publish.assert_not_called()
+                        receipt = json.loads((candidate / "backend-build-receipt.json").read_text())
+                        self.assertNotIn("shared_package", receipt)
+
     def test_shared_hit_validates_real_package_and_keeps_consumer_receipt_private(self):
         fixture = fixtures.BackendPackageTests()
         with tempfile.TemporaryDirectory() as temporary:
