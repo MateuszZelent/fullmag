@@ -1,9 +1,9 @@
 import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
-import type {
-  DecodedSavedSupport,
-  DecodedTopology,
-} from "@/kernel/api/codecs";
-import { savedSupportNodeIsActive } from "@/kernel/api/codecs";
+import type { DecodedTopology } from "@/kernel/api/codecs";
+import {
+  savedSupportNodeIsActive,
+  type DecodedSavedSupport,
+} from "@/kernel/api/codecs/savedSupportCodec";
 import type { SavedPlaybackResource } from "@/kernel/api/savedResultsPlayback";
 import {
   decodeSavedPlaybackFrame,

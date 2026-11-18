@@ -94,7 +94,7 @@ describe("export3dArrowGeometry", () => {
   });
 
   it("shares one unit arrow geometry, bounded quantized materials, and continuous 60fps TRS tracks", () => {
-    const usedNames = new Set<string>();
+    const usedNodeNames = new Set<string>();
     const siteCount = 30;
     const anchorsM = new Float32Array(siteCount * 3);
     for (let i = 0; i < siteCount; i += 1) {
@@ -116,10 +116,10 @@ describe("export3dArrowGeometry", () => {
         fv[i * 3 + 1] = Math.cos(phi + i * 0.2);
         fv[i * 3 + 2] = i === 0 && f === 30 ? 0 : 0.1 * Math.sin(i);
       }
-      // Force an exact zero-crossing on site 1 at frame 15
-      fv[1 * 3] = 0;
-      fv[1 * 3 + 1] = 0;
-      fv[1 * 3 + 2] = 0;
+      // Force an exact zero-crossing on site 1 at frame 15.
+      if (f === 15) {
+        fv.fill(0, 3, 6);
+      }
       frameVectors.push(fv);
     }
 
@@ -154,6 +154,10 @@ describe("export3dArrowGeometry", () => {
     }
     expect(new Set(built!.meshes.map((m) => m.name)).size).toBe(siteCount);
     expect(built!.tracks.length).toBe(siteCount * 3);
+    const zeroCrossingScale = built!.tracks.find(
+      (track) => track.name === built!.meshes[1]!.name + ".scale",
+    );
+    expect(Array.from(zeroCrossingScale!.values.slice(45, 48))).toEqual([0, 0, 0]);
 
     // Every quaternion track must maintain dot(q_prev, q_next) >= 0 across full 2*pi rotation.
     for (const track of built!.tracks) {

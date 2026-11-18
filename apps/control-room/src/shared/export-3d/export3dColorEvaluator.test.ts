@@ -22,12 +22,16 @@ import type { Export3DComplexFieldInput } from "./export3dTypes";
 
 describe("export3dColorEvaluator", () => {
   it("converts sRGB <-> linear-sRGB channels accurately across piecewise boundary", () => {
-    for (const srgb of [0, 0.02, 0.04045, 0.1, 0.5, 0.8, 1]) {
+    for (const srgb of [0, 0.02, 0.04044, 0.04046, 0.1, 0.5, 0.8, 1]) {
       const linear = srgbToLinearChannel(srgb);
       expect(linear).toBeGreaterThanOrEqual(0);
       expect(linear).toBeLessThanOrEqual(1);
       expect(linearToSrgbChannel(linear)).toBeCloseTo(srgb, 10);
     }
+    // The published rounded cutoffs do not round-trip exactly at 0.04045.
+    expect(srgbToLinearChannel(0.04045)).toBe(0.04045 / 12.92);
+    expect(linearToSrgbChannel(0.0031308)).toBe(0.0031308 * 12.92);
+    expect(linearToSrgbChannel(srgbToLinearChannel(0.04045))).toBeCloseTo(0.04045, 7);
     expect(srgbToLinearChannel(0.5)).toBeCloseTo(0.21404114048223255, 8);
   });
 

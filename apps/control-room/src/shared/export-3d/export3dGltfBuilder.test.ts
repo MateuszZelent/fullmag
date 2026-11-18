@@ -1,77 +1,48 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { export3DModel, summarizeExport3DCapabilities } from "./index";
 import type { Export3DTargetInput } from "./export3dTypes";
+import { useNodeBlobFileReader } from "./__tests__/useNodeBlobFileReader";
 
-class NodeBlobFileReader {
-  result: ArrayBuffer | string | null = null;
-  error: Error | null = null;
-  onload: ((event: unknown) => void) | null = null;
-  onloadend: ((event: unknown) => void) | null = null;
-  onerror: ((event: unknown) => void) | null = null;
-  private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+interface GlbNode {
+  name?: string;
+  mesh?: number;
+  extras?: {
+    fullmag?: {
+      si_meters_per_unit: number;
+      origin_offset_m: number[];
+    };
+  };
+}
 
-  addEventListener(type: string, listener: (event: unknown) => void): void {
-    let set = this.listeners.get(type);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(type, set);
-    }
-    set.add(listener);
-  }
+type GlbMeshNode = GlbNode & { mesh: number };
 
-  removeEventListener(type: string, listener: (event: unknown) => void): void {
-    this.listeners.get(type)?.delete(listener);
-  }
+interface GlbPrimitive {
+  attributes: Record<string, number>;
+  indices: number;
+  material: number;
+  mode?: number;
+  targets?: Array<Record<string, number>>;
+}
 
-  readAsArrayBuffer(blob: Blob): void {
-    void blob.arrayBuffer().then(
-      (buffer) => {
-        this.result = buffer;
-        this.emit("load");
-        this.emit("loadend");
-      },
-      (err: unknown) => {
-        this.error = err instanceof Error ? err : new Error(String(err));
-        this.emit("error");
-        this.emit("loadend");
-      },
-    );
-  }
-
-  readAsDataURL(blob: Blob): void {
-    void blob.arrayBuffer().then(
-      (buffer) => {
-        const mime = blob.type || "application/octet-stream";
-        const base64 = Buffer.from(buffer).toString("base64");
-        this.result = `data:${mime};base64,${base64}`;
-        this.emit("load");
-        this.emit("loadend");
-      },
-      (err: unknown) => {
-        this.error = err instanceof Error ? err : new Error(String(err));
-        this.emit("error");
-        this.emit("loadend");
-      },
-    );
-  }
-
-  private emit(type: string): void {
-    const event = { target: this };
-    if (type === "load") this.onload?.(event);
-    if (type === "loadend") this.onloadend?.(event);
-    if (type === "error") this.onerror?.(event);
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event);
-    }
-  }
+interface GlbJson {
+  accessors: Array<{ min: number[]; max: number[] }>;
+  animations: Array<{
+    channels: Array<{ sampler: number; target: { node: number; path: string } }>;
+    samplers: Array<{ interpolation: string }>;
+  }>;
+  extensionsUsed?: string[];
+  materials: Array<{ doubleSided?: boolean; extensions?: Record<string, unknown> }>;
+  meshes: Array<{ primitives: GlbPrimitive[] }>;
+  nodes: GlbNode[];
+  scenes: Array<Pick<GlbNode, "extras">>;
 }
 
 interface ParsedGlb {
   magic: number;
   version: number;
   totalLength: number;
-  json: Record<string, any>;
+  json: GlbJson;
   bin: Uint8Array;
 }
 
@@ -84,7 +55,7 @@ function parseGlbBytes(bytes: Uint8Array): ParsedGlb {
   const jsonType = view.getUint32(16, true);
   expect(jsonType).toBe(0x4e4f534a);
   const jsonText = new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength));
-  const json = JSON.parse(jsonText) as Record<string, any>;
+  const json = JSON.parse(jsonText) as GlbJson;
 
   const binHeaderOffset = 20 + jsonLength;
   let bin = new Uint8Array(0);
@@ -98,20 +69,7 @@ function parseGlbBytes(bytes: Uint8Array): ParsedGlb {
 }
 
 describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
-  const originalFileReader = globalThis.FileReader;
-
-  beforeAll(() => {
-    (globalThis as unknown as { FileReader: typeof NodeBlobFileReader }).FileReader =
-      NodeBlobFileReader;
-  });
-
-  afterAll(() => {
-    if (originalFileReader === undefined) {
-      delete (globalThis as unknown as { FileReader?: unknown }).FileReader;
-    } else {
-      globalThis.FileReader = originalFileReader;
-    }
-  });
+  useNodeBlobFileReader();
 
   it("exports static FDM grid to GLB with KHR_materials_unlit, COLOR_0, auto_scene transform, wireframe, and static arrows", async () => {
     const targets: Export3DTargetInput[] = [
@@ -184,22 +142,18 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
     const rootNodeExtras = glb.json.nodes?.[0]?.extras?.fullmag;
     expect(rootNodeExtras?.si_meters_per_unit).toBeCloseTo(20e-9, 14);
 
-    const primitives = glb.json.meshes.flatMap((m: any) => m.primitives);
-    const triPrims = primitives.filter((p: any) => (p.mode ?? 4) === 4);
-    const linePrims = primitives.filter((p: any) => p.mode === 1);
+    const primitives = glb.json.meshes.flatMap((m) => m.primitives);
+    const triPrims = primitives.filter((p) => (p.mode ?? 4) === 4);
+    const linePrims = primitives.filter((p) => p.mode === 1);
     expect(triPrims.length).toBe(2); // surface + static merged arrows
     expect(linePrims.length).toBe(1); // wireframe
     for (const p of triPrims) {
       expect(p.attributes.POSITION).toBeTypeOf("number");
       expect(p.attributes.NORMAL).toBeTypeOf("number");
       expect(p.attributes.COLOR_0).toBeTypeOf("number");
-    }
-
-    for (const mat of glb.json.materials) {
-      expect(mat.doubleSided).toBe(true);
-      if (mat.extensions?.KHR_materials_unlit) {
-        expect(mat.extensions.KHR_materials_unlit).toEqual({});
-      }
+      const material = glb.json.materials[p.material];
+      expect(material.doubleSided).toBe(true);
+      expect(material.extensions?.KHR_materials_unlit).toEqual({});
     }
 
     // Verify centered auto_scene bounds in POSITION accessor [-1, 1] along largest axis (X).
@@ -290,8 +244,8 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
     expect(glb.magic).toBe(0x46546c67);
     expect(glb.json.animations).toHaveLength(1);
 
-    const surfaceNodes = glb.json.nodes.filter((n: any) =>
-      typeof n.name === "string" && n.name.includes("_surface_f"),
+    const surfaceNodes = glb.json.nodes.filter((n): n is GlbMeshNode =>
+      n.mesh !== undefined && (n.name?.includes("_surface_f") ?? false),
     );
     expect(surfaceNodes).toHaveLength(8);
 
@@ -313,7 +267,7 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
       normAccessors.add(prim.attributes.NORMAL);
       idxAccessors.add(prim.indices);
       colorAccessors.add(prim.attributes.COLOR_0);
-      expect(prim.targets.length).toBe(4);
+      expect(prim.targets).toHaveLength(4);
     }
     expect(posAccessors.size).toBe(1);
     expect(normAccessors.size).toBe(1);
@@ -321,12 +275,7 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
     expect(colorAccessors.size).toBe(8);
 
     // Check animation channels: STEP scale + LINEAR weights + LINEAR arrow TRS.
-    const anim = glb.json.animations[0];
-    const channels = anim.channels as Array<{
-      sampler: number;
-      target: { node: number; path: string };
-    }>;
-    const samplers = anim.samplers as Array<{ interpolation: string }>;
+    const { channels, samplers } = glb.json.animations[0];
 
     const scaleChannels = channels.filter((c) => c.target.path === "scale");
     const weightChannels = channels.filter((c) => c.target.path === "weights");
@@ -345,15 +294,15 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
       expect(samplers[ch.sampler]!.interpolation).toBe("LINEAR");
     }
 
-    const arrowNodes = glb.json.nodes.filter((n: any) =>
-      typeof n.name === "string" && n.name.includes("_arrow_"),
+    const arrowNodes = glb.json.nodes.filter((n): n is GlbMeshNode =>
+      n.mesh !== undefined && (n.name?.includes("_arrow_") ?? false),
     );
     expect(arrowNodes).toHaveLength(4);
-    const arrowMeshes = new Set(arrowNodes.map((n: any) => n.mesh));
+    const arrowMeshes = new Set(arrowNodes.map((n) => n.mesh));
     // Arrows share one unit arrow geometry across materials.
     const arrowPosAccessors = new Set(
       arrowNodes.map(
-        (n: any) => glb.json.meshes[n.mesh].primitives[0].attributes.POSITION,
+        (n) => glb.json.meshes[n.mesh].primitives[0].attributes.POSITION,
       ),
     );
     expect(arrowMeshes.size).toBeLessThanOrEqual(4);
@@ -428,7 +377,7 @@ describe("export3dGltfBuilder & export3DModel glTF/GLB", () => {
     expect(res.stats.frameCount).toBe(2);
     expect(res.stats.triangleCount).toBe(4); // 4 exterior boundary faces of a tet
     expect(res.stats.arrowCount).toBe(4);
-    expect(glb.json.animations[0].channels.some((c: any) => c.target.path === "weights")).toBe(
+    expect(glb.json.animations[0].channels.some((c) => c.target.path === "weights")).toBe(
       true,
     );
   });

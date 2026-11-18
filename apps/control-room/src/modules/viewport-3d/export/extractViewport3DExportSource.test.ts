@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
+import { useNodeBlobFileReader } from "@/shared/export-3d/__tests__/useNodeBlobFileReader";
 import {
   EXPORT_3D_INACTIVE_REGION_ID,
   export3DModel,
@@ -10,6 +11,8 @@ import {
 import { extractViewport3DExportSource } from "./extractViewport3DExportSource";
 
 describe("extractViewport3DExportSource", () => {
+  useNodeBlobFileReader();
+
   it("extracts single-grid FDM with inactive regionIds and optional visible airbox", () => {
     const regionIds = new Uint32Array([
       1,
