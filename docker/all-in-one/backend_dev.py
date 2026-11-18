@@ -1110,7 +1110,7 @@ def _copy_live_regular_file(source: Path, target: Path, relative: str, entry: Ma
         os.chmod(temporary, 0o555 if entry["mode"] == "100755" else 0o444)
         os.replace(temporary, target)
     except OSError as error:
-        _fail(f"cannot synchronize live source {entry['path']}: {error}")
+        _fail(f"cannot synchronize live source {relative}: {error}")
     finally:
         os.close(source_descriptor)
         temporary.unlink(missing_ok=True)

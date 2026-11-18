@@ -1005,6 +1005,8 @@ jobs:
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_docker_diagnostic_source_checks.py -v
+          python -B scripts/test_docker_volume_preowner_probe_stop.py -v
           python -B scripts/test_backend_native_contracts.py -v
           python -B scripts/test_docker_native_contract_integration.py -v
           python -B -m unittest scripts.test_analyze_accepted_cuda_trace -v
