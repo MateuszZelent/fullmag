@@ -190,6 +190,12 @@ export function setTermParameter(
   name: string,
   value: number,
 ): MaskFieldDriveResource {
+  // The same value changes nothing, so the term keeps its ready-antenna origin.
+  const existing = drive.terms[termIndex];
+  const current = existing
+    ? termFunction(existing, role)?.parameters?.find((parameter) => parameter.name === name)
+    : null;
+  if (current?.value === value) return drive;
   return updateTerm(drive, termIndex, (term) =>
     withTermFunction(term, role, (target) => ({
       ...target,
@@ -452,6 +458,82 @@ export function maskAntennaSummary(drive: MaskFieldDriveResource): string {
   if (arrays > 0) parts.push(`${arrays} array mask${arrays === 1 ? "" : "s"}`);
   parts.push(drive.enabled === false ? "disabled" : "active");
   return parts.join(" · ");
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Structural equality of two JSON values. The key order of objects does not
+ * matter, and a `null` field equals a missing one (the server may write either).
+ */
+export function sameJson(left: unknown, right: unknown): boolean {
+  const absent = (value: unknown) => value === null || value === undefined;
+  if (left === right || (absent(left) && absent(right))) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameJson(item, right[index]));
+  }
+  if (!isJsonRecord(left) || !isJsonRecord(right)) return false;
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (!sameJson(left[key], right[key])) return false;
+  }
+  return true;
+}
+
+export interface MaskAntennaMerge {
+  /** Paths changed both in the draft and in the scene, to different values. */
+  conflicts: string[];
+  /** The scene version with the draft's changes; the draft's value where both changed. */
+  merged: MaskFieldDriveResource;
+}
+
+function mergeJson(
+  base: unknown,
+  mine: unknown,
+  theirs: unknown,
+  path: string,
+  conflicts: string[],
+): unknown {
+  if (sameJson(mine, base)) return theirs;
+  if (sameJson(theirs, base) || sameJson(mine, theirs)) return mine;
+  if (isJsonRecord(base) && isJsonRecord(mine) && isJsonRecord(theirs)) {
+    const merged: Record<string, unknown> = {};
+    for (const key of new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(theirs)])) {
+      const value = mergeJson(base[key], mine[key], theirs[key], `${path}.${key}`, conflicts);
+      if (value !== undefined) merged[key] = value;
+    }
+    return merged;
+  }
+  if (
+    Array.isArray(base) && Array.isArray(mine) && Array.isArray(theirs) &&
+    mine.length === base.length && theirs.length === base.length
+  ) {
+    return base.map((item, index) =>
+      mergeJson(item, mine[index], theirs[index], `${path}[${index}]`, conflicts));
+  }
+  conflicts.push(path);
+  return mine;
+}
+
+/**
+ * Three-way merge of a draft onto a newer scene version of its antenna.
+ * `mine` was edited from `base`; `theirs` is the antenna in the scene now.
+ * A field only one side changed takes that side's value. A field both sides
+ * changed to different values is a conflict and keeps the draft's value;
+ * arrays merge element by element unless a side changed their length.
+ */
+export function mergeMaskAntennaDraft(
+  base: MaskFieldDriveResource,
+  mine: MaskFieldDriveResource,
+  theirs: MaskFieldDriveResource,
+): MaskAntennaMerge {
+  const conflicts: string[] = [];
+  const merged = mergeJson(base, mine, theirs, "drive", conflicts) as MaskFieldDriveResource;
+  return { conflicts, merged };
 }
 
 export function commitMaskAntenna(

@@ -12,10 +12,12 @@ import {
   createMaskAntennaDraft,
   maskAntennaSummary,
   MAX_MASK_TERMS,
+  mergeMaskAntennaDraft,
   readyAntennaCalls,
   removeTerm,
   replaceReadyAntennaCall,
   resolveMaskAntennaPanelModel,
+  sameJson,
   setTermLocal,
   setTermOutput,
   setTermParameter,
@@ -204,5 +206,59 @@ describe("mask antenna panel model", () => {
       { base_revision: 8, drive },
       { sessionScopeKey: "s" },
     );
+  });
+
+  it("setting a parameter to its current value keeps the term and its origin", () => {
+    const drive = antenna([readyTerm(2e-4)]);
+    expect(setTermParameter(drive, 0, "mask", "amplitude", 2e-4)).toBe(drive);
+  });
+});
+
+describe("mask antenna draft merge", () => {
+  it("compares JSON by structure, ignoring key order and null against missing", () => {
+    expect(sameJson({ a: 1, b: [1, { c: 2 }] }, { b: [1, { c: 2 }], a: 1 })).toBe(true);
+    expect(sameJson({ a: 1, name: null }, { a: 1 })).toBe(true);
+    expect(sameJson({ a: [1, 2] }, { a: [2, 1] })).toBe(false);
+    expect(sameJson({ a: 0 }, { a: null })).toBe(false);
+  });
+
+  it("takes each side's change of different fields", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const mine = setTermOutput(base, 0, "mask", 2, "amplitude * g");
+    const theirs = { ...base, name: "Renamed", position_m: [0, 1e-7, 0] };
+    const { conflicts, merged } = mergeMaskAntennaDraft(base, mine, theirs);
+    expect(conflicts).toEqual([]);
+    expect(merged.name).toBe("Renamed");
+    expect(merged.position_m).toEqual([0, 1e-7, 0]);
+    expect(merged.terms[0].mask.kind === "function" && merged.terms[0].mask.function.outputs[2])
+      .toBe("amplitude * g");
+    // The edited term no longer equals the ready antenna's output.
+    expect(merged.terms[0].origin).toBeUndefined();
+  });
+
+  it("follows the scene where the draft equals its base", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const theirs = setTermParameter(base, 0, "mask", "amplitude", 5e-4);
+    expect(mergeMaskAntennaDraft(base, structuredClone(base), theirs)).toEqual({ conflicts: [], merged: theirs });
+  });
+
+  it("reports a field both sides changed and keeps the draft's value there", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const mine = setTermOutput(base, 0, "mask", 2, "amplitude * g");
+    const theirs = setTermParameter(setTermOutput(base, 0, "mask", 2, "2 * amplitude * g"), 0, "time", "t0", 1e-9);
+    const { conflicts, merged } = mergeMaskAntennaDraft(base, mine, theirs);
+    expect(conflicts).toEqual(["drive.terms[0].mask.function.outputs[2]"]);
+    const term = merged.terms[0];
+    expect(term.mask.kind === "function" && term.mask.function.outputs[2]).toBe("amplitude * g");
+    expect(term.time?.parameters?.[1]).toEqual({ name: "t0", value: 1e-9 });
+  });
+
+  it("treats a list whose length changed on one side and was edited on the other as a conflict", () => {
+    const base = antenna([readyTerm(2e-4)]);
+    const mine = addTerm(base);
+    const theirs = setTermParameter(base, 0, "mask", "amplitude", 5e-4);
+    const { conflicts, merged } = mergeMaskAntennaDraft(base, mine, theirs);
+    expect(conflicts).toEqual(["drive.terms"]);
+    expect(merged.terms).toEqual(mine.terms);
   });
 });

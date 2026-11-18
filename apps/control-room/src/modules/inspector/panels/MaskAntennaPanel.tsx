@@ -18,6 +18,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { useFieldDrivesResource } from "@/kernel/resources/fieldDriveResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
+  MODEL_MASK_FIELD_DRIVES_RESOURCE_KEY,
   maskAntennaMutationResourceKeys,
   useMaskFieldDrivesResource,
   useReadyAntennasResource,
@@ -38,12 +39,14 @@ import {
   defaultMaskShape,
   maskAntennaSummary,
   MAX_MASK_TERMS,
+  mergeMaskAntennaDraft,
   readyAntennaCalls,
   readyAntennaDefaultArguments,
   removeTerm,
   removeTermParameter,
   replaceReadyAntennaCall,
   resolveMaskAntennaPanelModel,
+  sameJson,
   setTermLocal,
   setTermName,
   setTermOutput,
@@ -60,8 +63,30 @@ import { regionalFieldDriveSelectorOptions } from "./RegionalFieldDrivePanelMode
 
 type RawInputs = Record<string, string>;
 
+/**
+ * The local draft of one antenna. It belongs to the antenna, not to a scene
+ * revision, so a newer revision keeps the draft, the focus and the scroll.
+ * `value` is null while the panel follows the scene; the first edit pins it.
+ * `base` is the scene version the edits started from (found antennas only);
+ * the panel merges the edits onto newer scene versions (three-way merge).
+ */
+interface MaskAntennaDraftState {
+  base: MaskFieldDriveResource | null;
+  key: string;
+  value: MaskFieldDriveResource | null;
+}
+
+/** A write the server acknowledged; it stands for the antenna until the list reaches its revision. */
+interface AcknowledgedMaskAntenna {
+  drive: MaskFieldDriveResource;
+  key: string;
+  revision: number;
+}
+
 const MASK_OUTPUT_LABELS = ["Bx", "By", "Bz"] as const;
 const NEW_READY_CALL = "new";
+const SCENE_CHANGED_REASON =
+  "This antenna changed in the scene in fields you also edited. Keep your values or load the scene version.";
 
 function maskAntennaNodeId(driveId: string): string {
   return `model:physics:mask-antennas:${driveId}`;
@@ -169,6 +194,14 @@ function applyRawInputs(drive: MaskFieldDriveResource, raw: RawInputs): MaskFiel
     if (value !== null) result = applyNumericInput(result, key, value);
   }
   return result;
+}
+
+/** The typed numbers that still match `drive`; an unparsed text is kept as an edit. */
+function consistentRawInputs(drive: MaskFieldDriveResource, raw: RawInputs): RawInputs {
+  return Object.fromEntries(Object.entries(raw).filter(([key, text]) => {
+    const value = parseFiniteNumber(text);
+    return value === null || sameJson(applyNumericInput(drive, key, value), drive);
+  }));
 }
 
 function RawNumberField({
@@ -488,37 +521,73 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   useLayoutEffect(() => {
     identityKeyRef.current = identityKey;
   }, [identityKey]);
-  const draftKey = model.mode === "create"
-    ? `${identityKey}:${resource.data ? "loaded" : "loading"}`
-    : `${identityKey}:${model.sceneRevision ?? "none"}`;
-  const [draftState, setDraftState] = useState<{
-    key: string;
-    value: MaskFieldDriveResource | null;
-  }>(() => ({ key: draftKey, value: drive ? structuredClone(drive) : null }));
+  const [acknowledged, setAcknowledged] = useState<AcknowledgedMaskAntenna | null>(null);
+  // Between the ACK of a save and the refetch, the saved antenna is the baseline:
+  // the draft neither flashes back to the old values nor counts as unapplied.
+  const baseline = model.mode === "found" &&
+    acknowledged?.key === identityKey &&
+    (model.sceneRevision ?? -1) < acknowledged.revision
+    ? acknowledged.drive
+    : drive;
+  const [draftState, setDraftState] = useState<MaskAntennaDraftState>(
+    () => ({ base: null, key: identityKey, value: null }),
+  );
   const [rawState, setRawState] = useState<{ identityKey: string; values: RawInputs }>(
     () => ({ identityKey, values: {} }),
   );
+  // An untouched new-antenna draft counts as unapplied, so Apply can create it.
+  // Once discarded it is clean until edited, so the selection guard can leave it.
+  // The selection object identifies one visit of the draft.
+  const [discardedSelection, setDiscardedSelection] = useState<Selection | null>(null);
   const [pendingId, setPendingId] = useState<number | null>(null);
   const nextOperationId = useRef(0);
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
   const [readyBusy, setReadyBusy] = useState<string | null>(null);
   const [newReadyFunction, setNewReadyFunction] = useState("");
 
-  const raw = rawState.identityKey === identityKey ? rawState.values : {};
-  const baseDraft = draftState.key === draftKey
-    ? draftState.value
-    : drive
-      ? structuredClone(drive)
-      : null;
-  const draft = baseDraft ? applyRawInputs(baseDraft, raw) : null;
+  const editable = model.mode === "create" || model.mode === "found";
+  const ownRaw = rawState.identityKey === identityKey ? rawState.values : {};
+  const own = draftState.key === identityKey ? draftState.value : null;
+  // The draft is this panel's edits merged onto the antenna as the scene has it
+  // now: a field changed only in the scene follows the scene, and a field
+  // changed on both sides is a conflict.
+  const merge = editable && own && model.mode === "found" && draftState.base && baseline
+    ? mergeMaskAntennaDraft(draftState.base, applyRawInputs(own, ownRaw), baseline)
+    : null;
+  const draft = !editable
+    ? null
+    : merge
+      ? merge.merged
+      : own
+        ? applyRawInputs(own, ownRaw)
+        : baseline
+          ? applyRawInputs(structuredClone(baseline), ownRaw)
+          : null;
+  // A number typed earlier that no longer matches the draft (the scene changed a
+  // field this panel left as it was) gives way to the scene's value.
+  const raw = draft ? consistentRawInputs(draft, ownRaw) : ownRaw;
+  const conflicts = merge?.conflicts ?? [];
+  const conflict = conflicts.length > 0;
   const pending = pendingId !== null;
   const locked = !draft || pending;
 
+  /** This antenna's edits, pinned to the scene version they start from. */
+  function pinned(current: MaskAntennaDraftState): MaskAntennaDraftState {
+    if (current.key === identityKey && current.value !== null) return current;
+    return {
+      base: model.mode === "found" && baseline ? structuredClone(baseline) : null,
+      key: identityKey,
+      value: baseline ? structuredClone(baseline) : null,
+    };
+  }
   function setRaw(key: string, text: string): void {
+    setDraftState(pinned);
     setRawState((current) => ({
       identityKey,
       values: {
-        ...(current.identityKey === identityKey ? current.values : {}),
+        ...(current.identityKey === identityKey
+          ? Object.fromEntries(Object.entries(current.values).filter(([name]) => name in raw))
+          : {}),
         [key]: text,
       },
     }));
@@ -527,17 +596,32 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     update: (value: MaskFieldDriveResource) => MaskFieldDriveResource,
   ): void {
     setDraftState((current) => {
-      const currentValue = current.key === draftKey
-        ? current.value
-        : drive
-          ? structuredClone(drive)
-          : null;
-      return {
-        key: draftKey,
-        value: currentValue ? update(applyRawInputs(currentValue, raw)) : null,
-      };
+      const next = pinned(current);
+      if (!next.value) return next;
+      const mine = applyRawInputs(next.value, raw);
+      if (model.mode === "found" && next.base && baseline) {
+        const merged = mergeMaskAntennaDraft(next.base, mine, baseline);
+        // Without a conflict, fold the scene's changes in and rebase the draft
+        // onto the scene version; a conflict keeps its base until it is resolved.
+        if (merged.conflicts.length === 0) {
+          return { base: structuredClone(baseline), key: identityKey, value: update(merged.merged) };
+        }
+      }
+      return { ...next, value: update(mine) };
     });
     // Structural edits fold the numeric drafts into the antenna.
+    setRawState({ identityKey, values: {} });
+  }
+  /** Resolve the conflicts with this panel's values; other fields keep the scene's. */
+  function keepDraft(): void {
+    if (!merge || !baseline) return;
+    setDraftState({ base: structuredClone(baseline), key: identityKey, value: structuredClone(merge.merged) });
+    setRawState({ identityKey, values: raw });
+    setFeedback(null);
+  }
+  /** Forget the local draft; the panel follows the scene again. */
+  function clearDraft(): void {
+    setDraftState({ base: null, key: identityKey, value: null });
     setRawState({ identityKey, values: {} });
   }
 
@@ -547,10 +631,33 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     ...rawErrors,
   ])];
   const dirty = Boolean(
-    draft &&
-      (model.mode === "create" ||
-        (drive && JSON.stringify(draft) !== JSON.stringify(drive))),
+    draft && (model.mode === "create"
+      ? own !== null || discardedSelection !== selection
+      : baseline && !sameJson(draft, baseline)),
   ) || rawErrors.length > 0;
+
+  const resetDraft = useCallback(() => {
+    setDraftState({ base: null, key: identityKey, value: null });
+    setRawState({ identityKey, values: {} });
+    setFeedback(null);
+    setDiscardedSelection(selection);
+  }, [identityKey, selection]);
+
+  // The selection guard reads this session synchronously: a write marks the
+  // committed draft clean through `acknowledgeDraft` before moving the selection.
+  const acknowledgeDraft = useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    Boolean(draft && sessionScopeKey && model.sceneRevision !== null && validationErrors.length === 0),
+    undefined,
+    save,
+    resetDraft,
+    {
+      historyMode: "mutation-owned",
+      applyBlockReason: conflict ? SCENE_CHANGED_REASON : validationErrors[0],
+    },
+  );
 
   function mutationContext() {
     return captureAuthoringMutationFence(
@@ -564,7 +671,7 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   async function runMutation(
     label: string,
     mutate: (baseRevision: number, scopeKey: string) => Promise<{ scene_revision: number }>,
-    onDone: () => void,
+    onDone: (sceneRevision: number) => void,
   ): Promise<boolean> {
     const context = mutationContext();
     const scopeKey = context.sessionScopeKey;
@@ -594,7 +701,7 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
         resources.invalidate(resourceKey, response.scene_revision);
       }
       if (!isCurrent()) return false;
-      onDone();
+      onDone(response.scene_revision);
       return true;
     } catch (error) {
       if (context.isCurrentSessionScope?.() !== true || !isCurrent()) return false;
@@ -609,18 +716,53 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
 
   async function save(): Promise<boolean> {
     if (!draft || (model.mode !== "create" && model.mode !== "found")) return false;
+    if (conflict) {
+      setFeedback({ kind: "error", message: SCENE_CHANGED_REASON });
+      return false;
+    }
     if (validationErrors.length > 0) {
       setFeedback({ kind: "error", message: validationErrors.join(" ") });
       return false;
     }
     const mode = model.mode;
+    const edits = mode === "found" && own && draftState.base
+      ? { base: draftState.base, mine: applyRawInputs(own, ownRaw) }
+      : null;
+    const listed = baseline;
+    let submitted = draft;
     return runMutation(
-      `${mode === "create" ? "Create" : "Update"} mask antenna ${draft.id}`,
-      (baseRevision, scopeKey) =>
-        commitMaskAntenna(api.model, mode, baseRevision, draft, { sessionScopeKey: scopeKey }),
-      () => {
-        setRawState({ identityKey, values: {} });
-        if (mode === "create") kernel.selection.set(maskAntennaSelection(draft), "inspector");
+      `${mode === "create" ? "Create" : "Update"} mask antenna ${submitted.id}`,
+      async (baseRevision, scopeKey) => {
+        if (edits && listed) {
+          // The list this panel shows may be older than the scene. Merge onto the
+          // antenna as the server holds it at `baseRevision`, the revision the
+          // write is checked against.
+          const current = await api.model.maskFieldDrives({ sessionScopeKey: scopeKey });
+          if (current.scene_revision !== baseRevision) {
+            throw new Error("The scene changed while saving. Apply again.");
+          }
+          const server = current.drives.find((item) => item.id === submitted.id);
+          if (!server) throw new Error(`Mask antenna ${submitted.id} is no longer in the scene.`);
+          if (!sameJson(server, listed)) {
+            resources.invalidate(MODEL_MASK_FIELD_DRIVES_RESOURCE_KEY, current.scene_revision);
+            const merged = mergeMaskAntennaDraft(edits.base, edits.mine, server);
+            if (merged.conflicts.length > 0) {
+              throw new Error("Not saved: this antenna changed in the scene in fields you also edited.");
+            }
+            submitted = merged.merged;
+          }
+        }
+        return commitMaskAntenna(api.model, mode, baseRevision, submitted, { sessionScopeKey: scopeKey });
+      },
+      (sceneRevision) => {
+        clearDraft();
+        if (mode === "found") {
+          setAcknowledged({ drive: submitted, key: identityKey, revision: sceneRevision });
+        }
+        const ownsSession = acknowledgeDraft();
+        if (mode === "create" && ownsSession) {
+          kernel.selection.set(maskAntennaSelection(submitted), "inspector");
+        }
         setFeedback({
           kind: "success",
           message: mode === "create" ? "Mask antenna created." : "Mask antenna saved.",
@@ -636,6 +778,9 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
       (baseRevision, scopeKey) =>
         api.model.deleteMaskFieldDrive(drive.id, { base_revision: baseRevision }, { sessionScopeKey: scopeKey }),
       () => {
+        // The draft of a deleted antenna is moot; it must not hold the selection.
+        clearDraft();
+        if (!acknowledgeDraft()) return;
         kernel.selection.set({
           kind: "physics.field-drives",
           label: "Field Drives",
@@ -669,23 +814,6 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
       setReadyBusy((current) => (current === busyKey ? null : current));
     }
   }
-
-  const resetDraft = useCallback(() => {
-    setDraftState({ key: draftKey, value: drive ? structuredClone(drive) : null });
-    setRawState({ identityKey, values: {} });
-    setFeedback(null);
-  }, [draftKey, drive, identityKey]);
-
-  useRegisterInspectorEditSession(
-    "staged",
-    pending,
-    dirty,
-    Boolean(draft && sessionScopeKey && model.sceneRevision !== null && validationErrors.length === 0),
-    undefined,
-    save,
-    resetDraft,
-    { historyMode: "mutation-owned", applyBlockReason: validationErrors[0] },
-  );
 
   const target = draft?.target;
   const scope = target?.kind === "region"
@@ -726,6 +854,23 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
             {model.mode !== "create" && model.mode !== "found"
               ? <FeedbackBanner kind="warning" message="Selected mask antenna is unavailable." />
               : null}
+            {conflict ? (
+              <>
+                <FeedbackBanner
+                  kind="warning"
+                  message={SCENE_CHANGED_REASON}
+                  detail={`Changed on both sides: ${conflicts.map((path) => path.replace(/^drive\./, "")).join(", ")}`}
+                />
+                <div className="fm-inspector-toolbar">
+                  <Button size="sm" type="button" variant="secondary" disabled={pending} onClick={keepDraft}>
+                    Keep my values
+                  </Button>
+                  <Button size="sm" type="button" variant="ghost" disabled={pending} onClick={resetDraft}>
+                    Load scene version
+                  </Button>
+                </div>
+              </>
+            ) : null}
             {model.mode === "create"
               ? <FormField label="ID" disabled={locked} value={draft?.id ?? ""} onChange={(event) => { const id = event.currentTarget.value; setDraft((value) => ({ ...value, id })); }} />
               : <FieldRow label="ID" value={model.driveId ?? "none"} />}
