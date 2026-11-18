@@ -3603,6 +3603,17 @@ mod tests {
     #[test]
     fn accepted_frequency_response_output_binding_rebinds_derived_study_catalog() {
         let (_, mut study, catalog, _) = selected_b_scene_plan();
+        // This inexpensive planner fixture ordinarily binds Run state flow.
+        // Isolate its first authored input and restore the empty-output shape
+        // seen before live response ports are derived from the native sweep.
+        // Remove downstream steps so no state edge depends on those outputs.
+        study.steps.truncate(1);
+        study.steps[0].inputs.clear();
+        study.steps[0].outputs.clear();
+        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(
+            &study, catalog.into_entries().into_iter().take(1).collect(),
+        ).unwrap();
+        catalog.validate_for(&study).unwrap();
         let original_entries = catalog.entries().to_vec();
         let revision = study.revision;
         // The live response branch declares outputs only after the first
