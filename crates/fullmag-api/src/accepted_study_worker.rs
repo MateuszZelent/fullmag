@@ -3352,7 +3352,9 @@ fn validate_inspection_run_parameters(
         "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
         "request_idempotency_key", "step_id", "command", "startup_source_sha256",
     ].into_iter().collect();
-    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent"))
+    // The shared worker validator above has already decoded and validated the
+    // HTTP receipt, including its command ID. It is orchestration evidence.
+    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent" | "request_receipt"))
         .collect::<BTreeSet<_>>() != expected_keys {
         bail!("inspection live workspace binding has unsupported fields");
     }
@@ -5296,6 +5298,49 @@ mod closed_loop_run_parameter_tests {
                 });
                 validate_accepted_inspection_run_parameters(&specification, "inspect").unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn solve_inspection_accepts_validated_http_receipt_and_rejects_unbound_metadata() {
+        let mut solve = startup();
+        solve.parameters["live_workspace"]["command"] = json!({
+            "kind": "solve", "command_id": "request",
+        });
+        solve.parameters["live_workspace"]["startup_source_sha256"] = json!(null);
+        let receipt = fullmag_session::LiveComputeRequestReceipt {
+            key_sha256: "a".repeat(64),
+            request_sha256: "b".repeat(64),
+            command_id: "request".into(),
+            request_id: Some("http-request".into()),
+            command_kind: Some("solve".into()),
+            client_intent_id: Some("client-intent".into()),
+            requested_target: Some(json!({"kind": "study"})),
+        };
+        solve.parameters["live_workspace"]["request_receipt"] = serde_json::to_value(receipt).unwrap();
+        validate_accepted_inspection_run_parameters(&solve, "inspect").unwrap();
+        for allow_profile in [false, true] {
+            super::validate_inspection_run_parameters(&solve, "inspect", allow_profile).unwrap();
+        }
+        for (key, value) in [
+            ("key_sha256", json!("invalid")),
+            ("request_sha256", json!("invalid")),
+            ("command_id", json!("another-command")),
+            ("command_kind", json!("unknown")),
+            ("requested_target", json!({})),
+            ("unexpected", json!(true)),
+        ] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"]["request_receipt"][key] = value;
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
+        }
+        let mut invalid = solve.clone();
+        invalid.parameters["live_workspace"]["request_receipt"] = json!(null);
+        assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err());
+        for key in ["unexpected", "initial_state_source"] {
+            let mut invalid = solve.clone();
+            invalid.parameters["live_workspace"][key] = json!({});
+            assert!(validate_accepted_inspection_run_parameters(&invalid, "inspect").is_err(), "{key}");
         }
     }
 
