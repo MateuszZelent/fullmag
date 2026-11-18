@@ -437,7 +437,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/docker_activation_history.py" "${history_args[@]}"
     ;;
   *"scripts/docker_volume_checks.py"*)
-    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|gpu-temperature-contracts|material-library-contracts|source-capture|activation-history|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|authoring-contracts|gpu-temperature-contracts|material-library-contracts|material-library-python-contracts|frontend-materials|frontend-materials-full|source-capture|activation-history|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
     volume_offline_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)' --offline --modules '(test_[A-Za-z0-9_]+)'[[:space:]]*$"
     if [[ "${recipe}" =~ ${volume_offline_checks_pattern} ]]; then
       volume_checks_args=(--source-root "${BASH_REMATCH[1]}" --offline --modules "${BASH_REMATCH[2]}")

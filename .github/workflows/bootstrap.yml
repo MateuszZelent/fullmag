@@ -438,6 +438,9 @@ jobs:
           cargo test -p fullmag-runner material_identity_tests --lib
           cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
 
+      - name: Run material library and scene assignment contracts
+        run: cargo test --locked -p fullmag-api --bin fullmag-api material_library
+
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
 
@@ -1254,6 +1257,7 @@ jobs:
         run: >-
           python -m pytest -q
           packages/fullmag-py/tests/test_scratch_authoring_ui_roundtrip.py
+          packages/fullmag-py/tests/test_material_assets_roundtrip.py
 
       - name: Run frozen probe terminal receipt contracts
         run: python -B scripts/test_run_de_frozen_v2_probe.py -v

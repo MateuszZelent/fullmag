@@ -119,7 +119,7 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        paths = (*checks.IMPORT_FILES, *checks.STL_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+        paths = (*checks.IMPORT_FILES, *checks.MATERIAL_FILES, *checks.STL_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
                  'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
                  'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
                  'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
@@ -143,6 +143,27 @@ class FrontendImportCheckTests(unittest.TestCase):
         result = checks.frontend_import_checks(self.control, self.root,
             identity or {'worktree_id': 'selected'}, scope=scope)
         return result, self.control.write.call_args.args[1]
+
+    def test_material_full_gate_is_fixed_bounded_and_preserves_each_attempt(self):
+        result, first = self.run_checks('frontend-materials-full')
+        self.assertEqual(result, 0)
+        commands = [item['arguments'] for item in first['commands']]
+        self.assertEqual([item['name'] for item in first['commands']],
+                         ['prepare', 'typecheck', 'lint', 'vitest-full', 'architecture', 'api-hygiene'])
+        self.assertIn('typecheck', commands[1])
+        self.assertIn('lint', commands[2])
+        self.assertEqual(commands[3][-2:], ['--pool=threads', '--maxWorkers=2'])
+        self.assertEqual([call.kwargs['timeout'] for call in self.execute.call_args_list],
+                         [600, 600, 1800, 1800, 600, 600])
+        self.assertTrue(set(checks.MATERIAL_FILES) <= set(first['selected_frontend_input_hashes']))
+        result, second = self.run_checks('frontend-materials-full')
+        self.assertEqual(result, 0)
+        self.assertNotEqual(first['receipt_path'], second['receipt_path'])
+        self.assertTrue(first['receipt_path'].startswith('verification/frontend-materials-full-checks/attempts/'))
+        self.documents['backend']['State']['Health']['Status'] = 'starting'
+        result, blocked = self.run_checks('frontend-materials-full')
+        self.assertNotEqual(result, 0)
+        self.assertEqual(blocked['commands'], [])
 
     def test_stl_retry_preserves_failed_attempt_receipt_and_logs(self):
         self.execute.side_effect = [
@@ -638,6 +659,17 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout),
                          ['--source-root', '/selected', '--scope', 'frontend-field-map'])
+
+    def test_dispatches_closed_material_and_authoring_scopes(self):
+        for scope in ('authoring-contracts', 'material-library-contracts',
+                      'material-library-python-contracts', 'frontend-materials', 'frontend-materials-full'):
+            with self.subTest(scope=scope):
+                recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                          f"--source-root '/selected' --scope '{scope}'")
+                result = self.dispatch(recipe)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), ['--source-root', '/selected', '--scope', scope])
+                self.assertEqual(self.dispatch(recipe.replace(scope, scope + '-extra')).returncode, 2)
 
     def test_dispatches_only_exact_field_map_source_scope(self):
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
