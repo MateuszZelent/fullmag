@@ -228,7 +228,8 @@ RUN [[ "${FULLMAG_MFEM_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] && \
 # CPU-prefix compilation (HYPRE, libCEED, MFEM, PETSc, SLEPc) needs far less
 # memory per job than MFEM CUDA templates, so it has its own bound.
 ARG FULLMAG_CPU_DEPENDENCY_BUILD_JOBS=2
-RUN [[ "${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || \n    { echo "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS must be a positive integer" >&2; exit 2; }
+RUN [[ "${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || \
+    { echo "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS must be a positive integer" >&2; exit 2; }
 
 # CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
 RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
