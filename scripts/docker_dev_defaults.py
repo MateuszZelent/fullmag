@@ -34,6 +34,7 @@ _PORT_ENVS = ("FULLMAG_HTTP_PORT", "FULLMAG_FRONTEND_HOST_PORT")
 GROUP_BUDGET_ENVS = (
     "FULLMAG_DEV_BACKEND_CPUS",
     "FULLMAG_DEV_BACKEND_MEMORY_GIB",
+    "FULLMAG_DEV_BACKEND_STORAGE_GIB",
     "FULLMAG_DEV_FRONTEND_CPUS",
     "FULLMAG_DEV_FRONTEND_MEMORY_GIB",
 )
@@ -320,7 +321,9 @@ def configured_group_budget(
     """Return the operator's per-group budget settings as positive integers.
 
     The process environment overrides the main checkout's ``.env``.  Unset
-    entries are omitted so the caller derives them from Docker capacity.
+    entries are omitted so the renderer derives CPU/RAM from Docker capacity
+    and uses the DEV execution-storage default of exactly 50 decimal GB.
+    Explicit storage values use GiB and may opt into a larger operator cap.
     """
     repo = Path(repo).resolve(strict=True)
     environ = os.environ if environ is None else environ
@@ -332,7 +335,10 @@ def configured_group_budget(
             continue
         if not raw.isdecimal() or int(raw) < 1:
             raise DiscoveryError(f"{name} must be a positive whole number")
-        budget[name] = int(raw)
+        value = int(raw)
+        if name == "FULLMAG_DEV_BACKEND_STORAGE_GIB" and value > ((1 << 64) - 1) // (1024 ** 3):
+            raise DiscoveryError(f"{name} exceeds the u64 byte range")
+        budget[name] = value
     return budget
 
 

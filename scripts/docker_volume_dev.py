@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shlex
+import shutil
 import stat
 import sys
 import time
@@ -30,6 +31,48 @@ INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
 _MAX_INCLUDE_UNTRACKED_BYTES = 64 * 1024
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
+_DEV_STORAGE_ENV = "FULLMAG_DOCKER_STORAGE_BYTES"
+_LEGACY_DEV_STORAGE_BYTES = 7 * 1024**3
+
+
+def _configured_group_budget(selected, layout):
+    from docker_dev_defaults import configured_group_budget
+
+    budget = configured_group_budget(selected)
+    storage_gib = budget.get("FULLMAG_DEV_BACKEND_STORAGE_GIB")
+    if storage_gib is not None:
+        available = shutil.disk_usage(layout["storage_root"]).free
+        if storage_gib * 1024**3 > available:
+            raise BuildControlError(
+                f"DEV backend storage budget {storage_gib} GiB exceeds available "
+                f"user storage at {layout['storage_root']} ({available / 1024**3:.2f} GiB)"
+            )
+    return budget
+
+
+def _compose_storage_budget(document):
+    return document["services"]["backend"]["environment"].get(_DEV_STORAGE_ENV)
+
+
+def _restore_compose_storage_budget(document, retained_bytes):
+    environment = document["services"]["backend"]["environment"]
+    if retained_bytes is None:
+        environment.pop(_DEV_STORAGE_ENV, None)
+    else:
+        environment[_DEV_STORAGE_ENV] = retained_bytes
+
+
+def _retained_storage_budget(control, reuse_state):
+    if "compose_storage_bytes" in reuse_state:
+        return reuse_state["compose_storage_bytes"]
+    config = control.read("runtime-control/runtime-service/docker-all.json", optional=True)
+    host = config.get("host_execution") if isinstance(config, Mapping) else None
+    if not isinstance(host, Mapping):
+        return None
+    capacity = host.get("policy", {}).get("total_budget", {}).get("storage_bytes")
+    if type(capacity) is not int or not 0 < capacity < 1 << 64:
+        raise BuildControlError("Retained native storage budget is invalid")
+    return None if capacity == _LEGACY_DEV_STORAGE_BYTES else str(capacity)
 
 
 def _session_host():
@@ -2335,6 +2378,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     _revalidate_helper_source_binding(helper_source_binding, selected)
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
+    configured_budget = _configured_group_budget(selected, layout)
     identity = _compose_identity(layout)
     from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
     requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
@@ -2409,6 +2453,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
+    retained_storage_bytes = None if reuse_state is None else _retained_storage_budget(control, reuse_state)
+    if reuse_state is not None and "FULLMAG_DEV_BACKEND_STORAGE_GIB" in configured_budget:
+        requested = configured_budget["FULLMAG_DEV_BACKEND_STORAGE_GIB"] * 1024**3
+        if str(requested) != (retained_storage_bytes or str(_LEGACY_DEV_STORAGE_BYTES)):
+            raise BuildControlError("Changing the DEV backend storage budget requires fresh-state archival of the existing group ledger")
     snapshot = _active_isolated_snapshot(control)
     if snapshot is not None and (snapshot["source_root"] != str(selected) or args.script is not None
           or getattr(args, "fresh_state", False)):
@@ -2455,6 +2504,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record}
+    if "FULLMAG_DEV_BACKEND_STORAGE_GIB" in configured_budget:
+        operation_inputs["backend_storage_gib"] = configured_budget["FULLMAG_DEV_BACKEND_STORAGE_GIB"]
     if getattr(args, "completed_recreation_attempt", None):
         operation_inputs["completed_recreation"] = {
             "attempt": args.completed_recreation_attempt,
@@ -2755,11 +2806,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         document = json.loads(configured.stdout)
         from docker_dev_network import apply_requested_subnet
         apply_requested_subnet(document, requested_network_subnet)
-        from docker_dev_defaults import configured_group_budget
         from docker_volume_resources import apply_development_budget
         if prepared_budget_render is None:
             apply_development_budget(
-                control, document, configured_group_budget(selected),
+                control, document, configured_budget,
                 cold_budget_restore=cold_budget_restore, source_root=str(selected),
             )
         else:
@@ -2772,6 +2822,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     if key in approved:
                         target[key] = approved[key]
                 target.setdefault("environment", {}).update(approved.get("environment", {}))
+        if reuse_state is not None:
+            # Ordinary recreation keeps the authenticated policy of the retained
+            # ledger. Only a fresh runtime archive applies a different limit.
+            _restore_compose_storage_budget(document, retained_storage_bytes)
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
         backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
@@ -7114,6 +7168,7 @@ def _resume_recreated_operation(args, control, selected, layout, identity, *, he
         "host_certificate": certificate_path,
         "owner_marker": owner_path,
         "receipt": {"image_id": image},
+        "compose_storage_bytes": _compose_storage_budget(document),
         "operator_probe_environment_record": operator_probe_record,
     }
     if helper_source_binding is not None:
@@ -7648,6 +7703,7 @@ def _completed_recreation_start_context(control, args, selected, layout):
         raise BuildControlError("Completed recreation requires the exact managed failed-owner restart proof")
     reuse = {"state": state, "host_certificate": certificate_path,
         "owner_marker": owner_marker, "receipt": {"image_id": image},
+        "compose_storage_bytes": _compose_storage_budget(document),
         "operator_probe_environment_record": operator_probe_record,
         "removed_recreation_proof_sha256": hashlib.sha256(canonical(removed_proof)).hexdigest()}
     return {"reuse_state": reuse,
@@ -8718,6 +8774,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         certificate_path = _certificate_path(state)
         owner_path = state / _session_host().OWNER_NAME
         fresh_state = bool(getattr(args, "fresh_state", False))
+        if not retire_only:
+            requested_storage = _configured_group_budget(selected, layout).get("FULLMAG_DEV_BACKEND_STORAGE_GIB")
+            if requested_storage is not None:
+                retained_storage = _compose_storage_budget(document) or str(_LEGACY_DEV_STORAGE_BYTES)
+                if str(requested_storage * 1024**3) != retained_storage and not fresh_state:
+                    raise BuildControlError("Changing the DEV backend storage budget requires fresh-state archival of the existing group ledger")
         lost_state_pin = getattr(args, "lost_state_stop", None)
         lost_state = None
         if lost_state_pin is not None:
@@ -9507,6 +9569,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             pin_archive(control)
         reuse = None if fresh_state else {"state": state, "host_certificate": certificate_path,
             "owner_marker": owner_path, "receipt": {"image_id": image},
+            "compose_storage_bytes": _compose_storage_budget(document),
             "operator_probe_environment_record": operator_probe_record}
         if reuse is not None and helper_source_binding is not None:
             reuse["helper_source_binding"] = helper_source_binding

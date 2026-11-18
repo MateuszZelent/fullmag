@@ -17,6 +17,7 @@ from docker_dev_host import require_host
 SCHEMA = "fullmag.docker-backend-resource-budget.v1"
 PROFILE_PATH = "backend/resource-budget.json"
 GIB = 1024 ** 3
+DEFAULT_DEV_BACKEND_STORAGE_BYTES = 50_000_000_000
 
 
 def _raw_record(control, relative):
@@ -73,6 +74,14 @@ def apply_group_budget(document, configured, capacity=None):
             or max(backend_memory, frontend_memory) > capacity["MemTotal"]):
         raise BuildControlError("DEV group budget exceeds Docker capacity "
                                 f"({capacity['NCPU']} CPUs, {capacity['MemTotal'] // GIB} GiB)")
+    storage_name = "FULLMAG_DEV_BACKEND_STORAGE_GIB"
+    storage_bytes = DEFAULT_DEV_BACKEND_STORAGE_BYTES
+    if storage_name in configured:
+        storage_gib = configured[storage_name]
+        if (type(storage_gib) is not int or storage_gib < 1
+                or storage_gib > ((1 << 64) - 1) // GIB):
+            raise BuildControlError(f"{storage_name} must be a positive whole GiB within the u64 byte range")
+        storage_bytes = storage_gib * GIB
     backend, frontend = (document["services"][name] for name in ("backend", "frontend"))
     backend.update(cpus=backend_cpus, mem_limit=backend_memory)
     frontend.update(cpus=frontend_cpus, mem_limit=frontend_memory)
@@ -80,6 +89,9 @@ def apply_group_budget(document, configured, capacity=None):
     environment["CARGO_BUILD_JOBS"] = str(min(backend_cpus, 64))
     environment["FULLMAG_DOCKER_CPU_MILLIS"] = str(backend_cpus * 1000)
     environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(backend_memory)
+    # DEV defaults to exactly 50 decimal GB. An explicit whole-GiB setting
+    # records the operator's chosen cap; native non-DEV defaults stay separate.
+    environment["FULLMAG_DOCKER_STORAGE_BYTES"] = str(storage_bytes)
 
 
 def apply_saved_budget(control, document, *, superseded=False):

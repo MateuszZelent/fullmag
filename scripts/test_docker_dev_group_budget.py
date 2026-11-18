@@ -5,12 +5,14 @@ import ast
 import json
 from types import SimpleNamespace
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import docker_dev_defaults as defaults
+import docker_volume_dev as volume_dev
 import docker_volume_resources as resources
 from docker_build_control import BuildControlError
 
@@ -26,6 +28,90 @@ def _document():
 
 
 class GroupBudgetTests(unittest.TestCase):
+    def test_unset_storage_renders_exactly_fifty_decimal_gb_for_dev(self):
+        document = _document()
+        resources.apply_group_budget(document, {}, VM)
+        self.assertNotIn("FULLMAG_DEV_BACKEND_STORAGE_GIB", resources.default_group_budget(VM))
+        self.assertEqual(document["services"]["backend"]["environment"], {
+            "CARGO_BUILD_JOBS": "8", "FULLMAG_DOCKER_CPU_MILLIS": "8000",
+            "FULLMAG_DOCKER_MEMORY_BYTES": str(32 * GIB),
+            "FULLMAG_DOCKER_STORAGE_BYTES": "50000000000",
+        })
+
+    def test_explicit_storage_propagates_from_dotenv_and_process_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".env").write_text("FULLMAG_DEV_BACKEND_STORAGE_GIB=48\n")
+            with mock.patch.object(defaults, "_known_checkouts", return_value=(root,)):
+                self.assertEqual(defaults.configured_group_budget(root, {}),
+                                 {"FULLMAG_DEV_BACKEND_STORAGE_GIB": 48})
+                configured = defaults.configured_group_budget(
+                    root, {"FULLMAG_DEV_BACKEND_STORAGE_GIB": "64"})
+            self.assertEqual(configured, {"FULLMAG_DEV_BACKEND_STORAGE_GIB": 64})
+            document = _document()
+            resources.apply_group_budget(document, configured, VM)
+            self.assertEqual(document["services"]["backend"]["environment"][
+                "FULLMAG_DOCKER_STORAGE_BYTES"], str(64 * GIB))
+            self.assertEqual(document["services"]["frontend"]["environment"], {})
+
+    def test_storage_configuration_rejects_nonpositive_fractional_or_overflowing_values(self):
+        maximum_gib = ((1 << 64) - 1) // GIB
+        with mock.patch.object(defaults, "_known_checkouts", return_value=(Path.cwd(),)), \
+                mock.patch.object(defaults, "_read_dotenv", return_value={}):
+            for value in ("0", "-1", "1.5", str(maximum_gib + 1)):
+                with self.subTest(value=value), self.assertRaisesRegex(
+                        defaults.DiscoveryError, "positive whole number|u64"):
+                    defaults.configured_group_budget(
+                        Path.cwd(), {"FULLMAG_DEV_BACKEND_STORAGE_GIB": value})
+
+    def test_storage_renderer_rejects_invalid_values_before_mutating_compose(self):
+        maximum_gib = ((1 << 64) - 1) // GIB
+        for value in (True, 0, -1, 1.5, "32", maximum_gib + 1):
+            document = _document()
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    BuildControlError, "FULLMAG_DEV_BACKEND_STORAGE_GIB"):
+                resources.apply_group_budget(document, {"FULLMAG_DEV_BACKEND_STORAGE_GIB": value}, VM)
+            self.assertEqual(document, _document())
+
+    def test_storage_byte_conversion_accepts_the_largest_whole_gib_in_u64(self):
+        maximum_gib = ((1 << 64) - 1) // GIB
+        document = _document()
+        resources.apply_group_budget(document, {"FULLMAG_DEV_BACKEND_STORAGE_GIB": maximum_gib}, VM)
+        self.assertEqual(document["services"]["backend"]["environment"][
+            "FULLMAG_DOCKER_STORAGE_BYTES"], str(maximum_gib * GIB))
+
+    def test_launcher_bounds_explicit_storage_by_the_selected_user_filesystem(self):
+        source = Path.cwd()
+        layout = {"storage_root": "/selected-user-storage"}
+        requested = {"FULLMAG_DEV_BACKEND_STORAGE_GIB": 24}
+        with mock.patch.object(defaults, "configured_group_budget", return_value=requested), \
+                mock.patch.object(volume_dev.shutil, "disk_usage", return_value=SimpleNamespace(free=23 * GIB)) as usage:
+            with self.assertRaisesRegex(BuildControlError, "exceeds available user storage"):
+                volume_dev._configured_group_budget(source, layout)
+            usage.assert_called_once_with(layout["storage_root"])
+            usage.return_value = SimpleNamespace(free=24 * GIB)
+            self.assertEqual(volume_dev._configured_group_budget(source, layout), requested)
+
+    def test_default_cap_does_not_require_reserving_50_gb_at_launch(self):
+        with mock.patch.object(defaults, "configured_group_budget", return_value={}), \
+                mock.patch.object(volume_dev.shutil, "disk_usage") as usage:
+            self.assertEqual(volume_dev._configured_group_budget(Path.cwd(), {"storage_root": "/selected"}), {})
+            usage.assert_not_called()
+
+    def test_retained_recreation_keeps_existing_storage_policy(self):
+        control = mock.Mock()
+        control.read.return_value = {"host_execution": {"policy": {"total_budget": {
+            "storage_bytes": 50_000_000_000,
+        }}}}
+        document = _document()
+        resources.apply_group_budget(document, {}, VM)
+        legacy = volume_dev._retained_storage_budget(control, {"compose_storage_bytes": None})
+        volume_dev._restore_compose_storage_budget(document, legacy)
+        self.assertNotIn("FULLMAG_DOCKER_STORAGE_BYTES", document["services"]["backend"]["environment"])
+        self.assertEqual(volume_dev._retained_storage_budget(control, {}), "50000000000")
+        self.assertEqual(volume_dev._retained_storage_budget(control, {"compose_storage_bytes": "68719476736"}),
+                         "68719476736")
+
     def test_defaults_let_three_groups_fit_the_vm(self):
         document = _document()
         resources.apply_group_budget(document, {}, VM)
@@ -113,7 +199,8 @@ class PreparedBudgetTests(unittest.TestCase):
         backend = document['services']['backend']
         self.assertEqual((backend['mem_limit'], backend['cpus'], backend['memswap_limit']), (32 * GIB, 40, 64 * GIB))
         self.assertEqual(backend['environment'], {'CARGO_BUILD_JOBS': '40',
-            'FULLMAG_DOCKER_CPU_MILLIS': '40000', 'FULLMAG_DOCKER_MEMORY_BYTES': str(32 * GIB)})
+            'FULLMAG_DOCKER_CPU_MILLIS': '40000', 'FULLMAG_DOCKER_MEMORY_BYTES': str(32 * GIB),
+            'FULLMAG_DOCKER_STORAGE_BYTES': '50000000000'})
         self.supervision.validate_prepared_render({**document, 'services': {**document['services'],
             'backend': {**backend, 'command': ['start', '--native-contract', 'fem-demag-poisson']}}}, self.witness)
 
