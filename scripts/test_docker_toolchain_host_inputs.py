@@ -88,6 +88,7 @@ class ToolchainHostInputsTests(unittest.TestCase):
     def test_default_mfem_concurrency_and_cuda_architectures(self):
         args = self.configuration({})
         self.assertEqual(args["FULLMAG_MFEM_BUILD_JOBS"], "1")
+        self.assertEqual(args["FULLMAG_CPU_DEPENDENCY_BUILD_JOBS"], "2")
         self.assertEqual(args["FULLMAG_MFEM_CUDA_FAST_COMPILE"], "0")
         self.assertEqual(args["FULLMAG_CUDA_ARCHITECTURES"], "80-real;89-real;90-real;90-virtual")
         self.assertEqual(args["FULLMAG_PETSC_CUDA_ARCHITECTURES"], "80,89,90")
@@ -99,6 +100,7 @@ class ToolchainHostInputsTests(unittest.TestCase):
             "FULLMAG_PETSC_CUDA_ARCHITECTURES": "120",
             "FULLMAG_MFEM_BUILD_JOBS": "2",
             "FULLMAG_MFEM_CUDA_FAST_COMPILE": "mid",
+            "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS": "16",
             "FULLMAG_HYPRE_MEMORY_VARIANT": "cuda_async",
             "FULLMAG_CUDA_BASE_IMAGE": "example/cuda@sha256:" + "a" * 64,
             "FULLMAG_CUDA_BASE_IMAGE_DIGEST": "a" * 64,

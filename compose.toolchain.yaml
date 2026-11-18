@@ -21,6 +21,8 @@ services:
         FULLMAG_HYPRE_MEMORY_VARIANT: "${FULLMAG_HYPRE_MEMORY_VARIANT:-baseline}"
         # CUDA template compilation can require tens of GiB per process.
         FULLMAG_MFEM_BUILD_JOBS: "${FULLMAG_MFEM_BUILD_JOBS:-1}"
+        # CPU-prefix dependency compilation jobs (lower memory per job).
+        FULLMAG_CPU_DEPENDENCY_BUILD_JOBS: "${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS:-2}"
         # Explicit DEV optimization tradeoff; 0 preserves the normal CUDA policy.
         FULLMAG_MFEM_CUDA_FAST_COMPILE: "${FULLMAG_MFEM_CUDA_FAST_COMPILE:-0}"
         FULLMAG_PETSC_CUDA_ARCHITECTURES: "${FULLMAG_PETSC_CUDA_ARCHITECTURES:-80,89,90}"
