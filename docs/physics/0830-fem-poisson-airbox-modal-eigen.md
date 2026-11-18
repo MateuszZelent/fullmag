@@ -2253,7 +2253,7 @@ magnetyczny.
 
 | Solver | Urządzenie | Stan | Uzasadnienie |
 | --- | --- | --- | --- |
-| FEM | CPU | zmieniona realizacja, zmierzona w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
+| FEM | CPU | zmieniona realizacja; K0 zmierzone w Docker DEV (headless), Floquet NOT VERIFIED | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny (`shifted_preconditioner_kind`); Floquet: `factorization_shift_policy` |
 | FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
 | FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
 | FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
@@ -2262,8 +2262,48 @@ Provenance: `shifted_preconditioner_kind` przyjmuje
 `augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
 `magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
 obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
-liczbę iteracji FGMRES/GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
-preconditioner do osobnej zmiany.
+liczbę iteracji FGMRES/GMRES.
+
+### Wariant Floquet
+
+Status: zmiana realizacji preconditionera wewnętrznego shifted KSP Floqueta
+(k ≠ 0 oraz Γ w przebiegu Floqueta). Build i runtime **NOT VERIFIED** do czasu
+pomiaru A/B. Operator macierzowo-wolny Floqueta stosuje obrót fazowy
+$\mathcal R_{\sigma}$ do wyniku działania Schura, a jego macierzą masy jest
+rozszczepienie real-split $\mathcal R(B_{qq})$ bez obrotu. Ta sama eliminacja
+wierszy Poissona daje układ rozszerzony dla danego wektora falowego:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift-floquet
+K_{\hat\tau}=
+\begin{bmatrix}
+\mathcal R_{\sigma}A_{qq}-\hat\tau\,\mathcal R(B_{qq}) & \mathcal R_{\sigma}A_{q\phi}\\
+A_{\phi q} & P
+\end{bmatrix},
+\qquad
+\bigl(\mathcal R_{\sigma}(A_{qq}-A_{q\phi}P^{-1}A_{\phi q})-\hat\tau\,\mathcal R(B_{qq})\bigr)^{-1}b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Bloki $A_{qq}$, $A_{q\phi}$ i masa niosą tę samą normalizację co MatShell
+(`normalize_native_floquet_pencil`). $P$ i $A_{\phi q}$ pozostają w
+jednostkach fizycznych, tak jak w działaniu Schura. Wszystkie bloki są
+rozszczepione real-split. $\mathcal R_{\sigma}A_{q\phi}$ powstaje jako
+iloczyn rzadkiej macierzy obrotu i bloku $A_{q\phi}$. Faktoryzacja MUMPS z
+METIS zastępuje magnetyczne LU tylko poza gęstą materializacją dokładną
+(wymiar real-split ≤ 512). Kolejne próby EPS przy tym samym celu
+wykorzystują ją ponownie. Wewnętrzny shifted KSP pozostaje prawostronnym
+GMRES z certyfikowanym testem prawdziwego residuum, więc niedokładne
+zastosowanie preconditionera nie może zostać uznane za zbieżne.
+`factorization_shift_policy` w wyniku przyjmuje wtedy wartość
+`augmented_exact_shift_mumps`, a `factorization_shift_amount` wartość 0.
+`FULLMAG_FLOQUET_AUGMENTED_SHIFT=0` lub nieudana faktoryzacja zachowują
+dotychczasowe magnetyczne LU z przesunięciem pivotów.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-floquet-augmented-shift | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + create_native_floquet_augmented_shift_solver | Bloki $K_{\hat\tau}$ Floqueta z obrotem fazowym i faktoryzacja; NOT VERIFIED runtime |
 
 Pomiar A/B (2026-11-18): `examples/fem_eigen_k0_poisson_airbox_production.py`
 z gałęzi PR #452 (relaksacja, potem jeden mod najbliższy 2 GHz). Uruchomiono

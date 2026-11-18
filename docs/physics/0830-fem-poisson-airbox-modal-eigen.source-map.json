@@ -425,6 +425,26 @@
         "source-augmented-shift-solver",
         "source-cpu-schur-augmented-shift"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-augmented-shift-floquet",
+      "symbols": [
+        "augmented_shift_matrix",
+        "floquet_phase_rotation",
+        "Aqq",
+        "scaled_shift",
+        "real_split",
+        "mass_blocks",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "P",
+        "q_restriction",
+        "shift_rhs"
+      ],
+      "sources": [
+        "source-floquet-augmented-shift",
+        "source-augmented-shift-solver"
+      ]
     }
   ],
   "symbols": [
@@ -1650,6 +1670,13 @@
       "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
       "responsibility": "Select the augmented exact shift preconditioner for K0 STSINVERT and fall back to the magnetic-only preconditioner.",
       "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-floquet-augmented-shift",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "create_native_floquet_augmented_shift_solver",
+      "responsibility": "Assemble the phase-rotated Floquet augmented (q, phi) shift matrix from the normalized shell blocks, factor it with MUMPS and install it as the inner shifted-KSP preconditioner.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
     }
   ],
   "public_api": {
