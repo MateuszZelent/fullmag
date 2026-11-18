@@ -288,6 +288,17 @@ and single-grid FDM CUDA planner materialization. Authoring tests cover scene an
 builder round-trip. The `examples/fem_absorbing_boundary.py` loader test verifies the
 flat top-level `study` style and the per-object layer parameters.
 
+### 5.4 Normal-incidence exchange-wave reflection
+
+The [reflection qualification](../../tests/standard_problems/absorbing_boundary/README.md)
+pairs each logarithmic, tanh and custom cubic absorber with a free-end control
+on longitudinal meshes of 4 nm and 2 nm. A central probe records the incident
+packet and its first return in disjoint windows predicted from the group
+velocity. Each FDM/FEM CPU/GPU run supplies its completed trajectory, resolved
+damping, source identity and actual execution provenance. The project gate
+requires a reflected-to-incident amplitude ratio at most one quarter of the
+paired control and checks sensitivity to spatial refinement and device choice.
+
 ## 6. Completeness checklist
 
 - [x] Python API
@@ -304,10 +315,10 @@ flat top-level `study` style and the per-object layer parameters.
 (limitations)=
 ## 7. Known limits and deferred work
 
-Rotation-aware object frames, FEM boundary-integral/PML absorption, native FDM
-new-profile GPU/CPU parity, and quantitative spin-wave reflection qualification are
-deferred. The module must remain visible as unsupported where those limits
-apply.
+Rotation-aware object frames and FEM boundary-integral/PML absorption remain
+deferred. The physical reflection and GPU/CPU parity gates require measured
+trajectories for the full matrix in section 5.4. Their runtime qualification
+remains unverified until the managed results pass those gates.
 
 (scientific-bibliography)=
 ## 8. References
@@ -331,6 +342,8 @@ parameter, backend lane, and implementation symbol cited here:
 | `packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py` | `compile_expression` | Python expression validation and analytic sampling |
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_absorbing_boundary` | Canonical editable profile export |
 | `crates/fullmag-plan/src/material.rs` | `apply_absorbing_boundary_layer` | FDM/FEM alpha-field materialization |
+| `tests/standard_problems/absorbing_boundary/prepare.py` | `prepare_case` | Matched wave-packet inputs for both meshes and all execution lanes |
+| `tests/standard_problems/absorbing_boundary/verify.py` | `inspect_case` | Stage provenance, damping and physical incident/reflected amplitudes |
 | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | FEM material-field handoff |
 | `crates/fullmag-plan/src/tests.rs` | `fdm_absorbing_boundary_uses_magnetic_support` | Masked single-grid and multilayer alpha, including explicit universe faces. |
 | `crates/fullmag-plan/src/tests.rs` | `fdm_cuda_absorbing_boundary_plans_cellwise_damping` | Single-grid FDM CUDA planner regression |

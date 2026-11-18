@@ -36,6 +36,8 @@
     {"id": "python-expression", "path": "packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py", "symbol": "compile_expression", "responsibility": "Validate the DSL expression and support Python analytic sampling."},
     {"id": "script-expression", "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py", "symbol": "_render_absorbing_boundary", "responsibility": "Preserve authored expression and scalar precision in editable script export."},
     {"id": "ui-panel", "path": "apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx", "symbol": "ObjectAbsorbingBoundaryPanel", "responsibility": "Expose per-object boundary parameters and persist them through the v2 model resource."},
+    {"id": "reflection-input", "path": "tests/standard_problems/absorbing_boundary/prepare.py", "symbol": "prepare_case", "responsibility": "Generate matched normal-incidence wave-packet controls and ABL models."},
+    {"id": "reflection-measurement", "path": "tests/standard_problems/absorbing_boundary/verify.py", "symbol": "inspect_case", "responsibility": "Verify managed execution, realized damping and quantitative reflection traces."},
     {"id": "fem-owner-bounds-regression", "path": "crates/fullmag-plan/src/tests/material_audit_fem.rs", "symbol": "fem_absorber_uses_the_union_of_conformal_owner_segments", "responsibility": "Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności.", "evidence_status": "implemented"}
   ],
   "public_api": {
