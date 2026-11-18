@@ -231,18 +231,18 @@ impl MaterialLibraryStore {
     pub fn update_with_revision(
         &mut self,
         id: &str,
-        request: MaterialLibraryWriteRequest,
+        mut request: MaterialLibraryWriteRequest,
         expected_revision: u64,
     ) -> Result<MaterialLibraryMutationResource> {
         require_custom_id(id)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let revision: u64 = transaction
+        let (revision, document): (u64, String) = transaction
             .query_row(
-                "SELECT revision FROM material_entries WHERE id=?1",
+                "SELECT revision,document FROM material_entries WHERE id=?1",
                 [id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?
             .ok_or_else(|| MaterialLibraryError::NotFound(format!("material not found: {id}")))?;
@@ -251,6 +251,13 @@ impl MaterialLibraryStore {
                 "material revision conflict; reload before saving".into(),
             ));
         }
+        let stored: MaterialLibraryEntryResource = serde_json::from_str(&document)?;
+        if request.source.is_some() && request.source != stored.source {
+            return Err(MaterialLibraryError::Invalid(
+                "material source cannot change; create a new variant instead".into(),
+            ));
+        }
+        request.source = stored.source;
         let revision = revision
             .checked_add(1)
             .ok_or_else(|| MaterialLibraryError::Conflict("material revision exhausted".into()))?;

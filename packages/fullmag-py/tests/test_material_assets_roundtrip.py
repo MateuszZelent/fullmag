@@ -62,6 +62,23 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         self.assertEqual(rebuilt["materials"], scene["materials"])
         self.assertEqual([obj["material_ref"] for obj in rebuilt["objects"]], ["mat:measured"] * 2)
 
+    def test_dormant_catalog_dmi_remains_disabled_after_script_roundtrip(self):
+        scene = material_scene()
+        scene["materials"][0]["properties"].update(Dind=-0.001, Dbulk=0.002)
+        scene["objects"][0]["physics_stack"].extend([
+            {"kind": "interfacial_dmi", "enabled": False, "params": {"dind": -0.001}},
+            {"kind": "bulk_dmi", "enabled": False, "params": {"dbulk": 0.002}},
+        ])
+        canonical = render_scene_document_as_script(scene)
+        with tempfile.TemporaryDirectory(prefix="fullmag-material-dmi-") as temporary:
+            path = Path(temporary) / "dmi.py"
+            path.write_text(canonical, encoding="utf-8")
+            rebuilt = build_scene_document_from_builder(export_builder_draft(str(path)))
+        entries = {entry["kind"]: entry for entry in rebuilt["objects"][0]["physics_stack"]}
+        self.assertFalse(entries["interfacial_dmi"]["enabled"])
+        self.assertFalse(entries["bulk_dmi"]["enabled"])
+        self.assertEqual(rebuilt["materials"][0]["properties"], scene["materials"][0]["properties"])
+
     def test_unassigned_material_survives_roundtrip(self):
         scene = material_scene()
         unassigned = copy.deepcopy(scene["materials"][0])
@@ -69,6 +86,24 @@ class TestMaterialAssetsRoundtrip(unittest.TestCase):
         scene["materials"].append(unassigned)
         rebuilt = build_scene_document_from_builder(build_builder_from_scene_document(scene))
         self.assertEqual(rebuilt["materials"], scene["materials"])
+
+    def test_legacy_effective_references_roundtrip_without_catalog_limits(self):
+        scene = material_scene()
+        material = scene["materials"][0]
+        material.pop("source")
+        refs = [{"label": "Historical reference " + str(index)} for index in range(65)]
+        refs.append({"label": "Long label " * 70, "url": "https:///path"})
+        material["references"] = refs
+        material["id"] = " legacy-material "
+        material["name"] = " Legacy material "
+        scene["objects"][0]["material_ref"] = material["id"]
+        canonical = render_scene_document_as_script(scene)
+        with tempfile.TemporaryDirectory(prefix="fullmag-material-old-") as temporary:
+            path = Path(temporary) / "legacy.py"
+            path.write_text(canonical, encoding="utf-8")
+            rebuilt = build_scene_document_from_builder(export_builder_draft(str(path)))
+        self.assertEqual(rebuilt["materials"][0], material)
+        self.assertEqual(rebuilt["objects"][0]["material_ref"], material["id"])
 
     def test_effective_parameters_always_override_stale_metadata(self):
         builder = build_builder_from_scene_document(material_scene())

@@ -23,8 +23,8 @@ def _mapping(value: object, context: str) -> Mapping[str, Any]:
 
 
 def _text(value: object, context: str) -> str:
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
-        raise ValueError(f"{context} must be a nonempty string without surrounding whitespace")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context} must be a nonempty string")
     return value
 
 
@@ -50,10 +50,10 @@ def _properties(value: object, context: str) -> dict[str, Any]:
     return result
 
 
-def _references(value: object, context: str) -> list[dict[str, Any]]:
+def _references(value: object, context: str, *, catalog_source: bool = False) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise ValueError(f"{context} must be a list")
-    if len(value) > 64:
+    if catalog_source and len(value) > 64:
         raise ValueError(f"{context} supports at most 64 references")
     result = []
     for index, raw in enumerate(value):
@@ -62,6 +62,9 @@ def _references(value: object, context: str) -> list[dict[str, Any]]:
             raise ValueError(f"{context}[{index}] has unsupported fields")
         if any(item is not None and not isinstance(item, str) for item in entry.values()):
             raise ValueError(f"{context}[{index}] values must be strings or null")
+        if not catalog_source:
+            result.append(dict(entry))
+            continue
         for key, limit in (("label", 512), ("url", 4096), ("citation", 16384)):
             text = entry.get(key)
             if text is not None and len(text.encode("utf-8")) > limit:
@@ -104,8 +107,17 @@ def _source(value: object, context: str) -> dict[str, Any]:
         "name": name,
         "kind": raw["kind"],
         "properties": properties,
-        "references": _references(raw.get("references", []), f"{context}.references"),
+        "references": _references(raw.get("references", []), f"{context}.references", catalog_source=True),
     }
+
+
+_DMI_KINDS = {"Dind": "interfacial_dmi", "Dbulk": "bulk_dmi"}
+
+
+def _inactive_dmi(stack: Sequence[Mapping[str, Any]]) -> list[str]:
+    return [key for key, kind in _DMI_KINDS.items()
+            if any(isinstance(entry, Mapping) and entry.get("kind") == kind
+                   and entry.get("enabled") is False for entry in stack)]
 
 
 def canonical_material_assets(value: object) -> dict[str, Any]:
@@ -113,7 +125,7 @@ def canonical_material_assets(value: object) -> dict[str, Any]:
     raw = _mapping(value, context)
     if raw.get("version") != MATERIAL_ASSETS_VERSION:
         raise ValueError(f"{context}.version must be {MATERIAL_ASSETS_VERSION}")
-    if set(raw) - {"version", "materials", "assignments", "object_ids"}:
+    if set(raw) - {"version", "materials", "assignments", "object_ids", "inactive_dmi"}:
         raise ValueError(f"{context} has unsupported fields")
     entries = raw.get("materials")
     if not isinstance(entries, list):
@@ -131,9 +143,12 @@ def canonical_material_assets(value: object) -> dict[str, Any]:
         if identity in identities:
             raise ValueError(f"{context} contains duplicate material ID {identity!r}")
         identities.add(identity)
+        name = entry.get("name")
+        if not isinstance(name, str):
+            raise ValueError(f"{label}.name must be a string")
         material = {
             "id": identity,
-            "name": _text(entry.get("name"), f"{label}.name"),
+            "name": name,
             "properties": _properties(entry.get("properties"), f"{label}.properties"),
             "references": _references(entry.get("references", []), f"{label}.references"),
         }
@@ -158,8 +173,19 @@ def canonical_material_assets(value: object) -> dict[str, Any]:
         if object_id in object_ids.values():
             raise ValueError(f"{context}.object_ids contains duplicate object ID {object_id!r}")
         object_ids[name] = object_id
-    return {"version": MATERIAL_ASSETS_VERSION, "materials": materials, "assignments": assignments,
-            "object_ids": object_ids}
+    inactive_dmi = {}
+    for object_id, values in _mapping(raw.get("inactive_dmi", {}), f"{context}.inactive_dmi").items():
+        if (object_id not in assignments or not isinstance(values, list)
+                or any(not isinstance(value, str) or value not in _DMI_KINDS for value in values)
+                or len(values) != len(set(values))):
+            raise ValueError(f"{context}.inactive_dmi has invalid object or coefficient")
+        if values:
+            inactive_dmi[object_id] = [key for key in _DMI_KINDS if key in values]
+    result = {"version": MATERIAL_ASSETS_VERSION, "materials": materials, "assignments": assignments,
+              "object_ids": object_ids}
+    if inactive_dmi:
+        result["inactive_dmi"] = inactive_dmi
+    return result
 
 
 def material_assets_from_scene(scene: Mapping[str, Any]) -> dict[str, Any]:
@@ -177,7 +203,42 @@ def material_assets_from_scene(scene: Mapping[str, Any]) -> dict[str, Any]:
             for obj in scene.get("objects") or []
             if str(obj.get("role") or "magnet") == "magnet"
         },
+        "inactive_dmi": {
+            obj["id"]: inactive for obj in scene.get("objects") or []
+            if str(obj.get("role") or "magnet") == "magnet"
+            and (inactive := _inactive_dmi(obj.get("physics_stack") or []))
+        },
     })
+
+
+def restore_inactive_material_dmi(
+    metadata: Mapping[str, Any], geometries: Sequence[dict[str, Any]],
+) -> None:
+    """Restore dormant coefficients omitted by the executable Python API."""
+    inactive_dmi = metadata.get("inactive_dmi") or {}
+    if not inactive_dmi:
+        return
+    entries = {entry["id"]: entry["properties"] for entry in metadata["materials"]}
+    for geometry in geometries:
+        object_id = geometry.get("object_id") or metadata["object_ids"].get(geometry.get("name"))
+        keys = inactive_dmi.get(object_id)
+        if not keys:
+            continue
+        material = geometry["material"]
+        stack = list(geometry.get("physics_stack") or [])
+        geometry["physics_stack"] = stack
+        original = entries[metadata["assignments"][object_id]]
+        for key in keys:
+            kind = _DMI_KINDS[key]
+            if material.get(key) is not None or any(
+                entry.get("enabled", True) and (entry.get("kind") == kind
+                    or (key == "Dind" and entry.get("kind") == "rotated_interfacial_dmi"))
+                for entry in stack
+            ):
+                continue
+            material[key] = original[key]
+            if not any(entry.get("kind") == kind for entry in stack):
+                stack.append({"kind": kind, "enabled": False, "params": {key.lower(): original[key] or 0.0}})
 
 
 def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -194,6 +255,7 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
     groups: dict[str, dict[tuple[Any, ...], list[tuple[str, dict[str, Any]]]]] = {}
     assignments = {}
     object_ids = {}
+    inactive = {}
     for geometry in geometries:
         if str(geometry.get("role") or "magnet") != "magnet":
             continue
@@ -238,6 +300,8 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
                     and kind not in enabled_kinds
                     and not (key == "Dind" and "rotated_interfacial_dmi" in enabled_kinds)):
                 properties[key] = 0.0
+        if flags := _inactive_dmi(geometry.get("physics_stack") or []):
+            inactive[object_id] = flags
         signature = tuple(properties[key] for key in _PROPERTY_KEYS)
         groups.setdefault(material_id, {}).setdefault(signature, []).append((object_id, properties))
     for material_id, variants in groups.items():
@@ -258,8 +322,11 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
             by_id[fork["id"]] = fork
             for object_id, _properties_value in objects:
                 assignments[object_id] = fork["id"]
-    return {"version": MATERIAL_ASSETS_VERSION, "materials": materials, "assignments": assignments,
-            "object_ids": object_ids}
+    result = {"version": MATERIAL_ASSETS_VERSION, "materials": materials, "assignments": assignments,
+              "object_ids": object_ids}
+    if inactive:
+        result["inactive_dmi"] = inactive
+    return result
 
 
 def _fork_id(material_id: str, object_id: str, occupied: Mapping[str, Any]) -> str:

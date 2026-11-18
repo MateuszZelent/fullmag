@@ -50,7 +50,7 @@ export function materialPropertiesFromDraft(
       return { error: `${label} must be a finite decimal SI value.`, field: key };
     }
     if (key === "Ms" && value <= 0) {
-      return { error: "Ms must be greater than zero when provided.", field: key };
+      return { error: "Ms must be greater than 0 A/m.", field: key };
     }
     if ((key === "Aex" || key === "alpha") && value < 0) {
       return { error: `${label} must be zero or greater.`, field: key };

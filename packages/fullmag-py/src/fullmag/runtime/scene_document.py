@@ -5,7 +5,12 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from fullmag.runtime.material_assets import material_assets_from_scene, reconcile_material_assets
+from fullmag.runtime.material_assets import (
+    canonical_material_assets,
+    material_assets_from_scene,
+    reconcile_material_assets,
+    restore_inactive_material_dmi,
+)
 from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.runtime.imported_geometry_assets import imported_geometry_source_asset_fields
 from fullmag.model.geometry import RigidTransform
@@ -1702,10 +1707,13 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         geometries,
     )
     objects: list[dict[str, Any]] = []
-    material_metadata = (
-        reconcile_material_assets(builder["material_assets"], geometries)
-        if builder.get("material_assets") is not None else None
-    )
+    material_metadata = None
+    if builder.get("material_assets") is not None:
+        metadata = canonical_material_assets(builder["material_assets"])
+        if metadata.get("inactive_dmi"):
+            geometries = copy.deepcopy(geometries)
+            restore_inactive_material_dmi(metadata, geometries)
+        material_metadata = reconcile_material_assets(metadata, geometries)
     materials: list[dict[str, Any]] = material_metadata["materials"] if material_metadata is not None else []
     material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
     object_ids = material_metadata["object_ids"] if material_metadata is not None else {}

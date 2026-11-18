@@ -4190,8 +4190,7 @@ fn apply_create_material_transaction(
     if let Some(source) = &source {
         fullmag_authoring::validate_material_source(source).map_err(ApiError::bad_request)?;
     }
-    let references = material_references_from_resources(references)?;
-    fullmag_authoring::validate_material_references(&references).map_err(ApiError::bad_request)?;
+    let references = material_references_from_resources(references, assign_to_object_id.is_some())?;
     let target_index = assign_to_object_id
         .as_deref()
         .map(|object_id| {
@@ -4222,9 +4221,41 @@ fn apply_create_material_transaction(
         source,
     });
     if let Some(index) = target_index {
-        scene.objects[index].material_ref = material_id.to_string();
+        let object = &mut scene.objects[index];
+        let previous = scene.materials.iter()
+            .find(|entry| entry.id == object.material_ref)
+            .map(|entry| &entry.properties);
+        preserve_implicit_dmi(object, previous, properties.dind, properties.dbulk);
+        object.material_ref = material_id.to_string();
     }
     Ok(())
+}
+
+/// Keep the legacy implicit enablement when replacing material coefficients.
+fn preserve_implicit_dmi(
+    object: &mut SceneObject,
+    previous: Option<&fullmag_authoring::ScriptBuilderMaterialState>,
+    dind: Option<f64>,
+    dbulk: Option<f64>,
+) {
+    use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
+
+    for (kind, key, before, after) in [
+        (InterfacialDmi, "dind", previous.and_then(|value| value.dind), dind),
+        (BulkDmi, "dbulk", previous.and_then(|value| value.dbulk), dbulk),
+    ] {
+        let enabled = before.is_some_and(|value| value != 0.0);
+        if enabled != after.is_some_and(|value| value != 0.0)
+            && find_interaction(object, kind).is_none()
+        {
+            object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                kind,
+                enabled,
+                params: Some(Value::Object([(key.to_owned(), Value::from(after.unwrap_or(0.0)))]
+                    .into_iter().collect())),
+            });
+        }
+    }
 }
 
 fn apply_patch_material_transaction(
@@ -4239,7 +4270,15 @@ fn apply_patch_material_transaction(
         .iter_mut()
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::not_found(format!("material not found: {material_id}")))?;
+    let previous = material.source.as_ref().map(|_| material.properties.clone());
     apply_material_patch_to_asset(material, patch)?;
+    if let Some(previous) = previous.as_ref() {
+        for object in scene.objects.iter_mut().filter(|object| {
+            object.role == "magnet" && object.material_ref == material_id
+        }) {
+            preserve_implicit_dmi(object, Some(previous), material.properties.dind, material.properties.dbulk);
+        }
+    }
     sync_interfacial_dmi_for_material(scene, material_id);
     sync_bulk_dmi_for_material(scene, material_id);
     Ok(())
@@ -4311,30 +4350,35 @@ fn apply_material_patch_to_asset(
         }
     }
     if let Some(references) = req.references {
-        material.references = material_references_from_resources(references)?;
+        material.references = material_references_from_resources(references, false)?;
     }
     Ok(())
 }
 
 fn material_references_from_resources(
     references: Vec<MaterialReferenceResource>,
+    preserve_text: bool,
 ) -> Result<Vec<SceneMaterialReference>, ApiError> {
     references
         .into_iter()
         .map(|reference| {
-            let label = trimmed_optional(reference.label);
-            let url = trimmed_optional(reference.url);
-            if let Some(url) = &url {
-                if !(url.starts_with("https://") || url.starts_with("http://")) {
-                    return Err(ApiError::bad_request(
-                        "material reference url must start with http:// or https://",
-                    ));
-                }
+            let url = trimmed_optional(reference.url.clone());
+            if url.as_deref().is_some_and(|url| {
+                !(url.starts_with("https://") || url.starts_with("http://"))
+            }) {
+                return Err(ApiError::bad_request(
+                    "material reference url must start with http:// or https://",
+                ));
             }
-            Ok(SceneMaterialReference {
-                label,
-                url,
-                citation: trimmed_optional(reference.citation),
+            // Assigning a copy preserves effective references byte for byte.
+            Ok(if preserve_text {
+                SceneMaterialReference { label: reference.label, url: reference.url, citation: reference.citation }
+            } else {
+                SceneMaterialReference {
+                    label: trimmed_optional(reference.label),
+                    url,
+                    citation: trimmed_optional(reference.citation),
+                }
             })
         })
         .collect()

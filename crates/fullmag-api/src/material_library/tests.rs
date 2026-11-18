@@ -135,6 +135,32 @@ fn source_snapshot_survives_parent_removal() {
 }
 
 #[test]
+fn updating_a_catalog_entry_preserves_its_original_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = MaterialLibraryStore::open(&directory.path().join("library.db")).unwrap();
+    let parent = store.create(custom("custom:parent")).unwrap();
+    let mut draft = custom("custom:variant");
+    draft.source = Some(parent.source_snapshot());
+    let saved = store.create(draft).unwrap();
+
+    let mut rename = custom("custom:variant");
+    rename.name = "New display name".into();
+    let updated = store.update(&saved.id, rename.clone(), saved.revision).unwrap();
+    assert_eq!(updated.name, "New display name");
+    assert_eq!(updated.source, saved.source);
+    assert_eq!(updated.kind, SceneMaterialSourceKind::Modified);
+
+    rename.source = updated.source.clone();
+    rename.source.as_mut().unwrap().name = "Different source".into();
+    let before = store.list().unwrap().revision;
+    assert!(matches!(
+        store.update(&updated.id, rename, updated.revision),
+        Err(MaterialLibraryError::Invalid(_))
+    ));
+    assert_eq!(store.list().unwrap().revision, before);
+}
+
+#[test]
 fn validates_finite_values_and_required_alpha() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = MaterialLibraryStore::open(&directory.path().join("library.db")).unwrap();

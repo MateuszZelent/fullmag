@@ -313,6 +313,18 @@ fn material_assets_metadata(scene: &SceneDocument) -> crate::SceneMaterialAssets
         assignments: scene.objects.iter().filter(|object| scene.materials.iter().any(|material| material.id == object.material_ref))
             .map(|object| (object.id.clone(),object.material_ref.clone())).collect(),
         object_ids: scene.objects.iter().map(|object| (builder_geometry_name_for_object(object),object.id.clone())).collect(),
+        inactive_dmi: scene.objects.iter().filter_map(|object| {
+            if !scene.materials.iter().any(|material| material.id == object.material_ref) {
+                return None;
+            }
+            let inactive = [
+                (ScriptBuilderMagneticInteractionKind::InterfacialDmi, crate::InactiveMaterialDmi::Interfacial),
+                (ScriptBuilderMagneticInteractionKind::BulkDmi, crate::InactiveMaterialDmi::Bulk),
+            ].into_iter().filter_map(|(kind, flag)| {
+                object.physics_stack.iter().any(|entry| entry.kind == kind && !entry.enabled).then_some(flag)
+            }).collect::<Vec<_>>();
+            (!inactive.is_empty()).then(|| (object.id.clone(), inactive))
+        }).collect(),
     }
 }
 
@@ -326,21 +338,36 @@ fn restore_material_assets(builder: &ScriptBuilderState, objects: &mut [SceneObj
     for (geometry,object) in builder.geometries.iter().zip(objects.iter_mut()) {
         if let Some(id) = metadata.object_ids.get(&geometry.name) { object.id = id.clone(); }
     }
-    let effective = builder.geometries.iter().zip(objects.iter()).map(|(geometry,object)| {
+    let effective = builder.geometries.iter().zip(objects.iter_mut()).map(|(geometry,object)| {
         let mut properties = geometry.material.clone();
         if let Some(original) = metadata.assignments.get(&object.id)
             .and_then(|id| metadata.materials.iter().find(|material| &material.id == id)) {
-            // Only absent, inactive zeros are authoring metadata. Explicit DSL
-            // values win; a nonzero value is never supplied by provenance.
-            let active = |kind| geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == kind);
-            if properties.dind.is_none() && original.properties.dind == Some(0.0)
-                && !active(ScriptBuilderMagneticInteractionKind::InterfacialDmi)
-                && !active(ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi) {
-                properties.dind = Some(0.0);
-            }
-            if properties.dbulk.is_none() && original.properties.dbulk == Some(0.0)
-                && !active(ScriptBuilderMagneticInteractionKind::BulkDmi) {
-                properties.dbulk = Some(0.0);
+            use crate::InactiveMaterialDmi::{Bulk, Interfacial};
+            use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi, RotatedInterfacialDmi};
+
+            let inactive = metadata.inactive_dmi.get(&object.id).map(Vec::as_slice).unwrap_or_default();
+            let rotated = geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == RotatedInterfacialDmi);
+            for (flag, kind, key, effective, saved) in [
+                (Interfacial, InterfacialDmi, "dind", &mut properties.dind, original.properties.dind),
+                (Bulk, BulkDmi, "dbulk", &mut properties.dbulk, original.properties.dbulk),
+            ] {
+                if effective.is_some() || (flag == Interfacial && rotated)
+                    || geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == kind)
+                {
+                    continue;
+                }
+                if inactive.contains(&flag) {
+                    *effective = saved;
+                    if !object.physics_stack.iter().any(|entry| entry.kind == kind) {
+                        object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                            kind,
+                            enabled: false,
+                            params: Some(Value::Object([(key.to_owned(), Value::from(saved.unwrap_or(0.0)))].into_iter().collect())),
+                        });
+                    }
+                } else if saved == Some(0.0) {
+                    *effective = saved;
+                }
             }
         }
         properties
@@ -2731,6 +2758,31 @@ mod tests {
         let restored = scene_document_from_script_builder(&builder);
         let restored_value = serde_json::to_value(restored).unwrap();
         assert_eq!(restored_value["objects"][0]["geometry"]["source_asset"], reference);
+    }
+
+    #[test]
+    fn material_library_roundtrip_restores_dormant_dmi_and_legacy_references() {
+        use ScriptBuilderMagneticInteractionKind::InterfacialDmi;
+
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.materials[0].references = (0..65).map(|index| crate::SceneMaterialReference {
+            label: Some(format!("Reference {index}")), url: None, citation: None,
+        }).collect();
+        scene.materials[0].properties.dind = Some(-0.001);
+        scene.objects[0].physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+            kind: InterfacialDmi, enabled: false, params: None,
+        });
+        let mut builder = scene_document_to_script_builder(&scene).unwrap();
+        // Canonical Python only emits executable DMI. Its editor metadata
+        // provides the dormant value and explicit disabled state on import.
+        builder.geometries[0].physics_stack.retain(|entry| entry.kind != InterfacialDmi);
+        builder.geometries[0].material.dind = None;
+        let builder: ScriptBuilderState = serde_json::from_value(serde_json::to_value(builder).unwrap()).unwrap();
+        let restored = scene_document_from_script_builder(&builder);
+        assert_eq!(restored.materials[0].properties.dind, Some(-0.001));
+        assert_eq!(restored.materials[0].references, scene.materials[0].references);
+        assert!(restored.objects[0].physics_stack.iter()
+            .any(|entry| entry.kind == InterfacialDmi && !entry.enabled));
     }
 
     #[test]

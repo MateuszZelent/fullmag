@@ -228,6 +228,20 @@ describe("ObjectMaterialPanel database lifecycle", () => {
     } finally { await view.dispose(); }
   });
 
+  it("does not copy displayed material parameters using a newer history revision", async () => {
+    const view = await mountPanel();
+    try {
+      const changed = {
+        ...scene(), revision: 11, scene_revision: 11,
+        materials: [{ ...scene().materials![0], properties: { ...entry.properties, Ms: 930000 } }],
+      };
+      mocks.sceneRequest.mockResolvedValue(changed);
+      await act(async () => button(view.container, "Make independent copy").click());
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(view.container.textContent).toContain("Review the refreshed model before making a copy.");
+    } finally { await view.dispose(); }
+  });
+
   it("shows a changed model copy against its pinned source with SI differences", async () => {
     mocks.scene.materials = [{
       ...mocks.scene.materials![0],

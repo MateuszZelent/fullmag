@@ -53,11 +53,13 @@ kontraktach. Dowody roundtrip i tożsamości wejścia są wymagane osobno od sol
    Zmiana jednego użytkownika współdzielonego materiału tworzy deterministyczną
    niezależną kopię z zachowanym źródłem. Nieprzypisane materiały pozostają
    częścią modelu. Nowa geometria nie dziedziczy źródła przez podobną nazwę.
-9. Szczególny przypadek edytorski to nieaktywne `Dind = 0` lub `Dbulk = 0`:
-   gdy DSL pomija współczynnik i nie ma odpowiedniego jawnego modułu DMI,
-   metadane materiału zachowują zero. Nie przywracają pominiętych wartości
-   niezerowych. Wartości źródłowego baseline nigdy nie uzupełniają parametrów
-   wykonania. Reguła nie aktywuje modułów fizyki.
+9. Przypisanie i edycja kopii zachowują stan oddziaływań DMI. Gdy zmiana
+   współczynnika zmieniłaby dawną, domyślną aktywność DMI, model zapisuje
+   dotychczasowy stan jawnie. Skrypt zapisuje jawnie wyłączone współczynniki
+   jako edytorskie metadane `inactive_dmi`, przypisane do ID obiektu i pola
+   `Dind` lub `Dbulk`. Przy reimporcie jawny DSL ma pierwszeństwo. Dla
+   pominiętego pola bez tej informacji metadane zachowują wyłącznie
+   nieaktywne zero. Pochodzenie katalogowe nie uzupełnia parametrów wykonania.
 10. Pochodzenie i referencje nie są wejściami wykonania w
     `scene_execution_input_view`. Zmiana samych metadanych przechodzi istniejącą
     bramkę `metadata_only`. Hash archiwizowanego całego ProblemIR może się
@@ -70,7 +72,9 @@ sesji. GET zwraca rewizję katalogu oraz wpisy; POST tworzy wpis. Osobna ścież
 `/{id}` obsługuje PUT i DELETE z wymaganą `base_revision` wpisu. Nie ma upsertu:
 kolizja tworzenia i nieaktualna rewizja zwracają konflikt. POST i PUT zwracają
 płaski wpis wraz z `catalog_revision` pobraną w tej samej transakcji co zapis;
-DELETE zwraca nową rewizję katalogu. Frontend unieważnia globalny zasób tym
+DELETE zwraca nową rewizję katalogu. PUT zachowuje pochodzenie, również
+gdy żądanie pomija `source`, a próbę podmiany snapshotu odrzuca.
+Frontend unieważnia globalny zasób tym
 zegarem także wtedy, gdy odpowiedź przychodzi po zmianie widoku. Rewizja wpisu
 nie zastępuje rewizji katalogu. Błędy walidacji mają 400, brak wpisu 404, konflikt 409,
 a błąd magazynu 500. Wbudowane ID są chronione przed zmianą i usunięciem. Przy

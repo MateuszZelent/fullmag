@@ -45,6 +45,18 @@ fn creates_and_assigns_one_independent_material_with_source_and_unchanged_physic
 }
 
 #[test]
+fn selecting_a_source_preserves_exact_reference_text() {
+    let mut value = scene();
+    let mut input = serde_json::to_value(create(true, Some("body"))).unwrap();
+    let refs = json!([{"label":" Sample ","citation":" Report A ","url":"https://example.org"}]);
+    input["references"] = refs.clone();
+    input["source"]["references"] = refs;
+    apply_authoring_transaction(&mut value, serde_json::from_value(input).unwrap()).unwrap();
+    let asset = &value.materials[0];
+    assert_eq!(asset.references, asset.source.as_ref().unwrap().references);
+}
+
+#[test]
 fn create_assignment_rejects_missing_or_nonmagnetic_target_without_partial_mutation() {
     for target in ["missing", "body"] {
         let mut value = scene();
@@ -84,6 +96,40 @@ fn incomplete_material_can_be_assigned_without_inventing_parameters() {
     assert_eq!(value.objects[0].material_ref, "mat:sample");
     assert!(value.materials[0].properties.ms.is_none());
     assert!(fullmag_authoring::scene_document_has_unresolved_solve_prerequisites(&value));
+}
+
+#[test]
+fn material_database_assignment_and_edits_do_not_enable_implicit_dmi() {
+    use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
+
+    let mut value = scene();
+    let mut input = serde_json::to_value(create(true, Some("body"))).unwrap();
+    input["properties"]["Dind"] = json!(-0.001);
+    apply_authoring_transaction(&mut value, serde_json::from_value(input).unwrap()).unwrap();
+    let interfacial = find_interaction(&value.objects[0], InterfacialDmi).unwrap();
+    assert!(!interfacial.enabled);
+
+    let patch = serde_json::from_value(json!({"properties":{"Dbulk":0.002}})).unwrap();
+    apply_patch_material_transaction(&mut value, Some(4), "mat:sample", patch).unwrap();
+    let bulk = find_interaction(&value.objects[0], BulkDmi).unwrap();
+    assert!(!bulk.enabled);
+    assert_eq!(value.materials[0].properties.dind, Some(-0.001));
+    assert_eq!(value.materials[0].properties.dbulk, Some(0.002));
+}
+
+#[test]
+fn material_database_assignment_preserves_legacy_active_dmi() {
+    use ScriptBuilderMagneticInteractionKind::InterfacialDmi;
+
+    let mut value = scene();
+    let mut previous = serde_json::to_value(create(false, None)).unwrap();
+    previous["material_id"] = json!("old");
+    previous["properties"]["Dind"] = json!(-0.001);
+    apply_authoring_transaction(&mut value, serde_json::from_value(previous).unwrap()).unwrap();
+
+    apply_authoring_transaction(&mut value, create(true, Some("body"))).unwrap();
+    assert!(find_interaction(&value.objects[0], InterfacialDmi).unwrap().enabled);
+    assert!(value.materials[1].properties.dind.is_none());
 }
 
 #[test]

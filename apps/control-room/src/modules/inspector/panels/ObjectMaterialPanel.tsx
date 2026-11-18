@@ -965,6 +965,7 @@ function useObjectMaterialPanelState(
   async function createAndAssignMaterial(
     hasBoundaryDraft = false,
     importedAsset?: MaterialAssetAssignment,
+    expectedSourceRevision?: number | null,
   ): Promise<boolean> {
     const operationScope = scope;
     const operationSessionScopeKey = sessionScopeKey;
@@ -1018,6 +1019,12 @@ function useObjectMaterialPanelState(
       preparation = await prepareAuthoringMutation(historyContext);
       if (!isCurrentScope()) return false;
       const baseRevision = preparation.baseRevision ?? object.baseRevision;
+      if (expectedSourceRevision !== undefined && baseRevision !== expectedSourceRevision) {
+        scene.refetch();
+        material.refetch();
+        setFeedback({ kind: "error", message: "The source material may have changed. Review the refreshed model before making a copy." });
+        return false;
+      }
       if (baseRevision === null) {
         setFeedback({ kind: "error", message: "No committed scene object with a known revision." });
         return false;
@@ -1368,7 +1375,9 @@ function ObjectMaterialPanelView({
     scopeToken: symbol;
   } | null>(null);
   const currentDatabaseIntent = databaseIntent?.scopeToken === scopeToken ? databaseIntent : null;
-  const materialUsages = scene.data?.objects?.filter((candidate) => candidate.material_ref === materialId) ?? [];
+  const materialUsages = materialData
+    ? (scene.data?.objects?.filter((candidate) => candidate.material_ref === materialData.id) ?? [])
+    : [];
   const sourceStatus = materialData
     ? materialSourceStatus(materialData.properties, materialData.references, materialData.source)
     : "unknown";
@@ -1637,7 +1646,10 @@ function ObjectMaterialPanelView({
               <div className="fm-inspector-toolbar">
                 {materialData && materialUsages.length > 1 ? (
                   <Button disabled={materialChangeBlocked} size="sm" type="button" variant="secondary"
-                    onClick={() => void createAndAssignMaterial(absorbingBoundaryDraftDirty, independentMaterialAsset(materialData))}>
+                    onClick={() => void createAndAssignMaterial(
+                      absorbingBoundaryDraftDirty, independentMaterialAsset(materialData),
+                      materialData.scene_revision ?? object.baseRevision,
+                    )}>
                     Make independent copy
                   </Button>
                 ) : null}

@@ -121,6 +121,14 @@ pub enum SceneMaterialAssetsVersion {
     V1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InactiveMaterialDmi {
+    #[serde(rename = "Dind")]
+    Interfacial,
+    #[serde(rename = "Dbulk")]
+    Bulk,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "MaterialAssetsMetadataWire")]
 pub struct SceneMaterialAssetsMetadata {
@@ -128,6 +136,8 @@ pub struct SceneMaterialAssetsMetadata {
     pub materials: Vec<crate::SceneMaterialAsset>,
     pub assignments: std::collections::BTreeMap<String, String>,
     pub object_ids: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub inactive_dmi: std::collections::BTreeMap<String, Vec<InactiveMaterialDmi>>,
 }
 #[derive(Deserialize)]
 struct MaterialAssetsMetadataWire {
@@ -135,6 +145,8 @@ struct MaterialAssetsMetadataWire {
     materials: Vec<crate::SceneMaterialAsset>,
     assignments: std::collections::BTreeMap<String, String>,
     object_ids: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    inactive_dmi: std::collections::BTreeMap<String, Vec<InactiveMaterialDmi>>,
 }
 impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
     type Error = String;
@@ -150,7 +162,7 @@ impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
             if material.id.trim().is_empty() || !ids.insert(material.id.as_str()) {
                 return Err("material metadata contains empty or duplicate identities".into());
             }
-            validate_material_references(&material.references)?;
+            // Effective references are authored scene data, including older archives.
             if let Some(source) = &material.source {
                 validate_material_source(source)?;
             }
@@ -168,11 +180,19 @@ impl TryFrom<MaterialAssetsMetadataWire> for SceneMaterialAssetsMetadata {
         }) {
             return Err("material metadata contains empty or duplicate object identities".into());
         }
+        if value.inactive_dmi.iter().any(|(object, flags)| {
+            !value.assignments.contains_key(object)
+                || flags.len() > 2
+                || (flags.len() == 2 && flags[0] == flags[1])
+        }) {
+            return Err("material metadata has invalid inactive DMI".into());
+        }
         Ok(Self {
             version: value.version,
             materials: value.materials,
             assignments: value.assignments,
             object_ids: value.object_ids,
+            inactive_dmi: value.inactive_dmi,
         })
     }
 }
