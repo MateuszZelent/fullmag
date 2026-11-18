@@ -5,7 +5,8 @@ from copy import deepcopy
 import hashlib
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -216,6 +217,73 @@ def fixture():
             "process": process, "old": old_doc, "recreation": recreation_doc}
 
 
+def retirement_fixture(*, private_ledger=False):
+    data = fixture()
+    recreation = data["recreation"]
+    rec_root = "recreate-services/attempts/" + data["recreation_attempt"]
+    old = data["old"]
+    old["config_sha256"] = recreation["inputs"]["config_sha256"]
+    old_raw = raw(old)
+    data["records"]["development/attempts/" + old["attempt"] + "/terminal.json"] = old_raw
+    for pointer in ("current", "verified"):
+        data["publications"][f"development/{pointer}.json"] = old_raw
+    archived_root = "runtime-archives/" + data["recreation_attempt"] + "/runtime-service"
+    process = data["process"]
+    process["api_exit_code"] = 0
+    del process["error"]
+    process_raw = raw(process)
+    data["records"][archived_root + "/process-tree.json"] = process_raw
+    data["records"][rec_root + "/retirement-native-drain.json"] = process_raw
+    recreation.pop("prelaunch_failure_fresh_archive")
+    recreation["inputs"].pop("prelaunch_failure_stop")
+    recreation.update(retire_only=True, retirement_native_drain_sha256=sha(process_raw))
+    labels = source_labels(data["control"].identity)
+    data["records"][rec_root + "/retained-containers.json"] = raw({
+        service: {"Id": old[service + "_container"], "State": {
+            "Running": False, "Status": "exited", "Pid": 0, "ExitCode": 0, "OOMKilled": False,
+        }, "Config": {"Labels": {**labels, "com.docker.compose.service": service}}}
+        for service in ("backend", "frontend")
+    })
+    previous_attempt = "3" * 32
+    earlier = {**old, "attempt": previous_attempt, "started_at": 0.1, "finished_at": 0.9}
+    data["records"]["development/attempts/" + previous_attempt + "/terminal.json"] = raw(earlier)
+    data["attempts"].append((previous_attempt, "d"))
+    archive_path = rec_root + "/runtime-control-archive-terminal.json"
+    intent_path = rec_root + "/runtime-control-archive-intent.json"
+    archive = recreation["runtime_control_archive"]
+    intent = json.loads(data["records"][intent_path])
+    control = data["control"]
+    ledger_volume = control.volume if private_ledger else "ledger-history-test"
+    intent["preserved_group_ledger_volume"] = ledger_volume
+    ledger_fields = {}
+    if private_ledger:
+        subpath = control.namespace + "/private/ledger"
+        archive["mapping"] = history._archive_mapping(data["recreation_attempt"], private_ledger=True)
+        intent.update(preserved_group_ledger_subpath=subpath, mapping=archive["mapping"])
+        archive["preserved_group_ledger_subpath"] = subpath
+        ledger_fields = {"preserved_subpath": subpath, "archived_group_ledger_path": archive["mapping"]["archived_group_ledger"]}
+    data["records"][intent_path] = raw(intent)
+    archive.update(preserved_group_ledger_volume=ledger_volume,
+                   intent_sha256=sha(raw(intent)))
+    data["records"][archive_path] = raw(archive)
+    data["records"]["group-ledger-generation.json"] = raw({
+        "schema": "fullmag.docker-group-ledger-generation.v1", "compose_project": data["control"].project,
+        "generation": data["recreation_attempt"], "archive_terminal_path": archive_path,
+        "archive_terminal_sha256": sha(canonical(archive)), "preserved_volume": ledger_volume,
+        **ledger_fields,
+    })
+    refresh_retirement(data)
+    return data
+
+
+def refresh_retirement(data):
+    rec_root = "recreate-services/attempts/" + data["recreation_attempt"]
+    recreation_raw = raw(data["recreation"])
+    data["recreation_sha256"] = sha(recreation_raw)
+    data["records"][rec_root + "/terminal.json"] = recreation_raw
+    data["records"][rec_root + "/receipt.json"] = recreation_raw
+
+
 class RecreatedHistoryTests(unittest.TestCase):
     def _validate(self, data):
         def read_raw(_control, path, optional=False):
@@ -251,6 +319,67 @@ class RecreatedHistoryTests(unittest.TestCase):
         self.assertIsNone(proof["retained_records"]["runtime-control/runtime-services/OWNER.json"])
         self.assertIsNone(proof["retained_records"]["runtime-control/runtime-service/process-tree.json"])
         self.assertLessEqual(len(proof["retained_records"]), history.MAX_RETAINED_RECORDS)
+
+    def test_retired_group_admits_failure_only_with_drained_pair_and_older_terminal(self):
+        data = retirement_fixture()
+        proof = self._validate(data)
+        self.assertEqual(proof["mode"], "retired-drained-runtime-archive")
+        self.assertEqual(proof["retirement_native_drain_sha256"],
+                         data["recreation"]["retirement_native_drain_sha256"])
+        terminal_path = "development/attempts/" + "3" * 32 + "/terminal.json"
+        self.assertEqual(proof["retained_records"][terminal_path], sha(data["records"][terminal_path]))
+
+    def test_retirement_rejects_mutated_drain_or_live_pair(self):
+        for change in ("drain", "pair"):
+            with self.subTest(change=change):
+                data = retirement_fixture()
+                root = "recreate-services/attempts/" + data["recreation_attempt"]
+                if change == "drain":
+                    data["records"][root + "/retirement-native-drain.json"] = raw({})
+                else:
+                    path = root + "/retained-containers.json"
+                    pair = json.loads(data["records"][path])
+                    pair["backend"]["State"]["Running"] = True
+                    data["records"][path] = raw(pair)
+                with self.assertRaises(BuildControlError):
+                    self._validate(data)
+
+    def test_retirement_rejects_ambiguous_earlier_history(self):
+        data = retirement_fixture()
+        path = "development/attempts/" + "3" * 32 + "/terminal.json"
+        earlier = json.loads(data["records"][path])
+        earlier["finished_at"] = 25
+        data["records"][path] = raw(earlier)
+        with self.assertRaises(BuildControlError):
+            self._validate(data)
+
+    def test_retirement_accepts_same_physical_runtime_parent_and_private_ledger(self):
+        data = retirement_fixture(private_ledger=True)
+        failed = data["failed_attempt"]
+        data["original"]["state_root"] = "/alternate/docker-volume-dev/" + failed
+        data["records"]["development/attempts/" + failed + "/receipt.json"] = raw(data["original"])
+        with patch.object(history, "_runtime_parent_identity", return_value=(860, 171)) as observe:
+            proof = self._validate(data)
+        self.assertEqual(proof["runtime_parent_device_inode"], [860, 171])
+        self.assertEqual([call.args[0] for call in observe.call_args_list], [
+            PurePosixPath("/runtime/docker-volume-dev"), PurePosixPath("/alternate/docker-volume-dev"),
+        ])
+        self.assertIn("group-ledger-generation.json", proof["retained_records"])
+        with patch.object(history, "_runtime_parent_identity", side_effect=[(860, 171), (861, 171)]):
+            with self.assertRaisesRegex(BuildControlError, "not an alias"):
+                self._validate(data)
+
+    def test_runtime_parent_identity_checks_real_directory_and_rejects_symlink(self):
+        with TemporaryDirectory() as root:
+            root = Path(root).resolve()
+            parent = root / "runtime"
+            parent.mkdir()
+            info = parent.stat()
+            self.assertEqual(history._runtime_parent_identity(parent), (info.st_dev, info.st_ino))
+            alias = root / "alias"
+            alias.symlink_to(parent, target_is_directory=True)
+            with self.assertRaisesRegex(BuildControlError, "symbolic link"):
+                history._runtime_parent_identity(alias)
 
     def test_changed_recreation_pin_and_old_verified_pointer_are_refused(self):
         data = fixture()
