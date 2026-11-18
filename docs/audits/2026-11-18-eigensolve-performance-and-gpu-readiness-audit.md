@@ -436,3 +436,54 @@ Dowody:
   `libfullmag_fem.so.0.1.0` zbudowana w tej próbie zawiera ścieżkę GPU modal.
   Zgodnie z zakazem nie kompilowano testów jednostkowych C++ ani Rust.
 - Runtime eigensolve: **NOT VERIFIED.** `examples/fem_eigen_k0_poisson_airbox_production.py` i `examples/fem_eigen_k0_kittel_periodic_airbox.py` są odrzucane już na etapie loweringu sceny w Pythonie (`thin_film_scoped_fields_require_exact_cell_geometric_airbox`, `asset_pipeline.py:3201`), zanim dojdą do solvera. To osobna regresja ścieżki siatki, niezależna od tych zmian.
+
+## I. Stan wdrożenia etapu 2 (PR #458, `00e62439e`) i przyspieszenie toolchainu
+
+| Pozycja | Stan | Zmiana |
+|---|---|---|
+| A2 (CPU) | wdrożone | Oba prefiksy PETSc (`/opt/fullmag-deps` z CUDA i `/opt/fullmag-mfem-cpu`) mają `--download-openblas --download-metis --download-scalapack --download-mumps`. `write_petsc_build_metadata.py` zapisuje `share/fullmag/petsc-build-metadata.json` i przerywa build obrazu, gdy brakuje któregoś pakietu. |
+| A2 (rola P) | wdrożone | `configure_modal_poisson_lu` (`modal_poisson_lu.hpp`) wybiera MUMPS z porządkowaniem METIS (`ICNTL(7)=5`) dla dokładnej faktoryzacji Poissona: CPU Schur k0 oraz P(k) i izolowany kontekst diagnostyczny we Floquecie. Bez MUMPS zostaje natywne LU PETSc. Diagnostyka raportuje `poisson_factorization_package`. Nota 0830 ma sekcję o realizacji LU. |
+| A2 (shift) | odłożone | Preconditionery przesunięte nadal używają natywnego LU (`MAT_SHIFT_NONZERO`). Przejście na MUMPS wymaga zamienników z A2 (`ICNTL(24)`, jawny `MatShift`) i należy do A1. |
+| A2 (GPU) | nie rozpoczęte | cuDSS w obrazie GPU nie jest jeszcze sprawdzony. |
+| Cholesky dla P | odłożone | Pakiet zawsze jest LU; LDLᵀ/Cholesky dla symetrycznego P wymaga osobnego dowodu dodatniej określoności na każdej ścieżce. |
+
+Dowody:
+
+- Toolchain:
+  - oba prefiksy mają `MUMPS/METIS/SCALAPACK/OPENBLAS: true` w `petsc-build-metadata.json`;
+  - MUMPS jest linkowany statycznie do `libpetsc.so` (37 symboli `dmumps_c`);
+  - bez `LD_LIBRARY_PATH` CPU PETSc rozwiązuje OpenBLAS, METIS, ScaLAPACK i HYPRE z własnego prefiksu.
+- Backend: w grupie weryfikacyjnej `libfullmag_fem.so` linkuje `libopenblas`, `libscalapack` i `libmetis` bez brakujących bibliotek i zawiera gałąź `mumps_lu_metis`.
+- Smoke MUMPS: przykład PETSc `ex45` w kontenerze backendu (laplasjan 3D 7-punktowy, 40³ = 64 tys. niewiadomych, seryjnie, prefiks CPU). MUMPS potwierdził `INFOG(7)=5`, czyli użycie METIS.
+
+  | | natywne LU PETSc | MUMPS + METIS |
+  |---|---|---|
+  | `MatLUFactorNum` | 16,70 s | 1,38 s |
+  | `MatLUFactorSym` | 0,65 s | 0,40 s |
+  | `MatSolve` | 0,058 s | 0,063 s |
+  | residuum | 2,7e-14 | 7,3e-15 |
+
+- Runtime eigensolve: **NOT VERIFIED.** Przygotowanie zaakceptowanego modelu FEM w API DEV (`accepted_fem_preparer.rs`) nie obsługuje `FemEigen`, więc etap eigen nie uruchamia się w Docker DEV. To osobne zadanie.
+
+### Przyspieszenie budowy toolchainu FEM
+
+- **PR #456 (`60253b4cb`):** oba prefiksy MFEM budują się przed PETSc/SLEPc, bo MFEM nie używa PETSc. Zmiana PETSc nie unieważnia już warstwy MFEM CUDA.
+- **PR #459 (`f82f2bf7a`):** wejście `FULLMAG_CPU_DEPENDENCY_BUILD_JOBS` zastępuje sztywne `-j2` w krokach prefiksu CPU; domyślnie 2.
+- **`.env` hosta** (lokalne, poza repozytorium):
+  - CUDA tylko dla architektury 89 (RTX 4080 SUPER) w MFEM, HYPRE i PETSc;
+  - `FULLMAG_MFEM_BUILD_JOBS=8`, `FULLMAG_CPU_DEPENDENCY_BUILD_JOBS=16`, `FULLMAG_DEV_BACKEND_CPUS=16`.
+- **Zmierzone na tym hoście (40 CPU):**
+
+  | Krok | Wcześniej | Teraz |
+  |---|---|---|
+  | HYPRE GPU | 22,7 min | 7,6 min |
+  | MFEM CUDA | ok. 2,5 h (`-j1`, 4 architektury) | 12 min |
+  | MFEM CPU | ponad 10 min (`-j2`) | 2,9 min |
+  | PETSc CUDA z MUMPS | — | 8,6 min |
+  | PETSc CPU z MUMPS | — | 8,3 min |
+  | Pełny toolchain od zera | ok. 4–5 h | ok. 47 min |
+
+- **Ryzyka i uwagi:**
+  - Obrazy z tymi ustawieniami `.env` działają tylko na GPU o compute capability 8.9.
+  - Każdy build pobiera MUMPS z mumps-solver.org.
+  - Zmiana architektur przebudowuje cały etap `deps`, bo ich ENV stoją na jego początku.
