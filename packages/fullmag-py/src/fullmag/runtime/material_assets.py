@@ -114,10 +114,14 @@ def _source(value: object, context: str) -> dict[str, Any]:
 _DMI_KINDS = {"Dind": "interfacial_dmi", "Dbulk": "bulk_dmi"}
 
 
+def _interactions_by_kind(stack: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+    return {str(entry.get("kind")): entry for entry in stack if isinstance(entry, Mapping)}
+
+
 def _inactive_dmi(stack: Sequence[Mapping[str, Any]]) -> list[str]:
+    interactions = _interactions_by_kind(stack)
     return [key for key, kind in _DMI_KINDS.items()
-            if any(isinstance(entry, Mapping) and entry.get("kind") == kind
-                   and entry.get("enabled") is False for entry in stack)]
+            if interactions.get(kind, {}).get("enabled") is False]
 
 
 def canonical_material_assets(value: object) -> dict[str, Any]:
@@ -199,10 +203,10 @@ def material_assets_from_scene(scene: Mapping[str, Any]) -> dict[str, Any]:
         properties = by_id.get(obj.get("material_ref"))
         if properties is None or str(obj.get("role") or "magnet") != "magnet":
             continue
-        physics = obj.get("physics_stack") or []
+        physics = _interactions_by_kind(obj.get("physics_stack") or [])
         if fields := [key for key, kind in _DMI_KINDS.items() if properties.get(key) is None
-                      and any(term.get("kind") == kind and term.get("enabled", True)
-                              and (term.get("params") or {}).get(key.lower()) == 0 for term in physics)]:
+                      and (term := physics.get(kind)) is not None and term.get("enabled", True)
+                      and (term.get("params") or {}).get(key.lower()) == 0]:
             active_without_coefficient[obj["id"]] = fields
     return canonical_material_assets({
         "version": MATERIAL_ASSETS_VERSION,

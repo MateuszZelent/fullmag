@@ -320,7 +320,7 @@ fn material_assets_metadata(scene: &SceneDocument) -> crate::SceneMaterialAssets
             (InterfacialDmi, Interfacial, "dind", material.properties.dind),
             (BulkDmi, Bulk, "dbulk", material.properties.dbulk),
         ] {
-            if let Some(entry) = object.physics_stack.iter().find(|entry| entry.kind == kind) {
+            if let Some(entry) = object.physics_stack.iter().rev().find(|entry| entry.kind == kind) {
                 if !entry.enabled {
                     inactive_dmi.entry(object.id.clone()).or_default().push(flag);
                 } else if value.is_none()
@@ -2790,9 +2790,10 @@ mod tests {
             label: Some(format!("Reference {index}")), url: None, citation: None,
         }).collect();
         scene.materials[0].properties.dind = Some(-0.001);
-        scene.objects[0].physics_stack.push(ScriptBuilderMagneticInteractionEntry {
-            kind: InterfacialDmi, enabled: false, params: None,
-        });
+        let interaction = scene.objects[0].physics_stack.iter_mut()
+            .find(|entry| entry.kind == InterfacialDmi).unwrap();
+        interaction.enabled = false;
+        interaction.params = Some(serde_json::json!({"dind":-0.001}));
         let mut builder = scene_document_to_script_builder(&scene).unwrap();
         // Canonical Python only emits executable DMI. Its editor metadata
         // provides the dormant value and explicit disabled state on import.
