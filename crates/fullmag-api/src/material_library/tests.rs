@@ -1,4 +1,5 @@
-use crate::material_library::{MaterialLibraryStore, MaterialLibraryWriteRequest};
+use crate::material_library::{MaterialLibraryError, MaterialLibraryStore, MaterialLibraryWriteRequest};
+use fullmag_authoring::SceneMaterialSourceKind;
 use serde_json::json;
 
 fn custom(id: &str) -> MaterialLibraryWriteRequest {

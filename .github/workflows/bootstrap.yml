@@ -136,6 +136,9 @@ jobs:
           cargo test -p fullmag-plan --lib antenna_current_source::tests::external_lead_does_not_inherit_closed_loop_volume_budget
           cargo test -p fullmag-runner --lib antenna_field_solution::direct_quadrature
 
+      - name: Run material library and scene assignment contracts
+        run: cargo test --locked -p fullmag-api --bin fullmag-api material_library
+
       - name: Run shared accepted-inspection read contracts
         run: |
           cargo test -p fullmag-session --lib read_transaction
@@ -440,9 +443,6 @@ jobs:
           cargo test -p fullmag-runner shared_domain_modal_scope_rejects_uncertified_local_tangent_terms --lib
           cargo test -p fullmag-runner material_identity_tests --lib
           cargo test -p fullmag-runner shared_domain_payload_omits_zero_anisotropy_after_certified_linearization --lib
-
-      - name: Run material library and scene assignment contracts
-        run: cargo test --locked -p fullmag-api --bin fullmag-api material_library
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
