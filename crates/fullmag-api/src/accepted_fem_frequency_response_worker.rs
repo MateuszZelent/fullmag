@@ -14,7 +14,8 @@ use fullmag_application::{
 use fullmag_authoring::{StudyOutputPort, StudyPortDataKind};
 use fullmag_ir::{BackendPlanIR, BackendTarget, ExecutionMode, ExecutionPrecision};
 use fullmag_runner::{
-    AcceptedFrequencyResponseArtifactLimits, ArtifactFileBytes, RunStatus, StageFemMeshAsset,
+    AcceptedFrequencyResponseArtifactLimits, ArtifactFileBytes, RunStatus, RuntimeEngineId,
+    StageFemMeshAsset,
 };
 use fullmag_runtime_control::{AcceptedStudySnapshot, AcceptedWorkerStep, StudyOutputPayload};
 use fullmag_session::SessionStore;
@@ -234,17 +235,26 @@ pub(crate) fn prepare(
     )
     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
     let expected_engine = if runtime.resolved_device == "gpu" {
-        "fem_native_gpu"
+        RuntimeEngineId::FemNativeGpu
     } else {
-        "fem_cpu_native"
+        RuntimeEngineId::FemFrequencyResponseProductionCpu
     };
     if preflight.resolved_backend != "fem"
         || preflight.resolved_device != runtime.resolved_device
         || preflight.resolved_precision != "double"
-        || preflight.resolved_engine_id.as_deref() != Some(expected_engine)
+        || preflight.resolved_engine_id.as_deref() != Some(expected_engine.as_str())
         || preflight.resolved_fallback.is_some()
     {
-        bail!("accepted driven-response preflight resolved a different native lane or fallback");
+        bail!(
+            "accepted driven-response preflight expected FEM/{}/double engine {}; resolved {}/{}/{} engine {:?}, fallback {:?}",
+            runtime.resolved_device,
+            expected_engine.as_str(),
+            preflight.resolved_backend,
+            preflight.resolved_device,
+            preflight.resolved_precision,
+            preflight.resolved_engine_id,
+            preflight.resolved_fallback,
+        );
     }
     Ok(PreparedFrequencyResponse {
         case_id: case_id.to_owned(),
