@@ -7,6 +7,7 @@ import {
   authoringWriteOptions,
   runAuthoringMutationWithHistory,
 } from "@/kernel/authoring/authoringHistoryMutation";
+import { invalidateAuthoringMutationDependents } from "@/kernel/authoring/authoringMutationInvalidation";
 import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 
@@ -222,7 +223,7 @@ export function ObjectAbsorbingBoundaryPanel({
         draft: rebasedDraft,
       });
       if (latestDraft === submittedDraft && !acknowledgeAppliedDraft()) return false;
-      resources.invalidate(SCENE_RESOURCE_KEY, revision);
+      invalidateAuthoringMutationDependents(resources, "material", revision);
       setFeedback({ kind: "success", message: "Absorbing boundary updated." });
       return true;
     } catch (error) {

@@ -1,3 +1,4 @@
+import { MESHING_SHARED_DOMAIN_MANIFEST_PATH } from "@/kernel/api/apiPaths";
 import { act, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -257,6 +258,7 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       );
       expect(mocks.recordHistory).toHaveBeenCalledOnce();
       expect(mocks.invalidate).toHaveBeenCalledWith(expect.any(String), 11);
+      expect(mocks.invalidate).toHaveBeenCalledWith(MESHING_SHARED_DOMAIN_MANIFEST_PATH, "scene:11");
       expect(container.textContent).toContain("Absorbing boundary updated.");
     } finally {
       await act(async () => root.unmount());
