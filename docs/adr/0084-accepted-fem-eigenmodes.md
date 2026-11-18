@@ -2,7 +2,7 @@
 
 - **Status:** propozycja; brak implementacji i kwalifikacji runtime.
 - **Data:** 2026-11-18.
-- **Uwaga o numeracji:** pierwszy wolny numer na `origin/master` (`e8402f3f6c`); numer `0083` jest zajęty przez [ADR 0083](0083-material-library-and-self-contained-model-copies.md).
+- **Uwaga o numeracji:** pierwszy wolny numer na `origin/master` (`5eb577e02c`); numer `0083` jest zajęty przez [ADR 0083](0083-material-library-and-self-contained-model-copies.md).
 - **Powiązania:** [ADR 0034](0034-adaptive-dispersion-process-pool.md), [ADR 0035](0035-typed-study-artifact-manifest-and-worker-boundary.md), [ADR 0036](0036-study-step-runtime-horizon.md), [ADR 0045](0045-accepted-fem-cpu-state-producer.md), [ADR 0055](0055-petsc-slepc-process-serialization.md), [ADR 0058](0058-frequency-domain-content-generation.md), [ADR 0060](0060-accepted-fem-gpu-docker-workspace.md), [ADR 0082](0082-accepted-fem-driven-response.md).
 - **Specyfikacja:** [accepted FEM eigenmodes v1](../specs/accepted-fem-eigenmodes-v1.md).
 - **Kontrakt artefaktów:** [eigenmode artifacts v1](../specs/eigenmode-artifacts-v1.md) oraz [frequency-domain artifacts v2](../specs/frequency-domain-artifacts-v2.md).
@@ -11,7 +11,7 @@
 
 Native solver modalny `FemEigen` (K0 CPU/GPU Poisson-airbox Schur oraz Floquet $k \neq 0$ CPU) działa w lokalnym orkiestratorze CLI w trybie headless (`crates/fullmag-cli/src/orchestrator.rs:2951-3074`), ale **nie jest wykonywalny w runie zaakceptowanym (API / Control Room / Docker DEV Workspace)**. Audyt etapu 2 (`docs/audits/2026-11-18-eigensolve-performance-and-gpu-readiness-audit.md:466`) potwierdził, że przygotowanie zaakceptowanego modelu FEM odrzuca `FemEigen`, przez co etap modalny w ogóle nie uruchamia się w Docker DEV.
 
-Bezpośrednia weryfikacja na `origin/master` (`e8402f3f6c`) pokazuje sześć luk blokujących wykonanie:
+Bezpośrednia weryfikacja na `origin/master` (`5eb577e02c`) pokazuje sześć luk blokujących wykonanie:
 
 1. **Preparer i planowanie przygotowania:** `crates/fullmag-api/src/accepted_fem_preparer.rs:194-207,473-484` obsługuje wyłącznie `Fem`, `FemFrequencyResponse` i inspekcje antenowe; `crates/fullmag-runtime-control/src/study.rs:31-35,131-143,214-245` nie ma wariantu `NativeFemPreparationKind::FemEigen`; `crates/fullmag-plan/src/preparation.rs:858-904` ma wyłącznie `from_fem_frequency_response_execution_plan_for_accepted_run`.
 2. **Materializacja wejścia $M_0$ w runnerze:** `study_magnetization_layout_for_plan` (`crates/fullmag-runner/src/lib.rs:3257-3323`), `materialize_study_magnetization_input_with_overlay` (`:3415-3519`) i `study_plan_state_sample_count` (`:3522-3595`) nie mają gałęzi `BackendPlanIR::FemEigen`; `artifacts::field_layout` zwraca `"fem_eigen"` (`crates/fullmag-runner/src/artifacts.rs:6148-6149`), co kończy się błędem.

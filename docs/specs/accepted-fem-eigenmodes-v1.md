@@ -2,7 +2,7 @@
 
 - **Status:** propozycja do przeglądu, nie działająca capability.
 - **Data:** 2026-11-18.
-- **Bazowy commit weryfikacji kodu:** `origin/master` @ `e8402f3f6c`.
+- **Bazowy commit weryfikacji kodu:** `origin/master` @ `5eb577e02c`.
 - **Decyzja:** [ADR 0084](../adr/0084-accepted-fem-eigenmodes.md).
 - **Wzorzec architektoniczny:** [ADR 0082](../adr/0082-accepted-fem-driven-response.md) oraz [accepted FEM driven response v1](accepted-fem-driven-response-v1.md).
 - **Fizyka i SI:** `docs/physics/0700-frequency-domain-linearized-llg.md`, `docs/physics/0828-fem-frequency-domain-floquet-demag.md`, `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`, `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`.
@@ -14,7 +14,7 @@
 
 Celem jest umożliwienie wykonania kroku `FemEigen` (pojedynczy punkt $k=0$ lub $k \neq 0$, ścieżka dyspersyjna $k$ oraz `BiasFieldSweep`) w trwałym runie zaakceptowanym (API v2 / Control Room / Docker DEV Workspace), w tym w kanonicznej sekwencji `Relax → FemEigen`, bez tworzenia osobnego backendu, bez obchodzenia certyfikacji równowagi i bez zmieniania fizyki lub tolerancji solvera.
 
-Bezpośrednia kontrola źródeł na `origin/master` (`e8402f3f6c`) potwierdza, że dziś wykonanie `FemEigen` w runie zaakceptowanym jest zablokowane na siedmiu kolejnych granicach:
+Bezpośrednia kontrola źródeł na `origin/master` (`5eb577e02c`) potwierdza, że dziś wykonanie `FemEigen` w runie zaakceptowanym jest zablokowane na siedmiu kolejnych granicach:
 
 | Warstwa | Zweryfikowana lokalizacja w `origin/master` | Obecne zachowanie blokujące |
 |---|---|---|
@@ -182,7 +182,7 @@ Nowy moduł `crates/fullmag-application/src/study_eigen_artifact.rs` (wzorowany 
 
 ---
 
-## 8. Mapa zmian plik po pliku (zweryfikowana na `origin/master` @ `e8402f3f6c`)
+## 8. Mapa zmian plik po pliku (zweryfikowana na `origin/master` @ `5eb577e02c`)
 
 | Crate / plik | Zweryfikowane symbole i linie w `origin/master` | Wymagana zmiana |
 |---|---|---|
@@ -204,7 +204,7 @@ Nowy moduł `crates/fullmag-application/src/study_eigen_artifact.rs` (wzorowany 
 
 ## 9. Testy blokujące obecne zachowanie i plan ich aktualizacji
 
-Poniższe testy istniejące na `origin/master` (`e8402f3f6c`) bezpośrednio utrwalają dzisiejsze ograniczenia lub wyliczają obsługiwane warianty — w trakcie implementacji ADR 0084 wymagają świadomej, precyzyjnej aktualizacji (**nigdy usuwania ani osłabiania asercji bezpieczeństwa**):
+Poniższe testy istniejące na `origin/master` (`5eb577e02c`) bezpośrednio utrwalają dzisiejsze ograniczenia lub wyliczają obsługiwane warianty — w trakcie implementacji ADR 0084 wymagają świadomej, precyzyjnej aktualizacji (**nigdy usuwania ani osłabiania asercji bezpieczeństwa**):
 
 | Plik i linia (`origin/master`) | Nazwa testu | Co dziś blokuje / sprawdza | Jak zaktualizować (zachowując rygor) |
 |---|---|---|---|
