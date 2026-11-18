@@ -448,7 +448,9 @@ jobs:
         run: cargo test -p fullmag-authoring scene_pbc --lib
 
       - name: Run absorbing boundary scene validation
-        run: cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+        run: |
+          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_patch
 
       - name: Run scene thermal intent preservation contracts
         run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
@@ -792,6 +794,12 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify absorbing boundary inspector editing
+        run: >-
+          pnpm --dir apps/control-room exec vitest run
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.dom.test.tsx
 
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
@@ -1242,6 +1250,7 @@ jobs:
           python -m pytest -q
           packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
           packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_absorbing_boundary.py
           packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
