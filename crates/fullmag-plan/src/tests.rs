@@ -3713,6 +3713,7 @@ fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
         faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Smootherstep,
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
+        expression: None,
     });
 
     let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");

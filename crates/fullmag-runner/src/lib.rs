@@ -4893,7 +4893,7 @@ fn with_interruptible_fem_live_consumer<R>(
     execute: impl for<'consumer> FnOnce(types::LiveStepConsumer<'consumer>) -> R,
 ) -> R {
     let types::LiveStepConsumer {
-        grid, field_every_n, initial_snapshot, display_selection,
+        grid, field_cadence, initial_snapshot, display_selection,
         interrupt_requested, on_step,
     } = live;
     // The native step loops consume callback actions at accepted boundaries.
@@ -4903,7 +4903,7 @@ fn with_interruptible_fem_live_consumer<R>(
     };
     execute(types::LiveStepConsumer {
         grid,
-        field_every_n,
+        field_cadence,
         initial_snapshot,
         display_selection,
         interrupt_requested,

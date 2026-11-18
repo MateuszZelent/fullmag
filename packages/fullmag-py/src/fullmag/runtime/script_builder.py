@@ -5039,14 +5039,16 @@ def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
     if len(faces) == 1:
         face_expr += ","
     face_expr += ")"
+    expression = config.get("expression")
+    expression_kwarg = f", expression={_py_repr(expression)}" if expression is not None else ""
     return [
         f"{var_name}.alpha.absorbing_boundary("
-        f"total_width={_py_number(float(config['total_width_m']))}, "
-        f"ramp_width={_py_number(float(config['ramp_width_m']))}, "
-        f"max_damping={_py_number(float(config['max_damping']))}, "
+        f"total_width={_py_float_roundtrip(float(config['total_width_m']))}, "
+        f"ramp_width={_py_float_roundtrip(float(config['ramp_width_m']))}, "
+        f"max_damping={_py_float_roundtrip(float(config['max_damping']))}, "
         f"faces={face_expr}, "
         f"profile={_py_repr(str(config.get('profile', 'smootherstep')))}, "
-        f"frame={_py_repr(str(config.get('frame', 'object')))})"
+        f"frame={_py_repr(str(config.get('frame', 'object')))}{expression_kwarg})"
     ]
 
 

@@ -2,6 +2,9 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod absorbing_boundary;
+pub use absorbing_boundary::ResolvedAbsorbingBoundaryProfile;
+
 pub mod antenna;
 pub mod antenna_current_source;
 pub mod constraint;
@@ -1530,6 +1533,9 @@ fn validate_absorbing_boundary(
     if !layer.max_damping.is_finite() || layer.max_damping < 0.0 {
         errors.push(format!("{path}.max_damping must be finite and >= 0"));
     }
+    if let Err(error) = layer.compile_profile() {
+        errors.push(format!("{path}: {error}"));
+    }
     if layer.faces.is_empty() {
         errors.push(format!("{path}.faces must contain at least one face"));
     }
@@ -1547,6 +1553,36 @@ mod absorbing_boundary_tests {
     use super::*;
 
     #[test]
+    fn custom_absorbing_boundary_round_trips_and_rejects_invalid_weights() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let legacy = serde_json::json!({
+            "total_width_m": 4.0,
+            "ramp_width_m": 2.0,
+            "max_damping": 0.8,
+            "faces": ["x-"],
+            "profile": "linear",
+            "frame": "object"
+        });
+        let mut layer: AbsorbingBoundaryLayerIR = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&layer).unwrap(), legacy);
+        layer.profile = AbsorbingBoundaryProfileIR::Custom;
+        layer.expression = Some("u**3".into());
+        let serialized = serde_json::to_value(&layer).unwrap();
+        assert_eq!(serialized["profile"], "custom");
+        assert_eq!(serialized["expression"], "u**3");
+        problem.magnets[0].absorbing_boundary = Some(serde_json::from_value(serialized).unwrap());
+        problem.validate().expect("custom ramp is valid");
+
+        for expression in [None, Some("u+1"), Some("u/(u-0.5)"), Some("2*u-u**4")] {
+            problem.magnets[0].absorbing_boundary.as_mut().unwrap().expression =
+                expression.map(str::to_string);
+            let errors = problem.validate().expect_err("invalid custom ramp should fail");
+            assert!(errors.iter().any(|error| error.contains("absorbing_boundary")
+                && error.contains("expression")), "{expression:?}: {errors:?}");
+        }
+    }
+
+    #[test]
     fn invalid_absorbing_boundary_is_rejected_by_problem_validation() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.magnets[0].absorbing_boundary = Some(AbsorbingBoundaryLayerIR {
@@ -1559,6 +1595,7 @@ mod absorbing_boundary_tests {
             ],
             profile: AbsorbingBoundaryProfileIR::Smootherstep,
             frame: AbsorbingBoundaryFrameIR::Object,
+            expression: None,
         });
 
         let errors = problem
