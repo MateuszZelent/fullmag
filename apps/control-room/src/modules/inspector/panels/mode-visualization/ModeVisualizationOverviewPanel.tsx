@@ -53,6 +53,7 @@ export function ModeVisualizationOverviewPanel({
   const kernel = useKernel();
   const overlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const commandContext = createCommandContext("inspector", kernel, {
     sourceDetail: "active-analysis-overlay-context",

@@ -419,6 +419,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frozenSpins = useFrozenSpinsCollectionResource({ enabled: modelTabActive });
   const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =

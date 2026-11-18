@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import type {
   FloquetSpatialConvention,
@@ -8,6 +8,7 @@ import type {
 } from "@/shared/domain/analysis/phasorConventionAdapter";
 
 import type { FieldVectorQuery } from "../api/apiTypes";
+import { AnalysisFieldOverlayPhaseClock } from "./AnalysisFieldOverlayPhaseClock";
 import type { ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 import {
   isAnalysisResultFieldOverlayIntent,
@@ -105,7 +106,20 @@ export interface AnalysisFieldOverlayContextSnapshot {
 
 type AnalysisFieldOverlayListener = () => void;
 
+/** Phase stored in the overlay state, without any running animation. */
+export function committedAnalysisFieldOverlayPhaseRad(
+  overlay: AnalysisFieldOverlayState | null | undefined,
+): number {
+  const phaseRad = overlay?.visualizationPhaseRad ?? overlay?.query.phase_rad ?? 0;
+  return Number.isFinite(phaseRad) ? phaseRad : 0;
+}
+
 export class AnalysisFieldOverlayController {
+  /**
+   * Per-frame display phase. Animation writes here instead of `update()`, so
+   * overlay subscribers are notified only when the overlay itself changes.
+   */
+  readonly phaseClock = new AnalysisFieldOverlayPhaseClock();
   private snapshot: AnalysisFieldOverlayState | null = null;
   private resultRunId: string | null = null;
   private contextSnapshot: AnalysisFieldOverlayContextSnapshot =
@@ -124,10 +138,38 @@ export class AnalysisFieldOverlayController {
     return this.contextSnapshot.status === "compatible" ? this.snapshot : null;
   }
 
+  /** Phase currently shown in the viewport: the live animation phase if any. */
+  getDisplayedPhaseRad(): number {
+    return (
+      this.phaseClock.getLivePhaseRad() ??
+      committedAnalysisFieldOverlayPhaseRad(this.snapshot)
+    );
+  }
+
+  /** Stores the running animation phase as the overlay's committed phase. */
+  commitLivePhase(): void {
+    const livePhaseRad = this.phaseClock.getLivePhaseRad();
+    if (livePhaseRad === null) return;
+    if (
+      this.snapshot &&
+      committedAnalysisFieldOverlayPhaseRad(this.snapshot) !== livePhaseRad
+    ) {
+      this.update({ visualizationPhaseRad: livePhaseRad });
+    }
+    this.phaseClock.clearLivePhase(
+      committedAnalysisFieldOverlayPhaseRad(this.snapshot),
+    );
+  }
+
   set(next: AnalysisFieldOverlayState): void {
     if (analysisFieldOverlayStateEquals(this.snapshot, next)) {
       return;
     }
+    const nextCommittedPhaseRad = committedAnalysisFieldOverlayPhaseRad(next);
+    const committedPhaseChanged =
+      this.snapshot === null ||
+      committedAnalysisFieldOverlayPhaseRad(this.snapshot) !==
+        nextCommittedPhaseRad;
     this.snapshot = {
       ...next,
       ...(next.appearance ? { appearance: { ...next.appearance } } : {}),
@@ -137,6 +179,13 @@ export class AnalysisFieldOverlayController {
       query: { ...next.query },
       ...(next.wavevectorKf ? { wavevectorKf: [...next.wavevectorKf] } : {}),
     };
+    // An explicitly stored phase wins over a running animation's live phase;
+    // the animation continues from it on its next frame.
+    if (committedPhaseChanged) {
+      this.phaseClock.clearLivePhase(nextCommittedPhaseRad);
+    } else {
+      this.phaseClock.syncCommittedPhase(nextCommittedPhaseRad);
+    }
     this.notify();
   }
 
@@ -171,6 +220,7 @@ export class AnalysisFieldOverlayController {
       return;
     }
     this.snapshot = null;
+    this.phaseClock.clearLivePhase(0);
     this.notify();
   }
 
@@ -220,8 +270,7 @@ export class AnalysisFieldOverlayController {
       return false;
     }
     const previous = this.snapshot;
-    const visualizationPhaseRad =
-      previous.visualizationPhaseRad ?? previous.query.phase_rad ?? 0;
+    const visualizationPhaseRad = this.getDisplayedPhaseRad();
     this.set({
       ...next,
       ...(previous.appearance ? { appearance: { ...previous.appearance } } : {}),
@@ -434,6 +483,7 @@ function numberArrayEquals(
 function analysisFieldOverlayStateEquals(
   left: AnalysisFieldOverlayState | null,
   right: AnalysisFieldOverlayState | null,
+  { ignorePhase = false }: { ignorePhase?: boolean } = {},
 ): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
@@ -452,8 +502,9 @@ function analysisFieldOverlayStateEquals(
     ) &&
     (left.sampleIndex ?? null) === (right.sampleIndex ?? null) &&
     left.source === right.source &&
-    (left.visualizationPhaseRad ?? null) ===
-      (right.visualizationPhaseRad ?? null) &&
+    (ignorePhase ||
+      (left.visualizationPhaseRad ?? null) ===
+        (right.visualizationPhaseRad ?? null)) &&
     analysisFieldOverlayAppearanceEquals(left.appearance, right.appearance) &&
     analysisFieldOverlayAnimationEquals(left.animation, right.animation) &&
     fieldVectorQueryEquals(left.query, right.query) &&
@@ -584,13 +635,92 @@ function fieldVectorQueryEquals(
   );
 }
 
+export interface AnalysisFieldOverlaySubscriptionOptions {
+  /**
+   * Keep the last snapshot when only the committed phase changed. Consumers
+   * that never read the phase (Explorer, Ribbon, scene identity) use this so
+   * phase edits do not rebuild them; the viewport reads the phase from
+   * `controller.phaseClock.uniform` instead.
+   */
+  ignorePhase?: boolean;
+}
+
+type SnapshotReader<TValue> = (controller: AnalysisFieldOverlayController) => TValue;
+type SnapshotEquality<TValue> = (left: TValue, right: TValue) => boolean;
+
+/**
+ * useSyncExternalStore with a cached selection: while `equals` holds, the
+ * previous value is returned, so subscribers whose inputs did not change are
+ * not re-rendered. `read` and `equals` must be stable (module-level).
+ */
+function useControllerSnapshot<TValue>(
+  controller: AnalysisFieldOverlayController,
+  read: SnapshotReader<TValue>,
+  equals: SnapshotEquality<TValue>,
+  serverValue: TValue,
+): TValue {
+  const cacheRef = useRef<{
+    controller: AnalysisFieldOverlayController;
+    equals: SnapshotEquality<TValue>;
+    read: SnapshotReader<TValue>;
+    value: TValue;
+  } | null>(null);
+  const subscribe = useCallback(
+    (listener: () => void) => controller.subscribe(listener),
+    [controller],
+  );
+  const getSnapshot = useCallback(() => {
+    const next = read(controller);
+    const cached = cacheRef.current;
+    if (
+      cached &&
+      cached.controller === controller &&
+      cached.read === read &&
+      cached.equals === equals &&
+      equals(cached.value, next)
+    ) {
+      return cached.value;
+    }
+    cacheRef.current = { controller, equals, read, value: next };
+    return next;
+  }, [controller, equals, read]);
+  const getServerSnapshot = useCallback(() => serverValue, [serverValue]);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
+
+const readOverlay: SnapshotReader<AnalysisFieldOverlayState | null> = (controller) =>
+  controller.getSnapshot();
+const readRenderableOverlay: SnapshotReader<AnalysisFieldOverlayState | null> = (
+  controller,
+) => controller.getRenderableSnapshot();
+const readContext: SnapshotReader<AnalysisFieldOverlayContextSnapshot> = (controller) =>
+  controller.getContextSnapshot();
+const sameReference = <TValue,>(left: TValue, right: TValue): boolean => left === right;
+const overlayEqualsIgnoringPhase: SnapshotEquality<AnalysisFieldOverlayState | null> = (
+  left,
+  right,
+) => analysisFieldOverlayStateEquals(left, right, { ignorePhase: true });
+const contextEqualsIgnoringPhase: SnapshotEquality<AnalysisFieldOverlayContextSnapshot> = (
+  left,
+  right,
+) =>
+  left === right ||
+  (left.status === right.status &&
+    left.reason === right.reason &&
+    left.resultRunId === right.resultRunId &&
+    analysisFieldOverlayStateEquals(left.overlay, right.overlay, {
+      ignorePhase: true,
+    }));
+
 export function useAnalysisFieldOverlay(
   controller: AnalysisFieldOverlayController,
+  { ignorePhase = false }: AnalysisFieldOverlaySubscriptionOptions = {},
 ): AnalysisFieldOverlayState | null {
-  return useSyncExternalStore(
-    (listener) => controller.subscribe(listener),
-    () => controller.getSnapshot(),
-    () => null,
+  return useControllerSnapshot(
+    controller,
+    readOverlay,
+    ignorePhase ? overlayEqualsIgnoringPhase : sameReference,
+    null,
   );
 }
 
@@ -603,20 +733,89 @@ const EMPTY_ANALYSIS_FIELD_OVERLAY_CONTEXT: AnalysisFieldOverlayContextSnapshot 
 
 export function useAnalysisFieldOverlayContext(
   controller: AnalysisFieldOverlayController,
+  { ignorePhase = false }: AnalysisFieldOverlaySubscriptionOptions = {},
 ): AnalysisFieldOverlayContextSnapshot {
-  return useSyncExternalStore(
-    (listener) => controller.subscribe(listener),
-    () => controller.getContextSnapshot(),
-    () => EMPTY_ANALYSIS_FIELD_OVERLAY_CONTEXT,
+  return useControllerSnapshot(
+    controller,
+    readContext,
+    ignorePhase ? contextEqualsIgnoringPhase : sameReference,
+    EMPTY_ANALYSIS_FIELD_OVERLAY_CONTEXT,
   );
 }
 
 export function useRenderableAnalysisFieldOverlay(
   controller: AnalysisFieldOverlayController,
+  { ignorePhase = false }: AnalysisFieldOverlaySubscriptionOptions = {},
 ): AnalysisFieldOverlayState | null {
-  return useSyncExternalStore(
-    (listener) => controller.subscribe(listener),
-    () => controller.getRenderableSnapshot(),
-    () => null,
+  return useControllerSnapshot(
+    controller,
+    readRenderableOverlay,
+    ignorePhase ? overlayEqualsIgnoringPhase : sameReference,
+    null,
   );
+}
+
+/**
+ * Displayed phase (live animation phase or committed phase), refreshed at most
+ * `maxHz` times per second while an animation runs. Use it only in small leaf
+ * readouts such as a phase slider, never in panels that own large trees.
+ */
+export function useAnalysisFieldOverlayDisplayedPhase(
+  controller: AnalysisFieldOverlayController | null,
+  { maxHz = 10 }: { maxHz?: number } = {},
+): number {
+  const minIntervalMs = 1000 / Math.max(1, maxHz);
+  // The snapshot changes only when a (throttled) listener fires, so React's
+  // post-commit consistency check never sees a newer per-frame value.
+  const valueRef = useRef<{
+    controller: AnalysisFieldOverlayController | null;
+    phaseRad: number;
+  } | null>(null);
+  const refresh = useCallback(() => {
+    valueRef.current = {
+      controller,
+      phaseRad: controller?.getDisplayedPhaseRad() ?? 0,
+    };
+  }, [controller]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!controller) return () => undefined;
+      let lastNotifyMs = Number.NEGATIVE_INFINITY;
+      let trailing: ReturnType<typeof globalThis.setTimeout> | null = null;
+      const notifyNow = () => {
+        lastNotifyMs = globalThis.performance?.now() ?? Date.now();
+        refresh();
+        listener();
+      };
+      const notifyThrottled = () => {
+        const nowMs = globalThis.performance?.now() ?? Date.now();
+        const waitMs = lastNotifyMs + minIntervalMs - nowMs;
+        if (waitMs <= 0) {
+          notifyNow();
+          return;
+        }
+        if (trailing !== null) return;
+        trailing = globalThis.setTimeout(() => {
+          trailing = null;
+          notifyNow();
+        }, waitMs);
+      };
+      const unsubscribeController = controller.subscribe(() => {
+        refresh();
+        listener();
+      });
+      const unsubscribeClock = controller.phaseClock.subscribe(notifyThrottled);
+      return () => {
+        unsubscribeController();
+        unsubscribeClock();
+        if (trailing !== null) globalThis.clearTimeout(trailing);
+      };
+    },
+    [controller, minIntervalMs, refresh],
+  );
+  const getSnapshot = useCallback(() => {
+    if (valueRef.current?.controller !== controller) refresh();
+    return valueRef.current?.phaseRad ?? 0;
+  }, [controller, refresh]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => 0);
 }
