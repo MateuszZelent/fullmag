@@ -881,7 +881,7 @@ export interface ObjectInteractionResource {
   scene_revision: number;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
-  absorbing_boundary?: JsonObject | null;
+  absorbing_boundary?: AbsorbingBoundaryConfig | null;
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
   material_ref?: string | null;
