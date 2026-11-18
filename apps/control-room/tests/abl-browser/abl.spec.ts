@@ -169,14 +169,35 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   });
   await page.getByRole("tab", { name: "Workspace", exact: true }).click();
   await page.getByTitle("Expand All", { exact: true }).click();
-  await page.locator(`[data-node-id="model:object:${fixture.object_id}:magnetic-parameters"]`).click();
-  const group = page.locator('section[data-slot="inspector-group"]').filter({
-    has: page.getByRole("heading", { name: "Absorbing Boundary", exact: true }),
-  }).last();
-  const toggle = group.getByRole("button", { name: /^Absorbing Boundary/ });
-  if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
+  const parentId = `model:object:${fixture.object_id}:magnetic-parameters`;
+  const parent = page.locator(`[data-node-id="${parentId}"]`);
+  const child = page.locator(`[data-node-id="${parentId}:absorbing-boundary"]`);
+  await parent.click();
+  const enabled = page.getByRole("checkbox", { name: "Absorbing Boundary", exact: true });
+  const save = page.getByRole("button", { name: "Apply", exact: true });
+  await expect(enabled).not.toBeChecked();
+  await expect(child).toHaveCount(0);
+  await expect(page.getByLabel("Ramp width", { exact: true })).toHaveCount(0);
+  if (await parent.getAttribute("aria-expanded") === "true") {
+    await parent.locator(".fm-explorer-tree-row__branch").click();
+  }
+  await enabled.check();
+  const [activation] = await Promise.all([
+    page.waitForResponse(r => r.url() === objectUrl && r.request().method() === "PATCH"),
+    save.click(),
+  ]);
+  expect(activation.status()).toBe(200);
+  const activatedScene = await readScene();
+  expect(activatedScene.revision).toBeGreaterThan(revision);
+  revision = activatedScene.revision;
+  expect(activatedScene.objects[0].absorbing_boundary.faces).toContain("x+");
+  await expect(parent).toHaveAttribute("aria-expanded", "true");
+  await expect(child).toBeVisible();
+  await child.click();
+  const field = (name: string) => page.locator("input,select").and(page.getByLabel(name, { exact: true }));
+  const group = page.locator('section[data-slot="inspector-group"]').filter({ has: field("Profile") });
+  await expect(group).toBeVisible();
   const panel = await group.elementHandle();
-  const field = (name: string) => group.locator("input,select").and(group.getByLabel(name, { exact: true }));
   const apply = async (step: string, layer: Layer | null) => {
     await readScene();
     const patch = layer ? { total_width_m: 40e-9, ramp_width_m: 20e-9, max_damping: layer.amplitude,
@@ -185,7 +206,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
     await observeChange(step, layer, async () => {
       const [saved] = await Promise.all([
         page.waitForResponse((r) => r.url() === objectUrl && r.request().method() === "PATCH", { timeout }),
-        group.getByRole("button", { name: "Apply boundary", exact: true }).click(),
+        save.click(),
       ]);
       expect(saved.status()).toBe(200);
       expect(saved.request().postDataJSON().absorbing_boundary).toEqual(patch);
@@ -194,9 +215,13 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       revision = scene.revision;
       expect(scene.objects[0].absorbing_boundary ?? null).toEqual(patch);
     });
-    await expect(group).toBeVisible();
-    expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
-    await expect(field("Enabled")).toBeChecked({ checked: layer !== null });
+    if (layer) {
+      await expect(group).toBeVisible();
+      expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
+    } else {
+      await expect(child).toHaveCount(0);
+      await expect(enabled).not.toBeChecked();
+    }
     if (layer?.profile === "custom" || !layer) {
       const rendered = await page.request.post(url("model/syncs"), { headers, data: { expected_scene_revision: revision } });
       expect(rendered.status()).toBe(200);
@@ -211,7 +236,6 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       await info.attach(step + "-export.py", { body: source, contentType: "text/x-python" });
     }
   };
-  await field("Enabled").check();
   await field("Total width").fill("4e-8");
   await field("Ramp width").fill("2e-8");
   await field("Maximum damping").fill("0.5");
@@ -229,7 +253,8 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await field("Profile").selectOption("custom");
   await field("Expression").fill("u**3");
   await apply("custom", { profile: "custom", face: "x-", amplitude: 0.8 });
-  await field("Enabled").uncheck();
+  await parent.click();
+  await enabled.uncheck();
   await apply("removed", null);
   await info.attach("abl-field-evidence", { body: JSON.stringify({ session: pin, evidence }), contentType: "application/json" });
 });

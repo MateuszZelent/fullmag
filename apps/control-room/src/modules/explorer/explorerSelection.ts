@@ -478,6 +478,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.region.diagnostics" ||
       node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
+      node.kind === "object.absorbing-boundary" ||
       node.kind === "object.magnetic-texture" ||
       node.kind === "object.magnetic-texture.asset" ||
       node.kind === "object.magnetic-texture.load" ||
@@ -807,6 +808,9 @@ export function resolveCurrentExplorerSelectionNode(
 ): ExplorerNode | null {
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
+  if (ref?.type === "scene-object" && ref.kind === "object.absorbing-boundary") {
+    return findExplorerNode(currentTree, `model:object:${ref.objectId}:magnetic-parameters`);
+  }
   if (ref?.type !== "postprocessing") return null;
   // A definition selection is tied to an immutable owner identity. If that
   // owner is no longer in the current snapshot, never silently retarget the

@@ -1624,6 +1624,18 @@ function ObjectMaterialPanelView({
               />
               <FieldRow label="Scene fetch" value={scene.status} />
               <FieldRow label="Material fetch" value={material.status} />
+              {showSection("absorbing-boundary") && object.mode === "committed" ? (
+                <InspectorEditSessionProvider store={absorbingBoundaryEditSessionStore}>
+                  <ObjectAbsorbingBoundaryPanel
+                    objectId={object.objectId}
+                    key={mutationScopeKey}
+                    scene={scene.data}
+                    view="activation"
+                    mutationCoordinator={mutationCoordinator}
+                    sessionScopeKey={scene.sessionScopeKey}
+                  />
+                </InspectorEditSessionProvider>
+              ) : null}
             </InspectorGroup>
           ) : null}
 
@@ -1867,17 +1879,6 @@ function ObjectMaterialPanelView({
                 onChange={(event) => updateDraft({ dbulk: event.target.value })}
               />
             </InspectorGroup>
-          ) : null}
-
-          {showSection("absorbing-boundary") && object.mode === "committed" ? (
-            <InspectorEditSessionProvider store={absorbingBoundaryEditSessionStore}>
-              <ObjectAbsorbingBoundaryPanel
-                objectId={object.objectId}
-                baseRevision={object.baseRevision}
-                mutationCoordinator={mutationCoordinator}
-                mutationScopeKey={mutationScopeKey}
-              />
-            </InspectorEditSessionProvider>
           ) : null}
 
           {showSection("uniaxial-anisotropy") ? (

@@ -54,6 +54,7 @@ import {
   flattenExplorerNodes,
 } from "./builders/buildModelTree";
 import { buildPhysicsFirstResultsTree } from "./builders/resultsExplorerNodes";
+import { modelTreeSnapshotFromScene } from "./builders/sceneModelTreeAdapter";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
 import {
   resolveCurrentExplorerSelectionNode,
@@ -136,6 +137,45 @@ function resultsTreeWithTables(
 }
 
 describe("selectExplorerNode", () => {
+  it("tracks the selected object's absorbing boundary across canonical scene revisions", () => {
+    const parentId = "model:object:film-b:magnetic-parameters";
+    const nodeId = parentId + ":absorbing-boundary";
+    const makeTree = (revision: number, absorbingBoundary: { total_width_m: number } | null) =>
+      buildModelTree(modelTreeSnapshotFromScene({
+        revision,
+        objects: [
+          { id: "film-a", name: "Film" },
+          { id: "film-b", name: "Film", absorbing_boundary: absorbingBoundary },
+        ],
+      }));
+
+    const configured = makeTree(1, { total_width_m: 2e-7 });
+    const boundaries = flattenExplorerNodes(configured)
+      .filter((node) => node.kind === "object.absorbing-boundary");
+    expect(boundaries).toHaveLength(1);
+    expect(boundaries[0]).toMatchObject({
+      id: nodeId,
+      parentId,
+      label: "Absorbing Boundary",
+      objectId: "film-b",
+    });
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, boundaries[0]!, "explorer");
+    const ref = kernel.selection.get().ref;
+    expect(ref).toEqual({
+      type: "scene-object",
+      kind: "object.absorbing-boundary",
+      nodeId,
+      objectId: "film-b",
+      visualizationTargetId: "object:film-b",
+    });
+
+    const removed = makeTree(2, null);
+    expect(flattenExplorerNodes(removed).some((node) => node.id === nodeId)).toBe(false);
+    expect(resolveCurrentExplorerSelectionNode(removed, nodeId, ref)?.id).toBe(parentId);
+    expect(resolveCurrentExplorerSelectionNode(buildModelTree(null), nodeId, ref)).toBeNull();
+  });
+
   it("preserves independent result status facets in a frequency selection ref", () => {
     const ref = selectionRefFromNode({
       availability: "partial",

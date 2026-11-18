@@ -1,3 +1,4 @@
+import { MESHING_SHARED_DOMAIN_MANIFEST_PATH } from "@/kernel/api/apiPaths";
 import { act, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   readScene: vi.fn(),
   recordHistory: vi.fn(),
   sceneData: {
-    objects: [] as Array<{ id: string; absorbing_boundary?: unknown }>,
+    objects: [] as Array<{ id: string; absorbing_boundary?: Record<string, unknown> }>,
     revision: 10,
   },
 }));
@@ -48,7 +49,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) 
   >();
   return {
     ...original,
-    useSceneResource: () => ({ data: mocks.sceneData, status: "ready" }),
+    useSceneResource: () => ({ data: mocks.sceneData, status: "ready", sessionScopeKey: "session=A&epoch=1" }),
   };
 });
 
@@ -56,7 +57,7 @@ import { createInspectorEditSessionStore, InspectorEditSessionProvider, type Ins
 import { InspectorFooter } from "../InspectorFooter";
 import { shouldGuardInspectorSelection } from "../InspectorDirtySelectionGuard";
 import { ObjectMaterialPanelEditSessionBridge } from "./ObjectMaterialPanelEditSessionBridge";
-import { ObjectAbsorbingBoundaryPanel } from "./ObjectAbsorbingBoundaryPanel";
+import { ObjectAbsorbingBoundaryInspectorPanel, ObjectAbsorbingBoundaryPanel } from "./ObjectAbsorbingBoundaryPanel";
 import { createObjectMaterialMutationCoordinator } from "./ObjectMaterialPanelEditSession";
 
 function ObjectMaterialCompositionHarness({
@@ -91,13 +92,43 @@ function ObjectMaterialCompositionHarness({
       <InspectorEditSessionProvider store={boundaryStore}>
         <ObjectAbsorbingBoundaryPanel
           objectId="object-a"
-          baseRevision={10}
+          scene={mocks.sceneData}
+          view="activation"
+          sessionScopeKey="session=A&epoch=1"
           mutationCoordinator={mutationCoordinator}
-          mutationScopeKey={mutationScopeKey}
         />
       </InspectorEditSessionProvider>
     </InspectorEditSessionProvider>
   );
+}
+
+function BoundaryEditorHarness() {
+  const [store] = useState(createInspectorEditSessionStore);
+  return (
+    <InspectorEditSessionProvider store={store}>
+      <ObjectAbsorbingBoundaryInspectorPanel selection={{
+        kind: "object.absorbing-boundary",
+        label: "Absorbing Boundary",
+        moduleSource: "explorer",
+        nodeId: "model:object:object-a:magnetic-parameters:absorbing-boundary",
+        objectId: "object-a",
+        ref: null,
+      }} />
+      <InspectorFooter onFocus={() => undefined} />
+    </InspectorEditSessionProvider>
+  );
+}
+
+function setActivation(container: TestNode, checked: boolean) {
+  const checkbox = findControl(container, "Absorbing Boundary");
+  Object.assign(checkbox, { checked });
+  checkbox.click();
+}
+
+function editWidth(container: TestNode) {
+  const field = findControl(container, "Total width");
+  field.value = "5e-7";
+  field.dispatchEvent(new TestEvent("input", { bubbles: true }));
 }
 
 describe("ObjectAbsorbingBoundaryPanel session fence", () => {
@@ -105,7 +136,21 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     vi.clearAllMocks();
     mocks.getSessionScopeKey.mockReturnValue("session=A&epoch=1");
     mocks.historyGeneration = 0;
-    mocks.sceneData = { objects: [{ id: "object-a" }], revision: 10 };
+    mocks.sceneData = {
+      objects: [{
+        id: "object-a",
+        absorbing_boundary: {
+          total_width_m: 4e-7,
+          ramp_width_m: 3e-7,
+          max_damping: 0.6,
+          faces: ["y-"],
+          profile: "custom",
+          expression: "u**2",
+          frame: "universe",
+        },
+      }],
+      revision: 10,
+    };
     mocks.readScene.mockResolvedValue({
       objects: [{ id: "object-a" }],
       revision: 10,
@@ -122,21 +167,8 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     });
   });
 
-  it("routes a child-only draft through the global Footer and selection guard", async () => {
-    mocks.sceneData = {
-      objects: [{
-        id: "object-a",
-        absorbing_boundary: {
-          total_width_m: 4e-7,
-          ramp_width_m: 3e-7,
-          max_damping: 0.5,
-          faces: ["x+"],
-          profile: "smootherstep",
-          frame: "universe",
-        },
-      }],
-      revision: 10,
-    };
+  it("activates a new boundary with a valid initial face through the global footer", async () => {
+    mocks.sceneData = { objects: [{ id: "object-a" }], revision: 10 };
     const parentStore = createInspectorEditSessionStore();
     const boundaryStore = createInspectorEditSessionStore();
     const materialApply = vi.fn(async () => true);
@@ -154,9 +186,8 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
         />,
       ));
 
-      const totalWidth = findControl(container, "Total width");
-      totalWidth.value = "5e-7";
-      await act(async () => totalWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      expect(() => findControl(container, "Total width")).toThrow();
+      await act(async () => setActivation(container, true));
 
       expect(parentStore.getCurrentSession()?.dirty).toBe(true);
       expect(boundaryStore.getCurrentSession()?.dirty).toBe(true);
@@ -165,6 +196,9 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       await act(async () => findButton(container, "Apply").click());
 
       expect(mocks.patchObject).toHaveBeenCalledOnce();
+      expect(mocks.patchObject.mock.calls[0][1].absorbing_boundary).toMatchObject({
+        faces: ["x+"], profile: "smootherstep", frame: "object",
+      });
       expect(materialApply).not.toHaveBeenCalled();
       expect(parentStore.getCurrentSession()?.dirty).toBe(false);
       expect(shouldGuardInspectorSelection(parentStore.getCurrentSession())).toBe(false);
@@ -174,21 +208,7 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     }
   });
 
-  it("blocks global Apply for two dirty drafts, then routes each after the other ACKs", async () => {
-    mocks.sceneData = {
-      objects: [{
-        id: "object-a",
-        absorbing_boundary: {
-          total_width_m: 4e-7,
-          ramp_width_m: 3e-7,
-          max_damping: 0.5,
-          faces: ["x+"],
-          profile: "smootherstep",
-          frame: "universe",
-        },
-      }],
-      revision: 10,
-    };
+  it("blocks global Apply for two dirty drafts until activation returns to its saved state", async () => {
     const parentStore = createInspectorEditSessionStore();
     const boundaryStore = createInspectorEditSessionStore();
     const materialApply = vi.fn(async () => true);
@@ -206,9 +226,7 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
         />,
       ));
 
-      const totalWidth = findControl(container, "Total width");
-      totalWidth.value = "5e-7";
-      await act(async () => totalWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      await act(async () => setActivation(container, false));
 
       const combined = parentStore.getCurrentSession();
       expect(combined?.dirty).toBe(true);
@@ -220,16 +238,13 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       expect(materialApply).not.toHaveBeenCalled();
       expect(mocks.patchObject).not.toHaveBeenCalled();
 
-      await act(async () => findButton(container, "Apply boundary").click());
-      expect(mocks.patchObject).toHaveBeenCalledOnce();
-      expect(materialApply).not.toHaveBeenCalled();
+      await act(async () => setActivation(container, true));
       expect(parentStore.getCurrentSession()?.dirty).toBe(true);
       expect(parentStore.getCurrentSession()?.applyBlockReason).toBeUndefined();
       expect(findButton(container, "Apply").disabled).toBe(false);
-
       await act(async () => findButton(container, "Apply").click());
       expect(materialApply).toHaveBeenCalledOnce();
-      expect(mocks.patchObject).toHaveBeenCalledOnce();
+      expect(mocks.patchObject).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -243,21 +258,70 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(
-        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={10} />,
+        <BoundaryEditorHarness />,
       ));
-      await act(async () => findButton(container, "Apply boundary").click());
+      await act(async () => editWidth(container));
+      await act(async () => findButton(container, "Apply").click());
 
       expect(mocks.readScene).toHaveBeenCalledWith({
         sessionScopeKey: "session=A&epoch=1",
       });
       expect(mocks.patchObject).toHaveBeenCalledWith(
         "object-a",
-        { base_revision: 10, absorbing_boundary: null },
+        {
+          base_revision: 10,
+          absorbing_boundary: {
+            ...mocks.sceneData.objects[0].absorbing_boundary,
+            total_width_m: 5e-7,
+          },
+        },
         { baseRevision: 10, sessionScopeKey: "session=A&epoch=1" },
       );
       expect(mocks.recordHistory).toHaveBeenCalledOnce();
       expect(mocks.invalidate).toHaveBeenCalledWith(expect.any(String), 11);
+      expect(mocks.invalidate).toHaveBeenCalledWith(MESHING_SHARED_DOMAIN_MANIFEST_PATH, "scene:11");
       expect(container.textContent).toContain("Absorbing boundary updated.");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("rejects a draft from a previous resource session before reading history or submitting", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      await act(async () => editWidth(container));
+      mocks.getSessionScopeKey.mockReturnValue("session=B&epoch=2");
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.readScene).not.toHaveBeenCalled();
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+      expect(mocks.recordHistory).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("cancels the write when the session changes during its history read", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      await act(async () => editWidth(container));
+      mocks.readScene.mockImplementationOnce(async () => {
+        mocks.getSessionScopeKey.mockReturnValue("session=B&epoch=2");
+        return mocks.sceneData;
+      });
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.readScene).toHaveBeenCalledWith({ sessionScopeKey: "session=A&epoch=1" });
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+      expect(mocks.invalidate).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -276,10 +340,11 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(
-        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={10} />,
+        <BoundaryEditorHarness />,
       ));
+      await act(async () => editWidth(container));
       await act(async () => {
-        findButton(container, "Apply boundary").click();
+        findButton(container, "Apply").click();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -339,13 +404,13 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(
-        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={10} />,
+        <BoundaryEditorHarness />,
       ));
       const totalWidth = findControl(container, "Total width");
       totalWidth.value = "5.00e-7";
       await act(async () => totalWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
       await act(async () => {
-        findButton(container, "Apply boundary").click();
+        findButton(container, "Apply").click();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -377,11 +442,75 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       });
       mocks.sceneData = committed;
       await act(async () => root.render(
-        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={11} />,
+        <BoundaryEditorHarness />,
       ));
 
       expect(findControl(container, "Total width").value).toBe("5e-7");
       expect(findControl(container, "Ramp width").value).toBe("2e-7");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("identifies the invalid width while the footer blocks Apply", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      const ramp = findControl(container, "Ramp width");
+      ramp.value = "6e-7";
+      await act(async () => ramp.dispatchEvent(new TestEvent("input", { bubbles: true })));
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      expect(container.textContent).toContain("Ramp width must be positive and no greater than total width.");
+      expect(ramp.getAttribute("aria-invalid")).toBe("true");
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("preserves a child draft when the history read observes a newer boundary configuration", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      await act(async () => editWidth(container));
+      mocks.readScene.mockResolvedValue({ revision: 11, objects: [{ id: "object-a" }] });
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+      expect(mocks.recordHistory).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Absorbing boundary changed");
+      expect(findControl(container, "Total width").value).toBe("5e-7");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("shows saved settings in the dedicated editor and drops the edit session when disabled externally", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      expect(findControl(container, "Expression").value).toBe("u**2");
+      expect(findControl(container, "Maximum damping").value).toBe("0.6");
+      expect(findControl(container, "y-")).toHaveProperty("checked", true);
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      expect(() => findControl(container, "Absorbing Boundary")).toThrow();
+      await act(async () => editWidth(container));
+      mocks.sceneData = { objects: [{ id: "object-a" }], revision: 11 };
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      expect(container.textContent).toContain("No absorbing boundary is active");
+      expect(() => findButton(container, "Apply")).toThrow();
+      expect(mocks.patchObject).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -396,9 +525,10 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(
-        <ObjectAbsorbingBoundaryPanel objectId="object-a" baseRevision={10} />,
+        <BoundaryEditorHarness />,
       ));
-      await act(async () => findButton(container, "Apply boundary").click());
+      await act(async () => editWidth(container));
+      await act(async () => findButton(container, "Apply").click());
 
       expect(mocks.readScene).not.toHaveBeenCalled();
       expect(mocks.patchObject).not.toHaveBeenCalled();

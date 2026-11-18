@@ -235,6 +235,9 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
       "object-material-assignment",
     );
+    expect(resolveInspectorPanel({ kind: "object.absorbing-boundary" })?.id).toBe(
+      "object-absorbing-boundary",
+    );
     expect(resolveInspectorPanel({ kind: "object.magnetic-parameters" })?.id).toBe(
       "object-material",
     );
