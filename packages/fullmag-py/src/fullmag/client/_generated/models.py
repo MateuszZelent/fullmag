@@ -2199,9 +2199,9 @@ ScratchSceneDocumentResource = Dict[str, Any]
 
 ScratchSessionBackend = Literal['fdm', 'fem']
 
-ScratchSessionDevice = Literal['cpu']
+ScratchSessionDevice = Literal['cpu', 'gpu']
 
-ScratchSessionPrecision = Literal['double']
+ScratchSessionPrecision = Literal['double', 'single']
 
 ScratchSessionRevisionsResource = TypedDict(
     'ScratchSessionRevisionsResource',

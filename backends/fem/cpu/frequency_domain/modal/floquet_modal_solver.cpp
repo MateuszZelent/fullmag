@@ -26,6 +26,7 @@
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
 #include <slepceps.h>
+#include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/modal/shifted_ksp_true_convergence.hpp"
 #include "cpu/frequency_domain/modal/shifted_ksp_certified_recovery.hpp"
 #endif
@@ -4279,11 +4280,8 @@ PetscErrorCode initialize_candidate_operator_diagnostic_workspace(
     if (error != PETSC_SUCCESS || poisson_pc == nullptr) {
         return error != PETSC_SUCCESS ? error : PETSC_ERR_ARG_WRONGSTATE;
     }
-    error = PCSetType(poisson_pc, PCLU);
-    if (error != PETSC_SUCCESS) {
-        return error;
-    }
-    error = PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE);
+    // Same exact P(k) LU realization as the production context.
+    error = configure_modal_poisson_lu(poisson_pc, MAT_SHIFT_NONE);
     if (error != PETSC_SUCCESS) {
         return error;
     }
@@ -7473,7 +7471,11 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
     result.factorization_shift_policy = "pending_preconditioner_norm";
     result.poisson_ksp_type = "preonly";
     result.poisson_pc_type = "lu";
+#if FULLMAG_FEM_WITH_SLEPC
+    result.poisson_factorization_package = kModalPoissonLuPackage;
+#else
     result.poisson_factorization_package = "petsc_default_lu";
+#endif
     result.poisson_factorization_shift_policy = "MAT_SHIFT_NONE";
     result.poisson_iteration_semantics =
         "preonly_factorization_no_iterative_convergence";
@@ -7894,9 +7896,9 @@ solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context(
         // This preonly LU computes P(k)^-1 inside the physical Schur operator.
         // A factorization shift would change that inverse, so an unusable P(k)
         // must fail closed instead of regularizing the physical Poisson block.
+        // MUMPS (when available) pivots and applies no shift either.
         if (KSPGetPC(context.p_ksp, &poisson_pc) != 0 ||
-        PCSetType(poisson_pc, PCLU) != 0 ||
-        PCFactorSetShiftType(poisson_pc, MAT_SHIFT_NONE) != 0 ||
+        configure_modal_poisson_lu(poisson_pc, MAT_SHIFT_NONE) != 0 ||
         KSPSetTolerances(
             context.p_ksp,
             poisson_ksp_rtol,

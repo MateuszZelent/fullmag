@@ -2,6 +2,7 @@
 #include "core/petsc_slepc_runtime.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "cpu/frequency_domain/modal_krylov_tuning.hpp"
+#include "cpu/frequency_domain/modal_poisson_lu.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
 #include "frequency_domain/real_frequency_rotated_pencil.hpp"
@@ -1839,8 +1840,7 @@ bool configure_production_context(
         KSPSetOperators(context->poisson_ksp, context->poisson, context->poisson) != 0 ||
         KSPSetType(context->poisson_ksp, KSPPREONLY) != 0 ||
         KSPGetPC(context->poisson_ksp, &pc) != 0 ||
-        PCSetType(pc, PCLU) != 0 ||
-        PCFactorSetShiftType(pc, MAT_SHIFT_NONZERO) != 0 ||
+        configure_modal_poisson_lu(pc, MAT_SHIFT_NONZERO) != 0 ||
         KSPSetTolerances(
             context->poisson_ksp,
             1.0e-12,
@@ -3456,6 +3456,7 @@ void write_production_schur_diagnostics(
         "\"schur_reduced\":true,"
         "\"static_demag_substitution\":false,"
         "\"poisson_factorization_reused\":true,"
+        "\"poisson_factorization_package\":\"%s\","
         "\"matrix_format\":\"real_split_matshell_seq_aij\","
         "\"spectral_pencil_kind\":\"real_frequency_rotated\","
         "\"target_representation\":\"tau=omega_target\","
@@ -3586,6 +3587,7 @@ void write_production_schur_diagnostics(
             ? result.modal_krylov_tuning_json : "null",
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
+        kModalPoissonLuPackage,
         problem.target_kind != nullptr ? problem.target_kind : "",
         production_string_equals(problem.target_kind, "nearest_frequency")
             ? "selected_only"
