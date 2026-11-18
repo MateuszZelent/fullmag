@@ -82,6 +82,7 @@ describe("ObjectAbsorbingBoundaryPanelModel", () => {
       4,
     );
     expect(invalid).toEqual({
+      field: "rampWidth",
       error: "Ramp width must be positive and no greater than total width.",
     });
     const valid = buildAbsorbingBoundaryPatch(

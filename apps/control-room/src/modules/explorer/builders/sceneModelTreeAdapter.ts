@@ -432,6 +432,7 @@ function sceneObjectSnapshot(
 
   return {
     geometryKind: geometryKind(object.geometry),
+    hasAbsorbingBoundary: recordValue(object.absorbing_boundary) !== null,
     id,
     label: stringValue(object.name) ?? id,
     magnetization: magnetizationRef,

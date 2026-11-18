@@ -71,6 +71,7 @@ export type ExplorerNodeKind =
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
+  | "object.absorbing-boundary"
   | "object.magnetic-texture"
   | "object.magnetic-texture.asset"
   | "object.magnetic-texture.load"
@@ -458,6 +459,7 @@ export interface ExplorerNode {
 
 export interface ModelTreeObjectSnapshot {
   id: string;
+  hasAbsorbingBoundary?: boolean;
   label: string;
   geometryKind?: string | null;
   magnetization?: string | null;

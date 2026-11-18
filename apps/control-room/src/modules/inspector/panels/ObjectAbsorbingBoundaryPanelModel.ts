@@ -38,7 +38,7 @@ export function absorbingBoundaryDraftFromObject(object: unknown): AbsorbingBoun
   const config = asRecord(asRecord(object)?.absorbing_boundary);
   const faces = Array.isArray(config?.faces)
     ? config.faces.filter((face): face is string => typeof face === "string")
-    : [];
+    : config ? [] : ["x+"];
   return {
     enabled: config !== null,
     totalWidth: asNumberString(config?.total_width_m, "4e-7"),
@@ -61,7 +61,7 @@ export function absorbingBoundaryDraftKey(draft: AbsorbingBoundaryDraft): string
 export function buildAbsorbingBoundaryPatch(
   draft: AbsorbingBoundaryDraft,
   baseRevision: number | null,
-): { error: string } | { patch: ObjectPatchRequest } {
+): { error: string; field: keyof AbsorbingBoundaryDraft } | { patch: ObjectPatchRequest } {
   if (!draft.enabled) {
     return { patch: { base_revision: baseRevision, absorbing_boundary: null } };
   }
@@ -69,23 +69,23 @@ export function buildAbsorbingBoundaryPatch(
   const rampWidth = Number(draft.rampWidth);
   const maxDamping = Number(draft.maxDamping);
   if (!Number.isFinite(totalWidth) || totalWidth <= 0) {
-    return { error: "Total width must be a finite positive number." };
+    return { field: "totalWidth", error: "Total width must be a finite positive number." };
   }
   if (!Number.isFinite(rampWidth) || rampWidth <= 0 || rampWidth > totalWidth) {
-    return { error: "Ramp width must be positive and no greater than total width." };
+    return { field: "rampWidth", error: "Ramp width must be positive and no greater than total width." };
   }
   if (!draft.maxDamping.trim() || !Number.isFinite(maxDamping) || maxDamping < 0) {
-    return { error: "Maximum damping must be finite and non-negative." };
+    return { field: "maxDamping", error: "Maximum damping must be finite and non-negative." };
   }
   const faces = [...new Set(draft.faces)].filter((face) =>
     (ABSORBING_BOUNDARY_FACES as readonly string[]).includes(face),
   );
-  if (faces.length === 0) return { error: "Select at least one boundary face." };
+  if (faces.length === 0) return { field: "faces", error: "Select at least one boundary face." };
   if (!(ABSORBING_BOUNDARY_PROFILES as readonly string[]).includes(draft.profile)) {
-    return { error: "Select a supported damping profile." };
+    return { field: "profile", error: "Select a supported damping profile." };
   }
   if (!(ABSORBING_BOUNDARY_FRAMES as readonly string[]).includes(draft.frame)) {
-    return { error: "Select a supported coordinate frame." };
+    return { field: "frame", error: "Select a supported coordinate frame." };
   }
   const boundary: JsonObject = {
     total_width_m: totalWidth,
@@ -97,7 +97,7 @@ export function buildAbsorbingBoundaryPatch(
   };
   if (draft.profile === "custom") {
     if (!draft.expression.trim() || draft.expression.length > 256) {
-      return { error: "Enter a custom profile expression of 1 to 256 characters." };
+      return { field: "expression", error: "Enter a custom profile expression of 1 to 256 characters." };
     }
     boundary.expression = draft.expression;
   }

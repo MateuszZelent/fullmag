@@ -393,6 +393,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const previousSelectedNodeId = useRef<string | null>(null);
   const lastRevealedSelectionPath = useRef<string | null>(null);
+  const parentWithoutAbsorbingBoundary = useRef<string | null>(null);
   const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -1023,26 +1024,45 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
-    if (
-      !modelTabActive ||
-      selectedRef?.type !== "airbox" ||
-      !selectedNodeId
-    ) {
+    if (!modelTabActive || selectedRef?.type !== "scene-object" ||
+      selectedRef.kind !== "object.magnetic-parameters") {
+      parentWithoutAbsorbingBoundary.current = null;
       return;
     }
+    if (modelResource.status !== "ready") return;
+    const parent = resolveCurrentExplorerSelectionNode(baseNodes, selectedRef.nodeId, selectedRef);
+    const key = JSON.stringify([modelResource.sessionScopeKey, selectedRef.nodeId]);
+    const wasAbsent = parentWithoutAbsorbingBoundary.current === key;
+    parentWithoutAbsorbingBoundary.current = null;
+    if (!parent) return;
+    if (!parent.children?.some((node) => node.kind === "object.absorbing-boundary")) {
+      parentWithoutAbsorbingBoundary.current = key;
+    } else if (wasAbsent) {
+      expandExplorerNodes("model", [parent.id]);
+    }
+  }, [baseNodes, modelResource.sessionScopeKey, modelResource.status, modelTabActive, selectedRef]);
+
+  useEffect(() => {
+    if (!modelTabActive || !selectedNodeId) return;
+    const boundarySelected = selectedRef?.type === "scene-object" &&
+      selectedRef.kind === "object.absorbing-boundary";
+    if (boundarySelected && modelResource.status !== "ready") return;
+    if (!boundarySelected && selectedRef?.type !== "airbox") return;
     const currentNode = resolveCurrentExplorerSelectionNode(
       baseNodes,
       selectedNodeId,
       selectedRef,
       baseNodes,
     );
-    if (!currentNode || !currentNode.kind.startsWith("airbox.")) return;
+    if (!currentNode) {
+      if (boundarySelected) kernel.selection.clear("explorer");
+      return;
+    }
+    if (!boundarySelected && !currentNode.kind.startsWith("airbox.")) return;
     const currentRef = selectionRefFromNode(currentNode);
     if (selectionRefEquals(selectedRef, currentRef)) return;
-    // Refresh only the selected node's resource facets. Selection identity and
-    // inspector routing remain stable as mesh resources invalidate.
     selectExplorerNode(kernel, currentNode, "explorer");
-  }, [baseNodes, kernel, modelTabActive, selectedNodeId, selectedRef]);
+  }, [baseNodes, kernel, modelResource.status, modelTabActive, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

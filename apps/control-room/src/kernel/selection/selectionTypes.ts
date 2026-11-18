@@ -48,6 +48,7 @@ type ObjectSelectionKind =
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
+  | "object.absorbing-boundary"
   | "object.magnetic-texture"
   | "object.magnetic-texture.asset"
   | "object.magnetic-texture.load"
