@@ -208,7 +208,8 @@
   flex-direction: column;
   justify-content: center;
   gap: 1px;
-  flex: 1 1 var(--fm-metric-basis);
+  /* --fm-metric-width is the balanced share set by useBalancedMetricRows. */
+  flex: 1 1 var(--fm-metric-width, var(--fm-metric-basis));
   box-sizing: border-box;
   min-width: min(100%, var(--fm-metric-basis));
   min-height: 38px;
