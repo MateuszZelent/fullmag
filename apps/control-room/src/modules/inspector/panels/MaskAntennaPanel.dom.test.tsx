@@ -2,7 +2,7 @@ import { act, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MaskFieldDriveResource } from "@/kernel/api/apiTypes";
+import type { MaskFieldDriveResource, MaskTermResource, ReadyAntennaResource } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   identity: { requestScopeEpoch: "api:1", sessionEpoch: "4", sessionId: "A" },
   listeners: new Set<() => void>(),
   masks: { data: { drives: [] as unknown[], scene_revision: 11 }, status: "ready" },
-  ready: { data: { antennas: [] }, status: "ready" },
+  ready: { data: { antennas: [] as ReadyAntennaResource[] }, status: "ready" },
   regional: { data: { drives: [], scene_revision: 11 }, status: "ready" },
   scene: { data: { objects: [], revision: 11 }, status: "ready" },
   server: { drives: [] as unknown[], scene_revision: 11 },
@@ -196,6 +196,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()?.();
   publish([], 11);
+  mocks.ready.data.antennas = [];
 });
 
 async function mount(selection: Omit<Selection, "moduleSource">) {
@@ -206,6 +207,7 @@ async function mount(selection: Omit<Selection, "moduleSource">) {
     createMaskFieldDrive: vi.fn(),
     deleteMaskFieldDrive: vi.fn(),
     maskFieldDrives: vi.fn(async () => structuredClone(mocks.server)),
+    readyAntennaTerms: vi.fn(),
     replaceMaskFieldDrive: vi.fn(),
     scene: vi.fn(async () => ({
       objects: [],
@@ -513,6 +515,37 @@ describe("MaskAntennaPanel draft across scene revisions", () => {
     await act(async () => publish([antenna("antenna", 2e-4, THEIR_BZ)], 12));
     expect(view.container.textContent).toContain(CONFLICT);
     expect(input(view.container, "Bz =").value).toBe(EDITED_BZ);
+  });
+
+  it("adds generated terms to the draft without dropping edits made during the request", async () => {
+    const readyFunction = "fullmag.antennas.gaussian_k_source";
+    const initial = antenna("antenna", 2e-4);
+    initial.terms[0].origin = {
+      arguments: { amplitude: 2e-4 },
+      call_index: 0,
+      function: readyFunction,
+      output_index: 0,
+    };
+    mocks.ready.data.antennas = [{ arguments: [], function: readyFunction, summary: "Gaussian" }];
+    publish([initial], 11);
+    const view = await mount(antennaSelection("antenna"));
+    let finish!: (response: { terms: MaskTermResource[] }) => void;
+    view.model.readyAntennaTerms.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+
+    await act(async () => exactButton(view.container, "Build terms").click());
+    expect(view.model.readyAntennaTerms).toHaveBeenCalledOnce();
+    await type(input(view.container, "Name"), "Antenna renamed while building");
+    const generated = antenna("antenna", 6e-4).terms[0];
+    generated.origin = { ...initial.terms[0].origin, arguments: { amplitude: 6e-4 } };
+    await act(async () => finish({ terms: [generated] }));
+
+    expect(input(view.container, "Name").value).toBe("Antenna renamed while building");
+    expect(input(view.container, "B01").value).toBe("0.0006");
+    view.model.replaceMaskFieldDrive.mockResolvedValue(ack(12));
+    expect(await apply(view.session())).toBe(true);
+    const request = submittedDrive(view.model.replaceMaskFieldDrive);
+    expect(request.drive.name).toBe("Antenna renamed while building");
+    expect(maskFunction(request.drive).parameters?.[0].value).toBe(6e-4);
   });
 
   it("saves an edited antenna and moves on through Apply and continue", async () => {

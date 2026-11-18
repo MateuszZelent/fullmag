@@ -85,6 +85,12 @@ interface AcknowledgedMaskAntenna {
 
 const MASK_OUTPUT_LABELS = ["Bx", "By", "Bz"] as const;
 const NEW_READY_CALL = "new";
+const READY_TERMS_PENDING_REASON = "Wait for the ready antenna terms before applying.";
+type ReadyTerms = MaskFieldDriveResource["terms"];
+
+function readyCallTerms(drive: MaskFieldDriveResource, callIndex: number): ReadyTerms {
+  return drive.terms.filter((term) => term.origin?.call_index === callIndex);
+}
 const SCENE_CHANGED_REASON =
   "This antenna changed in the scene in fields you also edited. Keep your values or load the scene version.";
 
@@ -181,8 +187,11 @@ function applyNumericInput(
     return drive;
   }
   if (scope === "term") {
-    const [termIndex, role, name] = rest;
-    return setTermParameter(drive, Number(termIndex), role as MaskFunctionRole, name, value);
+    const [termKey, role, name] = rest;
+    const index = termKey.startsWith("name:")
+      ? drive.terms.findIndex((term) => term.name === termKey.slice(5))
+      : Number(termKey);
+    return index >= 0 ? setTermParameter(drive, index, role as MaskFunctionRole, name, value) : drive;
   }
   return drive;
 }
@@ -276,7 +285,7 @@ function FunctionFields({
   raw,
   role,
   target,
-  termIndex,
+  termKey,
 }: {
   disabled: boolean;
   onLocalChange: (localIndex: number, expression: string) => void;
@@ -287,7 +296,7 @@ function FunctionFields({
   raw: RawInputs;
   role: MaskFunctionRole;
   target: MaskFunctionResource;
-  termIndex: number;
+  termKey: string;
 }) {
   const [newParameter, setNewParameter] = useState("");
   const parameters = target.parameters ?? [];
@@ -300,7 +309,7 @@ function FunctionFields({
         <div key={parameter.name} className="grid min-w-0 gap-fm-inspector-row">
           <RawNumberField
             raw={raw}
-            fieldKey={`term|${termIndex}|${role}|${parameter.name}`}
+            fieldKey={`term|${termKey}|${role}|${parameter.name}`}
             label={parameter.name}
             disabled={disabled}
             value={parameter.value}
@@ -371,6 +380,7 @@ function ArrayMaskRows({ mask }: { mask: Extract<MaskTermResource["mask"], { kin
 /** Argument form of one ready-antenna call; builds its terms through the API. */
 function ReadyAntennaCallFields({
   antenna,
+  buildDisabled,
   busy,
   disabled,
   onBuild,
@@ -378,6 +388,7 @@ function ReadyAntennaCallFields({
   values,
 }: {
   antenna: ReadyAntennaResource;
+  buildDisabled: boolean;
   busy: boolean;
   disabled: boolean;
   onBuild: (values: Record<string, number>) => void;
@@ -432,7 +443,7 @@ function ReadyAntennaCallFields({
           size="sm"
           type="button"
           variant="secondary"
-          disabled={disabled || busy || invalid || missing !== null}
+          disabled={disabled || buildDisabled || busy || invalid || missing !== null}
           disabledReason={missing ? `Give ${missing}.` : null}
           onClick={() => onBuild(parsed)}
         >
@@ -542,7 +553,9 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   const [pendingId, setPendingId] = useState<number | null>(null);
   const nextOperationId = useRef(0);
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
-  const [readyBusy, setReadyBusy] = useState<string | null>(null);
+  const [readyRequest, setReadyRequest] = useState<{ key: string; selection: Selection } | null>(null);
+  const activeReadyRequest = useRef<typeof readyRequest>(null);
+  const readyBusy = readyRequest?.selection === selection ? readyRequest.key : null;
   const [newReadyFunction, setNewReadyFunction] = useState("");
 
   const editable = model.mode === "create" || model.mode === "found";
@@ -570,6 +583,7 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   const conflict = conflicts.length > 0;
   const pending = pendingId !== null;
   const locked = !draft || pending;
+  const termsLocked = locked || conflict;
 
   /**
    * The state the next edit starts from. Edits are relative to `base` and use
@@ -607,6 +621,27 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     setDraftState({ base: start.base, key: identityKey, value: update(applyRawInputs(start.value, start.raw)) });
     setRawState({ identityKey, values: {} });
   }
+  // HTTP responses arrive in a later render. Apply them through the editor
+  // associated with the latest committed draft, including any intervening edits.
+  const applyReadyTerms = useRef<
+    ((callIndex: number | null, terms: ReadyTerms, previous: ReadyTerms | null) => boolean) | null
+  >(null);
+  useLayoutEffect(() => {
+    applyReadyTerms.current = (callIndex, terms, previous) => {
+      if (!draft || termsLocked) return false;
+      if (callIndex !== null && !sameJson(readyCallTerms(draft, callIndex), previous)) return false;
+      setDraft((value) => replaceReadyAntennaCall(value, callIndex, terms));
+      return true;
+    };
+    return () => { applyReadyTerms.current = null; };
+  });
+
+  const cancelReadyRequest = useCallback(() => {
+    activeReadyRequest.current = null;
+    setReadyRequest(null);
+  }, []);
+  useLayoutEffect(() => () => { activeReadyRequest.current = null; }, [selection]);
+
   /** Resolve the conflicts with this panel's values; other fields keep the scene's. */
   function keepDraft(): void {
     if (!merge || !baseline) return;
@@ -616,6 +651,7 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   }
   /** Forget the local draft; the panel follows the scene again. */
   function clearDraft(): void {
+    cancelReadyRequest();
     setDraftState({ base: null, key: identityKey, value: null });
     setRawState({ identityKey, values: {} });
   }
@@ -632,11 +668,12 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
   ) || rawErrors.length > 0;
 
   const resetDraft = useCallback(() => {
+    cancelReadyRequest();
     setDraftState({ base: null, key: identityKey, value: null });
     setRawState({ identityKey, values: {} });
     setFeedback(null);
     setDiscardedSelection(selection);
-  }, [identityKey, selection]);
+  }, [cancelReadyRequest, identityKey, selection]);
 
   // The selection guard reads this session synchronously: a write marks the
   // committed draft clean through `acknowledgeDraft` before moving the selection.
@@ -644,13 +681,15 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     "staged",
     pending,
     dirty,
-    Boolean(draft && sessionScopeKey && model.sceneRevision !== null && validationErrors.length === 0),
+    Boolean(draft && sessionScopeKey && model.sceneRevision !== null && validationErrors.length === 0 && !readyBusy),
     undefined,
     save,
     resetDraft,
     {
       historyMode: "mutation-owned",
-      applyBlockReason: conflict ? SCENE_CHANGED_REASON : validationErrors[0],
+      applyBlockReason: conflict
+        ? SCENE_CHANGED_REASON
+        : readyBusy ? READY_TERMS_PENDING_REASON : validationErrors[0],
     },
   );
 
@@ -713,6 +752,10 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     if (!draft || (model.mode !== "create" && model.mode !== "found")) return false;
     if (conflict) {
       setFeedback({ kind: "error", message: SCENE_CHANGED_REASON });
+      return false;
+    }
+    if (activeReadyRequest.current?.selection === selection) {
+      setFeedback({ kind: "error", message: READY_TERMS_PENDING_REASON });
       return false;
     }
     if (validationErrors.length > 0) {
@@ -792,22 +835,31 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
     callIndex: number | null,
     values: Record<string, number>,
   ): Promise<void> {
-    const busyKey = callIndex === null ? NEW_READY_CALL : String(callIndex);
-    setReadyBusy(busyKey);
+    if (!draft || termsLocked || activeReadyRequest.current?.selection === selection) return;
+    const previous = callIndex === null ? null : readyCallTerms(draft, callIndex);
+    const request = { key: callIndex === null ? NEW_READY_CALL : String(callIndex), selection };
+    activeReadyRequest.current = request;
+    setReadyRequest(request);
+    const isCurrent = () =>
+      activeReadyRequest.current === request && identityKeyRef.current === identityKey;
     setFeedback(null);
     try {
       const response = await api.model.readyAntennaTerms(
         { arguments: values, function: antenna.function },
         sessionScopeKey ? { sessionScopeKey } : undefined,
       );
-      if (identityKeyRef.current !== identityKey) return;
-      setDraft((value) => replaceReadyAntennaCall(value, callIndex, response.terms));
+      if (!isCurrent()) return;
+      if (!applyReadyTerms.current?.(callIndex, response.terms, previous)) {
+        setFeedback({ kind: "error", message: "The antenna terms changed while building. Build them again." });
+        return;
+      }
       if (callIndex === null) setNewReadyFunction("");
     } catch (error) {
-      if (identityKeyRef.current !== identityKey) return;
+      if (!isCurrent()) return;
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
     } finally {
-      setReadyBusy((current) => (current === busyKey ? null : current));
+      if (activeReadyRequest.current === request) activeReadyRequest.current = null;
+      setReadyRequest((current) => current === request ? null : current);
     }
   }
 
@@ -967,8 +1019,9 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
                 antenna={antenna}
                 title={`Ready antenna · terms ${call.termIndices.map((index) => index + 1).join(", ")}`}
                 values={call.arguments}
+                buildDisabled={readyBusy !== null}
                 busy={readyBusy === String(call.callIndex)}
-                disabled={pending}
+                disabled={termsLocked}
                 onBuild={(values) => void buildReadyAntennaTerms(antenna, call.callIndex, values)}
               />
             ) : (
@@ -979,6 +1032,11 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
           }) : null}
 
           {draft ? draft.terms.map((term, termIndex) => {
+            // Named raw inputs follow their term when the scene reorders the list.
+            const termKey = term.name && !term.name.includes("|") &&
+              draft.terms.filter((item) => item.name === term.name).length === 1
+              ? `name:${term.name}`
+              : String(termIndex);
             const maskFunction = termFunction(term, "mask");
             const timeFunction = termFunction(term, "time");
             const handlers = (role: MaskFunctionRole) => ({
@@ -993,17 +1051,17 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
             });
             return (
               <InspectorGroup key={termIndex} title={`Term ${termIndex + 1}${term.name ? ` · ${term.name}` : ""}`} collapsible defaultOpen>
-                <FormField label="Term name" disabled={pending} value={term.name ?? ""} onChange={(event) => { const name = event.currentTarget.value; setDraft((value) => setTermName(value, termIndex, name)); }} />
+                <FormField label="Term name" disabled={termsLocked} value={term.name ?? ""} onChange={(event) => { const name = event.currentTarget.value; setDraft((value) => setTermName(value, termIndex, name)); }} />
                 {term.origin ? <FieldRow label="Origin" value={`${term.origin.function}; editing the term detaches it`} /> : null}
                 {maskFunction
-                  ? <FunctionFields raw={raw} role="mask" target={maskFunction} termIndex={termIndex} disabled={pending} onRawChange={setRaw} {...handlers("mask")} />
+                  ? <FunctionFields raw={raw} role="mask" target={maskFunction} termKey={termKey} disabled={termsLocked} onRawChange={setRaw} {...handlers("mask")} />
                   : term.mask.kind === "sampled" ? <ArrayMaskRows mask={term.mask} /> : null}
-                <FormField label="Static (no time function)" type="checkbox" disabled={pending} checked={!timeFunction} onChange={(event) => { const isStatic = event.currentTarget.checked; setDraft((value) => setTermStatic(value, termIndex, isStatic)); }} />
+                <FormField label="Static (no time function)" type="checkbox" disabled={termsLocked} checked={!timeFunction} onChange={(event) => { const isStatic = event.currentTarget.checked; setDraft((value) => setTermStatic(value, termIndex, isStatic)); }} />
                 {timeFunction
-                  ? <FunctionFields raw={raw} role="time" target={timeFunction} termIndex={termIndex} disabled={pending} onRawChange={setRaw} {...handlers("time")} />
+                  ? <FunctionFields raw={raw} role="time" target={timeFunction} termKey={termKey} disabled={termsLocked} onRawChange={setRaw} {...handlers("time")} />
                   : null}
                 <div className="fm-inspector-toolbar fm-toolbar-top">
-                  <Button size="sm" type="button" variant="ghost" disabled={pending || draft.terms.length <= 1} onClick={() => setDraft((value) => removeTerm(value, termIndex))}>
+                  <Button size="sm" type="button" variant="ghost" disabled={termsLocked || draft.terms.length <= 1} onClick={() => setDraft((value) => removeTerm(value, termIndex))}>
                     Remove term
                   </Button>
                 </div>
@@ -1013,11 +1071,11 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
 
           <InspectorGroup title="Add" collapsible defaultOpen>
             <div className="fm-inspector-toolbar">
-              <Button size="sm" type="button" variant="secondary" disabled={locked || (draft?.terms.length ?? 0) >= MAX_MASK_TERMS} onClick={() => setDraft((value) => addTerm(value))}>
+              <Button size="sm" type="button" variant="secondary" disabled={termsLocked || (draft?.terms.length ?? 0) >= MAX_MASK_TERMS} onClick={() => setDraft((value) => addTerm(value))}>
                 Add term
               </Button>
             </div>
-            <FormField label="Ready antenna" type="select" disabled={locked || registry.length === 0} value={newReadyFunction} onChange={(event) => setNewReadyFunction(event.currentTarget.value)}>
+            <FormField label="Ready antenna" type="select" disabled={termsLocked || registry.length === 0} value={newReadyFunction} onChange={(event) => setNewReadyFunction(event.currentTarget.value)}>
               <option value="">Select a ready antenna</option>
               {registry.map((antenna) => <option key={antenna.function} value={antenna.function}>{antenna.function.split(".").pop()} — {antenna.summary}</option>)}
             </FormField>
@@ -1028,8 +1086,9 @@ export function MaskAntennaPanel({ selection }: InspectorPanelProps) {
               antenna={newReadyAntenna}
               title="New ready antenna"
               values={readyAntennaDefaultArguments(newReadyAntenna)}
+              buildDisabled={readyBusy !== null}
               busy={readyBusy === NEW_READY_CALL}
-              disabled={pending}
+              disabled={termsLocked}
               onBuild={(values) => void buildReadyAntennaTerms(newReadyAntenna, null, values)}
             />
           ) : null}

@@ -271,6 +271,31 @@ describe("mask antenna draft merge", () => {
     ]);
   });
 
+  it("keeps a parameter edit on its named term when the scene reorders the terms", () => {
+    const term = { ...readyTerm(2e-4), origin: undefined };
+    const base = antenna([{ ...term, name: "left" }, { ...term, name: "right" }]);
+    const mine = setTermParameter(base, 0, "mask", "amplitude", 3e-4);
+    const theirs = { ...base, terms: [...base.terms].reverse() };
+
+    expect(mergeMaskAntennaDraft(base, mine, theirs)).toEqual({
+      conflicts: [],
+      merged: setTermParameter(theirs, 1, "mask", "amplitude", 3e-4),
+    });
+  });
+
+  it("flags ambiguity when unnamed terms are edited while the scene reorders them", () => {
+    const first = { ...readyTerm(2e-4), origin: undefined };
+    const second = setTermOutput(antenna([first]), 0, "mask", 2, "amplitude").terms[0];
+    const base = antenna([first, second]);
+    const mine = setTermParameter(base, 0, "mask", "amplitude", 3e-4);
+    const theirs = { ...base, terms: [...base.terms].reverse() };
+
+    expect(mergeMaskAntennaDraft(base, mine, theirs)).toEqual({
+      conflicts: ["drive.terms"],
+      merged: mine,
+    });
+  });
+
   it("keeps a parameter the draft added beside one the scene changed", () => {
     const base = antenna([readyTerm(2e-4)]);
     const mine = addTermParameter(base, 0, "time", "phase");

@@ -522,6 +522,37 @@ function mergeJson(
     }
     return merged;
   }
+  if (key === "terms" && Array.isArray(base) && Array.isArray(mine) && Array.isArray(theirs)) {
+    const baseItems = namedItems(base);
+    const mineItems = namedItems(mine);
+    const theirItems = namedItems(theirs);
+    if (baseItems && mineItems && theirItems &&
+        baseItems.size === mineItems.size && baseItems.size === theirItems.size) {
+      const baseOrder = [...baseItems.keys()];
+      if (baseOrder.every((name) => mineItems.has(name) && theirItems.has(name))) {
+        const mineOrder = [...mineItems.keys()];
+        const theirOrder = [...theirItems.keys()];
+        const mineMoved = !sameJson(mineOrder, baseOrder);
+        const theirsMoved = !sameJson(theirOrder, baseOrder);
+        if (!mineMoved || !theirsMoved || sameJson(mineOrder, theirOrder)) {
+          const order = mineMoved ? mineOrder : theirOrder;
+          return order.map((name, index) => mergeJson(
+            baseItems.get(name), mineItems.get(name), theirItems.get(name),
+            `${path}[${index}]`, conflicts,
+          ));
+        }
+      }
+    } else if (
+      base.length === 1 && mine.length === 1 && theirs.length === 1 &&
+      [base[0], mine[0], theirs[0]].every((term) => isJsonRecord(term) && !term.name)
+    ) {
+      return [mergeJson(base[0], mine[0], theirs[0], `${path}[0]`, conflicts)];
+    }
+    // Multi-term drafts without stable names, membership changes, and competing
+    // reorders need an explicit choice. Matching by index can edit another term.
+    conflicts.push(path);
+    return mine;
+  }
   const named = key && NAMED_LISTS.has(key)
     ? [namedItems(base), namedItems(mine), namedItems(theirs)]
     : null;
@@ -553,7 +584,8 @@ function mergeJson(
  * `mine` was edited from `base`; `theirs` is the antenna in the scene now.
  * A field only one side changed takes that side's value. A field both sides
  * changed to different values is a conflict and keeps the draft's value;
- * arrays merge element by element unless a side changed their length.
+ * named terms merge by name, with ambiguous concurrent term changes reported
+ * as conflicts. Other positional arrays merge when their lengths match.
  */
 export function mergeMaskAntennaDraft(
   base: MaskFieldDriveResource,
