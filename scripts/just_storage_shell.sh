@@ -529,6 +529,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/fullmag_console.py" "${fullmag_console_args[@]}"
     ;;
   *"scripts/docker_dev.py"*)
+    docker_dev_preowner_probe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" stop-preowner-probe-volume --attempt '([0-9a-f]{32})' --resume-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --image-id '(sha256:[0-9a-f]{64})' --port '([0-9]{4,5})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson)')?([[:space:]]+--network-subnet '([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})')?[[:space:]]*$"
     docker_dev_codegen_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" codegen-openapi( --source-root '([^']+)')?[[:space:]]*$"
@@ -555,7 +556,14 @@ case "${recipe}" in
     docker_dev_retire_stopped_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --retire-only[[:space:]]*$"
     docker_dev_completed_cache_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" reconcile-completed-cache --registry '([^']+)' --volume '(fullmag-backend-v2-[0-9a-f]{24}-package)' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_args=(--repo-root "${repo_root}")
-    if [[ "${recipe}" =~ ${docker_dev_completed_cache_pattern} ]]; then
+    if [[ "${recipe}" =~ ${docker_dev_preowner_probe_pattern} ]]; then
+      docker_dev_args+=(stop-preowner-probe-volume --attempt "${BASH_REMATCH[1]}"
+        --resume-attempt "${BASH_REMATCH[2]}" --config-sha256 "${BASH_REMATCH[3]}"
+        --source-root "${BASH_REMATCH[4]}" --image-id "${BASH_REMATCH[5]}" --port "${BASH_REMATCH[6]}")
+      if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[8]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_completed_cache_pattern} ]]; then
       docker_dev_args+=(reconcile-completed-cache --registry "${BASH_REMATCH[1]}"
         --volume "${BASH_REMATCH[2]}" --recovery-id "${BASH_REMATCH[3]}")
       if [[ -n "${BASH_REMATCH[4]:-}" ]]; then
