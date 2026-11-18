@@ -2250,7 +2250,10 @@ pub(super) fn full_2x2_native_operator_diagnostics_json(
     // sized operator would duplicate the modal workload and can exhaust the
     // runner before SLEPc receives the request.  Keep the bounded diagnostic
     // for small contract cases and report the explicit omission otherwise.
-    const DIAGNOSTIC_SPECTRUM_MAX_DOF: usize = 4096;
+    // The diagnostic runs for every k-sample and costs ~5 dense n^3 passes,
+    // so the bound stays at contract-fixture scale (512^3 ~ 1.3e8 flops)
+    // rather than mid-size production meshes (4096^3 ~ 6.9e10 per pass).
+    const DIAGNOSTIC_SPECTRUM_MAX_DOF: usize = 512;
     if stiffness_field.nrows() > DIAGNOSTIC_SPECTRUM_MAX_DOF {
         object.insert(
             "generalized_field_spectrum_status".to_string(),

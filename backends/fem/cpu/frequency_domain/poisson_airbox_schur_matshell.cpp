@@ -1345,6 +1345,7 @@ struct ProductionKspConvergenceContext {
     PoissonAirboxModalLinearSolverRole linear_solver_role =
         PoissonAirboxModalLinearSolverRole::unknown;
     void *default_context = nullptr;
+    PoissonAirboxModalProgressThrottle progress_throttle{};
 };
 
 PetscErrorCode destroy_production_modal_ksp_convergence_context_value(
@@ -1448,7 +1449,9 @@ PetscErrorCode production_modal_ksp_convergence_test(
     }
     PetscCall(KSPConvergedDefault(
         ksp, iteration, residual_norm, reason, context->default_context));
-    emit_linear_progress("solving_shift_invert", nullptr);
+    if (context->progress_throttle.should_emit()) {
+        emit_linear_progress("solving_shift_invert", nullptr);
+    }
     PetscFunctionReturn(PETSC_SUCCESS);
 }
 
