@@ -22770,8 +22770,19 @@ pub(crate) async fn assert_fem_absorber_field_endpoints(snapshot: &SessionStateR
     assert_eq!(catalog.status(), StatusCode::OK);
     let catalog = body_json(catalog).await;
     let descriptor = catalog["quantities"].as_array().unwrap().iter().find(|q| q["quantity_id"] == "mat_alpha").unwrap();
-    assert_eq!(descriptor["location"], "node");
-    assert_eq!(descriptor["available"], true);
+    assert_eq!(descriptor["location"], "node", "{descriptor:#}");
+    assert_eq!(descriptor["available"], true, "prepared FEM damping descriptor: {descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["reason_code"], "prepared_damping_read_only", "{descriptor:#}");
+    assert_eq!(descriptor["resolved_capability"]["carriers"][0]["indexing"], "node", "{descriptor:#}");
+    let quantities = app.clone().oneshot(get("/v2/sessions/current/data/quantities")).await.unwrap();
+    assert_eq!(quantities.status(), StatusCode::OK);
+    let quantities = body_json(quantities).await;
+    let damping = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "mat_alpha").unwrap();
+    assert_eq!(damping["requestable"], true, "{damping:#}");
+    assert_eq!(damping["materializable"], false, "{damping:#}");
+    assert_eq!(damping["solver_capability"], "unsupported", "{damping:#}");
+    let effective = quantities["quantities"].as_array().unwrap().iter().find(|q| q["id"] == "H_eff").unwrap();
+    assert_eq!(effective["capability_state"], "unknown", "{effective:#}");
     let meta = app.clone().oneshot(get("/v2/sessions/current/data/fields/mat_alpha/meta")).await.unwrap();
     assert_eq!(meta.status(), StatusCode::OK);
     assert_eq!(body_json(meta).await["location"], "node");
@@ -22782,6 +22793,20 @@ pub(crate) async fn assert_fem_absorber_field_endpoints(snapshot: &SessionStateR
     assert_eq!(&bytes[..4], b"FMVP");
     assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize, expected.len());
     assert_eq!(decode_fmvp_payload_f64(&bytes), expected);
+
+    // A stale same-sized array must not acquire the validated read provider.
+    let mut stale = snapshot.clone();
+    stale.capabilities = Some(resolved_compute_fields_capabilities(&[]));
+    let capability = |current: &SessionStateResponse| {
+        crate::router_v2::handlers::data::quantities::resolved_quantity_capability_for_snapshot(
+            current, fullmag_quantities::quantity_spec("mat_alpha").unwrap(),
+            fullmag_runner::QuantityMaterializationCapability::Unmaterialized, vec![], "full")
+    };
+    assert_eq!(capability(&stale).reason_code.as_deref(), Some("prepared_damping_read_only"));
+    let mut altered = stale.latest_fields.get("mat_alpha").unwrap().clone();
+    altered["values"][0] = serde_json::json!(expected[0] + 1.0);
+    stale.latest_fields.insert("mat_alpha".into(), altered);
+    assert_eq!(capability(&stale).provider, fullmag_runner::QuantityProviderCapability::Unavailable);
 }
 
 async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::TempDir, PathBuf, String, String, u64) {
