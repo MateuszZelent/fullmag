@@ -16,7 +16,9 @@ their executable support is deliberately narrower than their IR vocabulary.
 (physics-inter-region-couplings-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Inter-region couplings represent both discrete cell-to-cell exchange overrides (`A_ab`) across
+adjacent `ObjectRegion` domains and opposing-surface bilinear/biquadratic RKKY interactions
+(`J_1, J_2`) across non-magnetic spacers.
 
 (physics-inter-region-couplings-governing-equations)=
 ## Governing equations
@@ -52,6 +54,15 @@ A_{ab}=sA_{ab}^{\mathrm{harm}},
 An explicit mode uses authored $A_{ab}$; a disabled mode sets the link to zero. This cell-link
 operator is not the same as a surface energy.
 
+```{figure} /_static/diagrams/inter-region-couplings-exchange-rkky.svg
+:alt: Two-panel diagram comparing (a) cell-to-cell harmonic, scaled-harmonic, explicit, and disabled region exchange A_ab across adjacent ObjectRegion cells (executable on FDM GPU CUDA and FDM CPU AoS reference, unsupported on FEM), against (b) surface RKKY and interlayer exchange energy -J_1(m_a.m_b) - J_2(m_a.m_b)^2 across FM, AFM, 90-degree, and canted regimes (authored_only IR rejected in strict runtime on all lanes).
+:width: 100%
+:name: fig-inter-region-couplings-exchange-rkky
+:figclass: fm-physics-figure
+
+Cell-link region exchange $A_{ab}$ across adjacent `ObjectRegion` cells (a) versus opposing-surface bilinear/biquadratic RKKY coupling $\sigma_{\mathrm{surf}}(\Delta\theta)$ (b), separating FDM-executable region exchange from `authored_only` surface couplings (Grünberg et al. 1986; Parkin et al. 1990; Bruno 1995; Suess et al. 2023).
+```
+
 (physics-inter-region-couplings-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -68,12 +79,10 @@ operator is not the same as a surface energy.
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | all coupling IR variants | unsupported for enabled runtime coupling | none | ordinary exchange does not imply coupling support |
-| FDM | GPU | all coupling IR variants | partial: region-to-region exchange only | managed runtime evidence still required | RKKY/interlayer surfaces are not materialized |
-| FEM | CPU | all coupling IR variants | unsupported | none | surface trace/quadrature operator not implemented |
-| FEM | GPU | all coupling IR variants | unsupported | none | no device surface or region materializer |
-
-Front matter must therefore be `partial`, not `implemented`.
+| FDM | CPU | all coupling IR variants | partial: region-to-region exchange via AoS reference (`ExchangeFaces`) | bounded planner/operator tests | persistent SoA fast path rejects `exchange_faces`; RKKY/interlayer unsupported |
+| FDM | GPU | all coupling IR variants | partial: region-to-region exchange via CUDA `face_xp/yp/zp` buffers | managed runtime evidence still required | multilayer FDM and RKKY/interlayer surfaces unsupported |
+| FEM | CPU | all coupling IR variants | unsupported | none | region-exchange and surface trace quadrature operators not implemented |
+| FEM | GPU | all coupling IR variants | unsupported | none | no device surface or region-link materializer |
 
 (physics-inter-region-couplings-python-api)=
 ## Python API and stage-first example
@@ -105,9 +114,8 @@ as a left/right partition.
 
 ### Authored-only surface term
 
-RKKY/interlayer terms should use `capability_policy="authored_only"` only for export/inspection.
-They are not executable in strict planning at this revision. Documentation must not place an
-authored-only term in a run stage and imply runtime support.
+RKKY and interlayer terms carry `capability_policy="authored_only"` strictly for `ProblemIR`
+export and schema inspection; they are not executable in strict planning.
 
 (physics-inter-region-couplings-problem-ir)=
 ## ProblemIR
@@ -129,14 +137,12 @@ authored-only term in a run stage and imply runtime support.
 ```
 
 (physics-inter-region-couplings-validation)=
-## Validation boundary and source-map correction
+## Validation boundary
 
-Python owns endpoint kind, selector names, mode/policy enums, and scalar consistency. Planner owns
-resolved region IDs, material coefficients, backend capability, and link materialization.
-`coupling_id` should be validated in `__post_init__`, not delayed until `to_ir()`.
-
-The current source map has an empty public constructor/parameter inventory despite a substantial
-public table. Regenerate it from the actual `CouplingRegistry` API and current audited revision.
+Python validates endpoint kind, selector names, mode/policy enums, and scalar consistency (with
+`coupling_id` uniqueness and canonical identifiers checked during `to_ir()` lowering). The planner
+resolves region IDs, material coefficients, backend capability, and link materialization before
+execution.
 
 ## Required numerical validation
 
@@ -147,7 +153,7 @@ public table. Regenerate it from the actual `CouplingRegistry` API and current a
 - interface and surface-area convergence;
 - endpoint orientation and face-pair symmetry;
 - strict rejection on all unsupported lanes;
-- future CPU reference before GPU-only surface coupling is promoted.
+- verified CPU reference alongside any GPU surface-coupling implementation.
 
 (physics-inter-region-couplings-limitations)=
 ## Limitations and roadmap
@@ -160,24 +166,13 @@ contracts.
 (physics-inter-region-couplings-scientific-bibliography)=
 ## Scientific bibliography
 
-1. P. Grünberg et al., *Physical Review Letters* **57**, 2442 (1986).
-2. S. S. P. Parkin, N. More, and K. P. Roche, *Physical Review Letters* **64**, 2304 (1990).
-3. NIST reference material on interlayer exchange coupling benchmarks.
+1. P. Grünberg, R. Schreiber, Y. Pang, M. B. Brodsky, and H. Sowers, “Layered Magnetic Structures: Evidence for Antiferromagnetic Coupling of Fe Layers across Cr Interlayers,” *Physical Review Letters* **57**(19), 2442–2445 (1986). [doi:10.1103/PhysRevLett.57.2442](https://doi.org/10.1103/PhysRevLett.57.2442).
+2. S. S. P. Parkin, N. More, and K. P. Roche, “Oscillations in exchange coupling and magnetoresistance in metallic superlattice structures: Co/Ru, Co/Cr, and Fe/Cr,” *Physical Review Letters* **64**(19), 2304–2307 (1990). [doi:10.1103/PhysRevLett.64.2304](https://doi.org/10.1103/PhysRevLett.64.2304).
+3. P. Bruno, “Theory of interlayer magnetic coupling,” *Physical Review B* **52**(1), 411–439 (1995). [doi:10.1103/PhysRevB.52.411](https://doi.org/10.1103/PhysRevB.52.411).
+4. D. Suess, S. Koraltan, F. Slanovc, F. Bruckner, and C. Abert, “Accurate finite-difference micromagnetics of magnets including RKKY interaction: Analytical solution and comparison to standard micromagnetic codes,” *Physical Review B* **107**(10), 104424 (2023). [doi:10.1103/PhysRevB.107.104424](https://doi.org/10.1103/PhysRevB.107.104424) | [arXiv:2206.11063](https://arxiv.org/abs/2206.11063) (CC-BY).
+5. L. Körber, A. Hempel, A. Otto, R. Gallardo, Y. Henry, J. Lindner, and A. Kákay, “Finite-element dynamic-matrix approach for propagating spin waves: Extension to mono- and multi-layers of arbitrary spacing and thickness,” *AIP Advances* **12**(11), 115206 (2022). [doi:10.1063/5.0107457](https://doi.org/10.1063/5.0107457) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/adv/article-pdf/doi/10.1063/5.0107457/16475837/115206_1_online.pdf) | [arXiv:2207.01519](https://arxiv.org/abs/2207.01519).
 
-(physics-inter-region-couplings-source-code-index)=
-
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
+(physics-inter-region-couplings-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -192,6 +187,7 @@ The authored model is valid only within the continuum, discretization, boundary,
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
 
+(physics-inter-region-couplings-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
@@ -199,7 +195,5 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 | `packages/fullmag-py/src/fullmag/model/couplings.py` | `CouplingRegistry, Coupling` | public endpoint and parameter validation |
 | `packages/fullmag-py/src/fullmag/world.py` | `StudyCouplingsHandle` | stage-first coupling facade |
 | `crates/fullmag-plan/src/fdm.rs` | `region coupling planning` | FDM capability and region resolution |
-| `crates/fullmag-engine/src` | `materialize_region_exchange_couplings` | FDM GPU link overrides |
+| `crates/fullmag-engine/src` | `materialize_region_exchange_couplings` | FDM CPU/GPU link overrides (`ExchangeFaces`) |
 | `crates/fullmag-ir/src` | `CouplingKindIR/CouplingEndpointIR` | tagged canonical schema |
-
-(physics-inter-region-couplings-round-trip-and-failure-semantics)=

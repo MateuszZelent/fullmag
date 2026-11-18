@@ -9,6 +9,12 @@ owner: fullmag-public-docs
 (public-docs-frontend-visualization-viewport-3d-and-studio)=
 # 3D WebGL Viewport, Projections & Studio Rendering
 
+In the FEM visualization Inspector, **Wireframe mesh** defaults to **Surface
+mesh**. Choose **Full volume mesh** to inspect interior element edges. This
+selection affects wireframe edges independently of vector and point sampling.
+While zooming or rotating, a lighter surface preview keeps navigation responsive;
+the selected edge detail returns when the camera stops.
+
 `Viewport3DModule` (`apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx`) and
 `Viewport3DCanvas` render the unified 3D scene across both structured FDM grids and unstructured
 FEM tetrahedral/prism meshes using **Three.js** and **@react-three/fiber**. All camera,
@@ -62,7 +68,7 @@ Through `ObjectVisualizationPanel`, the **View** / **Results** ribbon tabs, and 
 publication-quality rendering alongside strict quantitative safeguards:
 
 - **Quality Profiles (`viewport3dVisualProfile.ts`)**: `Interactive Lite` (no AA, DPR cap 1, 700 glyphs, no AO/shadows), `Interactive` (AA, DPR 1.25, 1,200 glyphs, 512px shadows, half-res AO), `Balanced` (DPR 1.5, 2,000 glyphs, 1024px shadows), `Figure` (DPR 2, 2,800 glyphs, 2048px shadows, full-res AO), and `Capture` (DPR 2, 3,200 glyphs, `preserveDrawingBuffer: true`).
-- **Scientific vs. Presentation Lighting**: In `Scientific — faithful field colors` mode, AO and Bloom automatically refuse to alter quantitative field color values. In `Presentation — PBR and studio HDRI` mode, `Viewport3DStudioEnvironment` synthesizes an offline equirectangular softbox HDRI (`createViewport3DStudioHdri`, zero external network assets) processed with `PMREMGenerator`, controllable key/fill light azimuth/elevation/intensity, PBR roughness/metalness, and `PCFShadowMap` soft shadows.
+- **Scientific vs. Presentation Lighting**: In `Scientific — faithful field colors` mode, field surfaces remain unlit and AO/Bloom cannot alter their colors. In `Presentation — PBR and studio HDRI` mode, both field-colored surfaces and uniform geometry respond to key/fill lights, an offline softbox HDRI processed with `PMREMGenerator`, roughness/metalness, soft shadows, and AO. Field values and color interpolation are unchanged, but lighting changes displayed brightness: use Scientific to read exact colors or the HSL Z component. Select **3D View → Visualization mode → Presentation** to reveal shape in a nearly uniform magnetization field. The Scientific/Presentation selector stays above all settings tabs; **Quality → Quality profile** separately chooses Interactive Lite, Interactive, Balanced, or Figure.
 - **High-Resolution PNG Export (`viewport3dImageExport.ts`)**: `captureViewport3DImage` captures `1×`, `2×`, or `4×` scaled frames (bounded by GPU limits up to `8192` px per edge / `16,000,000` pixels) with either matching viewport background or true **Transparent** background decoded cleanly from linear premultiplied `RGBA16F` composed targets (`unpremultiplySrgbChannel`), with optional scale-frame, legend, and orientation annotations.
 
 ```{image} /_static/images/ui/viewport-3d-studio-rendering.png
@@ -71,22 +77,12 @@ publication-quality rendering alongside strict quantitative safeguards:
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Controls, boundaries, and state synchronization
 
 - **Primary module**: `Viewport3DModule` and `Viewport3DCanvas` (`apps/control-room/src/modules/viewport-3d/`).
 - **Controls**: Ribbon **View** / **Results** / **Analysis** tabs, `Viewport3DAppearanceHud` (**View settings**), `Viewport3DSettingsDialog`, `Viewport3DCameraDialog`, and `ObjectVisualizationPanel`.
 - **Rendering boundary**: A rendered surface never guarantees element quality or mesh validity; inspect `MeshQualityStatisticsView` and backend validation diagnostics before claiming solver readiness.
-
-## Python/API crosswalk
-
-- The 3D viewport consumes published scene, mesh, and field resources and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect` scripts.
-- Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
-
-## Physics and bibliography scope
-
-This page covers WebGL scene composition, instanced glyph shading, HDRI studio lighting, and RGBA16F capture unpremultiplication; physical field equations are defined in the physics guides.
+- **Session synchronization**: The 3D viewport consumes published scene, mesh, and field resources and synchronizes visualization state cleanly across live browser sessions and Python `fm.connect()` scripts. Studio lighting, quality profiles, clipping, and PNG capture settings affect browser rendering only and never alter solver physics.
 
 ## Source-code index
 

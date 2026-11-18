@@ -53,6 +53,7 @@ import {
   Zap,
 } from "lucide-react";
 import { VIEW_DIRECTION_COMMANDS } from "@/modules/viewport-3d/public";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
@@ -1975,22 +1976,22 @@ function buildRenderQualityAction({
         items: [
           {
             commandId: "viewport-3d.profile-interactive-lite",
-            label: "Interactive Lite",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
             value: "interactive-lite",
           },
           {
             commandId: "viewport-3d.profile-interactive",
-            label: "Interactive",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
             value: "interactive",
           },
           {
             commandId: "viewport-3d.profile-balanced",
-            label: "Balanced",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
             value: "balanced",
           },
           {
             commandId: "viewport-3d.profile-figure",
-            label: "Figure",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
             value: "figure",
           },
           {

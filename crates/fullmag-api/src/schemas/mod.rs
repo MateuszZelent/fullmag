@@ -52,3 +52,5 @@ pub use frozen_spins::*;
 pub use planar_fields::*;
 pub use planar_monitors::*;
 pub use postprocessing_definitions::*;
+
+pub mod imported_surface;

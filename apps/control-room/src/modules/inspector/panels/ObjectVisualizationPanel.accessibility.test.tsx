@@ -9,12 +9,14 @@ import {
 import {
   NumberField,
   VisualizationDisplayPassesSection,
+  VisualizationWireframeGeometryScopeSection,
   VisualizationOverridesSection,
   VisualizationRenderModeSection,
 } from "./ObjectVisualizationTargetSection";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_OBJECT_VISUALIZATION,
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -149,6 +151,26 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('data-slot="inspector-property-row"');
     expect(html).toContain('data-slot="segmented-control"');
     expect(html).toContain('role="radio"');
+    expect(html).toContain('aria-checked="true"');
+  });
+
+  it("renders the FEM wireframe mesh choices as an accessible Surface/Full radio group", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationWireframeGeometryScopeSection
+        passControlsDisabled={false}
+        isFieldPending={() => false}
+        patch={vi.fn().mockResolvedValue(undefined)}
+        settings={DEFAULT_OBJECT_VISUALIZATION}
+      />,
+    );
+
+    expect(html).toContain("Wireframe mesh");
+    expect(html).toContain("Surface mesh");
+    expect(html).toContain("Full volume mesh");
+    expect(html).toContain("lighter surface preview");
+    expect(html).toContain("selected edge set returns");
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('aria-label="Wireframe mesh"');
     expect(html).toContain('aria-checked="true"');
   });
 

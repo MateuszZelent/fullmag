@@ -3972,6 +3972,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/objects/{object_id}/source-surface": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_objects_object_id_source_surface"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/objects/{object_id}/source-surface/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_objects_object_id_source_surface_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/oersted-fields": {
         parameters: {
             query?: never;
@@ -5206,6 +5238,38 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["workspace_get_workspace_material_library"];
+        put?: never;
+        post: operations["workspace_post_workspace_material_library"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/workspace/material-library/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["workspace_put_workspace_material_library_id"];
+        post?: never;
+        delete: operations["workspace_delete_workspace_material_library_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6538,6 +6602,7 @@ export interface components {
             transform?: Record<string, unknown> | null;
             universe?: Record<string, unknown> | null;
         } | {
+            assign_to_object_id?: string | null;
             /** Format: int64 */
             base_revision?: number | null;
             /** @enum {string} */
@@ -6546,6 +6611,7 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -10174,6 +10240,29 @@ export interface components {
             note?: string | null;
             triangle_count?: number | null;
         };
+        ImportedSourceSurfaceQuery: {
+            /** Format: int64 */
+            scene_revision: number;
+            source_sha256: string;
+        };
+        ImportedSourceSurfaceResource: {
+            bounds_max: number[];
+            bounds_min: number[];
+            coordinate_frame: string;
+            coordinate_unit: string;
+            node_count: number;
+            object_id: string;
+            purpose: string;
+            scale_to_metres: number[];
+            /** Format: int64 */
+            scene_revision: number;
+            /** @description This surface is source geometry, not a generated or validated volume mesh. */
+            solver_eligible: boolean;
+            source_sha256: string;
+            surface_id: string;
+            topology_format: string;
+            triangle_count: number;
+        };
         /** @enum {string} */
         InactiveSelectionPolicySchema: "warn_and_intersect" | "error";
         InstanceDiscoveryResource: {
@@ -10595,6 +10684,56 @@ export interface components {
             origin?: null | components["schemas"]["MaskLibraryCallResource"];
             time?: null | components["schemas"]["MaskFunctionResource"];
         };
+        MaterialLibraryDeleteRequest: {
+            /**
+             * Format: int64
+             * @description Revision of the entry being deleted.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryDeleteResource: {
+            /**
+             * Format: int64
+             * @description Catalog revision after deletion.
+             */
+            revision: number;
+        };
+        MaterialLibraryEntryResource: {
+            id: string;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            summary?: string | null;
+        };
+        /** @description The entry clock protects edits; the catalog clock invalidates shared readers. */
+        MaterialLibraryMutationResource: components["schemas"]["MaterialLibraryEntryResource"] & {
+            /** Format: int64 */
+            catalog_revision: number;
+        };
+        MaterialLibraryResource: {
+            entries: components["schemas"]["MaterialLibraryEntryResource"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        MaterialLibraryUpdateRequest: components["schemas"]["MaterialLibraryWriteRequest"] & {
+            /**
+             * Format: int64
+             * @description Revision of the entry being replaced, not the catalog revision.
+             */
+            base_revision: number;
+        };
+        MaterialLibraryWriteRequest: {
+            id?: string | null;
+            name: string;
+            properties: components["schemas"]["MaterialPropertiesResource"];
+            references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+            summary?: string | null;
+        };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
             /** Format: int64 */
@@ -10721,6 +10860,7 @@ export interface components {
             region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
+            source?: null | components["schemas"]["SceneMaterialSource"];
         };
         MaterializedDatasetActiveSupportResource: {
             selection?: null | components["schemas"]["MaterializedDatasetSelectionResource"];
@@ -14746,6 +14886,11 @@ export interface components {
         /** @enum {string} */
         SceneMaterialParameterName: "ms" | "aex" | "alpha" | "ku1" | "ku2" | "anisotropy_axis" | "kc1" | "kc2" | "kc3" | "dind" | "dbulk";
         SceneMaterialParameterValue: number | number[];
+        SceneMaterialReference: {
+            citation?: string | null;
+            label?: string | null;
+            url?: string | null;
+        };
         SceneMaterialResource: {
             id: string;
             name: string;
@@ -14753,6 +14898,30 @@ export interface components {
                 [key: string]: unknown;
             };
             references?: components["schemas"]["MaterialReferenceResource"][];
+            source?: null | components["schemas"]["SceneMaterialSource"];
+        };
+        SceneMaterialSource: {
+            catalog_id: string;
+            /** Format: int64 */
+            catalog_revision: number;
+            kind: components["schemas"]["SceneMaterialSourceKind"];
+            name: string;
+            properties: components["schemas"]["SceneMaterialSourceProperties"];
+            references?: components["schemas"]["SceneMaterialReference"][];
+        };
+        /** @enum {string} */
+        SceneMaterialSourceKind: "builtin" | "custom" | "modified";
+        SceneMaterialSourceProperties: {
+            /** Format: double */
+            Aex?: number | null;
+            /** Format: double */
+            Dbulk?: number | null;
+            /** Format: double */
+            Dind?: number | null;
+            /** Format: double */
+            Ms?: number | null;
+            /** Format: double */
+            alpha: number;
         };
         SceneMaterialTransition: {
             /** Format: int32 */
@@ -15608,6 +15777,7 @@ export interface components {
         SessionAssetImportResponse: {
             artifact_ref: string;
             asset_id: string;
+            content_sha256?: string | null;
             session_id: string;
             stored_path: string;
             summary: components["schemas"]["ImportedAssetSummary"];
@@ -17661,6 +17831,7 @@ export interface components {
             viewport_colorbar_visible: boolean;
             visible: boolean;
             wireframe_color: string;
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
             wireframe_opacity: number;
             wireframe_visible: boolean;
@@ -17800,6 +17971,7 @@ export interface components {
             vectors?: null | components["schemas"]["VectorLayerPatch"];
             visible?: boolean | null;
             wireframe?: null | components["schemas"]["BasicLayerPatch"];
+            wireframe_geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
         };
         /** @enum {string} */
         VisualizationTargetGeometryScope: "surface" | "full";
@@ -31098,6 +31270,93 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_objects_object_id_source_surface: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportedSourceSurfaceResource"];
+                };
+            };
+            /** @description Source or object unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source or scene changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_objects_object_id_source_surface_topology: {
+        parameters: {
+            query: {
+                scene_revision: number;
+                source_sha256: string;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path: {
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source-only FMMT v2: zero cells, triangular facets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Binary range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale scene or source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_oersted_fields: {
         parameters: {
             query?: never;
@@ -34880,6 +35139,212 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    workspace_get_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Built-in and user material entries with catalog revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryResource"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_post_workspace_material_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description User material created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material document */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material identity already exists or is read-only */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_put_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description User material replaced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryMutationResource"];
+                };
+            };
+            /** @description Invalid material or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    workspace_delete_workspace_material_library_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable custom material identity */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterialLibraryDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Material deleted and catalog revision advanced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterialLibraryDeleteResource"];
+                };
+            };
+            /** @description Invalid material identity or revision */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale revision or read-only built-in material */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Material catalog storage is unavailable */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

@@ -314,6 +314,8 @@ pub struct SceneMaterialResource {
     pub properties: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<MaterialReferenceResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<fullmag_authoring::SceneMaterialSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -1539,6 +1541,8 @@ pub struct MaterialResource {
     pub properties: MaterialPropertiesResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<MaterialReferenceResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<fullmag_authoring::SceneMaterialSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -2180,6 +2184,10 @@ pub enum AuthoringTransactionRequest {
         properties: MaterialPropertiesResource,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         references: Vec<MaterialReferenceResource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<fullmag_authoring::SceneMaterialSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assign_to_object_id: Option<String>,
     },
     PatchMaterial {
         #[serde(default)]

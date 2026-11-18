@@ -248,6 +248,8 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/objects/{object_id}/regions/reorder",
   "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}",
   "/v2/sessions/current/model/objects/{object_id}/regions/{region_id}/duplicate",
+  "/v2/sessions/current/model/objects/{object_id}/source-surface",
+  "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
   "/v2/sessions/current/model/oersted-fields",
   "/v2/sessions/current/model/oersted-fields/{id}",
   "/v2/sessions/current/model/physics-graph",
@@ -325,6 +327,8 @@ export const openApiV2PathLiterals = [
   "/v2/workspace/items/{id}/playback/frames/{frame_index}",
   "/v2/workspace/items/{id}/playback/geometry",
   "/v2/workspace/items/{id}/thumbnail",
+  "/v2/workspace/material-library",
+  "/v2/workspace/material-library/{id}",
   "/v2/workspace/roots",
   "/v2/workspace/scan",
   "/v2/workspace/settings/{key}"

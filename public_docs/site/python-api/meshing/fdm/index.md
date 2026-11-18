@@ -25,8 +25,8 @@ by FDM interaction and time-integration operators.
 (python-api-meshing-fdm-symbols-and-si-units)=
 ## Symbols and SI units
 
-All cell and distance values are SI metres. Counts, masks, fractions, strategy names, and mode names
-are dimensionless.
+All cell and distance values use SI metres ($\mathrm{m}$). Counts, masks, fractions, strategy names, and mode names
+are dimensionless ($1$).
 
 (python-api-meshing-fdm-assumptions-and-validity)=
 ## Assumptions and validity
@@ -40,14 +40,14 @@ Boundary-correction support remains interaction/device capability-gated.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FDM.cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values; cannot be combined with default_cell. | Legacy alias for the default native cell size. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.cell` |
-| `FDM.default_cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values. | Default native cell size inherited by magnets without an override. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.default_cell` |
-| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | 1 | Nonempty names and FDMGrid values. | Object-owned native grid overrides. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
-| `FDM.demag` | `FDMDemag \| None` | `None` | 1 | Typed, internally consistent demag policy. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
-| `FDM.projection_policy` | `str \| None` | `None` | 1 | `None` or the supported `unit_sphere` policy. | Projected-RK state constraint policy; `None` selects the qualified default. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.projection_policy` |
-| `FDM.boundary_correction` | `str \| None` | `None` | 1 | `none`, `volume`, or `full`. | Requested embedded-boundary correction. | Interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
-| `FDM.boundary_phi_floor` | `float \| None` | `None` | 1 | Strictly between zero and one. | Minimum stable partial-cell volume fraction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
-| `FDM.boundary_delta_min` | `float \| None` | `None` | m | Finite and nonnegative. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
+| `FDM.cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Three finite positive values; cannot be combined with `default_cell`. | Legacy alias for the default native cell size. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.cell` |
+| `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | Three finite positive values. | Default native cell size inherited by magnets without an override. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.default_cell` |
+| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | Nonempty names and `FDMGrid` values. | Object-owned native grid overrides. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDM.demag` | `FDMDemag \| None` | `None` | $1$ | Typed, internally consistent demag policy. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
+| `FDM.projection_policy` | `str \| None` | `None` | $1$ | `None` or the supported `unit_sphere` policy. | Projected-RK state constraint policy; `None` selects the qualified default. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.projection_policy` |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full`. | Requested embedded-boundary correction. | Interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Strictly between zero and one. | Minimum stable partial-cell volume fraction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Finite and nonnegative. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
 
 ```python
 # %% Complete stage-first FDM mesh scenario
@@ -115,24 +115,24 @@ model, and public boundary-correction fields do not establish universal kernel s
 ## Scientific bibliography
 
 1. A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for
-   nonuniform magnetization,” *J. Geophys. Res.* **98**, 9551–9555 (1993).
-2. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *Eur. Phys. J. B*
-   **92**, 120 (2019).
+   nonuniform magnetization,” *Journal of Geophysical Research: Solid Earth* **98**(B6), 9551–9555 (1993),
+   [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+2. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *The European Physical Journal B*
+   **92**(6), 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) |
+   [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
 
-(python-api-meshing-fdm-source-code-index)=
+## Control Room
 
-## Control Room crosswalk
+Control Room exposes a read-only structured-grid inspection panel for FDM studies ({doc}`/frontend/meshing/fdm-grid-view`); interactive authoring of `FDM`, `FDMGrid`, and `FDMDemag` remains `Python-only`.
 
-Status: Control Room exposes a read-only structured-grid inspection panel for FDM studies ({doc}`/frontend/meshing/fdm-grid-view`); interactive authoring of `FDM`, `FDMGrid`, and `FDMDemag` remains `not implemented` in the browser.
-
-| Python/API surface | Control Room path | Status | Transaction |
+| Python/API surface | Control Room path | Status | Interaction |
 |---|---|---|---|
 | Structured grid dimensions and inspection | `Model Explorer -> Study / Discretization (FDM grid view)` | `inspection-only` | Read-only grid dimensions, cell spacing, and domain extents ({doc}`/frontend/meshing/fdm-grid-view`) |
-| Authoring `FDM`, `FDMGrid`, and `FDMDemag` fields | `See the capability register; no editable FDM authoring route is established` | `not implemented` | Python-only until implemented |
+| Authoring `FDM`, `FDMGrid`, and `FDMDemag` fields | — | `Python-only` | Configured directly in Python |
 
-See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
+See {doc}`/frontend/meshing/fdm-grid-view` and [Control Room capability register](/frontend/capability-register) for browser support details (`apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx`).
 
+(python-api-meshing-fdm-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

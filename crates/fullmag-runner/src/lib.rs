@@ -159,6 +159,8 @@ pub(crate) mod fem;
 mod fem_baseline;
 mod fem_eigen;
 mod frequency_response;
+#[cfg(any(feature = "fem-gpu", test))]
+pub use frequency_response::{frequency_response_input_descriptor, FrequencyResponseInputDescriptor};
 pub mod frames_index;
 pub mod hysteresis;
 pub mod interactive;
@@ -166,6 +168,7 @@ mod interactive_runtime;
 mod live_demand;
 mod mask_time;
 pub use live_demand::{live_quantity_demand, set_live_quantity_demand};
+mod live_field_cadence;
 mod native_fem;
 mod native_fem_cuda_trace;
 pub use native_fem_cuda_trace::{fem_cuda_trace_available, FemCudaTrace, FemCudaTraceEnd, FemCudaTraceStats};
@@ -678,6 +681,7 @@ pub use solver_trace::{
     SolverTraceSegment, SolverTraceSegmentKind, SolverTraceValidationError,
     SOLVER_TRACE_FORMAT_VERSION,
 };
+pub use live_field_cadence::LiveFieldCadence;
 pub use timestep_qualification::{
     validation_state_for, TimestepExecutionIdentityKey, TimestepPolicyKind,
     QUALIFICATION_REGISTRY_VERSION,
@@ -3254,6 +3258,40 @@ pub fn study_magnetization_layout_for_plan(
     if matches!(plan.backend_plan, BackendPlanIR::AntennaFieldOnly(_)) {
         return Err(field_only_plan_not_executable_as_llg());
     }
+    if let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan {
+        if response.fe_order != 1 || plan.common.resolved_backend != fullmag_ir::BackendTarget::Fem {
+            return Err(RunError {
+                message: "study magnetization input is unsupported for FEM frequency-response layout outside native H1/P1".into(),
+            });
+        }
+        if !matches!(
+            &response.equilibrium,
+            &fullmag_ir::EquilibriumSourceIR::Provided
+        ) {
+            return Err(RunError {
+                message: "study magnetization input currently requires a provided FEM frequency-response equilibrium M0".into(),
+            });
+        }
+        let semantics = artifacts::fem_frequency_response_equilibrium_field_semantics(plan)
+            .map_err(|message| RunError { message })?
+            .ok_or_else(|| RunError {
+                message: "FEM frequency-response equilibrium M0 support semantics are unavailable".into(),
+            })?;
+        let mut layout = serde_json::json!({
+            "backend": "fem",
+            "mesh_name": response.mesh.mesh_name,
+            "mesh_source": response.mesh_source,
+            "fe_order": response.fe_order,
+            "hmax": response.hmax,
+            "topology_fingerprint": response.mesh.topology_fingerprint_v6(),
+            "n_nodes": response.mesh.nodes.len(),
+            "n_elements": response.mesh.cell_count(),
+        });
+        layout["field_semantics"] = serde_json::to_value(semantics).map_err(|error| RunError {
+            message: format!("serialize canonical FEM frequency-response M0 semantics: {error}"),
+        })?;
+        return Ok(layout);
+    }
     let mut layout = artifacts::field_layout(plan);
     let backend = layout
         .get("backend")
@@ -3286,7 +3324,13 @@ fn bind_live_magnetization_layout(
     plan: &fullmag_ir::ExecutionPlanIR,
     mut downstream: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> impl FnMut(StepUpdate) -> StepAction + Send {
-    let layout = study_magnetization_layout_for_plan(plan).ok();
+    // The FR canonical FEM layout belongs only to its provided equilibrium
+    // input. Do not publish it as a live or terminal FR response-field layout.
+    let layout = if matches!(plan.backend_plan, BackendPlanIR::FemFrequencyResponse(_)) {
+        None
+    } else {
+        study_magnetization_layout_for_plan(plan).ok()
+    };
     let expected_sample_count = layout
         .as_ref()
         .and_then(|layout| study_plan_state_sample_count(plan, layout).ok());
@@ -3355,6 +3399,9 @@ pub fn materialize_study_magnetization_input(
     materialize_study_magnetization_input_with_overlay(plan, source_layout, values, None)
 }
 
+const FEM_FREQUENCY_RESPONSE_M0_ACTIVE_NORM_THRESHOLD: f64 = 1.0e-12;
+const FEM_FREQUENCY_RESPONSE_M0_UNIT_NORM_TOLERANCE: f64 = 1.0e-8;
+
 /// Apply an accepted predecessor and keep the canonical authored samples only
 /// at degrees of freedom selected by the qualified overlay scopes.
 pub fn materialize_study_magnetization_input_with_overlay(
@@ -3363,6 +3410,11 @@ pub fn materialize_study_magnetization_input_with_overlay(
     values: &[[f64; 3]],
     overlay: Option<(&fullmag_ir::ProblemIR, &[fullmag_ir::RegionRefIR])>,
 ) -> Result<fullmag_ir::ExecutionPlanIR, RunError> {
+    if matches!(plan.backend_plan, BackendPlanIR::FemFrequencyResponse(_)) && overlay.is_some() {
+        return Err(RunError {
+            message: "provided FEM frequency-response equilibrium M0 cannot be altered by a study overlay".into(),
+        });
+    }
     let expected_layout = study_magnetization_layout_for_plan(plan)?;
     if &expected_layout != source_layout {
         return Err(RunError {
@@ -3384,6 +3436,43 @@ pub fn materialize_study_magnetization_input_with_overlay(
                 values.len()
             ),
         });
+    }
+
+    if matches!(plan.backend_plan, BackendPlanIR::FemFrequencyResponse(_)) {
+        let active_mask = expected_layout["field_semantics"]["active_node_mask"]
+            .as_array()
+            .ok_or_else(|| RunError {
+                message: "FEM frequency-response M0 layout has no canonical magnetic support mask".into(),
+            })?;
+        if active_mask.len() != expected_samples {
+            return Err(RunError {
+                message: "FEM frequency-response M0 support mask does not match the canonical sample count".into(),
+            });
+        }
+        for (index, (value, active)) in values.iter().zip(active_mask).enumerate() {
+            let active = active.as_bool().ok_or_else(|| RunError {
+                message: "FEM frequency-response M0 support mask contains a non-boolean sample".into(),
+            })?;
+            if active {
+                let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+                if !norm.is_finite()
+                    || norm <= FEM_FREQUENCY_RESPONSE_M0_ACTIVE_NORM_THRESHOLD
+                    || (norm - 1.0).abs() > FEM_FREQUENCY_RESPONSE_M0_UNIT_NORM_TOLERANCE
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "FEM frequency-response equilibrium M0 at magnetic node {index} must be unit length within 1e-8 and exceed the native 1e-12 support threshold (norm={norm:.17e})"
+                        ),
+                    });
+                }
+            } else if value.iter().any(|component| *component != 0.0) {
+                return Err(RunError {
+                    message: format!(
+                        "FEM frequency-response equilibrium M0 has a nonzero value at non-magnetic node {index}"
+                    ),
+                });
+            }
+        }
     }
 
     let authored_mask = overlay.map(|(problem, scopes)| {
@@ -3420,6 +3509,9 @@ pub fn materialize_study_magnetization_input_with_overlay(
             }
         }
         fullmag_ir::BackendPlanIR::Fem(fem) => copy_predecessor(&mut fem.initial_magnetization, 0),
+        fullmag_ir::BackendPlanIR::FemFrequencyResponse(response) => {
+            copy_predecessor(&mut response.equilibrium_magnetization, 0)
+        }
         _ => unreachable!("accepted layout was validated above"),
     }
     Ok(materialized)
@@ -3474,6 +3566,24 @@ fn study_plan_state_sample_count(
                 .ok_or_else(invalid_layout)?;
             if sample_count != fem.mesh.nodes.len()
                 || sample_count != fem.initial_magnetization.len()
+            {
+                return Err(invalid_layout());
+            }
+            Ok(sample_count)
+        }
+        (fullmag_ir::BackendPlanIR::FemFrequencyResponse(response), Some("fem"))
+            if response.fe_order == 1 =>
+        {
+            let sample_count = layout["n_nodes"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(invalid_layout)?;
+            if sample_count != response.mesh.nodes.len()
+                || sample_count != response.equilibrium_magnetization.len()
+                || layout["topology_fingerprint"]
+                    != response.mesh.topology_fingerprint_v6()
+                || layout["n_elements"].as_u64()
+                    != Some(response.mesh.cell_count() as u64)
             {
                 return Err(invalid_layout());
             }
@@ -4221,7 +4331,7 @@ fn run_planned_problem_with_callback_artifact_context(
                 &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
-                    field_every_n,
+                    field_cadence: LiveFieldCadence::every_n_steps(field_every_n),
                     initial_snapshot: false,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4244,7 +4354,7 @@ fn run_planned_problem_with_callback_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
-                    field_every_n,
+                    LiveFieldCadence::every_n_steps(field_every_n),
                     live_layout.as_ref(),
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
@@ -4266,7 +4376,7 @@ fn run_planned_problem_with_callback_artifact_context(
             let crossover_decision = resolution.fem_crossover_decision.clone();
             let live = Some(types::LiveStepConsumer {
                 grid: [0, 0, 0],
-                field_every_n,
+                field_cadence: LiveFieldCadence::every_n_steps(field_every_n),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
@@ -4652,7 +4762,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         output_dir,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4667,7 +4777,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     until_seconds: f64,
     output_dir: &Path,
     autosave_root: &Path,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
@@ -4680,7 +4790,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        field_cadence,
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4714,7 +4824,7 @@ pub fn run_planned_problem_with_live_preview_and_artifact_identity(
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -4738,7 +4848,7 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context(
 ) -> Result<RunResult, RunError> {
     run_planned_problem_with_live_preview_and_frozen_stage_context_and_observer(
         problem, plan, until_seconds, output_dir, autosave_root, interrupt_requested,
-        frozen, source_frozen_plan, u64::MAX, |_| StepAction::Continue,
+        frozen, source_frozen_plan, LiveFieldCadence::every_n_steps(u64::MAX), |_| StepAction::Continue,
     )
 }
 
@@ -4753,12 +4863,12 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observ
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     frozen: &constraints::FrozenStageContextV1,
     source_frozen_plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let display_selection = DisplaySelectionState::default;
     run_planned_problem_with_live_preview_artifact_context(problem, plan, None, until_seconds,
-        output_dir, autosave_root, field_every_n, &display_selection, interrupt_requested,
+        output_dir, autosave_root, field_cadence, &display_selection, interrupt_requested,
         false, on_step, None, Some((frozen, source_frozen_plan)))
 }
 
@@ -4779,6 +4889,29 @@ fn live_step_action_with_interrupt<T>(
     }
 }
 
+fn with_interruptible_fem_live_consumer<R>(
+    live: types::LiveStepConsumer<'_>,
+    execute: impl for<'consumer> FnOnce(types::LiveStepConsumer<'consumer>) -> R,
+) -> R {
+    let types::LiveStepConsumer {
+        grid, field_cadence, initial_snapshot, display_selection,
+        interrupt_requested, on_step,
+    } = live;
+    // The native step loops consume callback actions at accepted boundaries.
+    // Forward the shared Stop flag even when the observer only publishes data.
+    let mut interruptible_on_step = |update| {
+        live_step_action_with_interrupt(update, on_step, interrupt_requested)
+    };
+    execute(types::LiveStepConsumer {
+        grid,
+        field_cadence,
+        initial_snapshot,
+        display_selection,
+        interrupt_requested,
+        on_step: &mut interruptible_on_step,
+    })
+}
+
 fn run_planned_problem_with_live_preview_artifact_context(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -4786,7 +4919,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
     until_seconds: f64,
     output_dir: &Path,
     autosave_root: &Path,
-    field_every_n: u64,
+    field_cadence: LiveFieldCadence,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
@@ -4801,6 +4934,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
         if !update.terminal_field_snapshot { performance.observe(&update.stats); }
         consumer(update)
     };
+    let field_every_n = field_cadence.every_n();
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
     if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
@@ -4878,7 +5012,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 &runtime_outputs,
                 Some(types::LiveStepConsumer {
                     grid,
-                    field_every_n,
+                    field_cadence: field_cadence.clone(),
                     initial_snapshot,
                     display_selection: live_display_selection,
                     interrupt_requested,
@@ -4908,7 +5042,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 &runtime_outputs,
                 Some((
                     &fdm.common_cells,
-                    field_every_n,
+                    field_cadence.clone(),
                     live_layout.as_ref(),
                     &mut interruptible_on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
@@ -4933,39 +5067,42 @@ fn run_planned_problem_with_live_preview_artifact_context(
                 dispatch::fem_engine_label(resolution.engine),
                 resolution.fallback.as_ref().map(|f| &f.reason),
             );
-            let live = Some(types::LiveStepConsumer {
+            let live = types::LiveStepConsumer {
                 grid: [0, 0, 0],
-                field_every_n,
+                field_cadence: field_cadence.clone(),
                 initial_snapshot,
                 display_selection: live_display_selection,
                 interrupt_requested,
                 on_step: &mut on_step,
-            });
-            let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax_with_context_in_mode(
-                    fem_engine_kind(resolution.engine),
-                    fem,
-                    fem_stage_context.as_ref().expect("FEM stage context"),
-                    until_seconds,
-                    &runtime_outputs,
-                    live,
-                    artifact_writer.clone(),
-                    Some(&physics_execution_context),
-                    plan.common.execution_mode,
-                )
-            } else {
-                dispatch::execute_fem_with_context_in_mode(
-                    resolution.engine,
-                    fem,
-                    fem_stage_context.as_ref().expect("FEM stage context"),
-                    until_seconds,
-                    &runtime_outputs,
-                    live,
-                    artifact_writer.clone(),
-                    Some(&physics_execution_context),
-                    plan.common.execution_mode,
-                )
-            }?;
+            };
+            let mut executed = with_interruptible_fem_live_consumer(live, |live| {
+                let live = Some(live);
+                if fem.relaxation.is_some() {
+                    fem::relax::execute_fem_relax_with_context_in_mode(
+                        fem_engine_kind(resolution.engine),
+                        fem,
+                        fem_stage_context.as_ref().expect("FEM stage context"),
+                        until_seconds,
+                        &runtime_outputs,
+                        live,
+                        artifact_writer.clone(),
+                        Some(&physics_execution_context),
+                        plan.common.execution_mode,
+                    )
+                } else {
+                    dispatch::execute_fem_with_context_in_mode(
+                        resolution.engine,
+                        fem,
+                        fem_stage_context.as_ref().expect("FEM stage context"),
+                        until_seconds,
+                        &runtime_outputs,
+                        live,
+                        artifact_writer.clone(),
+                        Some(&physics_execution_context),
+                        plan.common.execution_mode,
+                    )
+                }
+            })?;
             attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
             attach_fem_crossover_decision_to_executed_run(&mut executed, crossover_decision);
             Ok(executed)
@@ -5233,7 +5370,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         until_seconds,
         output_dir,
         autosave_root,
-        field_every_n,
+        LiveFieldCadence::every_n_steps(field_every_n),
         display_selection,
         interrupt_requested,
         initial_snapshot,
@@ -5263,8 +5400,8 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             field_every_n, display_selection, interrupt_requested, initial_snapshot, hysteresis_stage_id, on_step);
     }
     run_planned_problem_with_live_preview_artifact_context(problem, plan, fem_mesh_identity,
-        until_seconds, output_dir, autosave_root, field_every_n, display_selection,
-        interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
+        until_seconds, output_dir, autosave_root, LiveFieldCadence::every_n_steps(field_every_n),
+        display_selection, interrupt_requested, initial_snapshot, on_step, None, frozen_stage)
 }
 
 /// Run an FDM problem using a persistent interactive runtime for low-latency
@@ -7141,6 +7278,9 @@ pub fn run_eigen_k_worker_request_file(
 }
 
 #[cfg(test)]
+mod fem_live_control_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -7873,6 +8013,222 @@ mod tests {
             },
         };
         problem
+    }
+
+    fn fem_frequency_response_air_support_problem() -> fullmag_ir::ProblemIR {
+        let mut problem = fem_frequency_response_validation_problem(vec![1.0e9]);
+        problem.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+            boundary_marker: Some(99),
+            ..Default::default()
+        });
+        problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+            fdm_grid_assets: Vec::new(),
+            fem_mesh_assets: Vec::new(),
+            fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+                mesh_source: None,
+                mesh: Some(fullmag_ir::MeshIR {
+                    mesh_name: "frequency-response-air-support".into(),
+                    nodes: vec![
+                        [0.0, 0.0, 0.0],
+                        [1.0e-9, 0.0, 0.0],
+                        [0.0, 1.0e-9, 0.0],
+                        [0.0, 0.0, 1.0e-9],
+                        [-2.0e-9, -2.0e-9, -2.0e-9],
+                        [2.0e-9, -2.0e-9, -2.0e-9],
+                        [-2.0e-9, 2.0e-9, -2.0e-9],
+                        [-2.0e-9, -2.0e-9, 2.0e-9],
+                    ],
+                    cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
+                        [0, 1, 2, 3],
+                        [4, 5, 6, 7],
+                    ]),
+                    element_markers: vec![1, 0],
+                    facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                        [0, 1, 2],
+                        [4, 5, 6],
+                    ]),
+                    boundary_markers: vec![1, 99],
+                    periodic_boundary_pairs: Vec::new(),
+                    periodic_node_pairs: Vec::new(),
+                    per_domain_quality: std::collections::HashMap::new(),
+                }),
+                region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                    geometry_name: "strip".into(),
+                    marker: 1,
+                }],
+                object_region_markers: Vec::new(),
+                build_report: None,
+            }),
+        });
+        problem
+    }
+
+    fn fem_frequency_response_plan_and_input_layout(
+    ) -> (fullmag_ir::ExecutionPlanIR, serde_json::Value) {
+        let plan = fullmag_plan::plan(&fem_frequency_response_air_support_problem())
+            .expect("provided FEM frequency-response fixture should plan");
+        let layout = study_magnetization_layout_for_plan(&plan)
+            .expect("FMR M0 must have a canonical FEM H1/P1 input layout");
+        (plan, layout)
+    }
+
+    fn unit_fem_frequency_response_m0(layout: &serde_json::Value) -> Vec<[f64; 3]> {
+        layout["field_semantics"]["active_node_mask"]
+            .as_array()
+            .expect("canonical FEM support mask")
+            .iter()
+            .enumerate()
+            .map(|(index, active)| {
+                if !active.as_bool().expect("boolean support") {
+                    return [0.0; 3];
+                }
+                match index % 4 {
+                    0 => [1.0 + 2.0e-9, 0.0, 0.0],
+                    1 => [0.0, 1.0 - 2.0e-9, 0.0],
+                    2 => [0.0, 0.0, 1.0],
+                    _ => [-1.0, 0.0, 0.0],
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fem_frequency_response_materializes_exact_canonical_m0_without_changing_output_layout() {
+        let problem = fem_frequency_response_air_support_problem();
+        let plan = fullmag_plan::plan(&problem)
+            .expect("provided FEM frequency-response fixture should plan");
+        let original_plan = plan.clone();
+        let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+            panic!("fixture must resolve to a FEM frequency-response plan");
+        };
+        let node_count = response.mesh.nodes.len();
+        assert_eq!(response.equilibrium_magnetization.len(), node_count);
+
+        let input_layout = study_magnetization_layout_for_plan(&plan)
+            .expect("FMR M0 must have a canonical FEM H1/P1 input layout");
+        assert_eq!(input_layout["backend"], "fem");
+        assert_eq!(input_layout["n_nodes"].as_u64(), Some(node_count as u64));
+        assert_eq!(
+            input_layout["field_semantics"]["active_node_mask"],
+            json!([true, true, true, true, false, false, false, false])
+        );
+        let mut time_domain_problem = problem.clone();
+        let mut dynamics = time_domain_problem.study.dynamics().clone();
+        let fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. } = &mut dynamics else {
+            panic!("time-domain fixture should carry LLG dynamics");
+        };
+        *fixed_timestep = Some(1.0e-16);
+        let mut sampling = time_domain_problem.study.sampling().clone();
+        sampling.outputs.clear();
+        time_domain_problem.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
+        let time_domain_plan = fullmag_plan::plan(&time_domain_problem)
+            .expect("matching time-domain FEM fixture should plan");
+        assert_eq!(
+            input_layout,
+            study_magnetization_layout_for_plan(&time_domain_plan)
+                .expect("time-domain FEM M layout")
+        );
+        let output_layout = artifacts::field_layout(&plan);
+        assert_eq!(output_layout["backend"], "fem_frequency_response");
+        assert_ne!(input_layout, output_layout);
+
+        let active_mask = input_layout["field_semantics"]["active_node_mask"]
+            .as_array()
+            .expect("canonical FEM support mask");
+        let values = active_mask
+            .iter()
+            .enumerate()
+            .map(|(index, active)| {
+                if active.as_bool().expect("boolean support") {
+                    match index % 4 {
+                        0 => [1.0 + 2.0e-9, 0.0, 0.0],
+                        1 => [0.0, 1.0 - 2.0e-9, 0.0],
+                        2 => [0.0, 0.0, 1.0],
+                        _ => [-1.0, 0.0, 0.0],
+                    }
+                } else {
+                    [0.0; 3]
+                }
+            })
+            .collect::<Vec<_>>();
+        let materialized = materialize_study_magnetization_input(&plan, &input_layout, &values)
+            .expect("valid provided M0 binds to the accepted FR equilibrium input");
+        assert_eq!(plan, original_plan, "input plan must remain immutable");
+        let BackendPlanIR::FemFrequencyResponse(materialized_response) = &materialized.backend_plan
+        else {
+            panic!("materialization must preserve the FR plan variant");
+        };
+        for (actual, expected) in materialized_response
+            .equilibrium_magnetization
+            .iter()
+            .flatten()
+            .zip(values.iter().flatten())
+        {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
+        let mut same_count_other_mesh = input_layout.clone();
+        same_count_other_mesh["topology_fingerprint"] = json!(format!("sha256:{}", "f".repeat(64)));
+        assert_eq!(same_count_other_mesh["n_nodes"], node_count);
+        assert!(materialize_study_magnetization_input(&plan, &same_count_other_mesh, &values)
+            .is_err());
+
+        let mut nonzero_air = values.clone();
+        nonzero_air[4] = [0.0, 0.0, 1.0];
+        assert!(materialize_study_magnetization_input(&plan, &input_layout, &nonzero_air)
+            .is_err());
+
+        let mut wrong_support = input_layout.clone();
+        wrong_support["field_semantics"]["active_node_mask"][4] = json!(true);
+        assert!(materialize_study_magnetization_input(&plan, &wrong_support, &values).is_err());
+
+        assert!(materialize_study_magnetization_input(
+            &plan,
+            &input_layout,
+            &values[..values.len() - 1],
+        )
+        .is_err());
+
+        let mut unsupported_p2 = plan.clone();
+        let BackendPlanIR::FemFrequencyResponse(response) = &mut unsupported_p2.backend_plan else {
+            unreachable!("fixture must retain the FR plan variant");
+        };
+        response.fe_order = 2;
+        assert!(study_magnetization_layout_for_plan(&unsupported_p2).is_err());
+
+        let mut unmaterialized_artifact = plan.clone();
+        let BackendPlanIR::FemFrequencyResponse(response) = &mut unmaterialized_artifact.backend_plan
+        else {
+            unreachable!("fixture must retain the FR plan variant");
+        };
+        response.equilibrium = fullmag_ir::EquilibriumSourceIR::Artifact {
+            path: "equilibrium/unloaded.json".into(),
+        };
+        assert!(study_magnetization_layout_for_plan(&unmaterialized_artifact).is_err());
+    }
+
+    #[test]
+    fn fem_frequency_response_rejects_zero_m0_on_magnetic_support() {
+        let (plan, layout) = fem_frequency_response_plan_and_input_layout();
+        let mut values = unit_fem_frequency_response_m0(&layout);
+        values[0] = [0.0; 3];
+        assert!(materialize_study_magnetization_input(&plan, &layout, &values).is_err());
+    }
+
+    #[test]
+    fn fem_frequency_response_rejects_tiny_m0_below_native_compaction_threshold() {
+        let (plan, layout) = fem_frequency_response_plan_and_input_layout();
+        let mut values = unit_fem_frequency_response_m0(&layout);
+        values[1] = [1.0e-13, 0.0, 0.0];
+        assert!(materialize_study_magnetization_input(&plan, &layout, &values).is_err());
+    }
+
+    #[test]
+    fn fem_frequency_response_rejects_nonunit_m0_outside_native_preflight_tolerance() {
+        let (plan, layout) = fem_frequency_response_plan_and_input_layout();
+        let mut values = unit_fem_frequency_response_m0(&layout);
+        values[2] = [0.5, 0.0, 0.0];
+        assert!(materialize_study_magnetization_input(&plan, &layout, &values).is_err());
     }
 
     fn topology_guard_frequency_plan_mut(
@@ -11092,7 +11448,7 @@ mod tests {
             2e-13,
             &output_dir,
             &output_dir,
-            1,
+            LiveFieldCadence::every_n_steps(1),
             &display_selection,
             None,
             true,

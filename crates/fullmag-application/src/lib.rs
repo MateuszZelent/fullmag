@@ -29,6 +29,19 @@ pub mod script_source_capture;
 pub mod script_stage_contract;
 pub mod script_stage_materialization;
 mod study_artifact;
+mod study_frequency_response_artifact;
+
+pub use study_frequency_response_artifact::{
+    decode_frequency_response_index_bundle, decode_frequency_response_point_bundle,
+    encode_frequency_response_index_bundle, encode_frequency_response_point_bundle,
+    validate_frequency_response_sweep_bundles, FrequencyResponseBundle,
+    FrequencyResponseBundleIdentity, FrequencyResponseBundleManifest,
+    FrequencyResponsePayloadReference, FrequencyResponsePointMetadata,
+    FrequencyResponsePointReference, FREQUENCY_RESPONSE_BUNDLE_MAX_BYTES,
+    FREQUENCY_RESPONSE_CODEC_VERSION, FREQUENCY_RESPONSE_INDEX_CODEC_ID,
+    FREQUENCY_RESPONSE_MANIFEST_MAX_BYTES, FREQUENCY_RESPONSE_POINT_CODEC_ID,
+};
+
 mod study_execution_materialization;
 mod task_execution;
 

@@ -755,6 +755,8 @@ export type AuthoringTransactionRequest =
     })
   | (BaseAuthoringTransaction & {
       kind: "create_material";
+      source?: SceneMaterialSource | null;
+      assign_to_object_id?: string | null;
       material_id: string;
       name: string;
       properties: MaterialPropertiesResource;
@@ -1472,3 +1474,16 @@ export interface WorkspaceRootWire {
   readonly recursive: boolean;
   readonly enabled: boolean;
 }
+
+export type ImportedSourceSurfaceResource = components["schemas"]["ImportedSourceSurfaceResource"];
+export type ImportedSourceSurfaceQuery = components["schemas"]["ImportedSourceSurfaceQuery"];
+
+export type MaterialLibraryResource = components["schemas"]["MaterialLibraryResource"];
+export type MaterialLibraryMutationResource = components["schemas"]["MaterialLibraryMutationResource"];
+export type MaterialLibraryEntryResource = components["schemas"]["MaterialLibraryEntryResource"];
+export type MaterialLibraryWriteRequest = components["schemas"]["MaterialLibraryWriteRequest"];
+export type MaterialLibraryUpdateRequest = components["schemas"]["MaterialLibraryUpdateRequest"];
+export type MaterialLibraryDeleteRequest = components["schemas"]["MaterialLibraryDeleteRequest"];
+export type MaterialLibraryDeleteResource = components["schemas"]["MaterialLibraryDeleteResource"];
+export type SceneMaterialSource = components["schemas"]["SceneMaterialSource"];
+export type SceneMaterialResource = components["schemas"]["SceneMaterialResource"];

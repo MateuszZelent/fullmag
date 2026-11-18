@@ -14,6 +14,7 @@ from docker_build_control import ControlOutcomeUnknown
 import docker_dev_codegen as codegen
 import docker_volume_dev as dev
 import docker_volume_reconcile as reconcile
+import docker_volume_linux_supervision_stop as supervision_stop
 import docker_build_control as build_control
 import docker_development_inputs as frontend_inputs
 import fullmag_storage
@@ -146,7 +147,13 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
         logger.stdin.close.side_effect = lambda: setattr(logger.stdin, 'closed', True)
         writes = {}
         control.write.side_effect = lambda path, value: writes.__setitem__(path, copy.deepcopy(value))
-        control.read.return_value = {'retained': 'same'}
+        retained_documents = {
+            'backend-cache.json': {'cache': 'retained'},
+            'host-ledger.json': {'schema': 'legacy-host-ledger'},
+            'ledger-maintenance-compose.json': {'services': {'host-ledger-maintenance': {}}},
+        }
+        control.read.side_effect = lambda path, optional=False: copy.deepcopy(
+            retained_documents.get(path.rsplit('/', 1)[-1], {'retained': 'same'}))
         backend_image, frontend_image = 'sha256:' + '1'*64, 'sha256:' + '2'*64
         backend = {'Id': 'b'*64, 'Image': backend_image,
                    'State': {'StartedAt': 'backend-start', 'Running': True, 'Health': {'Status': 'healthy'}}}
@@ -157,9 +164,16 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
                         'HostConfig': {'Memory': 8 * 1024**3 + (1 if fault == 'memory-drift' else 0)},
                         'State': {'StartedAt': 'new-start', 'Running': True, 'Health': {'Status': 'healthy'}}}
         observed = {'backend': backend, 'frontend': old_frontend}
-        document = {'services': {'backend': {'image': backend_image, 'same': 'declaration'},
+        document = {'services': {'backend': {'image': backend_image, 'same': 'declaration',
+                                             'environment': {
+                                                 'FULLMAG_HOST_LEDGER_PROFILE': 'host-ledger-v1',
+                                                 'FULLMAG_HOST_LEDGER_MOUNT_ROOT': '/host/ledger',
+                                                 'FULLMAG_HOST_LEDGER_PROJECT_ID': 'project-id',
+                                                 'FULLMAG_HOST_LEDGER_BACKING_IMAGE': 'backing-image',
+                                             }},
                                 'frontend': {'image': backend_image, 'mem_limit': str(6 * 1024**3),
                                              'environment': {'FULLMAG_FRONTEND_HOST_PORT': '3202'},
+                                             'volumes': [],
                                              'tmpfs': ['/tmp:rw,size=512m']}},
                     'volumes': {'frontend-build': {'name': 'old-volume'}, 'backend-cache': {'name': 'same'}}}
         before = copy.deepcopy(document)
@@ -373,7 +387,40 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
                     'backend_container': 'b'*64, 'frontend_container': 'f'*64,
                     'inputs': {'source_root': str(source), 'image_id': backend_image}}
         control = mock.Mock(project='own')
-        control.read.side_effect = lambda path, optional=False: (None if optional else document if path.endswith('/compose.json') else previous)
+        archive_path = ('recreate-services/attempts/' + 'd'*32
+                        + '/runtime-control-archive-terminal.json')
+        archive_raw = build_control.canonical({
+            'state': 'succeeded', 'compose_project': 'own',
+        }) + b'\n'
+        prepared_record = {
+            'schema': supervision_stop.PREPARED_QUARANTINE_SCHEMA,
+            'state': 'archived',
+            'fresh_archive': {
+                'path': archive_path,
+                'sha256': hashlib.sha256(archive_raw).hexdigest(),
+            },
+        }
+        prepared_raw = build_control.canonical(prepared_record) + b'\n'
+
+        def read_control(path, optional=False):
+            if path == supervision_stop.PREPARED_QUARANTINE:
+                self.assertTrue(optional)
+                return prepared_record
+            if optional:
+                return None
+            return document if path.endswith('/compose.json') else previous
+
+        def read_control_bytes(path, *, optional=False):
+            if path == supervision_stop.PREPARED_QUARANTINE:
+                self.assertTrue(optional)
+                return prepared_raw
+            if path == archive_path:
+                self.assertFalse(optional)
+                return archive_raw
+            self.fail(f'unexpected control byte read: {path}')
+
+        control.read.side_effect = read_control
+        control.read_bytes.side_effect = read_control_bytes
         args = SimpleNamespace(repo_root=str(Path(__file__).resolve().parent.parent), source_root=str(source),
                                attempt='a'*32, config_sha256=hashlib.sha256(build_control.canonical(document)).hexdigest(),
                                port=3202)
@@ -406,6 +453,10 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
                     dev._retained_operation(args, recreate_services=False)
             else:
                 dev._retained_operation(args, recreate_services=False)
+            self.assertEqual(control.read_bytes.call_args_list, [
+                mock.call(supervision_stop.PREPARED_QUARANTINE, optional=True),
+                mock.call(archive_path),
+            ])
             return validate, refresh, resume, backend_image, frontend_image
 
     def test_legacy_resume_is_only_dispatched_to_controlled_recreation(self):

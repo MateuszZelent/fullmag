@@ -65,6 +65,11 @@ import {
   prepareAuthoringMutation,
   recordAuthoringMutationHistory,
 } from "./authoringHistoryMutation";
+import {
+  importStlSourceGeometry,
+  STL_LENGTH_UNITS,
+  type StlLengthUnit,
+} from "./importedStlImport";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
 import { studyComputeDraftBlockedReason } from "./studyComputeDraftGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
@@ -1494,6 +1499,133 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
   primitiveDraftCommand("geometry.add-thin-film", "Add Thin Film", "box", "thin-film"),
   primitiveDraftCommand("geometry.add-cylinder", "Add Cylinder", "cylinder"),
   primitiveDraftCommand("geometry.add-sphere", "Add Sphere", "sphere"),
+  {
+    id: "geometry.import-stl",
+    title: "Import STL Surface",
+    category: "Geometry",
+    group: "geometry",
+    scope: "workspace",
+    isEnabled: (context) => Boolean(context.api && context.sessionScopeKey),
+    disabledReason: (context) => !context.api
+      ? "Control-room API is unavailable."
+      : !context.sessionScopeKey
+        ? "Open a project workspace before importing an STL surface."
+        : null,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+      if (!context.sessionScopeKey) {
+        return { message: "Open a project workspace before importing an STL surface.", status: "failed" };
+      }
+      const input = asRecord(context.input);
+      const file = input?.file;
+      const units = input?.units;
+      const scale = input?.scale;
+      if (
+        !file ||
+        typeof file !== "object" ||
+        typeof (file as { arrayBuffer?: unknown }).arrayBuffer !== "function" ||
+        typeof (file as { name?: unknown }).name !== "string" ||
+        typeof (file as { size?: unknown }).size !== "number" ||
+        !STL_LENGTH_UNITS.includes(units as StlLengthUnit) ||
+        typeof scale !== "number" ||
+        !Number.isFinite(scale) ||
+        scale <= 0
+      ) {
+        return {
+          message: "Choose an STL file, its coordinate length unit, and a positive scale.",
+          status: "failed",
+        };
+      }
+
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      const preparation = await prepareAuthoringMutation(context);
+      const scene = preparation.before ?? await context.api.model.scene(sessionRequestOptions(context));
+      assertCurrentSessionScope(context);
+      const baseRevision = sceneDocumentRevision(scene);
+      if (baseRevision === null) {
+        return {
+          message: "The canonical scene revision is unavailable. Refetch the scene before importing an STL surface.",
+          status: "failed",
+        };
+      }
+      preparation.before ??= scene;
+      preparation.baseRevision = baseRevision;
+
+      let imported: Awaited<ReturnType<typeof importStlSourceGeometry>>;
+      try {
+        imported = await importStlSourceGeometry(
+          context.api,
+          file as Parameters<typeof importStlSourceGeometry>[1],
+          units as StlLengthUnit,
+          scale,
+          sessionRequestOptions(context),
+        );
+      } catch (error) {
+        const obsoleteAfterUpload = obsoleteSessionResult(context);
+        if (obsoleteAfterUpload) return obsoleteAfterUpload;
+        return {
+          message: error instanceof Error ? error.message : "Could not import the STL source asset.",
+          status: "failed",
+        };
+      }
+      const obsoleteAfterUpload = obsoleteSessionResult(context);
+      if (obsoleteAfterUpload) return obsoleteAfterUpload;
+
+      const objectName = uniqueObjectName(imported.name, scene);
+      let objectId = draftObjectId("stl");
+      let suffix = 2;
+      const usedIds = new Set(sceneObjects(scene).flatMap((object) => {
+        const id = object.object_id ?? object.id;
+        return typeof id === "string" ? [id] : [];
+      }));
+      while (usedIds.has(objectId)) {
+        objectId = draftObjectId("stl") + "-" + suffix;
+        suffix += 1;
+      }
+
+      let response: Awaited<ReturnType<typeof createObjectTransaction>>;
+      try {
+        response = await createObjectTransaction(context.api, {
+          base_revision: baseRevision,
+          geometry: imported.geometry,
+          material_ref: "",
+          magnetization_ref: "",
+          name: objectName,
+          object_id: objectId,
+          transform: {
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            translation: [0, 0, 0],
+          },
+        }, sessionRequestOptions(context));
+      } catch (error) {
+        const obsoleteAfterWrite = obsoleteSessionResult(context);
+        if (obsoleteAfterWrite) return obsoleteAfterWrite;
+        const reason = error instanceof Error ? error.message : "scene transaction failed";
+        return {
+          message: "The STL asset was uploaded, but the scene object could not be created: " + reason,
+          status: "failed",
+        };
+      }
+      const obsoleteAfterWrite = obsoleteSessionResult(context);
+      if (obsoleteAfterWrite) return obsoleteAfterWrite;
+
+      selectCommittedObject(context, objectId, objectName);
+      await recordAuthoringMutationHistory(
+        context,
+        "Import STL surface: " + objectName,
+        preparation,
+        response.committed_scene,
+        captureAuthoringHistoryWorkspaceState(context),
+      );
+      assertCurrentSessionScope(context);
+      invalidateSceneAuthoringResources(context, response.scene_revision);
+      return { message: objectName + " was added as an STL surface.", status: "completed" };
+    },
+  },
   {
     id: "builder-build-geometry",
     title: "Build Geometry",

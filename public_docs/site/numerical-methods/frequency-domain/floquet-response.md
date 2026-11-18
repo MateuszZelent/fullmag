@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0828-fem-frequency-domain-floquet-demag.md
+source_of_truth: /physics/interactions/demagnetization/periodic-demag, /physics/foundations/llg-equation
 ---
 
 (public-docs-numerical-methods-frequency-domain-floquet-response)=
@@ -227,7 +227,7 @@ study.stages.add_frequency_response(
 ## 12. Scientific bibliography
 
 1. F. Bloch, “Über die Quantenmechanik der Elektronen in Kristallgittern,” *Zeitschrift für Physik*, 52, 555–600 (1929).
-2. FullMag physics contract: `docs/physics/0828-fem-frequency-domain-floquet-demag.md`.
+2. FullMag public physics contracts: {doc}`/physics/interactions/demagnetization/periodic-demag` and {doc}`/physics/foundations/llg-equation`.
 
 (floquet-response-source-code-index)=
 ## 13. Source-code index

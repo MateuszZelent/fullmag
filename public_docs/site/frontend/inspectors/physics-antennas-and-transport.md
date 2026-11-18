@@ -52,21 +52,11 @@ upstream dependency readiness) and enforces optimistic `scene_revision` concurre
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Selection routes and Python interoperability
 
 - **Selection routes**: `physics` (`PhysicsInteractionPanel`), `coupling` (`CouplingInspectorPanel`), `field-drive` (`RegionalFieldDrivePanel`), `frozen-spins` (`FrozenSpinsInspectorPanel`), `antenna` (`AntennaObjectPanel` + `antenna/*`), `current-transport` / `spin-transport` (`TransportAuthoringInspector`), `spin-torque` / `oersted-field` (`SpinAuthoringInspector`), and `spin-interface` (`SpinInterfaceInspectorPanel`).
 - **Mutation discipline**: All authoring transactions run through `runAuthoringMutationWithHistory`, support Undo/Redo, and verify active lane capability matrices before enabling writes.
-
-## Python/API crosswalk
-
-- Physics modules, field drives, antennas, frozen spins, current/spin transport, and spin interfaces map directly to their `packages/fullmag-py` constructors on objects, regions, and `Study`.
-- Any specialized material field closure or custom solver coefficient without a dedicated inspector form remains `TODO: frontend support` in {doc}`/frontend/capability-register`.
-
-## Physics and bibliography scope
-
-This page documents UI parameter editors and geometry/mesh verification checks only; solver formulations for exchange, DMI, spin diffusion, Slonczewski/Zhang–Li torques, and magnetostatic Oersted coupling are specified in the physics and numerical-methods sections.
+- **Python alignment**: Physics modules, field drives, antennas, frozen spins, current/spin transport, and spin interfaces map directly to their `packages/fullmag-py` constructors on objects, regions, and `Study`. Specialized material field closures or custom solver coefficients without a dedicated inspector form remain `Python-only` (see {doc}`/frontend/capability-register`).
 
 ## Source-code index
 

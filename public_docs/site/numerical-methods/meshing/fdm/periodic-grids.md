@@ -32,12 +32,12 @@ source_of_truth: "FdmPbc, runner resolution, CPU periodic spectra"
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $\mathbf H_d$ | demagnetizing field | A m^-1 |
-| $\mathbf r_i$ | target cell centre | m |
-| $\mathbf L$ | unit-cell period | m |
-| $\mathbf n$ | image index | 1 |
-| $\mathcal I$ | finite image set | 1 |
-| $\mathbf M_j$ | source magnetization | A m^-1 |
+| $\mathbf H_d$ | demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf r_i$ | target cell centre | $\mathrm{m}$ |
+| $\mathbf L$ | unit-cell period | $\mathrm{m}$ |
+| $\mathbf n$ | image index | $1$ |
+| $\mathcal I$ | finite image set | $1$ |
+| $\mathbf M_j$ | source magnetization | $\mathrm{A\,m^{-1}}$ |
 
 (fdm-periodic-grids-assumptions-and-validity)=
 ## Assumptions and validity
@@ -65,9 +65,9 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `FdmPbc.axes` | `tuple[bool, bool, bool]` | required | 1 | iterates input, applies `bool(value)`, then requires length three | periodic flags | FDM CPU source-backed; GPU capability-gated; FEM separate contract | `pbc.axes` as `periodic` or `open` |
-| `FdmPbc.demag` | `str` | `open` | 1 | applies `strip().lower()`, then requires `open`, `truncated_images`, or `periodic_airbox_k0` | normalized requested demag policy | FDM CPU open/truncated source-backed; GPU capability-gated; FEM differs | `pbc.demag` |
-| `FdmPbc.image_counts` | `tuple[int, int, int] \| None` | `None` | 1 | applies `int(value)`, then requires length three and non-negative results; only `truncated_images` | finite image ranges; when omitted for active periodic truncated demag, resolves to 10 on periodic axes and 0 on open axes | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `pbc.image_counts` |
+| `FdmPbc.axes` | `tuple[bool, bool, bool]` | required | $1$ | iterates input, applies `bool(value)`, then requires length three | periodic flags | FDM CPU source-backed; GPU capability-gated; FEM separate contract | `pbc.axes` as `periodic` or `open` |
+| `FdmPbc.demag` | `str` | `open` | $1$ | applies `strip().lower()`, then requires `open`, `truncated_images`, or `periodic_airbox_k0` | normalized requested demag policy | FDM CPU open/truncated source-backed; GPU capability-gated; FEM differs | `pbc.demag` |
+| `FdmPbc.image_counts` | `tuple[int, int, int] \| None` | `None` | $1$ | applies `int(value)`, then requires length three and non-negative results; only `truncated_images` | finite image ranges; when omitted for active periodic truncated demag, resolves to 10 on periodic axes and 0 on open axes | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `pbc.image_counts` |
 
 (fdm-periodic-grids-problem-ir)=
 ## ProblemIR

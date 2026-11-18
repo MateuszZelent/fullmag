@@ -17,8 +17,10 @@ live Python sessions (`fm.connect()`) update in real time.
 
 Model edits commit typed authoring transactions and re-lower through the study/`ProblemIR` pipeline;
 layout, active tabs, and visualization controls remain client-side UI state. Exported scripts preserve
-supported authored models, while {doc}`/frontend/capability-register` tracks backend capabilities
-that do not yet expose a dedicated UI editor.
+supported authored models, while {doc}`/frontend/capability-register` tracks Python-only features
+that do not expose a dedicated browser editor. Detailed module references live under
+{doc}`/frontend/control-room/index`, {doc}`/frontend/inspectors/index`, and
+{doc}`/frontend/visualization/index`, and full Python signatures live under {doc}`/python-api/index`.
 
 ---
 
@@ -348,24 +350,6 @@ Footer status bar reporting session state, runtime version, mesh status, WebSock
 
 ---
 
-## Control Room crosswalk
-
-Detailed frontend module references live under {doc}`/frontend/control-room/index`,
-{doc}`/frontend/inspectors/index`, and {doc}`/frontend/visualization/index`. Use
-{doc}`/frontend/capability-register` to verify whether any Python API parameter has an implemented
-Control Room editor versus `TODO: frontend support`.
-
-## Python/API crosswalk
-
-The runnable Python authoring API (`fm.study(...)` and `fm.connect()`) is authoritative. Consult
-{doc}`interactive-python` for live sessions and {doc}`/python-api/index` for complete parameter
-signatures and unit contracts.
-
-## Physics, limitations, and bibliography
-
-Control Room views do not define separate physical equations; all governing equations, boundary
-conditions, and lane support matrices are owned by {doc}`/backend/index`.
-
 ## Source-code index
 
 - `apps/control-room/src/kernel/layout/WorkspaceShellClient.tsx` and `AppMenuBar.tsx` — root
@@ -384,5 +368,3 @@ conditions, and lane support matrices are owned by {doc}`/backend/index`.
   diagnostics launchers.
 - {doc}`/frontend/capability-register` — authoritative boundary between implemented UI editors and
   Python-only features.
-
-Screenshots illustrate the Control Room user interface; they are not runtime, numerical convergence, or scientific qualification evidence.

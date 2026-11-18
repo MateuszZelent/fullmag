@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-swept-prism)=
 # Swept-Prism API
 
-(python-api-meshing-fem-ferromagnet-swept-prism-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-ferromagnet-swept-prism-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-ferromagnet-swept-prism-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-ferromagnet-swept-prism-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-ferromagnet-swept-prism-problem-statement)=
 ## 1. What it is and when to use it
 
 `object.mesh.thin_film(..., topology="prismatic")` requests a strict swept-prism
@@ -49,6 +38,7 @@ When to pick something else: no exact-layer requirement →
 Impact on the simulation: exact layers give controlled discretization of the
 normal gradient; cost grows linearly with `layers`.
 
+(python-api-meshing-fem-ferromagnet-swept-prism-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 This page introduces no equation of its own; it establishes a topological
@@ -111,6 +101,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-ferromagnet-swept-prism-python-api)=
 ## 4. Exact API
 
 Canonical path: `object.mesh.thin_film(topology="prismatic", ...)`
@@ -140,17 +131,14 @@ ProblemIR mapping: canonicalization happens inside the helper (section 9); the I
 already sees a consistent `swept_prism` recipe.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -172,6 +160,7 @@ triangular source faces, fixed distribution, exact layer count, prism family,
 **Apply Object Policy** writes the recipe; **Build Mesh** materializes the mesh.
 Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 
+(python-api-meshing-fem-ferromagnet-swept-prism-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -181,12 +170,10 @@ Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 | FDM | CPU/GPU | not applicable | use the FDM meshing API ({doc}`../../fdm/index`) |
 
 (python-api-meshing-fem-ferromagnet-swept-prism-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - The mode requires sweepable geometry (opposite source/target faces); complex
@@ -197,30 +184,16 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   in production scripts.
 
 (python-api-meshing-fem-ferromagnet-swept-prism-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
-(python-api-meshing-fem-ferromagnet-swept-prism-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-ferromagnet-swept-prism-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| swept-prism object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | recipe validation tests |
 | canonical helper and strict validation | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` | validation in method body |
-| canonicalization to swept_prism | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | `candidate.*` assignments in code |
-| advanced recipe consistency | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` (swept validation) | recipe validation tests |
+| canonicalization to `swept_prism` | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | `candidate.*` assignments in code |
 | typed swept controls | `packages/fullmag-py/src/fullmag/model/discretization.py` | `SweptMeshControls` | validation tests |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Swept-prism object policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Swept-prism object policy and lowering. | Source-map validator and focused API tests |

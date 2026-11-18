@@ -1,3 +1,7 @@
+import type { MaterialLibraryResource, MaterialLibraryMutationResource, MaterialLibraryWriteRequest, MaterialLibraryUpdateRequest, MaterialLibraryDeleteRequest, MaterialLibraryDeleteResource, SceneMaterialSource } from "./apiTypes";
+import { WORKSPACE_MATERIAL_LIBRARY_PATH, WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH } from "./apiPaths";
+import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
+import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
 import type { SavedPlaybackResource } from "./savedResultsPlayback";
 import { artifactFieldResponseIdentityError } from "./artifactFieldResponseIdentity";
@@ -1195,6 +1199,14 @@ export class ControlRoomApi {
    * them (modules/start/model/workspaceApiTypes.ts) until generated types exist.
    */
   readonly workspace = {
+    listMaterials: (options?: RequestOptions) =>
+      this.requestJson<MaterialLibraryResource>(WORKSPACE_MATERIAL_LIBRARY_PATH, options),
+    createMaterial: (input: MaterialLibraryWriteRequest, options?: RequestOptions) =>
+      this.postJson<MaterialLibraryMutationResource, MaterialLibraryWriteRequest>(WORKSPACE_MATERIAL_LIBRARY_PATH, input, options),
+    updateMaterial: (id: string, input: MaterialLibraryUpdateRequest, options?: RequestOptions) =>
+      this.putJson<MaterialLibraryMutationResource, MaterialLibraryUpdateRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
+    deleteMaterial: (id: string, input: MaterialLibraryDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<MaterialLibraryDeleteResource, MaterialLibraryDeleteRequest>(WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH, input, options, { path: { id } }),
     playback: (id: string, options?: RequestOptions) =>
       this.requestJson<SavedPlaybackResource>(WORKSPACE_ITEM_PLAYBACK_PATH, options, {path: {id}}),
     playbackGeometry: (id: string, revision: string, part: "topology"|"support", options?: BinaryRequestOptions) =>
@@ -2592,6 +2604,13 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    sourceSurface: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<ImportedSourceSurfaceResource>(MODEL_OBJECT_SOURCE_SURFACE_PATH, options,
+        { path: { object_id: objectId } }),
+    sourceSurfaceTopology: (objectId: string, query: ImportedSourceSurfaceQuery, options?: BinaryRequestOptions) =>
+      this.requestTopology(MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH, options,
+        { object_id: objectId }, { ...query }),
+
     frozenSpins: {
       list: (options?: RequestOptions) =>
         this.requestJson<FrozenSpinsCollectionResource>(
@@ -3001,11 +3020,14 @@ export class ControlRoomApi {
       properties: MaterialPropertiesResource,
       references: MaterialReferenceResource[] = [],
       options?: AuthoringWriteOptions,
+      asset?: { source?: SceneMaterialSource | null; assignToObjectId?: string },
     ) =>
       this.model.commitTransaction(
         {
           ...baseRevisionPayload(options),
           kind: "create_material",
+          ...(asset?.source ? { source: asset.source } : {}),
+          ...(asset?.assignToObjectId ? { assign_to_object_id: asset.assignToObjectId } : {}),
           material_id: materialId,
           name,
           properties,

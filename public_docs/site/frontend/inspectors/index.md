@@ -29,6 +29,13 @@ Panels register with `InspectorEditSession` (`InspectorEditSession.tsx`) under o
 - **`liveViewport`**: Display and camera settings patch `visualization/state` immediately while preserving **Revert** recovery.
 - **`immediate`**: Read-only inspection and discrete button actions (such as stage commands or mesh builds) run immediately without staged Apply/Revert state.
 
+Across all three modes, `inspectorRouteCatalog.tsx` maps every `SelectionKind` (`object`, `material`,
+`region`, `physics`, `coupling`, `frozen-spins`, `antenna`, `current-transport`, `spin-transport`,
+`spin-interface`, `study`, `study-stage`, `planar-monitor`, `frequency-domain-*`, `mode-visualization`,
+`runtime-*`, `job`, `diagnostic`) to its owner panel, and `InspectorShell` queries
+`inspectorActionState` from `InspectorEditSession` to drive **Apply** and **Reset**. Parameters not
+exposed in a dedicated inspector remain `Python-only` (see {doc}`/frontend/capability-register`).
+
 ## Semantic Inspector Families
 
 ```{toctree}
@@ -39,22 +46,6 @@ physics-antennas-and-transport
 studies-and-stages
 analysis-and-frequency-domain
 ```
-
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
-
-- **Route dispatcher**: `inspectorRouteCatalog.tsx` maps every `SelectionKind` (`object`, `material`, `region`, `physics`, `coupling`, `frozen-spins`, `antenna`, `current-transport`, `spin-transport`, `spin-interface`, `study`, `study-stage`, `planar-monitor`, `frequency-domain-*`, `mode-visualization`, `runtime-*`, `job`, `diagnostic`) to its React owner panel.
-- **Global action bar**: `InspectorShell` queries `inspectorActionState` from the active `InspectorEditSession` to drive **Apply** / **Reset** and disable reasons.
-
-## Python/API crosswalk
-
-- Staged inspector commits issue OpenAPI v2 authoring transactions equivalent to `Problem` / `Study` mutations in `packages/fullmag-py`.
-- Fields absent from an inspector panel remain documented as `TODO: frontend support` in {doc}`/frontend/capability-register` and remain authoritative in Python.
-
-## Physics and bibliography scope
-
-Semantic inspectors surface authored parameters, unit conversions, and runtime validation without altering physical model equations or solver numerics.
 
 ## Source-code index
 

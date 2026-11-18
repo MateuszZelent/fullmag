@@ -32,18 +32,12 @@ Every published result must make these values inspectable:
 - artifact revision and reproducibility metadata.
 
 Compilation on a host is not proof of executed GPU work. Public pages use the strongest evidence
-available and label lower-tier evidence explicitly.
-## Control Room crosswalk
+available and label lower-tier evidence explicitly. In the Control Room, session and runtime
+provenance are exposed read-only in `RuntimeResourceInspectorPanel` (`Model Explorer -> Runtime`),
+`StudyInspectorPanel`, `StatusBarModule`, and the Footer Dock (`Telemetry`, `Engine`, `Operations`,
+`Problems`), keeping requested intent (`auto` vs. pinned `cpu`/`gpu`) separate from resolved
+execution without silent CPU fallback when GPU is forced.
 
-This architecture page exposes session/runtime provenance via `RuntimeResourceInspectorPanel` (`Model Explorer -> Runtime`), `StudyInspectorPanel`, `StatusBarModule`, and the Footer Dock (`Telemetry`, `Engine`, `Operations`, `Problems`) as `inspection-only` surfaces; runtime targets follow explicit requested intent (`auto` vs. pinned `cpu`/`gpu`, with no silent CPU fallback when GPU is forced). See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-This page documents architecture rather than a standalone Python callable. Exact constructors, arguments, validation, and examples belong to the linked Python API pages; do not infer a public function from an internal architecture term.
-
-## Physics and bibliography scope
-
-No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

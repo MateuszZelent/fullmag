@@ -54,6 +54,7 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        material_assets: None,
         compute_resources: None,
         execution_profile: None,
         execution_layers: vec![],
@@ -126,6 +127,10 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
             adaptive_max_passes: 5,
             adaptive_error_tolerance: String::new(),
             order: None,
+            domain_mesh_mode: None,
+            domain_mesh_source: None,
+            domain_region_markers: None,
+            domain_object_region_markers: None,
         },
         universe: None,
         domain_frame: None,
@@ -135,6 +140,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         output_storage: None,
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+            source_asset: None,
             name: "body".to_string(),
             region_name: None,
             geometry_kind: "Box".to_string(),
@@ -7409,6 +7415,7 @@ async fn visualization_state_exposes_effective_scene_object_targets() {
     assert_eq!(target["settings"]["visible"], true);
     assert_eq!(target["settings"]["surface_visible"], true);
     assert_eq!(target["settings"]["wireframe_visible"], false);
+    assert_eq!(target["settings"]["wireframe_geometry_scope"], "surface");
     assert_eq!(target["settings"]["render_mode"], "surface");
 }
 
@@ -7460,6 +7467,9 @@ async fn visualization_state_exposes_one_canonical_airbox_and_only_orphan_part_f
     let json = body_json(response).await;
     assert_eq!(json["targets"]["airbox"]["scope"], "airbox");
     assert_eq!(json["targets"]["airbox"]["scope_id"], "airbox");
+    assert!(json["targets"]["airbox"]["settings"]
+        .get("wireframe_geometry_scope")
+        .is_none());
     assert_eq!(
         json["targets"]["objects"]
             .as_array()
@@ -7549,7 +7559,8 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "points": { "visible": false, "opacity": 0.75 },
                                     "vectors": { "visible": false },
                                     "opacity": 0.55,
-                                    "geometry_scope": "surface"
+                                    "geometry_scope": "surface",
+                                    "wireframe_geometry_scope": "full"
                                 },
                                 "style": {
                                     "scalar_color_palette": "inferno",
@@ -7607,6 +7618,10 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
     assert_eq!(
+        json["overrides"][0]["display"]["wireframe_geometry_scope"],
+        "full"
+    );
+    assert_eq!(
         json["overrides"][0]["style"]["scalar_color_palette"],
         "inferno"
     );
@@ -7637,6 +7652,14 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
         "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["geometry_scope"],
+        "surface"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["wireframe_geometry_scope"],
+        "full"
     );
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["surface_opacity"],
@@ -13299,6 +13322,7 @@ async fn mesh_build_command_lowers_difference_geometry_from_scene() {
         scene.objects[0].id = "permalloy_box".to_string();
         scene.objects[0].name = "permalloy_box".to_string();
         scene.objects[0].geometry = fullmag_authoring::SceneGeometry {
+            source_asset: None,
             geometry_kind: "Difference".to_string(),
             geometry_params: serde_json::json!({
                 "base": {
@@ -17710,6 +17734,35 @@ async fn authoring_scene_get_returns_current_scene() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["scene"]["name"], "Scene");
+}
+
+#[tokio::test]
+async fn authoring_scene_get_does_not_wait_for_stl_compute_transition() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+    let app = build_v2_router().with_state(state.clone());
+    // Compute keeps this fence while preparing its immutable inputs. A fresh
+    // browser must still receive the already committed scene for its viewport.
+    let _transition = state.current_live_session_transition.lock().await;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/scene")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("committed scene reads must not wait behind Compute")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["scene"]["name"], "Scene");
+    assert_eq!(json["revision"], 3);
 }
 
 #[tokio::test]
@@ -49159,7 +49212,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationStateResource missing v2 field `{required}`"
         );
     }
-
     for compatibility_field in [
         "active_quantity_id",
         "view_mode",
@@ -49194,6 +49246,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "surface_opacity",
         "wireframe_visible",
         "wireframe_opacity",
+        "wireframe_geometry_scope",
         "point_color",
         "point_opacity",
         "points_visible",
@@ -49212,7 +49265,6 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
             "VisualizationResolvedTargetSettings missing field `{required}`"
         );
     }
-
     for required in [
         "scope", "scope_id", "visible", "display", "style", "quantity",
     ] {
@@ -49230,6 +49282,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vectors",
         "opacity",
         "geometry_scope",
+        "wireframe_geometry_scope",
     ] {
         assert!(
             override_display_props.contains(required),
@@ -56555,3 +56608,38 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
 
 #[path = "tests_planar_composition.rs"]
 mod planar_composition_tests;
+
+
+#[test]
+fn malformed_stl_upload_is_rejected_before_any_files_are_published() {
+    use base64::Engine as _;
+    let directory = tempfile::tempdir().unwrap();
+    let imports = directory.path().join("imports");
+    let result = crate::import_asset_into_dir(&test_app_state(), "session-stl", imports.clone(),
+        crate::types::ImportSessionAssetRequest {
+            file_name: "broken.stl".into(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(b"not STL"),
+            target_realization: "fem".into(),
+        });
+    assert!(result.is_err());
+    assert!(!imports.exists(), "invalid STL must not create a directory, file or manifest");
+}
+
+#[test]
+fn stl_upload_receipt_pins_the_exact_original_bytes() {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    let source = b"solid face\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 2 0 0\nvertex 0 3 0\nendloop\nendfacet\nendsolid face\n";
+    let directory = tempfile::tempdir().unwrap();
+    let imports = directory.path().join("imports");
+    let response = crate::import_asset_into_dir(&test_app_state(), "session-stl", imports,
+        crate::types::ImportSessionAssetRequest {
+            file_name: "face.stl".into(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(source),
+            target_realization: "fem".into(),
+        }).unwrap();
+    assert_eq!(response.content_sha256, Some(format!("{:x}", Sha256::digest(source))));
+    assert_eq!(std::fs::read(response.stored_path).unwrap(), source);
+    assert_eq!(response.summary.triangle_count, Some(1));
+    assert!(response.summary.element_count.is_none());
+}

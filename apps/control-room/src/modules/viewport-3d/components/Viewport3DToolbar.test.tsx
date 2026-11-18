@@ -42,6 +42,8 @@ describe("Viewport3DToolbar", () => {
     for (const group of ["Navigation", "Projection", "Inspection", "Layers", "Quality", "Export", "Settings"]) {
       expect(html).toContain(`aria-label="${group}"`);
     }
+    expect(html).toContain('aria-label="Quality profile: Detailed"');
+    expect(html).toContain("Detailed");
     expect(html).toContain('aria-label="Fit view"');
     expect(html).toContain('aria-disabled="true"');
     expect(html).toContain("The current scene has no visible bounds.");

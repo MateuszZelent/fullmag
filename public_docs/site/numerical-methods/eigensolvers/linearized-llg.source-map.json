@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/numerical-methods/eigensolvers/linearized-llg.md",
     "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
-    "source_of_truth": "docs/physics/0600-fem-eigenmodes-linearized-llg.md"
+    "source_of_truth": "/physics/foundations/llg-equation, /physics/interactions/demagnetization/fem-poisson-airbox"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "source-backed"},

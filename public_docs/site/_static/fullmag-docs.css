@@ -648,6 +648,86 @@ main article figure.fm-ui-figure figcaption {
   margin: 0;
 }
 
+/* Scientific physics diagrams and schematic figures */
+main article figure.fm-physics-figure {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 1.5rem 0;
+  padding: 0.9rem;
+  background: var(--fm-docs-bg-surface);
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.6rem;
+}
+
+main article figure.fm-physics-figure a.image-reference {
+  display: block;
+  max-width: 100%;
+  text-decoration: none;
+}
+
+main article figure.fm-physics-figure img,
+main article figure.align-default img[src$=".svg"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+  background-color: #fbfcfe;
+  border: 1px solid var(--fm-docs-border-subtle);
+  border-radius: 0.45rem;
+}
+
+main article figure.fm-physics-figure img[src$=".svg"],
+main article figure.align-default img[src$=".svg"] {
+  padding: 0.35rem;
+}
+
+html[data-theme="dark"] main article figure.fm-physics-figure {
+  border-color: var(--fm-docs-border-default);
+}
+
+html[data-theme="dark"] main article figure.fm-physics-figure img[src$=".svg"],
+html[data-theme="dark"] main article figure.align-default img[src$=".svg"] {
+  background-color: #fbfcfe;
+  border-color: #ccd0da;
+  box-shadow: 0 2px 12px rgb(17 17 27 / 0.36);
+}
+
+main article figure.fm-physics-figure figcaption {
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--fm-docs-border-subtle);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--fm-docs-text-secondary);
+}
+
+main article figure.fm-physics-figure figcaption > p {
+  margin: 0;
+}
+
+main article figure.fm-physics-figure figcaption > p + p {
+  margin-top: 0.45rem;
+}
+
+main article figure.fm-physics-figure figcaption .caption-number {
+  font-weight: 600;
+  color: var(--fm-docs-text-primary);
+}
+
+@media (max-width: 48rem) {
+  main article figure.fm-physics-figure {
+    margin: 1.1rem 0;
+    padding: 0.6rem;
+  }
+
+  main article figure.fm-physics-figure figcaption {
+    font-size: 0.87rem;
+  }
+}
+
 /* Prominent EU Horizon Europe MSCA grant acknowledgement card */
 .fm-eu-grant-card {
   display: grid;

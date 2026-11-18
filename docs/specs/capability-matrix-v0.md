@@ -915,3 +915,22 @@ PASS. Rust regression source nie były kompilowane. Multilayer/GPU runtime
 i końcowe Compute po restore pozostają NOT VERIFIED.
 Nie promuje to FDM CPU/GPU ani FEM CPU/GPU do `validated`; kwalifikacja
 naukowa i pozostałe bramki lane'ów zachowują dotychczasowy status.
+
+
+### Imported STL authoring (ADR 0081)
+
+`ImportedGeometry` with a local `.stl` source, explicit positive SI scale and
+`volume="full"` is an authored FEM input for the shared mesher in both strict
+and extended modes. FEM CPU/GPU consume the resulting conforming MeshIR;
+preprocessing does not select a solver device. FDM execution and imported CSG
+children remain unsupported. Open surfaces may be displayed, but do not pass
+volume meshing; touching, intersecting, open or ambiguous shells fail before
+fallback. Preview topology never qualifies as a solver mesh.
+
+The geometry capability is `Preview` (`fem=true`, `fdm=false`, `dsl=true`,
+`boolean=false`). This records implemented authoring support, not production
+or scientific qualification. Managed runtime, GPU execution and mesh/airbox
+convergence remain separate gates. Requested GPU intent must fail explicitly
+when unavailable and must never fall back to CPU. Source byte identity, units,
+scale and asset ownership survive archive round-trip under ADR 0081; the
+scientific domain partition is defined in physics note 0100 section 8.3.

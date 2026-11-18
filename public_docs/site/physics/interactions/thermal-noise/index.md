@@ -16,7 +16,27 @@ alone.
 (physics-thermal-noise-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Thermal Brown fluctuations enter as an uncorrelated Gaussian effective field calibrated by the
+fluctuation–dissipation theorem so that equilibrium spin ensembles converge to the Boltzmann
+distribution at temperature $T$.
+
+```{figure} /_static/diagrams/thermal-brown-stochastic-llg.svg
+:alt: Two-panel diagram of Brown thermal noise in Fullmag: Panel (a) shows the discrete stochastic field formula with bare gamma_{mu0}, accepted-interval raw-draw reuse across rejected adaptive RK retries, FSAL invalidation, and lane constraints; Panel (b) plots the exact Boltzmann equilibrium density P(theta) proportional to sin(theta) exp(xi cos(theta)) against ensemble 95% confidence intervals and contrasts statistical validation against invalid bitwise CPU/GPU comparison.
+:width: 100%
+:name: fig-thermal-brown-stochastic-llg
+:figclass: fm-physics-figure
+
+Discrete Brown stochastic field contract and Boltzmann equilibrium validation. Panel (a) shows the
+fluctuation-dissipation standard deviation $\sigma_i^n$ using Fullmag's bare gyromagnetic ratio
+$\gamma_{\mu 0}$ (so $1/(1+\alpha^2)$ is applied once by LLG), the accepted-interval raw Gaussian
+draw reuse and $\Delta t^{-1/2}$ rescaling contract across rejected steps (Leliaert *et al.* 2017;
+implemented in FEM CPU), FSAL invalidation, and recommended fixed-step Heun versus rejected `ABM3`
+and adaptive stepping on FDM. Panel (b) plots the
+analytical single-spin Boltzmann density $P_{\mathrm{eq}}(\theta)\propto\sin\theta\exp(\xi\cos\theta)$
+for $\xi=2.0$ alongside ensemble 95% confidence intervals (Brown 1963; Leliaert *et al.* 2017),
+highlighting why cross-device qualification requires statistical moments rather than bitwise sample
+identity.
+```
 
 (physics-thermal-noise-governing-equations)=
 ## Governing equations
@@ -58,7 +78,7 @@ H_{\mathrm{th},i,a}^{\,n}H_{\mathrm{th},j,b}^{\,m}
 ```
 
 For FDM, $V_i=\Delta x\Delta y\Delta z$. FEM uses a documented nodal volume or mass-lumping
-measure. There is no standalone $E_{\mathrm{th}}$.
+measure (with nonmagnetic nodes zeroed). There is no standalone $E_{\mathrm{th}}$.
 
 (physics-thermal-noise-symbols-and-si-units)=
 ## Symbols and SI units
@@ -78,18 +98,20 @@ measure. There is no standalone $E_{\mathrm{th}}$.
 
 A fixed seed defines requested replay policy, not universal cross-device bitwise identity.
 Adaptive integrators must specify whether rejected trials reuse the same raw Gaussian draw and
-how the draw is scaled when the accepted interval changes. A deterministic ODE convergence test
-does not qualify an SDE implementation.
+how the draw is scaled when the accepted interval changes. In Fullmag's FEM CPU reference sampler,
+rejected adaptive attempts reuse the interval's raw draw $\boldsymbol\xi_i^n$ and rescale only
+$\sigma_i^n(\Delta t_{\mathrm{retry}})$, while FSAL reuse is disabled across accepted-step
+boundaries. A deterministic ODE convergence test does not qualify an SDE implementation.
 
 (physics-thermal-noise-discrete-realization)=
 ## Backend capability matrix
 
 | Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
 |---|---|---|---|---|---|
-| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable | sampling law not yet full equilibrium qualification | counter-based/random stream and active-cell policy |
-| FDM | GPU | same canonical IR | partial | executed-device variance and replay evidence required | cuRAND/precision/runtime identity are part of provenance |
-| FEM | CPU | same canonical IR | partial/reference executable | nodal-volume and accepted-step statistics required | raw-draw reuse policy must be explicit |
-| FEM | GPU | authoring accepted | unsupported in strict public planning | none | kernel source alone is not an executable lane |
+| FDM | CPU | `ThermalNoise(T, seed)` | partial/reference executable | sampling law not yet full equilibrium qualification | fixed-step Heun recommended (fixed-step `rk4`/`rk23`/`rk45` accepted without SDE qualification; `ABM3` and `adaptive_timestep` rejected); use `H_eff` |
+| FDM | GPU | same canonical IR | partial | executed-device variance and replay evidence required | fixed-step Heun recommended (`ABM3` and `adaptive_timestep` rejected; other fixed-step RK methods lack SDE qualification); cuRAND/precision/runtime identity are part of provenance |
+| FEM | CPU | same canonical IR | partial/reference executable | nodal-volume and accepted-step statistics required | `mt19937_64` raw-draw reuse across retries; FSAL disabled |
+| FEM | GPU | authoring accepted | unsupported in strict public planning | none | rejected pending `CAP-THERM-GPU-001`; kernel source alone is not an executable lane |
 
 (physics-thermal-noise-python-api)=
 ## Python API and stage-first example
@@ -110,6 +132,7 @@ body.Aex = 13.0e-12
 body.alpha = 0.02
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
+# %% Brown thermal field and fixed-step Heun physical-time stage
 study.exchange()
 study.thermal_noise(temperature=300.0, seed=123)
 study.solver(integrator="heun", fix_dt=1.0e-15)
@@ -117,7 +140,9 @@ study.stages.add_run(stage_id="thermalize", until=1.0e-12)
 ```
 
 Use a physical-time stage, not deterministic energy minimization. A direct `H_therm` output is
-lane-dependent; `H_eff` is the safer portable field observable at the audited revision.
+rejected in the current FDM CPU/GPU observable contract; `H_eff` is the portable field
+observable across lanes. For exact constructor arguments on `fm.ThermalNoise`, see
+{doc}`/python-api/interactions/thermal-noise`.
 
 (physics-thermal-noise-problem-ir)=
 ## ProblemIR
@@ -129,13 +154,12 @@ lane-dependent; `H_eff` is the safer portable field observable at the audited re
 Omitting `seed` requests system entropy. `seed=0` is not the same state and is rejected.
 
 (physics-thermal-noise-validation)=
-## Validation boundary and code hardening
+## Validation boundary
 
-`ThermalNoise.temperature` is required positive. The current Python annotation says `seed:
-int | None`, but runtime type enforcement is incomplete: positive non-integer values and booleans
-can pass the constructor's `seed <= 0` check. Replace this with an explicit positive-integer
-validator and document the exact accepted range. Planner checks remain responsible for lane,
-volume, timestep, material fields, and random-state availability.
+`ThermalNoise.temperature` must be finite and strictly positive. `ThermalNoise.seed` accepts
+`None` or a positive integer (`seed <= 0` is rejected, while runtime integer type checking is not
+enforced by the constructor). Planner checks additionally validate lane support, active
+cell/nodal volumes, timestep compatibility, and random-state availability.
 
 ## Required numerical validation
 
@@ -148,8 +172,29 @@ volume, timestep, material fields, and random-state availability.
 - timestep refinement under the selected stochastic interpretation;
 - CPU/GPU statistical equivalence using confidence intervals, not sample equality.
 
+(physics-thermal-noise-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent preserves the authored `temperature` in kelvin, optional positive `seed` (or
+explicit entropy policy when omitted), and execution request. Resolved execution records the
+selected solver, device, precision, integrator, RNG policy, and capability decision. Validation errors
+reject non-positive or non-finite temperatures, `seed=0`, conflicting `Problem.temperature`
+values, and duplicate `ThermalNoise` terms before runtime. Unsupported combinations (such as
+strict FEM GPU pending `CAP-THERM-GPU-001`, `ABM3` or `adaptive_timestep` with thermal noise on
+FDM, `H_therm` field exports on FDM, or multilayer FDM thermal execution) fail closed and are
+never silently omitted or replaced by deterministic evolution.
+
+(physics-thermal-noise-implementation-mapping)=
+## Implementation mapping
+
+Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/energy.py`,
+`world.py`), `ProblemIR` owns canonical intent, planners (`crates/fullmag-plan/src/fdm.rs`,
+`fem.rs`) enforce temperature/seed consistency, integrator legality, and lane gates, and backend
+solvers own stochastic field sampling, raw-draw caching, and FSAL invalidation. Control Room parameter exposure is tracked in {doc}`/frontend/capability-register`; parameters
+without a matching UI control are configured in Python.
+
 (physics-thermal-noise-limitations)=
-## Limitations and recommended extensions
+## Limitations
 
 The model does not provide longitudinal thermal fluctuations, temperature-dependent material
 laws, heat transport, or LLB dynamics near $T_C$. These require separate coupled physics
@@ -158,38 +203,29 @@ contracts.
 (physics-thermal-noise-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown, *Physical Review* **130**, 1677–1686 (1963),
-   DOI: 10.1103/PhysRev.130.1677.
-2. J. L. García-Palacios and F. J. Lázaro, *Physical Review B* **58**, 14937 (1998).
+1. W. F. Brown Jr., "Thermal Fluctuations of a Single-Domain Particle," *Physical Review*
+   **130**(5), 1677–1686 (1963),
+   [doi:10.1103/PhysRev.130.1677](https://doi.org/10.1103/PhysRev.130.1677).
+2. J. L. García-Palacios and F. J. Lázaro, "Langevin-dynamics study of the dynamical properties
+   of small magnetic particles," *Physical Review B* **58**(22), 14937–14958 (1998),
+   [doi:10.1103/PhysRevB.58.14937](https://doi.org/10.1103/PhysRevB.58.14937).
+3. J. Leliaert, J. Mulkers, J. De Clercq, A. Coene, M. Dvornik, and B. Van Waeyenberge,
+   "Adaptively time stepping the stochastic Landau-Lifshitz-Gilbert equation at nonzero
+   temperature: Implementation and validation in MuMax3," *AIP Advances* **7**(12) (2017),
+   [doi:10.1063/1.5003957](https://doi.org/10.1063/1.5003957)
+   (CC-BY OA, [arXiv:1709.01682](https://arxiv.org/abs/1709.01682)).
+4. J. Leliaert, M. Dvornik, J. Mulkers, J. De Clercq, M. V. Milošević, and B. Van Waeyenberge,
+   "Fast micromagnetic simulations on GPU—recent advances made with MuMax3," *Journal of Physics D:
+   Applied Physics* **51**(12), 123002 (2018),
+   [doi:10.1088/1361-6463/aaab1c](https://doi.org/10.1088/1361-6463/aaab1c)
+   (CC-BY OA).
 
 (physics-thermal-noise-source-code-index)=
-
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
-## Round-trip and failure semantics
-
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
-
-(physics-thermal-noise-implementation-mapping)=
-## Implementation mapping
-
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
-
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `ThermalNoise` | public temperature/seed contract |
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class ThermalNoise` | public temperature/seed contract |
 | `packages/fullmag-py/src/fullmag/world.py` | `thermal_noise` | stage-first registration |
 | `crates/fullmag-plan/src/fdm.rs` | `thermal planning` | FDM lane and seed policy |
 | `crates/fullmag-plan/src/fem.rs` | `thermal planning` | FEM lane and capability rejection |
@@ -197,5 +233,3 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 | `backends/fdm/gpu/cuda/interactions` | `thermal field kernels` | FDM GPU sampling |
 | `backends/fem/cpu/mfem` | `thermal sampler` | FEM CPU nodal realization |
 | `backends/fem/gpu/cuda` | `thermal source` | non-promoting source evidence |
-
-(physics-thermal-noise-round-trip-and-failure-semantics)=

@@ -4026,7 +4026,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-interactive",
-      title: "Interactive 3D Profile",
+      title: "Use Standard quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4034,7 +4034,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-figure",
-      title: "Figure 3D Profile",
+      title: "Use Figure quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => true,
@@ -4050,7 +4050,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-balanced",
-      title: "Balanced 3D Profile",
+      title: "Use Detailed quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4058,7 +4058,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-interactive-lite",
-      title: "Interactive Lite 3D Profile",
+      title: "Use Fast quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4195,18 +4195,22 @@ describe("ribbon structure", () => {
       items: [
         expect.objectContaining({
           commandId: "viewport-3d.profile-interactive-lite",
+          label: "Fast",
           value: "interactive-lite",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-interactive",
+          label: "Standard",
           value: "interactive",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-balanced",
+          label: "Detailed",
           value: "balanced",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-figure",
+          label: "Figure",
           value: "figure",
         }),
         expect.objectContaining({

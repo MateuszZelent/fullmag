@@ -102,6 +102,15 @@ The minus sign follows the FullMag convention
 $\mathbf H=-\frac{1}{\mu_0M_s}\frac{\delta E}{\delta\mathbf m}$. The field is local and does
 not require a demagnetization solve or an interaction boundary condition.
 
+```{figure} /_static/diagrams/anisotropy-uniaxial-and-cubic-landscapes.svg
+:alt: Two-panel anisotropy diagram highlighting panel (b) for Fullmag's cubic anisotropy polynomial w_c = Kc1 Sigma + Kc2 alpha_1^2 alpha_2^2 alpha_3^2 + Kc3 Sigma^2, showing 3D energy surfaces and (1-10)-plane cross-sections for Kc1 > 0 (<100> easy) and Kc1 < 0 (<111> easy), alongside uniaxial landscapes in panel (a).
+:width: 100%
+:name: fig-cubic-anisotropy-landscape
+:figclass: fm-physics-figure
+
+Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles for Fullmag's cubic polynomial with $K_{c1}>0$ ($\langle 100\rangle$ easy) and $K_{c1}<0$ ($\langle 111\rangle$ easy), highlighting FEM's strict orthonormal crystal-frame rule (Kittel 1949; Collings et al. 2023).
+```
+
 (cubic-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -131,7 +140,7 @@ not require a demagnetization solve or an interaction boundary condition.
 (cubic-assumptions-and-validity)=
 ## Assumptions and validity
 
-- `Kc1`, `Kc2`, and `Kc3` are SI energy-density constants in J/m^3.
+- `Kc1`, `Kc2`, and `Kc3` are SI energy-density constants in $\mathrm{J\,m^{-3}}$.
 - The physical crystal frame is orthonormal. FEM planner validation is strict; FDM normalization
   behavior must be recorded as resolved execution and not generalized to all lanes.
 - $M_s>0$ and the reduced magnetization normalization are supplied by surrounding contracts.
@@ -151,14 +160,14 @@ not require a demagnetization solve or an interaction boundary condition.
 | `CubicAnisotropy.kc3` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | finite | third cubic constant | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_kc3` |
 | `CubicAnisotropy.axis1` | `Sequence[float]` | `(1,0,0)` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis1` |
 | `CubicAnisotropy.axis2` | `Sequence[float]` | `(0,1,0)` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis2` |
-| `Material.Kc1` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical third cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `tuple[float,float,float] \\| None` | `None` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `tuple[float,float,float] \\| None` | `None` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis2` |
-| `Material.Kc1_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc1 override | FEM and supported allocating FDM reference paths | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
+| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc1` |
+| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc2` |
+| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical third cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc3` |
+| `Material.anisC1` | `tuple[float,float,float] \| None` | `None` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis1` |
+| `Material.anisC2` | `tuple[float,float,float] \| None` | `None` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis2` |
+| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc1 override | FEM and supported allocating FDM reference paths | `materials[].kc1_field` |
+| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
+| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
 
 ### Executable user workflow: study and stages
@@ -184,10 +193,6 @@ body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.alpha = 0.01
 body.Kc1 = 0.2e6
-body.Kc2 = 0.0
-body.Kc3 = 0.0
-body.anisC1 = (1.0, 0.0, 0.0)
-body.anisC2 = (0.0, 1.0, 0.0)
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 
 study.stages.add_relax(
@@ -196,11 +201,27 @@ study.stages.add_relax(
     max_steps=50_000,
     tolT=1.0e-6,
 )
+
+# %% Material inspection when specifying Kc2, Kc3, and explicit crystal axes
+cubic_material = fm.Material(
+    name="cubic_film",
+    Ms=800.0e3,
+    A=13.0e-12,
+    alpha=0.01,
+    Kc1=0.2e6,
+    Kc2=0.0,
+    Kc3=0.0,
+    anisC1=(1.0, 0.0, 0.0),
+    anisC2=(0.0, 1.0, 0.0),
+)
+assert cubic_material.to_ir()["cubic_anisotropy_kc1"] == 0.2e6
 ```
 
-The compatibility constructor `fm.CubicAnisotropy` is a lowering/inspection form; the stage
-workflow above is the public simulation authoring path. A GPU request or spatial cubic fields
-requires the corresponding planner capability and is not implied by this CPU reference example.
+On the stage-first handle (`MagnetHandle`), `body.Kc1` is assigned directly; higher-order
+constants (`Kc2`, `Kc3`), crystal axes (`anisC1`, `anisC2`), and spatial `Kc*_field` arrays
+are authored on `fm.Material(...)` or via `fm.CubicAnisotropy(...)`. A GPU request or spatial
+cubic fields requires the corresponding planner capability and is not implied by this CPU
+reference example.
 
 (cubic-problem-ir)=
 ## ProblemIR and planner contract
@@ -258,7 +279,7 @@ fields use element quadrature with explicit field cardinality and material-locat
 ### FEM GPU
 
 The CUDA kernel computes the crystal-frame components, reconstructs the laboratory field, emits
-block energy sums, and the RK reduction consumes those sums. Device `Ms`, Kc arrays, axes, masks,
+block energy sums, and the RK reduction consumes those sums. Device `Ms`, `Kc` arrays, axes, masks,
 and lumped masses are required; missing arrays fail closed.
 
 ### Observables
@@ -273,8 +294,7 @@ and lumped masses are required; missing arrays fail closed.
 ## Implementation mapping
 
 Python migration and material serialization are separate from native plan resolution. FDM CPU,
-FDM CUDA, FEM CPU, and FEM CUDA have separate field/energy symbols listed in the source index and
-machine map. Stable symbols, not stale line numbers, are the citation identity.
+FDM CUDA, FEM CPU, and FEM CUDA have separate field and energy symbols listed in the source-code index below.
 
 (cubic-validation)=
 ## Validation and qualification
@@ -294,24 +314,11 @@ remain explicitly distinguished. GPU production qualification remains an execute
 (cubic-scientific-bibliography)=
 ## Scientific bibliography
 
-- Brown, W. F., *Micromagnetics*, Wiley, 1963.
-- FullMag internal source of truth: `docs/physics/0403-cubic-anisotropy.md`.
-- FullMag implementation: `packages/fullmag-py/src/fullmag/model/energy.py` and `structure.py`.
+1. C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949). [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+2. J. B. Collings, R. Rama-Eiroa, R. M. Otxoa, R. F. L. Evans, and R. W. Chantrell, “Generalized form of the magnetic anisotropy field in micromagnetic and atomistic spin models,” *Physical Review B* **107**(6), 064413 (2023). [doi:10.1103/PhysRevB.107.064413](https://doi.org/10.1103/PhysRevB.107.064413) | [Open-access PDF (White Rose)](https://eprints.whiterose.ac.uk/id/eprint/197787/1/PhysRevB.107.064413.pdf) | [arXiv:2210.10916](https://arxiv.org/abs/2210.10916).
+3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers / Wiley, New York (1963). [WorldCat record](https://search.worldcat.org/title/536451).
 
 (cubic-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

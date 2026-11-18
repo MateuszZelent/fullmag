@@ -1260,6 +1260,11 @@ fn capture_authored_scene_with_asset_root_and_progress<T: serde::de::Deserialize
     std::fs::create_dir_all(workspace_root)
         .map_err(|error| ApiError::internal(format!("failed to prepare workspace: {error}")))?;
 
+    let pinned_scene = crate::imported_geometry_sources::snapshot_pinned_stl_sources(
+        repo_root, workspace_root, asset_root, scene_document,
+    )?;
+    let scene_document = &pinned_scene;
+
     let scene_path = workspace_root.join(format!("preparation-scene-{}.json", uuid_v4_hex()));
     let _scene_guard = TemporaryFileGuard(scene_path.clone());
     let scene_body = serde_json::to_vec(scene_document).map_err(|error| {

@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-bulk_dmi",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_bulk_dmi"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_bulk_dmi",
@@ -63,7 +46,7 @@
         "python": "fm.BulkDMI.D",
         "type": "float",
         "default": "required",
-        "si_unit": "J/m^2",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
         "validation": "finite; sign preserved",
         "meaning": "bulk DMI constant",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",

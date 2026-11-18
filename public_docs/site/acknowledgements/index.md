@@ -149,7 +149,3 @@ cite the original publications of those upstream projects.
 [^16]: A. J. Newell, W. Williams, and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *Journal of Geophysical Research* **98**, 9551–9555 (1993), [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
 [^17]: D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* **26**, 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
 [^18]: C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-
-## Source-code index
-
-This is an institutional and attribution overview page and introduces no standalone numerical implementation symbol. The exact source-code index is maintained by each selected solver, interaction, or API reference page.

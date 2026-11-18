@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-geometry_primitive",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_geometry_primitive"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_geometry_primitive",
@@ -63,7 +46,7 @@
         "python": "Box.size_or_x",
         "type": "float or sequence or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive scalar or three-vector form",
         "meaning": "size or x dimension",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "Box.y",
         "type": "float or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive when scalar form is used",
         "meaning": "y dimension",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -83,7 +66,7 @@
         "python": "Box.z",
         "type": "float or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive when scalar form is used",
         "meaning": "z dimension",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -93,7 +76,7 @@
         "python": "Box.size",
         "type": "sequence or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive three-vector when supplied",
         "meaning": "keyword size",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -103,7 +86,7 @@
         "python": "Box.name",
         "type": "str",
         "default": "box",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "stable geometry name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

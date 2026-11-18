@@ -1476,7 +1476,7 @@ describe("useViewport3DSceneModel", () => {
       "fdmSettings: fdmDomain ? fdmSettings : null,",
     );
     expect(source).toContain(
-      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+      "const tet4FmmqQualitySupported = useMemo(\n    () => topologySupportsTet4FmmqQuality(topology.data),\n    [topology.data],\n  );",
     );
     expect(source).toContain(
       "useViewport3DMeshQualityData(\n    Boolean(\n      liveViewportResourcesEnabled &&\n        fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",

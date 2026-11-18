@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0800-fem-static-pbc-demag.md
+source_of_truth: /physics/interactions/demagnetization/periodic-demag
 ---
 
 (public-docs-numerical-methods-demag-solvers-periodic-demag)=
@@ -211,13 +211,9 @@ side. CPU/GPU results are comparable only after the same policy, mesh/cell topol
 zero-mode handling and tolerances are recorded.
 
 (numerical-methods-periodic-demag-implementation-mapping)=
-## Where this is implemented
+## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| Python policy | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | [`class FdmPbc`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L208) | validates axes, policy and image counts; lowers periodic intent | Python/IR |
-| FDM periodic kernel | [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | [`compute_periodic_newell_kernel_spectra`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fdm/cpu/fft.rs#L676) | computes periodic kernel spectra for the FDM convolution | FDM CPU |
-| FEM periodic reduction | [`backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | [`solve_demag_periodic_poisson_reduced`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp#L198) | reduces and solves the periodic Poisson system | FEM CPU |
+Public periodic boundary policy lowering (`FdmPbc`), finite-image FDM kernel spectrum construction, and reduced periodic FEM Poisson solves are mapped in {ref}`numerical-methods-periodic-demag-source-code-index`.
 
 (numerical-methods-periodic-demag-validation)=
 ## Validation
@@ -240,15 +236,9 @@ every periodic policy.
 ## Scientific bibliography
 
 - A. J. Newell, W. Williams, and D. J. Dunlop, “A method for computing the magnetostatic demagnetizing tensor for rectangular prisms,” *Geophysical Journal International* 124 (1993), 938–946, DOI: [10.1111/j.1365-246X.1993.tb04780.x](https://doi.org/10.1111/j.1365-246X.1993.tb04780.x).
-- Fullmag internal periodic FEM design: `docs/physics/0800-fem-static-pbc-demag.md`.
 - Canonical physics owner: {doc}`../../physics/interactions/demagnetization/periodic-demag`.
 
 (numerical-methods-periodic-demag-source-code-index)=
-
-## Control Room workflow
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |

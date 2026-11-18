@@ -49,6 +49,44 @@
       "sources": [
         "mixed-volume-evidence-validation"
       ]
+    },
+    {
+      "id": "eq-stl-signed-shell-volume",
+      "symbols": [
+        "stl_shell_volume",
+        "stl_shell_vertices",
+        "stl_shell_origin",
+        "stl_faces"
+      ],
+      "sources": [
+        "stl-shell-classifier"
+      ]
+    },
+    {
+      "id": "eq-stl-shell-winding",
+      "symbols": [
+        "stl_winding",
+        "stl_query",
+        "stl_solid_angle",
+        "stl_faces"
+      ],
+      "sources": [
+        "stl-shell-winding"
+      ]
+    },
+    {
+      "id": "eq-stl-shell-domain-partition",
+      "symbols": [
+        "stl_material",
+        "stl_air",
+        "stl_universe",
+        "stl_shell_depth",
+        "stl_parent"
+      ],
+      "sources": [
+        "stl-shell-material-volumes",
+        "stl-shell-domain-contract"
+      ]
     }
   ],
   "symbols": [
@@ -147,6 +185,78 @@
       "latex": "R",
       "meaning": "Sampled positive local curvature radius",
       "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "stl_shell_volume",
+      "latex": "V_i",
+      "meaning": "Objętość ze znakiem zamkniętej powłoki",
+      "si_unit": "\\mathrm{m}^3"
+    },
+    {
+      "id": "stl_shell_vertices",
+      "latex": "\\mathbf a,\\mathbf b,\\mathbf c",
+      "meaning": "Wierzchołki trójkąta w kolejności źródłowej",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "stl_shell_origin",
+      "latex": "\\mathbf o_i",
+      "meaning": "Lokalny początek układu do całkowania objętości",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "stl_faces",
+      "latex": "F_i",
+      "meaning": "Zbiór zorientowanych trójkątów i jego element",
+      "si_unit": "1"
+    },
+    {
+      "id": "stl_winding",
+      "latex": "w_i(\\mathbf p)",
+      "meaning": "Liczba nawinięć powłoki",
+      "si_unit": "1"
+    },
+    {
+      "id": "stl_query",
+      "latex": "\\mathbf p",
+      "meaning": "Punkt zapytania poza powierzchnią",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "stl_solid_angle",
+      "latex": "\\omega_f(\\mathbf p)",
+      "meaning": "Zorientowany kąt bryłowy trójkąta widzianego z punktu",
+      "si_unit": "1"
+    },
+    {
+      "id": "stl_material",
+      "latex": "\\Omega_{\\mathrm m}",
+      "meaning": "Rozłączne wnętrza materiału i powietrza",
+      "si_unit": "\\mathrm{m}^3"
+    },
+    {
+      "id": "stl_air",
+      "latex": "\\Omega_{\\mathrm a}",
+      "meaning": "Rozłączne wnętrza materiału i powietrza",
+      "si_unit": "\\mathrm{m}^3"
+    },
+    {
+      "id": "stl_universe",
+      "latex": "U",
+      "meaning": "Ograniczona domena universe",
+      "si_unit": "\\mathrm{m}^3"
+    },
+    {
+      "id": "stl_shell_depth",
+      "latex": "d_i",
+      "meaning": "Głębokość i indeksy powłok",
+      "si_unit": "1"
+    },
+    {
+      "id": "stl_parent",
+      "latex": "\\operatorname{parent}(j)",
+      "meaning": "Bezpośrednia powłoka nadrzędna",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -247,6 +357,67 @@
       "symbol": "DOC-ANCHOR:canonical-fem-mesh-policy",
       "responsibility": "Defines canonical zone eligibility, upper/lower composition, independent curvature, exact-layer meaning, and atomic migration.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "stl-shell-domain-contract",
+      "path": "docs/physics/0100-mesh-and-region-discretization.md",
+      "symbol": "DOC-ANCHOR:stl-shell-domain-contract",
+      "responsibility": "Planned STL nested-shell and domain-partition contract; not runtime qualification",
+      "backend": "FEM CPU/GPU",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "stl-shell-classifier",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_stl_shells.py",
+      "symbol": "classify_closed_shells",
+      "responsibility": "Float64 closed-shell topology and signed volumes; source-tested, not GPU qualification",
+      "backend": "FEM CPU/GPU geometry input"
+    },
+    {
+      "id": "stl-shell-winding",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_stl_shells.py",
+      "symbol": "_winding",
+      "responsibility": "Solid-angle winding classification",
+      "backend": "FEM CPU/GPU geometry input"
+    },
+    {
+      "id": "stl-shell-material-volumes",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_stl_shells.py",
+      "symbol": "material_shell_volumes",
+      "responsibility": "Source-owned even-depth material and immediate cavity holes",
+      "backend": "FEM CPU/GPU geometry input"
+    },
+    {
+      "id": "stl-work-coordinate-scale",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "_stl_work_coordinate_scale",
+      "responsibility": "Use micrometre work coordinates for supported typed numeric fields; preserve SI for uninterpreted expressions and lower policies",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested; managed BuckyBall runtime not verified"
+    },
+    {
+      "id": "stl-work-mesh-si",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "_stl_mesh_in_si",
+      "responsibility": "Restore metre node coordinates and cubic-metre global and domain quality volumes",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested"
+    },
+    {
+      "id": "stl-coordinate-conditioning-test",
+      "path": "packages/fullmag-py/tests/test_stl_coordinate_conditioning.py",
+      "symbol": "test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics",
+      "responsibility": "Check SI output and quality with no input mutation",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source-tested"
+    },
+    {
+      "id": "frozen-boundary-stl-export",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_write_frozen_boundary_ascii_stl",
+      "responsibility": "Derive closed outward temporary STL from exterior volume-cell faces, including periodic cuts, without altering the frozen mesh",
+      "backend": "FEM CPU/GPU geometry input",
+      "evidence_status": "source tests; no new solver/PBC qualification"
     }
   ],
   "public_api": {

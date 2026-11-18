@@ -4707,6 +4707,21 @@ async function installInspectorFixtureApi(page, fixture) {
         utilization_cpu_percent: 0,
       });
     }
+    if (path === "/v2/sessions/current/diagnostics/performance" && request.method() === "GET") {
+      // The fixture has no native worker or performance samples. Keep the
+      // resource explicit while the catch-all continues to reject route drift.
+      return fulfillJson(route, {
+        elapsed_monotonic_ns: 0,
+        gpu_scope: "unavailable",
+        points: [],
+        reason: "Inspector fixture does not run a native worker.",
+        revision: `inspector-performance-${fixture.revision}`,
+        rows_dropped: 0,
+        sample_sequence: 0,
+        state: "unavailable",
+        unique_step_callback_records: 0,
+      });
+    }
     if (path === "/v2/sessions/current/diagnostics/gpu" && request.method() === "GET") {
       return fulfillJson(route, {
         devices: [],

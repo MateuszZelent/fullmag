@@ -123,6 +123,7 @@ export function PrimitiveObjectLayer({
           materialProfile={materialProfile}
           hasRealizedObjectGeometry={realizedObjectIds?.has(object.objectId) ?? false}
           allowMeshReadyPreview={
+            object.kind === "imported-surface" ||
             object.role === "antenna" ||
             (isFerromagneticPrimitiveRole(object.role) &&
               (meshReadyFallbackObjectIds?.has(object.objectId) ?? false))

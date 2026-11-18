@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: FEM-to-FDM and FDM-to-FEM terminal pages, source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: fem-to-fdm, fdm-to-fem
 ---
 
 (public-docs-numerical-methods-interpolation-and-state-transfer-root)=
@@ -323,10 +323,3 @@ location or interpolation itself executed on the GPU.
 fem-to-fdm
 fdm-to-fem
 ```
-## Control Room crosswalk
-
-This is a navigation page; use the terminal page named by the selected stage or solver. The category itself has no standalone editor. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

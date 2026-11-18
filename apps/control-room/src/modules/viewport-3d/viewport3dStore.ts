@@ -331,10 +331,22 @@ class Viewport3DStore {
   }
 
   setAppearance(patch: Partial<Viewport3DAppearancePreferences>): void {
-    const appearance = applyViewport3DAppearancePatch(this.snapshot.appearance, patch);
-    if (sameViewport3DAppearancePreferences(this.snapshot.appearance, appearance)) return;
+    const current = this.snapshot;
+    const appearance = applyViewport3DAppearancePatch(current.appearance, patch);
+    if (sameViewport3DAppearancePreferences(current.appearance, appearance)) return;
+    const next = { ...current, appearance };
+    const preset = current.appearance.renderMode !== "presentation" && appearance.renderMode === "presentation"
+      ? applyFigurePresentationPreset(next)
+      : next;
     this.markPersistedPreferenceChange();
-    this.snapshot = { ...this.snapshot, appearance };
+    this.snapshot = {
+      ...preset,
+      appearanceDiagnostics: preset.widgets === current.widgets
+        ? current.appearanceDiagnostics
+        : buildViewport3DAppearanceDiagnostics(
+          preset.widgets, preset.visualProfileId, this.postProcessingDataProtected, this.postProcessingAvailable,
+        ),
+    };
     this.notify();
   }
 
@@ -634,19 +646,25 @@ class Viewport3DStore {
   }
 
   setVisualProfile(profileId: Viewport3DVisualProfileId): void {
+    const current = this.snapshot;
+    const preset = applyFigurePresentationPreset({
+      ...current,
+      captureReturnProfileId: null,
+      visualProfileId: profileId,
+    });
     if (
-      this.snapshot.visualProfileId === profileId &&
-      this.snapshot.captureReturnProfileId === null
+      current.visualProfileId === profileId &&
+      current.captureReturnProfileId === null &&
+      preset.appearance === current.appearance &&
+      preset.widgets === current.widgets
     ) {
       return;
     }
     if (profileId !== "capture") this.markPersistedPreferenceChange();
     this.snapshot = {
-      ...this.snapshot,
-      captureReturnProfileId: null,
-      visualProfileId: profileId,
+      ...preset,
       appearanceDiagnostics: buildViewport3DAppearanceDiagnostics(
-        this.snapshot.widgets,
+        preset.widgets,
         profileId,
         this.postProcessingDataProtected,
         this.postProcessingAvailable,
@@ -900,6 +918,22 @@ class Viewport3DStore {
 }
 
 export const viewport3dStore = new Viewport3DStore();
+
+/** Apply the Figure preset on explicit selection or entry into Presentation.
+ * Subsequent individual effect edits and PNG export preserve user choices.
+ */
+function applyFigurePresentationPreset(state: Viewport3DCommandState): Viewport3DCommandState {
+  if ((state.captureReturnProfileId ?? state.visualProfileId) !== "figure" || state.appearance.renderMode !== "presentation") return state;
+  const { appearance, widgets } = state;
+  if (appearance.lightingMode === "studio" && appearance.softShadows && widgets.effectAmbientOcclusion) return state;
+  return {
+    ...state,
+    appearance: appearance.lightingMode === "studio" && appearance.softShadows
+      ? appearance
+      : { ...appearance, lightingMode: "studio", softShadows: true },
+    widgets: widgets.effectAmbientOcclusion ? widgets : { ...widgets, effectAmbientOcclusion: true },
+  };
+}
 
 ensureViewport3DPreferencesHydrated = createViewport3DPreferencesHydrationAdapter({
   applyPreferences: (preferences) =>

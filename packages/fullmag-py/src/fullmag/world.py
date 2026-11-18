@@ -494,12 +494,13 @@ class AlphaControl:
         faces: Sequence[str] | None = None,
         profile: str | None = None,
         frame: str | None = None,
+        expression: str | None = None,
     ) -> AbsorbingBoundaryLayer:
         self._owner._assert_active_context()
         if parameters is not None:
             if any(
                 value is not None
-                for value in (total_width, ramp_width, max_damping, faces, profile, frame)
+                for value in (total_width, ramp_width, max_damping, faces, profile, frame, expression)
             ):
                 raise TypeError("absorbing_boundary accepts either parameters or keyword values, not both")
             if not isinstance(parameters, AbsorbingBoundaryLayer):
@@ -526,6 +527,7 @@ class AlphaControl:
                 faces=tuple(faces) if faces is not None else ("x+",),
                 profile=profile or "smootherstep",
                 frame=frame or "object",
+                expression=expression,
             )
         self._owner._absorbing_boundary = layer
         return layer

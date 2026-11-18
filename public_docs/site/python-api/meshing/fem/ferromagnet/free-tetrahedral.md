@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-free-tetrahedral)=
 # Free-Tetrahedral API
 
-(python-api-meshing-fem-ferromagnet-free-tetrahedral-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-ferromagnet-free-tetrahedral-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-ferromagnet-free-tetrahedral-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-problem-statement)=
 ## 1. What it is and when to use it
 
 `object.mesh(...)` is the default object meshing strategy: an unstructured
@@ -49,6 +38,7 @@ Impact on the simulation: `maximum_element_size` controls the accuracy/cost
 trade-off; refinement should respect the exchange length $l_{\mathrm{ex}}$
 (section 2).
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 This page introduces no equation of its own; it selects the discrete space for
@@ -110,6 +100,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-python-api)=
 ## 4. Exact API
 
 Signature: `object.mesh(**kwargs)` — `GeometryMeshHandle.__call__`
@@ -142,17 +133,14 @@ ProblemIR mapping: fields land in the canonical object recipe
 (`PerObjectMeshRecipe`) and then in the mesh workflow metadata.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -171,6 +159,7 @@ groups (Gmsh algorithms, optimizer, quality). **Apply Object Policy** writes the
 recipe; **Build Mesh** materializes it. Full description:
 {doc}`../../../../frontend/meshing/object-mesh`.
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -180,12 +169,10 @@ recipe; **Build Mesh** materializes it. Full description:
 | FDM | CPU/GPU | not applicable | use the FDM meshing API ({doc}`../../fdm/index`) |
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Tetrahedra do not guarantee through-thickness layers — for films with strong
@@ -194,30 +181,16 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   in the build report.
 
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 2. A. Hubert and R. Schäfer, *Magnetic Domains*, Springer, 1998.
 
-(python-api-meshing-fem-ferromagnet-free-tetrahedral-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-ferromagnet-free-tetrahedral-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| free-tetrahedral object policy and lowering | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | validation tests |
 | `object.mesh(...)` facade | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.__call__` / `configure` | signature and validation in code |
-| object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` | validation tests |
 | size fields | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.size_field` | method signature |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Free-tetrahedral object policy and lowering. | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | [`class PerObjectMeshRecipe`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/discretization.py#L679) | Free-tetrahedral object policy and lowering. | Source-map validator and focused API tests |

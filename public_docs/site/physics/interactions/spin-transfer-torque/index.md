@@ -17,7 +17,9 @@ canonical SI models.
 (physics-spin-transfer-torque-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Spin-transfer torque models angular-momentum transfer from spin-polarized charge currents via two
+local mechanisms: Slonczewski perpendicular/multilayer torque (`SlonczewskiSTT`) and Zhang–Li
+current-in-plane gradient torque (`ZhangLiSTT`).
 
 (physics-spin-transfer-torque-governing-equations)=
 ## Governing equations
@@ -38,7 +40,7 @@ A backend must not pre-convert the same source and then let the LLG layer conver
 
 ## Slonczewski CPP/MTJ torque
 
-For spin-polarization direction $\hat{\mathbf p}$,
+For unit spin-polarization direction $\hat{\mathbf p}$ and oriented stack normal $\hat{\mathbf n}_{\mathrm{stack}}$:
 
 ```{math}
 :label: eq-public-spin-transfer-torque-stt-slonczewski
@@ -48,14 +50,29 @@ For spin-polarization direction $\hat{\mathbf p}$,
 \mathbf m\times(\hat{\mathbf p}\times\mathbf m)
 +
 \Omega_{\mathrm{FL}}\,
-\mathbf m\times\hat{\mathbf p}.
+\mathbf m\times\hat{\mathbf p},
 ```
+
+where the canonical `slonczewski.fullmag.v2` prefactor and Slonczewski angular asymmetry factor are
+
+```{math}
+:label: eq-public-spin-transfer-torque-stt-slonczewski-rates
+\Omega_J = \frac{\gamma_e\hbar J_\perp}{e M_s t_F},
+\qquad
+J_\perp = \mathbf J_c\cdot\hat{\mathbf n}_{\mathrm{stack}},
+\qquad
+\epsilon_{\mathrm{DL}}(\mathbf m)
+=
+\frac{P\Lambda^2}{(\Lambda^2+1)+(\Lambda^2-1)(\mathbf m\cdot\hat{\mathbf p})},
+```
+
+with $\Omega_{\mathrm{DL}} = -\Omega_J\,\epsilon_{\mathrm{DL}}(\mathbf m)$ (so that $\Omega_{\mathrm{DL}}\,\mathbf m\times(\hat{\mathbf p}\times\mathbf m) = +\Omega_J\,\epsilon_{\mathrm{DL}}\,\mathbf m\times(\mathbf m\times\hat{\mathbf p})$ in backend kernels) and $\Omega_{\mathrm{FL}} = \Omega_J\,\epsilon'$.
+Legacy `slonczewski.legacy_fullmag.v0` uses a factor of $2$ in the denominator of $\Omega_J$ and applies $\epsilon_{\mathrm{DL}}$ to both the damping-like and $\epsilon'$ field-like terms.
 
 The canonical model uses a signed normal current density, an oriented stack normal, target
 $M_s$, and either a free-layer thickness or an explicitly resolved interface realization.
-The angular efficiency is a named formula version based on polarization and asymmetry
-parameters. Current sign, stack-normal orientation, and fixed-layer polarization must remain
-independent authored quantities.
+Current sign, stack-normal orientation, and fixed-layer polarization remain independent
+authored quantities.
 
 ## Zhang–Li CIP torque
 
@@ -80,21 +97,50 @@ and
 [(\mathbf u\cdot\nabla)\mathbf m].
 ```
 
-The exact sign is tied to conventional current, positive elementary charge $e$, and the
-Fullmag LLG convention. Documentation must not switch to electron-flow language mid-equation.
+The exact sign is tied to conventional charge current ($e > 0$) and the
+Fullmag LLG convention rather than electron-flow sign.
+
+```{figure} /_static/diagrams/stt-slonczewski-vs-zhang-li.svg
+:alt: Comparison of Slonczewski CPP/MTJ trilayer torque with computed angular asymmetry curves epsilon_DL(theta) versus Zhang-Li CIP domain-wall translation, plus the single Gilbert-to-explicit conversion invariant.
+:width: 100%
+:name: fig-stt-slonczewski-vs-zhang-li
+:figclass: fm-physics-figure
+
+Side-by-side physics and Fullmag formula comparison for local spin-transfer torques. **(a)** `SlonczewskiSTT` CPP/MTJ trilayer geometry (`slonczewski.fullmag.v2`) and computed angular asymmetry $\epsilon_{\mathrm{DL}}(\theta)$ at $P = 0.40$ for $\Lambda \in \{1.0, 1.5, 2.0\}$. **(b)** `ZhangLiSTT` CIP domain-wall profile $\mathbf m(x)$ separating conventional charge current $\mathbf J_c$ from electron drift, showing adiabatic wall drag and non-adiabatic out-of-plane canting. The bottom guard states Fullmag's single Gilbert-to-explicit RHS conversion invariant.
+```
 
 (physics-spin-transfer-torque-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---:|
+| $\mathbf m$ | unit magnetization vector | $1$ |
 | $\mathbf J_c$ | signed conventional charge-current density | $\mathrm{A\,m^{-2}}$ |
+| $J_\perp$ | signed current density normal to stack | $\mathrm{A\,m^{-2}}$ |
+| $\hat{\mathbf n}_{\mathrm{stack}}$ | unit stack normal | $1$ |
 | $\hat{\mathbf p}$ | spin-polarization direction | $1$ |
 | $P$ | spin polarization degree | $1$ |
-| $\beta$ | non-adiabaticity | $1$ |
+| $\Lambda$ | Slonczewski angular asymmetry parameter | $1$ |
+| $\epsilon_{\mathrm{DL}}$ | Slonczewski angular efficiency | $1$ |
+| $\epsilon'$ | secondary field-like Slonczewski coefficient | $1$ |
+| $\beta$ | Zhang–Li non-adiabaticity | $1$ |
+| $g$ | Landé $g$-factor | $1$ |
+| $\mu_{\mathrm B}$ | Bohr magneton | $\mathrm{J\,T^{-1}}$ |
+| $\gamma_e$ | positive magnitude of electron gyromagnetic ratio | $\mathrm{s^{-1}\,T^{-1}}$ |
+| $\hbar$ | reduced Planck constant | $\mathrm{J\,s}$ |
+| $e$ | positive elementary charge | $\mathrm{C}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $t_F$ | physical free-layer thickness | $\mathrm{m}$ |
+| $\alpha$ | Gilbert damping | $1$ |
 | $\mathbf u$ | spin-drift velocity | $\mathrm{m\,s^{-1}}$ |
+| $\Omega_J$ | Slonczewski base torque frequency | $\mathrm{s^{-1}}$ |
 | $\Omega_{\mathrm{DL}},\Omega_{\mathrm{FL}}$ | torque rates | $\mathrm{s^{-1}}$ |
-| $\mathbf T_G$ | Gilbert-source torque | $\mathrm{s^{-1}}$ |
+| $\mathbf T_G,\mathbf T_{\mathrm{explicit}}$ | Gilbert-source and explicit RHS torques | $\mathrm{s^{-1}}$ |
+
+(physics-spin-transfer-torque-assumptions-and-validity)=
+## Assumptions and validity
+
+The authored models assume continuum-scale magnetization ($\lVert\mathbf m\rVert_2 = 1$), positive local $M_s$, and strictly separate `SlonczewskiSTT` (volumetric thin-layer homogenized or schema-only interface flux) and `ZhangLiSTT` (gradient-driven diffusive adiabatic/non-adiabatic) regimes within the discretization and capability limits stated on this page.
 
 (physics-spin-transfer-torque-discrete-realization)=
 ## Capability matrix
@@ -140,15 +186,9 @@ study.spin_torque(stt)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-The previous public API example used non-existent parameters (`polarization`, `efficiency`,
-`direction_fixed`, `interface_inPlane`), passed a scalar where a three-vector was required, and
-declared no stage. The actual compatibility constructors are documented by the parameter tables
-below.
-
-At the audited revision, these cells prove constructor and lowering semantics only. Do not claim
-a complete executable stage unless the selected study facade, planner, target, formula version,
-and current-source route are all registered and accepted. A normal stage shell without an
-attached torque is not an STT example.
+See {doc}`/python-api/interactions/spin-transfer-torque` for complete constructor signatures, defaults,
+and validation rules for `fm.SlonczewskiSTT` and `fm.ZhangLiSTT`. Execution support depends on
+the selected study target, formula version, and current-source route.
 
 ## Constructor parameters
 
@@ -186,12 +226,17 @@ The IR must preserve:
 - thickness/interface realization;
 - all polarization/asymmetry parameters.
 
-Canonical export must not erase a legacy formula version or silently upgrade it.
+Canonical export preserves any explicit legacy formula version without silently upgrading it.
+
+(physics-spin-transfer-torque-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
 
 (physics-spin-transfer-torque-validation)=
 ## Validation requirements
 
-Python validation should reject non-finite vectors/scalars, zero polarization direction, invalid
+Python and planner validation reject non-finite vectors/scalars, zero polarization direction, invalid
 degree/asymmetry domains, conflicting current sources, incomplete canonical identity, invalid
 target, and missing realization. Planner validation additionally owns mesh derivatives, target
 materialization, source availability, backend/device support, and current-field cardinality.
@@ -219,50 +264,28 @@ coefficients.
 (physics-spin-transfer-torque-scientific-bibliography)=
 ## Scientific bibliography
 
-1. J. C. Slonczewski, *Journal of Magnetism and Magnetic Materials* **159**, L1–L7 (1996),
-   DOI: 10.1016/0304-8853(96)00062-5.
-2. S. Zhang and Z. Li, *Physical Review Letters* **93**, 127204 (2004),
-   DOI: 10.1103/PhysRevLett.93.127204.
-3. NIST μMAG Standard Problem 5.
-
-(physics-spin-transfer-torque-source-code-index)=
-
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
-## Round-trip and failure semantics
-
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
-
-(physics-spin-transfer-torque-assumptions-and-validity)=
-## Assumptions and validity
-
-The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+1. J. C. Slonczewski, "Current-driven excitation of magnetic multilayers," *Journal of Magnetism and Magnetic Materials* **159**(1-2), L1–L7 (1996), [doi:10.1016/0304-8853(96)00062-5](https://doi.org/10.1016/0304-8853(96)00062-5).
+2. L. Berger, "Emission of spin waves by a magnetic multilayer traversed by a current," *Physical Review B* **54**(13), 9353–9358 (1996), [doi:10.1103/PhysRevB.54.9353](https://doi.org/10.1103/PhysRevB.54.9353).
+3. S. Zhang and Z. Li, "Roles of Nonequilibrium Conduction Electrons on the Magnetization Dynamics of Ferromagnets," *Physical Review Letters* **93**(12), 127204 (2004), [doi:10.1103/PhysRevLett.93.127204](https://doi.org/10.1103/PhysRevLett.93.127204) ([arXiv:cond-mat/0407174](https://arxiv.org/abs/cond-mat/0407174)).
+4. A. Thiaville, Y. Nakatani, J. Miltat, and Y. Suzuki, "Micromagnetic understanding of current-driven domain wall motion in patterned nanowires," *Europhysics Letters (EPL)* **69**(6), 990–996 (2005), [doi:10.1209/epl/i2004-10452-6](https://doi.org/10.1209/epl/i2004-10452-6) ([arXiv:cond-mat/0407628](https://arxiv.org/abs/cond-mat/0407628)).
+5. D. C. Ralph and M. D. Stiles, "Spin transfer torques," *Journal of Magnetism and Magnetic Materials* **320**(7), 1190–1216 (2008), [doi:10.1016/j.jmmm.2007.12.019](https://doi.org/10.1016/j.jmmm.2007.12.019) ([arXiv:0711.4608](https://arxiv.org/abs/0711.4608)).
+6. M. Najafi, B. Krüger, S. Bohlens, M. Franchin, H. Fangohr, A. Vanhaverbeke, R. Allenspach, M. Bolte, U. Merkt, D. Pfannkuche, D. P. F. Möller, and G. Meier, "Proposal for a standard problem for micromagnetic simulations including spin-transfer torque," *Journal of Applied Physics* **105**(11) (2009), [doi:10.1063/1.3126702](https://doi.org/10.1063/1.3126702).
 
 (physics-spin-transfer-torque-implementation-mapping)=
 ## Implementation mapping
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
 
+(physics-spin-transfer-torque-source-code-index)=
 ## Source-code index
 
 | Repository path | Stable symbol / area | Responsibility |
 |---|---|---|
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `SlonczewskiSTT, ZhangLiSTT` | public constructors and formula versions |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `class SlonczewskiSTT`, `class ZhangLiSTT` | public constructors and formula versions |
 | `packages/fullmag-py/src/fullmag/world.py` | `spin_torque facade` | stage registration boundary |
-| `crates/fullmag-plan/src/spin_torque.rs` | `STT planning` | variant/source/target capability |
-| `crates/fullmag-plan/src/fdm.rs` | `FDM torque planning` | FDM materialization |
-| `crates/fullmag-plan/src/fem.rs` | `FEM torque planning` | FEM materialization |
-| `backends/fdm/gpu/cuda/interactions` | `STT kernels` | FDM GPU realization |
-| `backends/fem/cpu/mfem/interactions` | `STT operators` | FEM CPU realization |
+| `crates/fullmag-plan/src/spin_torque.rs` | `resolve_legacy_spin_torque` | variant/source/target capability |
+| `crates/fullmag-engine/src/fdm/cpu/fields/direct_torques.rs` | `slonczewski_torque_from_config` | FDM CPU reference STT evaluator |
+| `backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp` | `add_slonczewski_stt_rhs_aos` | FEM CPU Slonczewski realization |
+| `backends/fem/cpu/mfem/interactions/stt_zhang_li.cpp` | `add_zhang_li_stt_rhs_aos` | FEM CPU Zhang–Li realization |
+| `backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu` | `slonczewski_stt_rhs_kernel` | FEM GPU CUDA STT kernels |
 
-(physics-spin-transfer-torque-round-trip-and-failure-semantics)=

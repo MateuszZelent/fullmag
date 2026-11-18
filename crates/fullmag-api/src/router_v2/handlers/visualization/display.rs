@@ -1974,6 +1974,7 @@ fn empty_visualization_target_display_override() -> VisualizationTargetDisplayOv
         vectors: None,
         opacity: None,
         geometry_scope: None,
+        wireframe_geometry_scope: None,
     }
 }
 
@@ -2877,6 +2878,7 @@ fn object_target_settings(
         bounds_visible: layers.bounds.visible,
         bounds_opacity: layers.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
+        wireframe_geometry_scope: Some(VisualizationTargetGeometryScope::Surface),
         opacity: layers.surface.opacity,
         point_color: "var(--fm-border-strong)".to_string(),
         point_opacity: layers.points.opacity,
@@ -2919,6 +2921,7 @@ fn airbox_target_settings(
         bounds_visible: layers.airbox.bounds.visible,
         bounds_opacity: layers.airbox.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
+        wireframe_geometry_scope: None,
         opacity: layers.airbox.surface.opacity,
         point_color: "var(--fm-info)".to_string(),
         point_opacity: layers.airbox.points.opacity,
@@ -3005,6 +3008,9 @@ fn apply_visualization_target_override(
         }
         if let Some(geometry_scope) = display.geometry_scope {
             settings.geometry_scope = geometry_scope;
+        }
+        if let Some(wireframe_geometry_scope) = display.wireframe_geometry_scope {
+            settings.wireframe_geometry_scope = Some(wireframe_geometry_scope);
         }
     }
     if let Some(style) = &override_state.style {

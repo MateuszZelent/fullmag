@@ -62,6 +62,10 @@ fullmag-dev-container script source_root="" port="" gpu_access="auto":
 # Codegen through the already-running services; no Compose lifecycle operation.
 docker-dev-codegen source_root="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" codegen-openapi {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
+# Preserve and stop an empty pre-owner GPU-probe failure; no native drain is claimed.
+docker-dev-stop-preowner-probe attempt resume_attempt config_sha256 source_root image_id port="3197" apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-preowner-probe-volume --attempt {{quote(attempt)}} --resume-attempt {{quote(resume_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --port {{quote(port)}}{{if apply == "true" { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Stop only a pinned supervisor whose failed admission already reaped the API.
 docker-dev-stop-failed source_root container_id image_id process_receipt_sha256 terminal_only="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}{{if terminal_only == "true" { " --terminal-only" } else if terminal_only == "false" { "" } else { error("terminal_only must be true or false") } }}
@@ -140,6 +144,10 @@ docker-dev-build-for-recovery attempt config_sha256 source_root request request_
 # Reconcile only the existing unknown iteration; no backend/frontend lifecycle.
 docker-dev-reconcile-iteration request request_sha256 source_root port="3197" preview="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
+
+# Close only an orphaned pre-owner source-verification lease; preserve every log and verified receipt.
+docker-dev-reconcile-interrupted-verification source_root attempt receipt_sha256 active_sha256 development_attempt development_terminal_sha256 compose_sha256 engine_id boot_id apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_verification_interrupted.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --active-sha256 {{quote(active_sha256)}} --development-attempt {{quote(development_attempt)}} --development-terminal-sha256 {{quote(development_terminal_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}} --boot-id {{quote(boot_id)}}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires the exact preview plan digest") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { "" } else { error("a plan digest requires apply=true") } } else { error("apply must be true or false") } }}
 
 # Confirm one interrupted development only; preview never changes its native receipt.
 docker-dev-reconcile-development request request_sha256 source_root apply="false":

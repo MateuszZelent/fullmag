@@ -194,6 +194,12 @@ pub(crate) fn prepare_accepted_fem_task(
         let solver = match &execution_plan.backend_plan {
             BackendPlanIR::Fem(_) => accepted.materialize_fem_preparation_receipt(
                 preparation_id, &step.step_id, &native),
+            BackendPlanIR::FemFrequencyResponse(_) => accepted
+                .materialize_fem_frequency_response_preparation_receipt(
+                    preparation_id,
+                    &step.step_id,
+                    &native,
+                ),
             BackendPlanIR::AntennaExternalLeadInspection(_) => accepted
                 .materialize_antenna_external_lead_inspection_preparation_receipt(
                     preparation_id, &step.step_id, &native),
@@ -467,10 +473,13 @@ fn store_prepared_bundle(
 fn accepted_preparation_mesh(plan: &BackendPlanIR) -> Result<(&fullmag_ir::MeshIR, u32)> {
     match plan {
         BackendPlanIR::Fem(fem) => Ok((&fem.mesh, fem.fe_order)),
+        BackendPlanIR::FemFrequencyResponse(response) => {
+            Ok((&response.mesh, response.fe_order))
+        }
         BackendPlanIR::AntennaExternalLeadInspection(antenna) => {
             Ok((&antenna.input.combined_mesh, 1))
         }
-        _ => bail!("accepted FEM preparer requires a time-domain FEM or antenna inspection plan"),
+        _ => bail!("accepted FEM preparer requires a FEM, frequency-response, or antenna inspection plan"),
     }
 }
 
@@ -648,7 +657,7 @@ mod tests {
             &BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("time-domain FEM or antenna inspection"));
+        assert!(error.to_string().contains("frequency-response"));
     }
 
     #[test]

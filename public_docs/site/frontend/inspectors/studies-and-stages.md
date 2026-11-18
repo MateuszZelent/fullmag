@@ -59,7 +59,7 @@ external script pipeline reference) with stage-specific execution/result inspect
 
 Each editable stage validates locally via `validateStudyStageDraft` and across stage sequence rules
 via `validateStudyWorkflow` (catching missing dependencies, incompatible lane algorithms, or invalid
-initial states before submission). stages marked `pipelineNodeId` lock structural ID edits to protect
+initial states before submission). Stages marked `pipelineNodeId` lock structural ID edits to protect
 script provenance while allowing result inspection.
 
 ## Initial State, Per-Stage Texture Overrides & Interactive Re-Execution
@@ -68,21 +68,11 @@ script provenance while allowing result inspection.
 - **Stage Texture Assignments (`StageTextureAssignmentsEditor`)**: Allows per-stage magnetization texture overrides on selected objects or regions.
 - **Safe Apply & Run (`executeStageAfterApply` in `studyStageApplyAndRun.ts`)**: Interactive stage re-execution pins `(scene_revision, solver_profile, domain)` before applying changes, applies the stage draft, fetches fresh `sessions/current/status` and `model/readiness`, aborts cleanly if a concurrent Python/UI write mutated `scene_revision` or `changedStudyComputeInput`, reports readiness blockers verbatim, and only then dispatches the stage execution command (`target = current_stage`).
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Selection routes and Python interoperability
 
 - **Selection routes**: `study` (`StudyInspectorPanel`) and `study-stage` (`StudyStageInspectorRouter`).
 - **Re-execution safety**: Controlled solely by `executeStageAfterApply` and `studyComputeDraftBlockedReason`; dirty invalid drafts block Study Compute until resolved or reset.
-
-## Python/API crosswalk
-
-- Every editable stage mirrors a `study.stages.add_*` builder call in `packages/fullmag-py`.
-- Python-authored workflow stages carrying complex runtime closures render cleanly as `UnsupportedStageInspector` (`inspection-only` / `TODO: frontend support`) rather than corrupting script semantics.
-
-## Physics and bibliography scope
-
-This page documents stage authoring, validation UI, and revision-pinned command submission; time integrators, energy minimization schemes, and eigenvalue algorithms are specified in the numerical-methods documentation.
+- **Python alignment**: Every editable stage mirrors a `study.stages.add_*` builder call in `packages/fullmag-py`. Python-authored workflow stages carrying complex runtime closures render as read-only summaries via `UnsupportedStageInspector` rather than overwriting script semantics.
 
 ## Source-code index
 
