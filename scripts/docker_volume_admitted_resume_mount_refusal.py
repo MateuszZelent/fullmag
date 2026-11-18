@@ -457,7 +457,7 @@ def _controller_pins(source):
     return {name: digest((source / "scripts" / name).read_bytes()) for name in CONTROLLERS}
 
 
-def _exact_group_services(control, original):
+def _exact_group_services(control, original, observer=None):
     from docker_volume_activation_reconcile import _validate_helper, _validate_helper_logged
 
     helper_name = original.get("helper_container")
@@ -465,20 +465,33 @@ def _exact_group_services(control, original):
     _validate_helper_logged(helper_id)
     ids = docker_capture("ps", "--all", "--no-trunc", "--filter",
         "label=com.docker.compose.project=" + control.project, "--format", "{{.ID}}").stdout.decode().split()
-    require(len(ids) == 3, "Only the exact resume helper and two retained service containers may exist")
+    require(len(ids) == 3 + (observer is not None),
+        "Only the exact resume helper, retained services, and pinned recovery observer may exist")
     inspected = json.loads(docker_capture("inspect", *ids).stdout)
     services = {"lease": helper}
+    observer_seen = False
     for item in inspected:
         name = item.get("Config", {}).get("Labels", {}).get("com.docker.compose.service")
         if name in ("backend", "frontend"):
             require(name not in services, "Duplicate retained service container")
             services[name] = item
         elif name == "build-control":
-            require(item.get("Id") == helper_id, "Unexpected group helper remains")
+            if observer is not None and item.get("Id") == observer["container_id"]:
+                state = item.get("State", {})
+                require(item.get("Name") == "/" + observer["container_name"]
+                    and item.get("Image") == observer["image_id"]
+                    and state.get("StartedAt") == observer["started_at"]
+                    and state.get("Running") is True
+                    and fingerprint(item) == observer["fingerprint"],
+                    "Recovery observer changed while validating the exact service inventory")
+                observer_seen = True
+            else:
+                require(item.get("Id") == helper_id, "Unexpected group helper remains")
         else:
             require(False, "Unexpected group container/resource remains")
     require(set(services) == {"lease", "backend", "frontend"},
         "Both retained service containers and the original helper are required")
+    require(observer is None or observer_seen, "Pinned recovery observer is absent")
     require(services["backend"].get("Id") == original.get("backend_container")
         and services["frontend"].get("Id") == original.get("frontend_container"),
         "Resume service IDs differ from the original receipt")
@@ -550,7 +563,8 @@ def _read_original(control, attempt):
     return root, current_raw, saved_raw, original_raw, original
 
 
-def _build_request(control, selected, layout, identity, *, attempt, base_attempt, config_sha256, port):
+def _build_request(control, selected, layout, identity, *, attempt, base_attempt, config_sha256, port,
+                   observer=None):
     import docker_group_storage
     import docker_volume_dev as dev
     import fullmag_storage as storage
@@ -579,7 +593,7 @@ def _build_request(control, selected, layout, identity, *, attempt, base_attempt
     dev._operator_probe_record_from_retained(original, document)
     state = storage.validate_path(Path(original.get("state_root", "")), layout["runtime_root"],
         "admitted resume retained state")
-    actual = _exact_group_services(control, original)
+    actual = _exact_group_services(control, original, observer)
     validate_admitted_services(original, {name: actual[name] for name in ("backend", "frontend")},
         compose_backend_name=actual["backend"].get("Name"))
     _validate_retained_compose(document, actual, original, port)
@@ -682,7 +696,7 @@ def _build_request(control, selected, layout, identity, *, attempt, base_attempt
     return request, original_raw, original, actual, document, state
 
 
-def _validate_failure(control, selected, layout, identity, request):
+def _validate_failure(control, selected, layout, identity, request, observer=None):
     require(request["source_root"] == str(selected)
         and request["compose_project"] == control.project,
         "Recovery request belongs to another checkout/group")
@@ -693,6 +707,7 @@ def _validate_failure(control, selected, layout, identity, request):
         control, selected, layout, identity,
         attempt=request["attempt"], base_attempt=request["base_attempt"],
         config_sha256=request["config_sha256"], port=request["port"],
+        observer=observer,
     )
     require(observed == request and digest(original_raw) == request["unknown_receipt_sha256"],
         "Resume receipt, service state, Compose binds, native owner, or preserved artifacts changed")
@@ -854,7 +869,7 @@ def _apply(control, selected, layout, identity, request, request_path, request_s
             helper_image[0]["Id"], request, request_sha)
         # Re-check all target facts after the observer has acquired its lock.
         original_raw, original, actual, document, state = _validate_failure(
-            control, selected, layout, identity, request)
+            control, selected, layout, identity, request, observer_record)
         if read_raw(control, root + "/unknown-receipt.json", optional=True) is None:
             write_immutable(control, root + "/unknown-receipt.json", original_raw)
         control.write("resume/attempts/" + request["attempt"]
@@ -866,7 +881,7 @@ def _apply(control, selected, layout, identity, request, request_path, request_s
         require(control._line(claim) == "OBSERVING",
             "Resume observer BEGIN outcome unknown; original resources retained")
         original_raw, original, actual, document, state = _validate_failure(
-            control, selected, layout, identity, request)
+            control, selected, layout, identity, request, observer_record)
         if result_raw is None:
             result = failure_terminal(original, request, request_path=request_path,
                 request_sha256=request_sha, observer_record=observer_record, finished_at=time.time())

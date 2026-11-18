@@ -1,7 +1,10 @@
 """Contract tests for failure-only reconciliation of an admitted resume."""
 import copy
+import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import docker_volume_admitted_resume_mount_refusal as recovery
 from docker_build_control import BuildControlError, canonical
@@ -139,6 +142,31 @@ class AdmittedResumeMountRefusalTests(unittest.TestCase):
         self.assertEqual(recovery._stable_state_fingerprint(state), before)
         state["Pid"] += 1
         self.assertNotEqual(recovery._stable_state_fingerprint(state), before)
+
+    def test_group_inventory_accepts_only_the_validated_apply_observer(self):
+        original_helper = self._service("e", "build-control", self.backend_started)
+        observer = self._service("f", "build-control", self.backend_started)
+        observer.update(Name="/admitted-resume-observer")
+        observer["State"]["Running"] = True
+        pin = {
+            "container_id": observer["Id"], "container_name": "admitted-resume-observer",
+            "image_id": observer["Image"], "started_at": self.backend_started,
+            "fingerprint": reconcile.fingerprint(observer),
+        }
+        containers = [self.backend, self.frontend, original_helper, observer]
+        replies = [
+            SimpleNamespace(stdout="\n".join(item["Id"] for item in containers).encode()),
+            SimpleNamespace(stdout=json.dumps(containers).encode()),
+        ]
+        control = SimpleNamespace(project=self.project)
+        with mock.patch("docker_volume_activation_reconcile._validate_helper",
+                        return_value=(original_helper, original_helper["Id"])), \
+                mock.patch("docker_volume_activation_reconcile._validate_helper_logged"), \
+                mock.patch.object(recovery, "docker_capture", side_effect=replies * 2):
+            self.assertEqual(set(recovery._exact_group_services(control, self.original, pin)),
+                             {"lease", "backend", "frontend"})
+            with self.assertRaisesRegex(BuildControlError, "observer changed"):
+                recovery._exact_group_services(control, self.original, {**pin, "started_at": self.frontend_started})
 
     def test_backend_oci_refusal_requires_exact_prestart_incarnation(self):
         self.backend["State"].update(Status="exited", Running=False, Pid=0, ExitCode=127,
