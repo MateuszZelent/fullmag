@@ -6235,7 +6235,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     }
     configured = configured && KSPGetPC(st_ksp, &st_pc) == 0;
     if (configured && augmented_shifted_preconditioner) {
-        configured = configure_augmented_shift_pc(st_pc, augmented_shift.get()) == 0;
+        // Right preconditioning with the unpreconditioned residual norm: the
+        // KSP must certify ||b - (A - tau B) x|| itself.  With left
+        // preconditioning the test uses ||K^{-1} r||, which the augmented
+        // factorization can make small while the true residual is not, and
+        // EPS then stagnates on an inexact shift-invert operator.
+        configured = configure_augmented_shift_pc(st_pc, augmented_shift.get()) == 0 &&
+            KSPSetPCSide(st_ksp, PC_RIGHT) == 0 &&
+            KSPSetNormType(st_ksp, KSP_NORM_UNPRECONDITIONED) == 0;
     } else if (configured) {
         configured =
             PCSetType(st_pc, PCLU) == 0 &&

@@ -2216,9 +2216,15 @@ EPS, więc $K_{\hat\tau}$ odtwarza dokładnie operator przesunięty widziany prz
 
 Realizacja: jedna faktoryzacja LU macierzy $K_{\hat\tau}$ (MUMPS, porządkowanie
 METIS `ICNTL(7)=5`, progowe częściowe pivotowanie) na każde przesunięcie,
-podana jako prawy preconditioner `PCSHELL` dotychczasowego GMRES. Przy
-dokładnej odwrotności GMRES zbiega w jednej iteracji, a tolerancja
-`shifted_ksp_rtol` i limit iteracji pozostają bez zmian. Macierz
+podana jako prawy preconditioner `PCSHELL` dotychczasowego GMRES
+(`PC_RIGHT`, `KSP_NORM_UNPRECONDITIONED`). Test zbieżności KSP sprawdza więc
+residuum operatora przesuniętego z {eq}`eq-poisson-airbox-augmented-shift`
+dla prawej strony $b$, a nie normę po preconditionowaniu. Lewy preconditioner mierzyłby
+$\lVert K_{\hat\tau}^{-1}r\rVert$, które faktoryzacja może uczynić małym przy
+dużym residuum prawdziwym. Na modelu z wymiarem real-split 4824 EPS z tym
+ustawieniem nie zbiegł w 2412 restartach, a z prawym preconditionerem
+zbiegł w 20. Przy dokładnej odwrotności GMRES zbiega w 1–2 iteracjach, a
+tolerancja `shifted_ksp_rtol` i limit iteracji pozostają bez zmian. Macierz
 magnetyczna bez sprzężenia demag pozostaje macierzą preconditionera ST
 i ścieżką zapasową, gdy PETSc nie ma MUMPS, gdy
 `FULLMAG_K0_AUGMENTED_SHIFT=0` albo gdy faktoryzacja się nie powiedzie.
