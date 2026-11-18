@@ -334,7 +334,7 @@ const FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY =
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH;
 
 export interface FrequencyDomainChartBuildResult<TPoint> {
-  dataSourceVersion: "unknown" | "response.v1" | "response.v2";
+  dataSourceVersion: "unknown" | "response.v1" | "response.v2" | "response.v3";
   diagnostics: string[];
   droppedPointCount: number;
   points: TPoint[];
@@ -345,7 +345,19 @@ export function frequencyResponseSeriesUnit(
   model: Pick<FrequencyDomainChartBuildResult<unknown>, "series">,
   quantity: string,
 ): string {
-  return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
+  const units = new Set(model.series.filter((series) => series.quantity === quantity).map((series) => series.unit));
+  return units.size === 1 ? [...units][0]! : NOT_PUBLISHED_UNIT;
+}
+
+export function frequencyResponseSeriesForPoint(
+  model: FrequencyDomainChartBuildResult<FrequencyResponsePoint>,
+  quantity: string,
+  point: FrequencyResponsePoint | null | undefined,
+): FrequencyDomainChartSeries | null {
+  if (!point) return null;
+  const rowIndex = model.points.indexOf(point);
+  return model.series.find((series) => series.quantity === quantity &&
+    series.points.some((entry) => entry.rowIndex === rowIndex)) ?? null;
 }
 
 export interface FrequencyDomainChartPoint {
@@ -1519,10 +1531,12 @@ export function buildFrequencyResponseChartModel(
   );
   const rows = responseRows(resource?.payload);
   const points: FrequencyResponsePoint[] = [];
+  const absorptionProvenance = new Map<FrequencyResponsePoint, unknown>();
+  const susceptibilityProvenance = new Map<FrequencyResponsePoint, unknown>();
   let droppedPointCount = 0;
 
-  if (dataSourceVersion === "response.v2" && resource?.payload && rows.length === 0) {
-    diagnostics.push("response.v2 artifact is present but contains no readable points");
+  if ((dataSourceVersion === "response.v2" || dataSourceVersion === "response.v3") && resource?.payload && rows.length === 0) {
+    diagnostics.push(`${dataSourceVersion} artifact is present but contains no readable points`);
   }
 
   rows.forEach((row, rowIndex) => {
@@ -1544,7 +1558,7 @@ export function buildFrequencyResponseChartModel(
     const residualRelativeL2 = nonnegativeFiniteNumber(
       item?.relative_residual_l2_norm ?? item?.residualRelativeL2,
     );
-    points.push({
+    const point: FrequencyResponsePoint = {
       absorbedPowerDensity: finiteNumber(
         item?.absorbed_power_density ?? item?.absorbedPowerDensity,
       ),
@@ -1565,7 +1579,10 @@ export function buildFrequencyResponseChartModel(
       ...(residualRelativeL2 != null ? { residualRelativeL2 } : {}),
       susceptibility: susceptibility.length ? susceptibility : null,
       overlap: finiteNumber(item?.overlap_score ?? item?.overlapScore ?? item?.overlap),
-    });
+    };
+    points.push(point);
+    absorptionProvenance.set(point, item?.absorbed_power_density_provenance);
+    susceptibilityProvenance.set(point, item?.susceptibility_tensor_provenance);
   });
 
   const frequencyScale = frequencyChartScale(
@@ -1580,21 +1597,15 @@ export function buildFrequencyResponseChartModel(
     (point) => point.amplitude,
     diagnostics,
   );
-  const absorbedPowerDensityUnit = responseObservableUnit(
-    points,
-    manifestPayload,
-    ["absorbed_power"],
-    "absorbed power density",
-    (point) => point.absorbedPowerDensity,
-    diagnostics,
+  const absorptionSeries = responseObservableSeries(
+    points, absorptionProvenance, resource, frequencyScale, manifestPayload,
+    "absorbed-power-density", "Absorbed power density", ["absorbed_power"],
+    "absorbed power density", (point) => point.absorbedPowerDensity, diagnostics,
   );
-  const susceptibilityUnit = responseObservableUnit(
-    points,
-    manifestPayload,
-    ["susceptibility"],
-    "susceptibility",
-    (point) => maxAbsSusceptibility(point.susceptibility),
-    diagnostics,
+  const susceptibilitySeries = responseObservableSeries(
+    points, susceptibilityProvenance, resource, frequencyScale, manifestPayload,
+    "susceptibility-max-abs", "Max |susceptibility|", ["susceptibility"],
+    "susceptibility", (point) => maxAbsSusceptibility(point.susceptibility), diagnostics,
   );
 
   return {
@@ -1621,24 +1632,8 @@ export function buildFrequencyResponseChartModel(
         "rad",
         (point) => point.phaseRad,
       ),
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "absorbed-power-density",
-        "Absorbed power density",
-        absorbedPowerDensityUnit,
-        (point) => point.absorbedPowerDensity,
-      ),
-      responseSeries(
-        points,
-        resource,
-        frequencyScale,
-        "susceptibility-max-abs",
-        "Max |susceptibility|",
-        susceptibilityUnit,
-        (point) => maxAbsSusceptibility(point.susceptibility),
-      ),
+      ...absorptionSeries,
+      ...susceptibilitySeries,
     ].filter((series) => series.points.length > 0),
   };
 }
@@ -1648,6 +1643,82 @@ type ResponseObservableKind =
   | "drive_projected_response"
   | "response_amplitude"
   | "susceptibility";
+
+interface ResponseObservableSeriesEvidence {
+  key: string;
+  label: string;
+  unit: string | null;
+}
+
+function responseObservableSeries(
+  points: readonly FrequencyResponsePoint[],
+  provenanceByPoint: ReadonlyMap<FrequencyResponsePoint, unknown>,
+  resource: FrequencyDomainJsonArtifactLike | null | undefined,
+  frequencyScale: FrequencyChartScale,
+  manifestPayload: unknown,
+  quantity: string,
+  legacyLabel: string,
+  observableKinds: readonly ResponseObservableKind[],
+  diagnosticLabel: string,
+  selector: (point: FrequencyResponsePoint) => number | null,
+  diagnostics: string[],
+): FrequencyDomainChartSeries[] {
+  const evidence = new Map<FrequencyResponsePoint, ResponseObservableSeriesEvidence>();
+  for (const point of points) {
+    if (selector(point) == null) continue;
+    const raw = provenanceByPoint.get(point);
+    if (raw == null) {
+      evidence.set(point, { key: "legacy", label: legacyLabel, unit: null });
+      continue;
+    }
+    const provenance = record(raw);
+    let label: string | null = null;
+    let unit: string | null = null;
+    if (quantity === "absorbed-power-density") {
+      if (provenance?.kind === "drive_projected_absorption_proxy" &&
+        provenance.physical_power_density === false) {
+        label = "Drive-projected absorption proxy";
+      } else if (provenance?.physical_power_density === true) {
+        label = legacyLabel;
+      }
+      unit = stringValue(provenance?.units);
+    } else {
+      if (provenance?.full_tensor === false &&
+        provenance.kind === "drive_projected_si_susceptibility") {
+        label = "|Drive-projected susceptibility|";
+      } else if (provenance?.full_tensor === false &&
+        provenance.kind === "drive_projected_scalar") {
+        label = "|Drive-projected response|";
+      } else if (provenance?.full_tensor === true) {
+        label = legacyLabel;
+      }
+      unit = stringValue(provenance?.response_units);
+    }
+    if (!provenance || label == null || unit == null) {
+      const diagnostic = `${diagnosticLabel} provenance is incomplete or unsupported`;
+      if (!diagnostics.includes(diagnostic)) diagnostics.push(diagnostic);
+      continue;
+    }
+    // Native provenance is a flat metadata record. Sort its entries without
+    // mutating it so equivalent key order does not create another series.
+    const key = JSON.stringify(Object.entries(provenance).toSorted(([a], [b]) => a.localeCompare(b)));
+    evidence.set(point, { key, label, unit });
+  }
+  const groups = Map.groupBy(points, (point) => evidence.get(point)?.key ?? null);
+  const validGroups = [...groups].filter(([key]) => key !== null);
+  return validGroups.map(([, members], groupIndex) => {
+    const metadata = evidence.get(members[0]!)!;
+    const included = new Set(members);
+    const unit = metadata.unit ?? responseObservableUnit(
+      members, manifestPayload, observableKinds, diagnosticLabel, selector, diagnostics,
+    );
+    const series = responseSeries(points, resource, frequencyScale, quantity, metadata.label,
+      unit, (point) => included.has(point) ? selector(point) : null);
+    return validGroups.length === 1 ? series : {
+      ...series, id: `${series.id}:provenance-${groupIndex}`,
+    };
+  });
+}
 
 function responseObservableUnit(
   points: readonly FrequencyResponsePoint[],
@@ -1996,10 +2067,13 @@ function responseRows(payload: unknown): unknown[] {
 
 function responseDataSourceVersion(
   resource: FrequencyDomainJsonArtifactLike | null | undefined,
-): "unknown" | "response.v1" | "response.v2" {
+): "unknown" | "response.v1" | "response.v2" | "response.v3" {
   const root = record(resource?.payload);
   const schema = stringValue(root?.schema_version);
   const artifactPath = resource?.artifact_path ?? "";
+  if (schema === "magnetic_response_sweep.v3" || artifactPath.endsWith(".v3.json")) {
+    return "response.v3";
+  }
   if (schema === "magnetic_response_sweep.v2" || artifactPath.endsWith(".v2.json")) {
     return "response.v2";
   }

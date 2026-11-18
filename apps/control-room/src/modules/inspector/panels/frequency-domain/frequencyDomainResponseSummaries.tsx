@@ -34,6 +34,7 @@ import {
   buildFmrPeakTableModel,
   eigenModeFieldAvailable,
   frequencyDomainManifestPayload,
+  frequencyResponseSeriesForPoint,
   frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -148,10 +149,6 @@ export function useFrequencyResponsePointSummary({ selection }: InspectorPanelPr
     frequencyDomainManifestPayload(manifest.data),
   );
   const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
-  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
-    responseModel,
-    "absorbed-power-density",
-  );
   const matchingPoints = responseModel.points.filter(
     (point) => point.frequencyIndex === frequencyIndex,
   );
@@ -183,6 +180,17 @@ export function useFrequencyResponsePointSummary({ selection }: InspectorPanelPr
     finiteNumber(fieldMeta.data?.default_phase_rad) ?? firstPoint?.phaseRad ?? 0;
   const absorptionProvenance = record(payload?.absorbed_power_density_provenance);
   const susceptibilityProvenance = record(payload?.susceptibility_tensor_provenance);
+  const absorptionSeries = firstPoint
+    ? frequencyResponseSeriesForPoint(responseModel, "absorbed-power-density", firstPoint)
+    : null;
+  const absorbedPowerDensityLabel = absorptionSeries?.label ?? (
+    absorptionProvenance?.physical_power_density === false
+      ? "Drive-projected absorption proxy"
+      : "Absorbed power density"
+  );
+  const absorbedPowerDensityUnit = absorptionSeries?.unit ??
+    stringValue(absorptionProvenance?.units) ??
+    frequencyResponseSeriesUnit(responseModel, "absorbed-power-density");
   const provenance = [
     stringValue(absorptionProvenance?.kind),
     stringValue(susceptibilityProvenance?.kind),
@@ -207,6 +215,7 @@ export function useFrequencyResponsePointSummary({ selection }: InspectorPanelPr
       absorbedPowerDensity == null
         ? "not available"
         : formatQuantity(absorbedPowerDensity, absorbedPowerDensityUnit),
+    absorbedPowerDensityLabel,
     amplitude: formatQuantity(amplitude, amplitudeUnit),
     amplitudeUnit,
     artifactPath: frequencyPoint.data?.artifact_path ?? "not available",
@@ -409,6 +418,8 @@ export function useFrequencyResponseSweepSummary() {
     responseModel,
     "susceptibility-max-abs",
   );
+  const absorptionSeries = responseModel.series.filter((series) => series.quantity === "absorbed-power-density");
+  const susceptibilitySeries = responseModel.series.filter((series) => series.quantity === "susceptibility-max-abs");
   const fmrPeakModel = buildFmrPeakTableModel({
     manifestPayload: frequencyDomainManifestPayload(manifest.data),
     responseSweep: responseSweep.data,
@@ -418,9 +429,10 @@ export function useFrequencyResponseSweepSummary() {
   const phases = responseModel.points.flatMap((point) =>
     point.phaseRad == null ? [] : [point.phaseRad],
   );
-  const absorbedPowers = responseModel.points.flatMap((point) =>
-    point.absorbedPowerDensity == null ? [] : [point.absorbedPowerDensity],
-  );
+  const absorptionPointCount = absorptionSeries.reduce((count, series) => count + series.points.length, 0);
+  const maxAbsorption = absorptionSeries.length === 1
+    ? maxFinite(absorptionSeries[0].points.map((point) => point.y))
+    : null;
   const fieldOverlayCount = responseModel.points.filter((point) => point.fieldId).length;
   const peak = fmrPeakModel.peaks.find((item) => item.source === "driven_response");
 
@@ -434,9 +446,12 @@ export function useFrequencyResponseSweepSummary() {
       : "not requested",
     fieldOverlayStatus: `${fieldOverlayCount}/${responseModel.points.length} point(s) field-ready`,
     frequencyRange: formatFrequencyRange(frequencies),
-    maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
+    maxAbsorbedPowerDensity: maxAbsorption == null
       ? "not available"
-      : formatQuantity(maxFinite(absorbedPowers)!, absorbedPowerDensityUnit),
+      : formatQuantity(maxAbsorption, absorbedPowerDensityUnit),
+    maxAbsorbedPowerDensityLabel: absorptionSeries.length === 1
+      ? `Max ${absorptionSeries[0].label.toLowerCase()}`
+      : "Max absorption",
     peakResponse: peak
       ? `${formatFrequency(peak.frequencyHz)}; amplitude ${formatQuantity(peak.amplitude, amplitudeUnit)}`
       : "not available",
@@ -445,8 +460,9 @@ export function useFrequencyResponseSweepSummary() {
       ? `${progress.data.status}; ${progress.data.completed_frequency_points}/${progress.data.total_frequency_points}`
       : "not available",
     phaseCoverage: `${phases.length}/${responseModel.points.length} point(s)`,
-    responseSeriesControls:
-      "Amplitude, Phase, Absorbed power density, Max |susceptibility|",
+    responseSeriesControls: responseModel.dataSourceVersion === "response.v3"
+      ? responseModel.series.map((series) => series.label).join(", ") || "not available"
+      : "Amplitude, Phase, Absorbed power density, Max |susceptibility|",
     resourceKey: responseSweep.data?.resource_key ??
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
     responseModel,
@@ -455,8 +471,10 @@ export function useFrequencyResponseSweepSummary() {
     seriesStatus: responseModel.series.length
       ? `${responseModel.series.length} series: ${responseModel.series.map((series) => series.label).join(", ")}`
       : "not available",
-    absorbedPowerCoverage: `${absorbedPowers.length}/${responseModel.points.length} point(s)`,
-    susceptibilityComponent: `max |χ| from response tensor [${susceptibilityUnit}]`,
+    absorbedPowerCoverage: `${absorptionPointCount}/${responseModel.points.length} point(s)`,
+    susceptibilityComponent: responseModel.dataSourceVersion === "response.v3"
+      ? susceptibilitySeries.map((series) => `${series.label} [${series.unit}]`).join(", ") || "not available"
+      : `max |χ| from response tensor [${susceptibilityUnit}]`,
     susceptibilityUnit,
   };
 }
