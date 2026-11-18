@@ -12,6 +12,8 @@ import {
   TestElement,
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { VIEWPORT_3D_QUALITY_PROFILE_OPTIONS } from "@/shared/viewport3dQualityLabels";
+
 import { viewport3dStore } from "../viewport3dStore";
 
 vi.mock("@/shared/ui/Slider", () => ({
@@ -160,11 +162,33 @@ describe("Viewport3DSettingsContent", () => {
       );
       expect(qualityRadios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["false", "true"]);
       expect(settings.container.textContent).toContain("Quality profile");
-      expect(settings.container.textContent).toContain("Rendering detail and cost, independent of the visualization mode above.");
+      expect(settings.container.textContent).toContain("Quality controls render detail and GPU cost.");
+      expect(VIEWPORT_3D_QUALITY_PROFILE_OPTIONS).toEqual([
+        ["interactive-lite", "Fast"],
+        ["interactive", "Standard"],
+        ["balanced", "Detailed"],
+        ["figure", "Figure"],
+      ]);
+      const qualityControl = elementById(settings.container, "fm-view-quality");
+      const describedBy = qualityControl.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
+      expect(describedBy).toContain("fm-view-quality-help");
+      expect(describedBy).toContain("fm-view-quality-description");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Standard.");
 
       await act(async () => viewport3dStore.setVisualProfile("figure"));
       expect(viewport3dStore.getSnapshot().visualProfileId).toBe("figure");
       expect(viewport3dStore.getSnapshot().appearance.renderMode).toBe("presentation");
+      const figureDescription = elementById(settings.container, "fm-view-quality-description").textContent;
+      expect(figureDescription).toMatch(/2× viewport resolution.*100% zoom/);
+      expect(figureDescription).toMatch(/switching to Presentation.*Studio lighting.*soft shadows.*ambient occlusion/);
+      expect(figureDescription).toMatch(/adjust.*GPU memory.*longer to render/i);
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Figure.");
+      await act(async () => viewport3dStore.requestCapture());
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Figure. Exporting PNG.");
+      await act(async () => viewport3dStore.completeCapture());
       await act(async () => viewport3dStore.setEffectAmbientOcclusion(false));
       const selectedPresentation = findElement(
         settings.container,
@@ -223,6 +247,33 @@ describe("Viewport3DSettingsContent", () => {
     }
   });
 
+  it("shows the retained profile during export and an explicit Capture profile honestly", async () => {
+    const settings = await mountContent("quality");
+    try {
+      await act(async () => viewport3dStore.setVisualProfile("figure"));
+      await act(async () => viewport3dStore.requestCapture());
+      expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe("figure");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toBe("Active quality: Figure. Exporting PNG.");
+      expect(elementById(settings.container, "fm-view-quality").textContent)
+        .toContain("Figure");
+
+      await act(async () => viewport3dStore.completeCapture());
+      await act(async () => viewport3dStore.setVisualProfile("capture"));
+      expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBeNull();
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toBe("Active quality: Capture.");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .not.toContain("Exporting PNG");
+      expect(elementById(settings.container, "fm-view-quality").textContent)
+        .toContain("Capture");
+      expect(elementById(settings.container, "fm-view-quality-description").textContent)
+        .toContain("image capture");
+    } finally {
+      await settings.cleanup();
+    }
+  });
+
   it("shows one shared mode control in Appearance and the legacy dialog", async () => {
     const appearance = await mountContent("appearance");
     const dialog = readFileSync(
@@ -243,7 +294,7 @@ describe("Viewport3DSettingsContent", () => {
       expect(dialog.match(/<Viewport3DVisualizationModeControl\s*\/>/g) ?? []).toHaveLength(1);
       expect(dialog).not.toContain("fm-view-render-mode");
       expect(dialog).toContain('label="Quality profile"');
-      expect(dialog).toContain("Rendering detail and cost, independent of the visualization mode above.");
+      expect(dialog).toContain('describedBy="fm-view-quality-dialog-help fm-view-quality-dialog-description"');
     } finally {
       await appearance.cleanup();
     }

@@ -50,8 +50,8 @@ E[\mathbf{m}]=\sum_{k\in\mathcal{K}}E_k[\mathbf{m}].
 ## Assumptions and validity
 
 The sum includes only explicitly enabled terms (see
-{ref}`fig-interactions-taxonomy-energy-vs-torque` for the taxonomy across all 12 interactions
-and {ref}`fig-effective-field-and-direct-torque-composition` for how conservative energy
+{numref}`fig-interactions-taxonomy-energy-vs-torque` for the taxonomy across all 12 interactions
+and {numref}`fig-effective-field-and-direct-torque-composition` for how conservative energy
 variation $\delta E_k$ maps to $\mathbf{H}_k$ separately from direct torques
 $\boldsymbol{\tau}_{\mathrm{direct}}$). Each interaction owns its sign, units, discretization,
 and boundary law. FEM and FDM reductions can use different weights and quadrature, so the
@@ -89,9 +89,9 @@ for complete argument tables, support matrices, and rejection semantics.
 (foundation-energy-problem-ir)=
 ## ProblemIR
 
-Exchange.to_ir() produces {"kind":"exchange"} and Zeeman.to_ir() produces
-{"kind":"zeeman","B":[0.0,0.0,0.001]}. Lowering inserts these fragments into
-ProblemIR.energy_terms and preserves requested values before planner resolution.
+`Exchange.to_ir()` produces `{"kind": "exchange"}` and `Zeeman.to_ir()` produces
+`{"kind": "zeeman", "B": [0.0, 0.0, 0.001]}`. Lowering inserts these fragments into
+`ProblemIR.energy_terms` and preserves requested values before planner resolution.
 
 (foundation-energy-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -114,14 +114,14 @@ silently dropped from the energy sum.
 (foundation-energy-implementation-mapping)=
 ## Implementation mapping
 
-energy.py owns typed terms and to_ir serialization. _build_problem assembles enabled
-objects, and ProblemIR owns the typed energy_terms field. Native backends own term evaluation.
+`energy.py` owns typed terms and `to_ir()` serialization. `_build_problem` assembles enabled
+objects, and `ProblemIR` owns the typed `energy_terms` field. Native backends own term evaluation.
 
 (foundation-energy-validation)=
 ## Validation
 
-The source map checks all listed Python and Rust symbols. The example is parsed by the
-public-example guard. Energy-derivative and cross-backend parity evidence remains
+The stage-first Python example is verified against the public study API and object-level
+serialization checks. Energy-derivative and cross-backend parity evidence remains
 interaction-specific.
 
 (foundation-energy-limitations)=
@@ -150,4 +150,4 @@ term kind is executable on every lane.
 | interfacial DMI authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | [`class InterfacialDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L128) | serializes D and normal | planner-gated | source-backed |
 | bulk DMI authoring | [`packages/fullmag-py/src/fullmag/model/energy.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | [`class BulkDMI`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/energy.py#L161) | serializes D | planner-gated | source-backed |
 | term assembly | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | [`_build_problem`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L9460) | assembles enabled terms | all lanes | source-backed |
-| canonical term container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores energy_terms | all lanes | source-backed |
+| canonical term container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores `energy_terms` | all lanes | source-backed |

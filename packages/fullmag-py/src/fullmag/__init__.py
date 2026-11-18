@@ -1,6 +1,9 @@
 """Public embedded Python DSL for Fullmag."""
 
-from . import couplings, export3d, fields, init, select, shapes
+from . import couplings, export3d, fields, init, select, shapes, units
+from .units import GHz, MHz, T, mT, mm, nm, ns, ps, um
+from .model.mask_function import mask, time
+from .model.space_time import space_time
 from .init import (
     FIELD_STATE_FORMATS,
     MAGNETIZATION_STATE_FORMATS,
@@ -176,6 +179,11 @@ from .model import (
     FieldAutosave,
     QuasistaticElasticity,
     RegionalFieldDrive,
+    MaskAntenna,
+    VectorMask,
+    MaskFunction,
+    MaskFunctionError,
+    TimeFunction,
     SolvedAntennaDrive,
     RfDrive,
     Region,
@@ -288,6 +296,7 @@ from .model.compute_resources import (
 )
 from .shapes import affine, disk, rotate, scale
 from .runtime import BackendTarget, Result, Simulation, load_problem_from_script
+from ._material_versions import materials
 from .meshing import (
     MeshData,
     MeshOptions,
@@ -479,6 +488,24 @@ class _MeshNamespace:
 mesh = _MeshNamespace()
 
 __all__ = [
+    "GHz",
+    "MHz",
+    "MaskAntenna",
+    "VectorMask",
+    "MaskFunction",
+    "MaskFunctionError",
+    "T",
+    "TimeFunction",
+    "mT",
+    "mask",
+    "space_time",
+    "mm",
+    "nm",
+    "ns",
+    "ps",
+    "time",
+    "um",
+    "units",
     "LiveModeError",
     "LiveSession",
     "connect",
@@ -774,6 +801,7 @@ __all__ = [
     "load_field_state",
     "load_magnetization",
     "load_problem_from_script",
+    "materials",
     "save_field_state",
     "save_magnetization",
     "texture",

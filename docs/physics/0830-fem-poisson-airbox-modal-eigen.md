@@ -2114,3 +2114,67 @@ znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.e
 
 
 Native CPU/MFEM assembly korekty nodalnego Ms: GHA38298716226 PASS, clean090c13b,1/1CTest i marker hetero moments/Gamma observed. SLEPc OFF; dowód nie obejmuje pełnego eigensolve, GPU ani naukowej kwalifikacji dyspersji. Receipt d6b173bb /native log1ea7cf63, pełne SHA w ci-evidence-20261010.json.
+
+## Realizacja LU dokładnego rozwiązania Poissona (MUMPS/METIS)
+
+Status: zmiana realizacji FEM CPU w toolchainie Docker DEV; build i runtime
+nowego toolchainu **NOT VERIFIED** do czasu świeżego managed buildu i
+porównania residuali na identycznym modelu. Operator, równania, tolerancje,
+budżety iteracji, preconditioner shift-invert i bramki certyfikacji nie
+zmieniają się.
+
+Każde zastosowanie operatora Schura z {eq}`eq-poisson-airbox-modal-block`
+wymaga dokładnego rozwiązania skalarnego bloku Poissona:
+
+```{math}
+:label: eq-poisson-airbox-exact-poisson-lu
+\phi=-P^{-1}A_{\phi q}q,
+\qquad
+\Pi_{r}\,P\,\Pi_{c}=L\,U .
+```
+
+Faktoryzacja jest wykonywana raz na kontekst operatora i używana przez
+`KSPPREONLY`; rozwiązanie pozostaje dokładną odwrotnością w precyzji
+podwójnej. Zmienia się wyłącznie pakiet rzadkiej faktoryzacji. Gdy PETSc
+udostępnia MUMPS (`PETSC_HAVE_MUMPS`), blok Poissona K0 i blok $P(k)$ Floqueta
+używają MUMPS z porządkowaniem METIS (`ICNTL(7)=5`, przy `PETSC_HAVE_METIS`).
+MUMPS stosuje progowe częściowe pivotowanie, więc strukturalnie zerowa
+diagonala wiersza gauge w rozszerzonym bloku Poissona nie wymaga przesunięcia
+faktoryzacji. Natywne LU PETSc stosowało tu `MAT_SHIFT_NONZERO`, które przy
+zerowym pivocie zaburza odwrotność. Bez MUMPS zachowana jest natywna ścieżka
+z dotychczasową polityką przesunięcia (`MAT_SHIFT_NONZERO` dla K0,
+`MAT_SHIFT_NONE` dla $P(k)$). Nieodwracalny $P(k)$ nadal kończy się
+fail-closed, bez regularyzacji.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $P$ | skalarny blok sztywności Poissona | $\mathrm{m}$ |
+| $\phi$ | wektor współczynników dynamicznego potencjału | $\mathrm{A}$ |
+| $A_{\phi q}$ | blok sprzężenia magnetyzacja→potencjał | $\mathrm{A\,m}$ |
+| $q$ | współczynniki modalne w płaszczyźnie stycznej | $1$ |
+| $L$, $U$ | trójkątne czynniki faktoryzacji LU bloku $P$ | $1$, $\mathrm{m}$ |
+| $\Pi_{r}$, $\Pi_{c}$ | permutacje wierszy (pivotowanie) i kolumn (METIS) | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja, NOT VERIFIED | Poisson K0 i $P(k)$ przez MUMPS/METIS, gdy PETSc go udostępnia; pakiet w provenance `poisson_factorization_package` |
+| FEM | GPU | bez zmian | lane GPU rozwiązuje Poissona przez CG+BoomerAMG na urządzeniu |
+| FDM | CPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+| FDM | GPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+
+Provenance: diagnostyka K0 zapisuje `poisson_factorization_package`, a wynik
+Floqueta pole o tej samej nazwie, z wartością `mumps_lu_metis`, `mumps_lu` albo
+`petsc_default_lu`. Toolchain zapisuje rozwiązaną konfigurację PETSc w
+`share/fullmag/petsc-build-metadata.json` każdego prefiksu i przerywa build,
+gdy brakuje MUMPS, METIS, ScaLAPACK lub OpenBLAS. Preconditionery shifted
+KSP (LU bloku magnetycznego z jawnym przesunięciem) pozostają przy natywnym
+LU, ponieważ ich konfiguracja przesunięcia jest częścią opisanej diagnostyki.
+Obraz CI `docker/fem-cpu` zachowuje natywne LU do czasu osobnej zmiany jego
+kontraktu.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-modal-poisson-lu | backends/fem/cpu/frequency_domain/modal_poisson_lu.hpp + configure_modal_poisson_lu | Wybór MUMPS/METIS albo natywnego LU; NOT VERIFIED runtime |
+| source-cpu-schur-poisson-lu | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + configure_production_context | Poisson K0 przez wspólny helper |
+| source-floquet-poisson-lu | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | $P(k)$ Floqueta przez wspólny helper i provenance pakietu |
+| source-petsc-build-metadata | docker/fem-gpu/write_petsc_build_metadata.py + main | Metadane PETSc i wymagane pakiety w toolchainie |

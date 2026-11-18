@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-universe_domain",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_universe_domain"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_universe_domain",
@@ -63,7 +46,7 @@
         "python": "pbc.x/y/z",
         "type": "bool",
         "default": "False",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "boolean",
         "meaning": "periodic axis flags",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "pbc.demag",
         "type": "str",
         "default": "open",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "supported demag mode",
         "meaning": "open-domain demag choice",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -83,7 +66,7 @@
         "python": "pbc.images",
         "type": "int or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive when supplied",
         "meaning": "periodic image count",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -93,7 +76,7 @@
         "python": "mesh.cell_size",
         "type": "tuple[float,float,float] or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive components",
         "meaning": "structured cell size",
         "backend_support": "FDM CPU/GPU: IR; FEM resolver-specific",
@@ -103,7 +86,7 @@
         "python": "mesh.hmax/hmin",
         "type": "float or None",
         "default": "None",
-        "si_unit": "m",
+        "si_unit": "$\\mathrm{m}$",
         "validation": "positive when supplied; hmin <= hmax",
         "meaning": "unstructured size bounds",
         "backend_support": "FEM CPU/GPU: IR; FDM resolver-specific",
@@ -113,7 +96,7 @@
         "python": "mesh.growth_rate",
         "type": "float or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive when supplied",
         "meaning": "mesh grading growth",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

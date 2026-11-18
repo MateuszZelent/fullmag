@@ -211,9 +211,9 @@ export async function runViewportExportBrowserQa(page, {
     originalInspectorState = await readViewportInspectorState(page);
     await ensureSettingsOpen(page, "Export", timeoutMs);
     originalSettings = await readSettings(page, settings, timeoutMs);
-    if (expectedCaptureDpr === 2 && originalSettings.quality !== "Interactive") {
+    if (expectedCaptureDpr === 2 && originalSettings.quality !== "Standard") {
       throw new Error(
-        "A 2x capture-resolution check requires the Interactive quality profile as its 1.25x baseline; found " +
+        "A 2x capture-resolution check requires the Standard quality profile as its 1.25x baseline; found " +
         originalSettings.quality,
       );
     }
@@ -571,7 +571,7 @@ async function exportPng(page, settings, {
   const quality = await readChoice(page, "Quality profile", timeout);
   if (quality !== expectedQuality) {
     throw new Error(
-      "Render quality was not restored after " +
+      "Quality profile was not restored after " +
       label +
       ": expected " +
       expectedQuality +
@@ -625,7 +625,7 @@ async function verifyCaptureResolution(page, {
       baseline.drawingBuffer,
       baseline.cssRect,
       INTERACTIVE_DPR,
-      "Interactive baseline",
+      "Standard baseline",
       label,
     );
   }
@@ -646,7 +646,7 @@ async function verifyCaptureResolution(page, {
     );
   }, baseline.drawingBuffer, { timeout: waitTimeout, polling: 50 }).catch((error) => {
     throw new Error(
-      "Viewport drawing buffer did not return to its pre-export Interactive dimensions after " +
+      "Viewport drawing buffer did not return to its pre-export Standard dimensions after " +
       label +
       ": " +
       (error?.message ?? String(error)),

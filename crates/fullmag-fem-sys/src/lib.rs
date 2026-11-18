@@ -16,7 +16,9 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
-pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 3;
+pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 4;
+/// At most this many HOST_EXPRESSION drives per backend on the GPU lane.
+pub const FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES: u32 = 8;
 pub const FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY: usize = 256;
@@ -137,6 +139,9 @@ pub enum fullmag_fem_time_dependence_kind {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /// The multiplier is the value of the descriptor's `time_program`
+    /// (`fullmag_time_expr.v1`), evaluated on the host once per field build.
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 }
 
 #[repr(C)]
@@ -191,6 +196,9 @@ pub struct fullmag_fem_time_dependence_desc {
     pub parameters: fullmag_fem_time_dependence_parameters,
     pub points: *const fullmag_fem_time_point,
     pub point_count: u64,
+    /// HOST_EXPRESSION only: `fullmag_time_expr.v1` words; null and 0 otherwise.
+    pub time_program: *const f64,
+    pub time_program_len: u64,
 }
 
 #[repr(C)]
@@ -3350,6 +3358,9 @@ extern "C" {
     pub fn fullmag_fem_get_regional_field_drive_abi_layout(
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
+    /// Value of a `fullmag_time_expr.v1` program at `t_s`, by the interpreter
+    /// the library uses for HOST_EXPRESSION drives.
+    pub fn fullmag_fem_time_expression_eval_v1(code: *const f64, len: u64, t_s: f64) -> f64;
     pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
     pub fn fullmag_fem_prepare_mesh_space_v1(
         request: *const fullmag_fem_mesh_space_preparation_request_v1,

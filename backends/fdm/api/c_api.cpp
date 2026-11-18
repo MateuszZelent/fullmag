@@ -6,6 +6,7 @@
  */
 
 #include "fullmag_fdm.h"
+#include "fullmag_time_expression.h"
 #include "fullmag_adaptive_step_decision.hpp"
 #include "context.hpp"
 #include "plan_ingestion_v2.hpp"
@@ -1120,7 +1121,9 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
     // The single-grid CUDA integrators consume a device-resident Frozen Spins
     // mask after all physical RHS sources are assembled. Multilayer plans are
     // still rejected by the planner and do not advertise this lane.
-    return FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1;
+    // Regional field drives accept HOST_MULTIPLIER terms through descriptor v3.
+    return FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 |
+           FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1;
 }
 
 /* ── Create ── */
@@ -4268,6 +4271,18 @@ int fullmag_fdm_backend_set_regional_field_drives_v2(
     uint32_t drive_count)
 {
     return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+double fullmag_fdm_time_expression_eval_v1(const double *code, uint64_t len, double t_s) {
+    return fullmag_time_expression_eval(code, len, t_s);
 }
 
 /* ── Error ── */

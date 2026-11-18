@@ -27,7 +27,7 @@ The left `StartRail` (`apps/control-room/src/modules/start/rail/StartRail.tsx`) 
 
 | Section ID | Rail label | Shortcut | Purpose |
 |---|---|---|---|
-| `home` | Overview | `Ctrl+1` | Primary launch tiles, interrupted checkpoint recovery, active sessions, recent projects/scripts/results, and discovered instances |
+| `home` | Overview | `Ctrl+1` | Primary launch tiles, interrupted checkpoint recovery, active sessions, recent projects, scripts, and results, and discovered instances |
 | `templates` | Templates | `Ctrl+2` | Curated template catalog (`STUDY_TEMPLATES`) saved as `.py` scripts or launched directly |
 | `import` | Import | `Ctrl+3` | Import workflows for `.mif`, `.mx3`, `.mph`, and `.fms` archives |
 | `learn` | Learn | `Ctrl+4` | Guided onboarding and example workflows |
@@ -86,22 +86,12 @@ Sessions initiated from Python via `fullmag.live` appear automatically inside **
 :width: 100%
 ```
 
-Screenshots illustrate the interface; they are not runtime or physics qualification evidence.
-
-## Control Room crosswalk
+## Routes, fallbacks, and Python interoperability
 
 - **Primary workspace route**: `/home` (`InstanceTabStrip` Home tab, or `workspace.home` from the menu bar).
 - **Primary components**: `StartScreen`, `StartRail`, `LaunchTiles`, `ContinueCard`, `ActiveSessions`, `RecentProjects`, `OtherInstances`, `TemplateDetails`, `ScriptInspector`, and `ProjectInspector`.
-- **Unsupported desktop actions**: Desktop-only actions such as native OS file-picker `Open script…` or script launch from the browser fall back gracefully with an explicit disabled reason when no desktop script host is bound (`scriptRunHost.ts`).
-
-## Python/API crosswalk
-
-- Interactive session attachment uses `fm.connect(...)` implemented by `LiveSession` (`packages/fullmag-py/src/fullmag/live/_session.py`).
-- Start-screen template exports emit canonical `fullmag` study-and-stage Python scripts compatible with headless execution.
-
-## Physics and bibliography scope
-
-This page describes UI session launch, discovery, and navigation only; it introduces no independent physical equations or discretization semantics.
+- **Desktop script host fallback**: Desktop-only actions such as native OS file-picker `Open script…` or script launch from the browser fall back gracefully with an explicit disabled reason when no desktop script host is bound (`scriptRunHost.ts`).
+- **Live Python attachment & script export**: Interactive session attachment uses `fm.connect(...)` implemented by `LiveSession` (`packages/fullmag-py/src/fullmag/live/_session.py`). Start-screen template exports emit canonical `fullmag` study-and-stage Python scripts compatible with headless execution.
 
 ## Source-code index
 

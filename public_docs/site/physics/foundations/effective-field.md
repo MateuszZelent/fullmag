@@ -13,7 +13,7 @@ source_of_truth: backends/fem/cpu/mfem/interactions/effective_field.cpp and back
 (foundation-effective-field-problem-statement)=
 # Effective field
 
-Field-form interactions are composed into H_eff in A/m. The LLG RHS consumes that field;
+Field-form interactions are composed into $\mathbf{H}_{\mathrm{eff}}$ in $\mathrm{A\,m^{-1}}$. The LLG RHS consumes that field;
 direct torque terms remain RHS quantities and are not reinterpreted as fields.
 
 (foundation-effective-field-governing-equations)=
@@ -94,18 +94,18 @@ zeeman_ir = Zeeman(B=(0.0, 0.0, 1.0e-3)).to_ir()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
-Exchange has no constructor parameters. Zeeman.B is a three-component finite induction
+`Exchange` has no constructor parameters. `Zeeman.B` is a three-component finite induction
 vector at the Python boundary.
 
 | Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| Zeeman.B | Sequence[float] | required | $\mathrm{T}$ | exactly three finite components | external induction vector | FDM/FEM authoring; executable lane is planner-gated | energy_terms[].B |
+| `Zeeman.B` | `Sequence[float]` | required | $\mathrm{T}$ | exactly three finite components | external induction vector | FDM/FEM authoring; executable lane is planner-gated | `energy_terms[].B` |
 
 (foundation-effective-field-problem-ir)=
 ## ProblemIR
 
-Exchange.to_ir() and Zeeman.to_ir() produce typed energy-term fragments. A complete
-ProblemIR additionally contains geometry, materials, magnets, study, and backend policy;
+`Exchange.to_ir()` and `Zeeman.to_ir()` produce typed energy-term fragments. A complete
+`ProblemIR` additionally contains geometry, materials, magnets, study, and backend policy;
 lowering creates that complete object.
 
 (foundation-effective-field-round-trip-and-failure-semantics)=
@@ -122,20 +122,20 @@ Unsupported combinations fail closed and are not converted to another field path
 |---|---|---|
 | FDM CPU | cell fields and CPU dispatch | partial; numerical qualification is separate |
 | FDM GPU | device buffers and CUDA dispatch | partial; executed-device evidence is required |
-| FEM CPU | compute_effective_fields_for_magnetization | partial; weak/discrete details are lane-specific |
-| FEM GPU | gpu_rk_accumulate_effective_field | partial; build presence is not runtime proof |
+| FEM CPU | `compute_effective_fields_for_magnetization` | partial; weak/discrete details are lane-specific |
+| FEM GPU | `gpu_rk_accumulate_effective_field` | partial; build presence is not runtime proof |
 
 (foundation-effective-field-implementation-mapping)=
 ## Implementation mapping
 
-Python energy objects own authoring and to_ir serialization. FEM CPU and FEM GPU have
+Python energy objects own authoring and `to_ir()` serialization. FEM CPU and FEM GPU have
 separate effective-field composition functions; LLG kernels consume the composed field.
 
 (foundation-effective-field-validation)=
 ## Validation
 
-The source map checks every stable symbol and equation mapping. The example is parsed as
-Python. Field-energy derivative tests and executed GPU parity remain separate evidence.
+The stage-first Python example is verified against the repository authoring API. Field-energy
+derivative consistency tests and executed GPU parity remain separate evidence.
 
 (foundation-effective-field-limitations)=
 ## Limitations

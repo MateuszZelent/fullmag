@@ -32,9 +32,9 @@ The supported study-level imported mesh contract is `FEM(mesh=...)`, not a per-o
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $\mathbf{m}_h$ | discrete magnetization field | 1 |
-| $\mathbf{m}_i$ | nodal magnetization coefficient | 1 |
-| $\phi_i$ | finite-element basis function | 1 |
+| $\mathbf{m}_h$ | discrete magnetization field | $1$ |
+| $\mathbf{m}_i$ | nodal magnetization coefficient | $1$ |
+| $\phi_i$ | finite-element basis function | $1$ |
 
 (imported-mesh-assumptions-and-validity)=
 ## Assumptions and validity
@@ -48,10 +48,10 @@ The table is exhaustive for this public family entry point. Alias rows are alter
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `FEM.order` | `int` | `required` | 1 | integer >= 1 | FEM solution-space order | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.order` |
-| `FEM.maximum_element_size` | `float` | `required` | m | finite and > 0 | required FEM size hint even with a mesh source | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.hmax` | `float \| None` | `None` | m | alias; must equal maximum_element_size if both are supplied | maximum size alias | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.mesh` | `str \| None` | `None` | 1 | nonempty path when supplied | study-level pre-built mesh source | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.mesh` |
+| `FEM.order` | `int` | `required` | $1$ | integer >= 1 | FEM solution-space order | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.maximum_element_size` | `float` | `required` | $\mathrm{m}$ | finite and > 0 | required FEM size hint even with a mesh source | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.hmax` | `float \| None` | `None` | $\mathrm{m}$ | alias; must equal maximum_element_size if both are supplied | maximum size alias | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.mesh` | `str \| None` | `None` | $1$ | nonempty path when supplied | study-level pre-built mesh source | FEM CPU source-backed; FEM GPU capability-gated | `backend_policy.discretization_hints.fem.mesh` |
 
 ```python
 # %% imports
@@ -113,6 +113,7 @@ The source index maps public authoring, lowering, realization, reporting, and ba
 ### FEM CPU/GPU plan and runtime consumption
 
 `plan_fem` resolves the domain or per-object mesh asset, validates typed MeshIR and region ownership, and places that mesh in `FemPlanIR`; this is the planning consumer after Python realization. The production runner enters `execute_fem_with_context_in_mode`, normalizes the FEM plan, resolves CPU/GPU behavior, and calls the configuration-selected `execute_native_fem` implementation for native execution. `apply_native_fem_runtime_contract` is not a gate: after runtime observations exist, it returns `()` and only populates `ExecutionProvenance` fields such as execution mode, qualification status, data residency, CUDA-kernel use, GPU Poisson use, and hot-loop synchronization counts. A source-backed Python mesh build is therefore not itself CPU or GPU runtime proof; actual execution and its populated provenance provide that evidence.
+
 (imported-mesh-validation)=
 ## Validation
 

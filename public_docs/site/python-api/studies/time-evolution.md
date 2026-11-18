@@ -10,13 +10,11 @@ owner: fullmag-public-docs
 # `TimeEvolution` Study and `add_time` Stage Contract
 
 (python-api-studies-time-evolution-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Physical problem and overview
 
 `fm.TimeEvolution` (and the stage-workflow builder `study.stages.add_time(...)` / `world.time_stage(...)`) defines a physical time-domain integration study or stage that evolves the magnetization field $\mathbf{m}(\mathbf{x}, t)$ over a finite time interval $[t_0, t_0 + T]$ under the Landau–Lifshitz–Gilbert (LLG) equation with precession enabled ($s_{\mathrm{prec}} = 1$). It owns the `LLG` dynamics policy, field/scalar output schedules (`outputs`), optional tabular autosave (`table_autosave`), and stage-applicable `FrozenSpins` constraints.
 
 (python-api-studies-time-evolution-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 Over a time-evolution stage of duration $T = t_{\mathrm{end}} - t_0 > 0$, each active magnetic degree of freedom $i \in \mathcal{A}$ ($M_{s,i} > 0$) integrates
@@ -40,7 +38,6 @@ t \in [t_0, t_0 + T],
 subject to $\|\mathbf{m}_i(t)\|_2 = 1$ and $\dot{\mathbf{m}}_j(t) = \mathbf{0}$ on any degree of freedom $j$ belonging to an active `FrozenSpins` constraint set.
 
 (python-api-studies-time-evolution-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -55,14 +52,12 @@ subject to $\|\mathbf{m}_i(t)\|_2 = 1$ and $\dot{\mathbf{m}}_j(t) = \mathbf{0}$ 
 | $t$ | Physical simulation time | $\mathrm{s}$ |
 
 (python-api-studies-time-evolution-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and limits of validity
 
 - **Full precessional dynamics**: Unlike `Relaxation(algorithm="llg_overdamped")`, `TimeEvolution` always retains the conservative precessional torque $-\gamma_0(1+\alpha^2)^{-1}\mathbf{m}\times\mathbf{H}_{\mathrm{eff}}$.
 - **Output horizon requirement**: Standalone `TimeEvolution` studies require either a non-empty `outputs` sequence with positive time horizon or a valid `table_autosave` schedule so that the integration interval is well-defined; in stage workflows (`study.stages.add_time(duration=...)`), the explicit `duration` parameter sets $T > 0$.
 
 (python-api-studies-time-evolution-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API and parameter contract
 
 ### Constructor and stage-builder signatures
@@ -151,7 +146,6 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 ```
 
 (python-api-studies-time-evolution-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. `ProblemIR` and canonical script representation
 
 ```json
@@ -189,7 +183,6 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 ```
 
 (python-api-studies-time-evolution-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip, provenance, and failure semantics
 
 - **Requested intent vs. resolved execution**: `TimeEvolution` and `add_time` stages preserve the user's `dynamics`, `outputs`, `constraints`, and `table_autosave` in `ProblemIR` (`requested intent`) while recording resolved stepper decisions and sample counts in the execution receipt (`resolved execution`).
@@ -197,14 +190,12 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 - **Unsupported combinations**: Combining `FrozenSpins` or coupled elastodynamics with an unqualified backend/integrator lane is rejected as an unsupported combination by the planner.
 
 (python-api-studies-time-evolution-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization and numerical operators
 
 - **FEM CPU & GPU**: Advances nodal magnetization via `context_step_explicit_rk_mfem` (CPU) or `gpu_rk_device_resident_step` (GPU) and records scheduled field/scalar snapshots at accepted step boundaries.
 - **FDM CPU & GPU**: Advances Cartesian SoA/AoS magnetization via explicit RK, `abm3`, or `coupled_imex_ark2` in `crates/fullmag-runner/src/solvers/fdm/workflows/time_domain/`.
 
 (python-api-studies-time-evolution-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Backend and device implementation mapping
 
 | Solver | Device | Status | Notes |
@@ -215,33 +206,30 @@ assert ir["study"]["stages"][0]["duration"] == 0.5e-9
 | FDM | GPU | `documented` | CUDA time-domain workflow and FFT demagnetization. |
 
 (python-api-studies-time-evolution-validation)=
-<!-- (validation)= -->
 ## 10. Validation and benchmark gates
 
 - Validated in `packages/fullmag-py/tests/test_llg_solver_contract.py`, `test_standard_problem_4_fem.py`, `test_standard_problem_5_fdm.py`, and `test_standard_problem_5_fem.py`.
 
 (python-api-studies-time-evolution-limitations)=
-<!-- (limitations)= -->
 ## 11. Known limitations and operational constraints
 
 - Snapshot and table sampling intervals are evaluated at accepted step boundaries; set `dt_max` at or below the finest sampling interval when exact uniform temporal spacing is required without interpolation.
 
 (python-api-studies-time-evolution-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 1. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376 (1999).
 
-## Control Room crosswalk
+## Control Room support
 
-Status: Time-evolution stage authoring, live scalar time-series charts, and interactive stage re-execution are `partial`; custom stopping predicates (`fm.run_until`), low-level integrator hooks, or specialized stage closures remain not implemented in the form editor.
+Status: Time-evolution stage authoring, live scalar time-series charts, and interactive stage re-execution are `partial`; custom stopping predicates (`fm.run_until`), low-level integrator hooks, and specialized stage closures remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 | --- | --- | --- | --- |
 | Stage duration, timestep / integrator policy, & `StageInitialStateSelector` | `Model Explorer -> Stages -> Add stage -> Run` (`RunStageInspector`, `StudyStageDraftEditor`) | `partial` | `executeStageAfterApply` (`scene_revision`-pinned draft commit + stage Compute) |
 | Live magnetization, energy & torque traces | `Live Charts` (`LiveChartsModule`, `LiveChartControls`) | `inspection-only` | Binary FMTB stream + WebSocket `scalar.sample` follow window & CSV export |
 | Per-stage texture overrides (`StageTextureAssignmentsEditor`) | `Model Explorer -> Stages -> <stage> -> Initial State / Textures` | `partial` | Staged draft mutation on `scene_revision` |
-| Python-only constraints or programmatic callbacks | `Model Explorer -> Stages -> <stage>` | `not implemented` | Authored via Python script or live `fm.run()` / `fm.run_until()` |
+| Python-only constraints or programmatic callbacks | `Model Explorer -> Stages -> <stage>` | `Python-only` | Authored via Python script or live `fm.run()` / `fm.run_until()` |
 
 ```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
 :alt: Control Room Run Stage Inspector and stage re-run transaction controls
@@ -259,7 +247,6 @@ See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/studies-
 Frontend source owners: `apps/control-room/src/modules/inspector/panels/stages/RunStageInspector.tsx`, `apps/control-room/src/modules/inspector/panels/studyStageApplyAndRun.ts`, and `apps/control-room/src/modules/live-charts/LiveChartsView.tsx`.
 
 (python-api-studies-time-evolution-source-code-index)=
-<!-- (source-code-index)= -->
 ## 13. Source-code index
 
 | Layer | File | Symbol / entrypoint | Responsibility |

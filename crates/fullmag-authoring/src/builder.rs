@@ -200,6 +200,14 @@ pub struct ScriptBuilderMeshState {
     /// the loaded script value during canonical rewrites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_mesh_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_region_markers: Option<Vec<fullmag_ir::FemDomainRegionMarkerIR>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_object_region_markers: Option<Vec<fullmag_ir::FemDomainRegionMarkerIR>>,
 }
 
 impl Default for ScriptBuilderMeshState {
@@ -244,6 +252,10 @@ impl Default for ScriptBuilderMeshState {
             adaptive_max_passes: default_adaptive_mesh_max_passes(),
             adaptive_error_tolerance: String::new(),
             order: None,
+            domain_mesh_mode: None,
+            domain_mesh_source: None,
+            domain_region_markers: None,
+            domain_object_region_markers: None,
         }
     }
 }
@@ -378,6 +390,8 @@ pub enum StudyPrimitiveStageKind {
     AntennaFieldSolve,
     ChangeDevice,
     AddFieldDrive,
+    AddMaskFieldDrive,
+    UpdateMaskFieldDrive,
     RemoveFieldDrive,
     TableAutosave,
     Autosave,
@@ -399,6 +413,8 @@ impl StudyPrimitiveStageKind {
         Self::AntennaFieldSolve,
         Self::ChangeDevice,
         Self::AddFieldDrive,
+        Self::AddMaskFieldDrive,
+        Self::UpdateMaskFieldDrive,
         Self::RemoveFieldDrive,
         Self::TableAutosave,
         Self::Autosave,
@@ -416,7 +432,8 @@ impl StudyPrimitiveStageKind {
         matches!(
             self,
             Self::SetField | Self::SetCurrent
-                | Self::AddFieldDrive | Self::RemoveFieldDrive
+                | Self::AddFieldDrive | Self::AddMaskFieldDrive
+                | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
                 | Self::TableAutosave | Self::Autosave
         )
     }
@@ -781,6 +798,8 @@ pub struct ScriptBuilderMeshInterfaceState {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderGeometryEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_asset: Option<crate::scene::SceneImportedGeometryAssetRef>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_name: Option<String>,
@@ -972,10 +991,14 @@ pub struct ScriptBuilderState {
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_assets: Option<crate::SceneMaterialAssetsMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub planar_monitors: Vec<fullmag_ir::PlanarMonitorIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1068,9 +1091,48 @@ fn default_solver_max_steps() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, StudyPipelineDocument,
-        StudyPipelineNode, StudyPrimitiveStageKind,
+        ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState,
+        StudyPipelineDocument, StudyPipelineNode, StudyPrimitiveStageKind,
     };
+
+    #[test]
+    fn explicit_shared_domain_mesh_fields_survive_builder_serde_round_trip() {
+        let authored = serde_json::json!({
+            "domain_mesh_mode": "explicit_shared_domain_mesh",
+            "domain_mesh_source": "/user-data/fullmag-domain-roundtrip/relax.mesh.json",
+            "domain_region_markers": [
+                {"geometry_name": "left", "marker": 1},
+                {"geometry_name": "right", "marker": 2}
+            ],
+            "domain_object_region_markers": [
+                {"geometry_name": "left:core", "marker": 3}
+            ]
+        });
+        let mesh: ScriptBuilderMeshState = serde_json::from_value(authored.clone())
+            .expect("explicit shared-domain mesh state should deserialize");
+        let serialized = serde_json::to_value(&mesh).unwrap();
+
+        for key in [
+            "domain_mesh_mode",
+            "domain_mesh_source",
+            "domain_region_markers",
+            "domain_object_region_markers",
+        ] {
+            assert_eq!(serialized.get(key), authored.get(key), "field {key} was lost");
+        }
+
+        let legacy: ScriptBuilderMeshState = serde_json::from_value(serde_json::json!({}))
+            .expect("legacy mesh state without shared-domain declaration should deserialize");
+        let legacy_serialized = serde_json::to_value(legacy).unwrap();
+        for key in [
+            "domain_mesh_mode",
+            "domain_mesh_source",
+            "domain_region_markers",
+            "domain_object_region_markers",
+        ] {
+            assert!(legacy_serialized.get(key).is_none(), "unexpected default for {key}");
+        }
+    }
 
     #[test]
     fn legacy_swept_ir_defaults_do_not_claim_exact_mixed_topology() {

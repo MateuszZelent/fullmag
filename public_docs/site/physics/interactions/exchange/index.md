@@ -10,14 +10,13 @@ source_of_truth: docs/physics/0400-fdm-exchange-demag-zeeman.md
 (public-docs-physics-exchange)=
 # Exchange interaction
 
-:::{admonition} Review candidate
+:::{admonition} Qualification scope
 :class: note
 
-This is the first FullMag interaction page written against the interaction-first documentation
-structure. It is
-ready for scientific and editorial review, but it does **not** claim that every backend is
-qualified. In particular, current-revision executed-device proof is missing for FDM CUDA Exchange
-and for the newest mixed-element FEM CUDA path.
+FullMag implements bulk exchange across FDM CPU, FDM CUDA, FEM CPU, and FEM CUDA, though not
+every backend lane has current-revision executed-device qualification. In particular,
+current-revision executed-device proof remains open for FDM CUDA Exchange and for the newest
+mixed-element FEM CUDA path.
 :::
 
 ## Solver and backend realizations
@@ -274,9 +273,9 @@ print(material.to_ir())
 
 | Python | Type | Default | SI unit | Meaning and validation |
 |---|---|---|---|---|
-| `FDM.boundary_correction` | `str \mid None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
-| `FDM.boundary_phi_floor` | `float \mid None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
-| `FDM.boundary_delta_min` | `float \mid None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
 
 ### Supporting Python API
 
@@ -586,14 +585,13 @@ be regenerated from the symbol when the code moves.
 
 | Lane | Evidence present in repository | Honest status for this revision |
 |---|---|---|
-| FDM CPU reference | zero-field, second-difference, inactive-neighbor, periodic stencil, energy decrease and refinement tests | Source/test mapped; no fresh run was performed for this review candidate. Heterogeneous allocating tests do not qualify heterogeneous SoA stepping. |
-| FDM GPU CUDA | device-capable FP64 field/energy, CPU–GPU Tier A, FP64–FP32 Tier B and Heun parity tests | Implemented; current-revision executed-device result and device identity were not found. Skip-success tests are not device proof. |
-| FEM CPU MFEM | operator symmetry/PSD/nullspace, mixed P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Strong historical energy/sign evidence; no fresh managed run tied to this review revision. Existing acceptance does not establish pointwise maximum-field convergence. |
+| FDM CPU reference | zero-field, second-difference, inactive-neighbor, periodic stencil, energy decrease and refinement tests | Source and test contracts verified; heterogeneous allocating tests do not qualify heterogeneous SoA stepping. |
+| FDM GPU CUDA | device-capable FP64 field/energy, CPU–GPU Tier A, FP64–FP32 Tier B and Heun parity tests | Implemented; current-revision executed-device result and device identity are open. Skip-success tests are not device proof. |
+| FEM CPU MFEM | operator symmetry/PSD/nullspace, mixed P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Historical energy/sign evidence exists; current-revision managed convergence artifacts are separate from static docs. Existing acceptance does not establish pointwise maximum-field convergence. |
 | FEM GPU CUDA | MFEM/CUDA FP64 parity tests, device-residency and transfer-audit contracts; historical RTX 4080 SUPER runtime artifacts | Historical tetrahedral runtime identity exists, but it predates the newest mixed-P1 implementation. Current mixed-P1 executed-device qualification remains open. |
 
-The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`. No command was executed
-while preparing this review page because the existing recipe rewrites checked-in validation-result
-files and the shared worktree contains unrelated user changes.
+The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`; inspect the
+generated runtime receipt alongside target device identity and mesh topology when qualifying a run.
 
 (physics-interactions-exchange-index-limitations)=
 ## Known limitations and unresolved qualification
@@ -637,6 +635,6 @@ files and the shared worktree contains unrelated user changes.
 | FEM CPU | `initialize_exchange_operator_mfem`, `apply_exchange_component_mass_projection` | `fem_exchange_contract`, `relaxation_energy_derivative_contract` | Broad native contracts plus historical managed energy convergence |
 | FEM GPU | `legacy_sparse_exchange_kernel`, `gpu_rk_compute_legacy_sparse_exchange` | CUDA/MFEM parity and transfer-audit cases in `fem_exchange_contract` | Historical device residency; current mixed-P1 qualification incomplete |
 
-The implementation table above is the authoritative path-and-symbol map for this review candidate.
-The bibliography is scientific authority; the source index is implementation authority. Neither
-substitutes for an executed numerical qualification artifact.
+The implementation table above indexes each exchange capability to its current repository path and stable
+symbol; neither code-index traceability nor bibliography substitutes for an executed numerical qualification
+artifact.

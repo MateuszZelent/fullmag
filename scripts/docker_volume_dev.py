@@ -4852,6 +4852,16 @@ def _retained_startup_enabled(container):
 
 
 _SAVED_AUTHORING_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT = (
+    '/opt/fullmag/runtime-control/local-live/current/imported-stl-snapshots'
+)
+_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES = _SAVED_AUTHORING_API_RESPONSE_MAX_BYTES
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES = (
+    ((_SAVED_AUTHORING_MAX_ARCHIVE_BYTES + 2) // 3) * 4
+    + _SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES
+)
 _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA = 'fullmag.saved-empty-authoring-restart.v1'
 
 
@@ -4872,6 +4882,54 @@ def _saved_authoring_require(value, message):
 
 def _saved_authoring_sha(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _saved_authoring_imported_stl_bindings(scene):
+    objects = scene.get('objects', [])
+    _saved_authoring_require(isinstance(objects, list), 'scene objects list is invalid')
+    bindings = []
+    object_ids = set()
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        geometry = obj.get('geometry')
+        if not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry':
+            continue
+        source_asset = geometry.get('source_asset')
+        if not isinstance(source_asset, dict):
+            continue
+        archive_path = source_asset.get('archive_path')
+        match = re.fullmatch(
+            r'project/assets/imported-geometry/([0-9a-f]{64})\.stl',
+            archive_path if isinstance(archive_path, str) else '',
+        )
+        if match is None:
+            continue
+        digest = match.group(1)
+        _saved_authoring_require(set(source_asset) == {'archive_path', 'asset_id', 'content_sha256'}
+            and source_asset.get('content_sha256') == digest
+            and source_asset.get('asset_id') == 'stl-sha256-' + digest,
+            'imported STL source identity differs')
+        params = geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(params, dict) and params.get('source') == archive_path,
+            'imported STL archive source differs from source asset')
+        object_id = obj.get('id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id and object_id.strip() == object_id
+            and len(object_id.encode('utf-8')) <= 256
+            and not any(ord(char) < 32 or ord(char) == 127 for char in object_id),
+            'imported STL object id is invalid')
+        _saved_authoring_require(object_id not in object_ids
+            and sum(isinstance(candidate, dict) and candidate.get('id') == object_id for candidate in objects) == 1,
+            'imported STL object id is ambiguous')
+        object_ids.add(object_id)
+        bindings.append({
+            'object_id': object_id,
+            'archive_path': archive_path,
+            'asset_id': 'stl-sha256-' + digest,
+            'content_sha256': digest,
+        })
+    _saved_authoring_require(len(bindings) <= 8192, 'imported STL binding count exceeds budget')
+    return bindings
 
 
 def _saved_authoring_document(raw):
@@ -5011,10 +5069,23 @@ def _saved_authoring_validate_archive(raw, pin):
         _saved_authoring_require(isinstance(assets, list) and isinstance(opaque, list), 'manifest lists missing')
         if source_less:
             _saved_authoring_require(assets == [], 'empty UI authoring cannot contain unbound assets')
+        asset_paths = set()
         for asset in assets:
-            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str)
-                and asset['path'].startswith('assets/'), 'unexpected asset path')
-            allowed.add(asset['path'])
+            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str),
+                'unexpected asset path')
+            asset_path = asset['path']
+            imported_stl = re.fullmatch(
+                r'project/assets/imported-geometry/([0-9a-f]{64})\.stl', asset_path)
+            if not asset_path.startswith('assets/'):
+                _saved_authoring_require(imported_stl is not None, 'unexpected asset path')
+                asset_digest = hashlib.sha256()
+                with archive.open(asset_path) as member:
+                    for block in iter(lambda: member.read(1024 * 1024), b''):
+                        asset_digest.update(block)
+                _saved_authoring_require(asset_digest.hexdigest() == imported_stl.group(1),
+                    'imported STL asset digest differs')
+            allowed.add(asset_path)
+            asset_paths.add(asset_path)
         for name in opaque:
             if source_less:
                 _saved_authoring_require(isinstance(name, str) and name == 'project/provenance.json',
@@ -5035,6 +5106,9 @@ def _saved_authoring_validate_archive(raw, pin):
             and definition.get('scene') == scene and scene.get('version') == 'scene.v2'
             and scene.get('revision') == pin['scene_revision']
             and _saved_authoring_sha(canonical(scene)) == pin['scene_sha256'], 'saved project/revision/scene differs')
+        for binding in _saved_authoring_imported_stl_bindings(scene):
+            _saved_authoring_require(binding['archive_path'] in asset_paths,
+                'imported STL source asset is not declared in the archive manifest')
         if source_less:
             nested_scene = scene.get('scene')
             _saved_authoring_require(isinstance(nested_scene, dict)
@@ -5068,6 +5142,72 @@ def _saved_authoring_read_archive(request, state):
     return raw, _saved_authoring_validate_archive(raw, request['archive'])
 
 
+def _saved_authoring_validate_imported_stl_scene(archived_scene, live_scene, bindings, observations):
+    _saved_authoring_require(isinstance(observations, list) and len(observations) == len(bindings),
+        'imported STL snapshot observation count differs')
+    expected = {}
+    for binding in bindings:
+        object_id = binding['object_id']
+        expected[object_id] = {
+            'source_path': _SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl',
+            'content_sha256': binding['content_sha256'],
+        }
+    observed = {}
+    for observation in observations:
+        _saved_authoring_require(isinstance(observation, dict)
+            and set(observation) == {'object_id', 'source_path', 'content_sha256', 'bytes'},
+            'imported STL snapshot observation fields differ')
+        object_id = observation.get('object_id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id in expected and object_id not in observed,
+            'imported STL snapshot observation binding differs')
+        binding = expected[object_id]
+        size = observation.get('bytes')
+        _saved_authoring_require(observation.get('source_path') == binding['source_path']
+            and observation.get('content_sha256') == binding['content_sha256']
+            and type(size) is int and 0 < size <= _SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES,
+            'imported STL snapshot path/hash/size differs')
+        observed[object_id] = observation
+    _saved_authoring_require(set(observed) == set(expected), 'imported STL snapshot binding is missing')
+
+    import copy
+    normalized = copy.deepcopy(live_scene)
+    archived_objects = archived_scene.get('objects')
+    live_objects = normalized.get('objects')
+    _saved_authoring_require(isinstance(archived_objects, list) and isinstance(live_objects, list),
+        'imported STL scene object list is invalid')
+    for binding in bindings:
+        object_id = binding['object_id']
+        archived_matches = [obj for obj in archived_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        live_matches = [obj for obj in live_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        _saved_authoring_require(len(archived_matches) == 1 and len(live_matches) == 1,
+            'imported STL live object identity differs')
+        archived_geometry = archived_matches[0].get('geometry')
+        live_geometry = live_matches[0].get('geometry')
+        expected_source_asset = {
+            'archive_path': binding['archive_path'],
+            'asset_id': binding['asset_id'],
+            'content_sha256': binding['content_sha256'],
+        }
+        _saved_authoring_require(isinstance(archived_geometry, dict)
+            and archived_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and archived_geometry.get('source_asset') == expected_source_asset,
+            'imported STL archive source identity differs')
+        _saved_authoring_require(isinstance(live_geometry, dict)
+            and live_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and live_geometry.get('source_asset') == archived_geometry.get('source_asset'),
+            'imported STL live source identity differs')
+        live_params = live_geometry.get('geometry_params')
+        archive_params = archived_geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(live_params, dict) and isinstance(archive_params, dict)
+            and live_params.get('source') == expected[object_id]['source_path'],
+            'imported STL live snapshot path differs')
+        live_params['source'] = binding['archive_path']
+    _saved_authoring_require(normalized == archived_scene,
+        'live authored scene differs from durable archive')
+
+
 def _saved_authoring_validate_probe(probe, request, scene):
     cancelled = preclaim_restart.validate_checkpoint(request)
     terminal_cancelled = cancelled is not None and 'stop_command_id' in cancelled
@@ -5078,6 +5218,14 @@ def _saved_authoring_validate_probe(probe, request, scene):
     def body(name, status=200):
         _saved_authoring_require(rows[name].get('status') == status, 'unexpected HTTP result: ' + name)
         return rows[name]['body']
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
+    snapshot_rows = probe.get('imported_stl_snapshots')
+    if imported_stl_bindings:
+        _saved_authoring_require(isinstance(snapshot_rows, dict) and set(snapshot_rows) == {'before', 'after'},
+            'imported STL snapshot observations are missing')
+    else:
+        _saved_authoring_require(snapshot_rows is None or snapshot_rows == {},
+            'unexpected imported STL snapshot observations')
     for suffix in ('before', 'after'):
         current = body('current_' + suffix)
         status = body('status_' + suffix)
@@ -5093,7 +5241,13 @@ def _saved_authoring_validate_probe(probe, request, scene):
             and status.get('resources', {}).get('scene_revision') == scene['revision']
             and status.get('solver', {}).get('state') in ({'cancelled'} if terminal_cancelled else {'idle', 'awaiting_command'}), 'session epoch/run/readiness differs')
         live = body('scene_' + suffix)
-        _saved_authoring_require({k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live} == scene, 'live authored scene differs from durable archive')
+        live_scene = {k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live}
+        if imported_stl_bindings:
+            _saved_authoring_validate_imported_stl_scene(
+                scene, live_scene, imported_stl_bindings, snapshot_rows[suffix],
+            )
+        else:
+            _saved_authoring_require(live_scene == scene, 'live authored scene differs from durable archive')
     health = body('health')
     _saved_authoring_require(health.get('status') == 'ok' and health.get('active_session') is True, 'pinned authoring session lost')
     _saved_authoring_require(body('queue').get('schema_version') == 'compute_queue.v1'
@@ -5162,10 +5316,119 @@ def _saved_authoring_validate_probe(probe, request, scene):
     preclaim_restart.validate_historical_binding(probe, request)
 
 
-_SAVED_AUTHORING_PROBE_SCRIPT = retained_history.PROBE_FUNCTION + "\n" + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
+_SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS = f"""\
+API_RESPONSE_MAX={_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES}
+PROJECT_OPEN_RESPONSE_MAX={_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES}
+def read_api_response(response, path):
+    limit = PROJECT_OPEN_RESPONSE_MAX if path == '/v2/persistence/projects/open' else API_RESPONSE_MAX
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise RuntimeError('API response exceeded budget')
+    return raw
+"""
+
+_SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS = """\
+import hashlib, os, pathlib, re, stat
+IMPORTED_STL_SNAPSHOT_ROOT = __IMPORTED_STL_SNAPSHOT_ROOT__
+IMPORTED_STL_MAX_BYTES = __IMPORTED_STL_MAX_BYTES__
+def read_imported_stl_snapshot(binding):
+    if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+        raise RuntimeError('invalid imported STL snapshot binding')
+    object_id = binding['object_id']
+    archive_path = binding['archive_path']
+    digest = binding['content_sha256']
+    if (not isinstance(object_id, str) or not object_id or not isinstance(digest, str)
+            or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+            or archive_path != 'project/assets/imported-geometry/' + digest + '.stl'
+            or binding['asset_id'] != 'stl-sha256-' + digest):
+        raise RuntimeError('invalid imported STL snapshot identity')
+    root = pathlib.PurePosixPath(IMPORTED_STL_SNAPSHOT_ROOT)
+    if not root.is_absolute() or '..' in root.parts:
+        raise RuntimeError('invalid imported STL snapshot root')
+    directory_fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    file_fd = None
+    try:
+        for component in root.parts[1:]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                               dir_fd=directory_fd)
+            if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
+                os.close(next_fd)
+                raise RuntimeError('invalid imported STL snapshot parent')
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(digest + '.stl', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    try:
+        before = os.fstat(file_fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_size > IMPORTED_STL_MAX_BYTES):
+            raise RuntimeError('invalid bounded imported STL snapshot')
+        hasher = hashlib.sha256()
+        total = 0
+        while True:
+            block = os.read(file_fd, min(1024 * 1024, IMPORTED_STL_MAX_BYTES + 1 - total))
+            if not block:
+                break
+            total += len(block)
+            if total > IMPORTED_STL_MAX_BYTES:
+                raise RuntimeError('imported STL snapshot exceeds byte budget')
+            hasher.update(block)
+        after = os.fstat(file_fd)
+        before_state = (before.st_dev, before.st_ino, before.st_size, before.st_nlink,
+                        before.st_mtime_ns, before.st_ctime_ns)
+        after_state = (after.st_dev, after.st_ino, after.st_size, after.st_nlink,
+                       after.st_mtime_ns, after.st_ctime_ns)
+        observed_digest = hasher.hexdigest()
+        if total != before.st_size or before_state != after_state or observed_digest != digest:
+            raise RuntimeError('imported STL snapshot changed or digest differs')
+        return {'object_id': object_id,
+                'source_path': str(root / (digest + '.stl')),
+                'content_sha256': observed_digest, 'bytes': total}
+    finally:
+        os.close(file_fd)
+
+def observe_imported_stl_snapshots(scene, bindings):
+    if not isinstance(bindings, list) or len(bindings) > 8192:
+        raise RuntimeError('invalid imported STL snapshot binding list')
+    objects = scene.get('objects') if isinstance(scene, dict) else None
+    if not isinstance(objects, list):
+        raise RuntimeError('invalid imported STL live scene')
+    observed = []
+    seen = set()
+    for binding in bindings:
+        if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+            raise RuntimeError('invalid imported STL snapshot binding')
+        object_id = binding['object_id']
+        if object_id in seen:
+            raise RuntimeError('duplicate imported STL snapshot object id')
+        seen.add(object_id)
+        matches = [obj for obj in objects if isinstance(obj, dict) and obj.get('id') == object_id]
+        if len(matches) != 1:
+            raise RuntimeError('imported STL live object identity differs')
+        geometry = matches[0].get('geometry')
+        expected_source_asset = {'archive_path': binding['archive_path'],
+                                 'asset_id': binding['asset_id'],
+                                 'content_sha256': binding['content_sha256']}
+        params = geometry.get('geometry_params') if isinstance(geometry, dict) else None
+        expected_path = IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl'
+        if (not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry'
+                or geometry.get('source_asset') != expected_source_asset
+                or not isinstance(params, dict) or params.get('source') != expected_path):
+            raise RuntimeError('imported STL live source binding differs')
+        observed.append(read_imported_stl_snapshot(binding))
+    return observed
+""".replace('__IMPORTED_STL_SNAPSHOT_ROOT__', repr(_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT)) \
+    .replace('__IMPORTED_STL_MAX_BYTES__', str(_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES))
+
+_SAVED_AUTHORING_PROBE_SCRIPT = (retained_history.PROBE_FUNCTION + "\n"
+    + _SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS + "\n"
+    + _SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS + "\n"
+    + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
 MAX=8*1024*1024
 request=json.load(sys.stdin)
 pin=request['checkpoint']; session=pin['session']
+imported_stl_bindings=request.get('imported_stl_bindings',[])
 def canon(value): return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 def regular(path):
  path=pathlib.Path(path)
@@ -5211,8 +5474,7 @@ def api(path,payload=None):
  try: response=urllib.request.urlopen(req,timeout=10)
  except urllib.error.HTTPError as error: response=error
  with response:
-  raw=response.read(MAX+1)
-  if len(raw)>MAX: raise RuntimeError('API response exceeded budget')
+  raw=read_api_response(response,path)
   if response.status==204 and not raw: value=None
   else:
    value=json.loads(raw)
@@ -5221,6 +5483,10 @@ def api(path,payload=None):
 rows={}
 for suffix in ('before',):
  for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_'+suffix]=api('/v2/sessions/current'+path)
+imported_stl_snapshots={}
+if imported_stl_bindings:
+ imported_stl_snapshots['before']=observe_imported_stl_snapshots(
+  rows['scene_before']['body'],imported_stl_bindings)
 for name,path in [('health','/v2/platform/health'),('queue','/v2/platform/compute/queue'),('runtime','/v2/platform/runtime-service'),('commands','/v2/sessions/current/simulation/commands'),('run','/v2/sessions/current/simulation/runs/current'),('preparation','/v2/sessions/current/simulation/preparation'),('mesh','/v2/sessions/current/meshing/builds/current'),('mesh_history','/v2/sessions/current/meshing/builds'),('mesh_manifest','/v2/sessions/current/meshing/meshes/shared-domain/manifest')]: rows[name]=api(path)
 rows['project_open']=api('/v2/persistence/projects/open',{'display_name':pin['archive']['path'].replace('\\','/').split('/')[-1],'archive_base64':request['archive_base64']})
 # Do not retain the archive copy returned by the memory-only project parser.
@@ -5310,18 +5576,25 @@ provenance=json.loads(provenance_raw)
 extra={}
 if 'cancelled_preclaim' in pin or 'historical_preclaim' in pin: extra.update(preclaim_cancelled_snapshots(store,ledger,pin))
 for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_after']=api('/v2/sessions/current'+path)
-print(json.dumps({'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra},sort_keys=True))
-"""
+if imported_stl_bindings:
+ imported_stl_snapshots['after']=observe_imported_stl_snapshots(
+  rows['scene_after']['body'],imported_stl_bindings)
+result={'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra}
+if imported_stl_bindings: result['imported_stl_snapshots']=imported_stl_snapshots
+print(json.dumps(result,sort_keys=True))
+""")
 
 
 def _saved_authoring_probe(backend_id, request, raw, scene, certificate):
     cancelled = preclaim_restart.validate_checkpoint(request)
     historical = preclaim_restart.validate_historical_checkpoint(request)
     script = (preclaim_restart.PROBE_FUNCTION if cancelled or historical else '') + _SAVED_AUTHORING_PROBE_SCRIPT
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
     result = docker_capture('exec', '-i', '--env',
         'PYTHONPATH=/opt/fullmag:/opt/fullmag/package:/build/workspace/packages/fullmag-py/src',
         backend_id, '/usr/local/bin/python3', '-B', '-c', script,
         data=canonical({'checkpoint': request, 'archive_base64': base64.b64encode(raw).decode('ascii'),
+                        'imported_stl_bindings': imported_stl_bindings,
                         'host_certificate': certificate}), timeout=180)
     observed = _saved_authoring_document(result.stdout)
     _saved_authoring_validate_probe(observed, request, scene)

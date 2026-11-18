@@ -53,6 +53,7 @@
 @import "../src/design/styles/footer-transport-log.css" layer(fm-modules);
 @import "../src/design/styles/footer-diagnostics.css" layer(fm-modules);
 @import "../src/design/styles/footer-telemetry.css" layer(fm-modules);
+@import "../src/design/styles/footer-run-progress.css" layer(fm-modules);
 @import "../src/design/styles/footer-recorder.css" layer(fm-modules);
 @import "../src/design/styles/command-palette.css" layer(fm-modules);
 @import "../src/design/styles/registry-inspector.css" layer(fm-modules);

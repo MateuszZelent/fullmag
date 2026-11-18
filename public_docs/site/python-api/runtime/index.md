@@ -31,31 +31,3 @@ results
 artifacts
 provenance
 ```
-## Control Room crosswalk
-
-Control Room surfaces live runtime status, resolved engine/device provenance, active background
-mesh/solver jobs, and realtime diagnostics in the bottom status bar and footer drawers, alongside
-connected sessions in **Active simulations** and instance tabs (see {doc}`live-session` and
-{doc}`/frontend/capability-register`). Direct runtime-policy selection (`auto`/`fdm`/`fem`, `cpu`/`gpu`,
-precision) is edited in **Study -> Execution Profile**, while backend-only artifact publication flags
-and legacy selection options without matching UI fields remain Python-authored (`TODO: frontend support`).
-
-```{image} /_static/images/ui/status-bar-footer.png
-:alt: Control Room status bar showing runtime state, mesh readiness, WebSocket status, and active compute engine
-:align: center
-:width: 100%
-```
-
-```{image} /_static/images/ui/explorer-jobs-and-diagnostics-tabs.png
-:alt: Control Room Explorer Jobs and Diagnostics tabs showing live command queue and runtime diagnostics
-:align: center
-:width: 100%
-```
-
-## API and source scope
-
-This index does not define a standalone runtime function. Terminal pages own exact calls, lifecycle semantics, limitations, bibliography, and source-code indexes.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

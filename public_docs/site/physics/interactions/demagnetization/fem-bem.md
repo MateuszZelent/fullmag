@@ -316,6 +316,10 @@ and executed-device validation.
 | Orchestration | `context_compute_demag_fem_bem` | Orders all stages and publishes solve telemetry. |
 | Field and energy | `recover_demag_poisson_field` and `demag_poisson_energy_from_field` | Reuses the common field recovery and energy contract. |
 
+### Control Room support
+
+When `PhysicsInteractionPanel` (`apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`) exposes FEM–BEM demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: parameters without a matching UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-bem-validation)=
 ## 10. Validation and qualification
 
@@ -374,8 +378,4 @@ demag do not constitute a GPU BEM implementation or executed-device proof.
 | `backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp` | `combine_demag_fem_bem_total_potential` | Potential sum. | FEM CPU |
 | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Common field recovery and energy handoff. | FEM CPU |
 | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | Common demagnetization energy reduction. | FEM CPU |
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. Parameters without a matching control report `frontend support is not implemented`; see {doc}`/frontend/capability-register` and do not infer UI support from backend or Python availability. Frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx`.
 

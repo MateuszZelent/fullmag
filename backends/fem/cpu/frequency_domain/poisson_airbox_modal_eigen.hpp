@@ -2,6 +2,7 @@
 
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <chrono>
 #include <complex>
 #include <cmath>
 #include <cstddef>
@@ -235,6 +236,31 @@ inline PoissonAirboxEigenBlockProblem poisson_airbox_modal_progress_with_elapsed
     }
     return progress;
 }
+
+// Rate limiter for per-iteration linear-solver progress. Inner KSP convergence
+// tests run once per Krylov iteration (for the GPU Schur operator: once per
+// inner Poisson CG iteration), and every emitted event formats ~1.5 KB of JSON
+// and crosses the FFI into the runner. One KSP context is reused for every
+// solve of its role, so the limiter is purely time-based: the first event is
+// always reported, later ones at most once per interval. Cancellation polling
+// and cancellation events are independent of this limiter.
+struct PoissonAirboxModalProgressThrottle {
+    static constexpr std::chrono::milliseconds kMinInterval{100};
+
+    std::chrono::steady_clock::time_point last_emitted_at{};
+    bool emitted_once = false;
+
+    bool should_emit() noexcept
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!emitted_once || now - last_emitted_at >= kMinInterval) {
+            last_emitted_at = now;
+            emitted_once = true;
+            return true;
+        }
+        return false;
+    }
+};
 
 inline void poisson_airbox_modal_emit_progress(
     const PoissonAirboxEigenBlockProblem &problem,

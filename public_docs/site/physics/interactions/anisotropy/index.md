@@ -22,7 +22,7 @@ cubic
 (physics-anisotropy-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Magnetocrystalline anisotropy adds an orientation-dependent energy density whose minimum aligns the magnetization with preferred crystal axes (`uniaxial` or `cubic` symmetry). This overview connects the continuum anisotropy energy and effective field to Fullmag's material-owned authoring, `ProblemIR` serialization, planner resolution, and executable backend lanes.
 
 (physics-anisotropy-governing-equations)=
 ## Governing equations
@@ -159,8 +159,7 @@ On the stage-first handle (`MagnetHandle`), `body.Ku1`, `body.anisU`, and `body.
 assigned directly; higher-order constants (`Ku2`, `Kc2`, `Kc3`) and explicit cubic crystal axes
 (`anisC1`, `anisC2`) are authored on `fm.Material(...)` or via the compatibility constructors.
 
-`UniaxialAnisotropy` and `CubicAnisotropy` remain compatibility constructors. Canonical export
-should migrate unambiguous single-material terms to material-owned fields.
+`UniaxialAnisotropy` and `CubicAnisotropy` remain supported compatibility constructors; canonical scripts store unambiguous single-material terms on material-owned fields.
 
 (physics-anisotropy-problem-ir)=
 ## ProblemIR
@@ -181,17 +180,11 @@ Representative material fragment:
 ```
 
 (physics-anisotropy-validation)=
-## Validation boundary and required code corrections
+## Validation boundary
 
-At the audited revision, compatibility constructors convert constants with `float()` and axes
-with `as_vector3`; this does not guarantee finite values or non-zero/orthogonal axes at the
-constructor boundary. `Material.Ku1/Ku2` are finite-checked, while the cubic material constants
-do not receive the same explicit finite check. The documentation should state where each check
-actually occurs, and the API should be hardened so all scalar coefficients and axes fail early.
+Compatibility constructors convert constants with `float()` and axes with `as_vector3`, leaving finite and non-zero/orthogonality checks for downstream validation rather than constructor time. On `Material`, `Material.Ku1` and `Material.Ku2` are finite-checked at construction, whereas the cubic material constants are checked during lowering and planning.
 
-The docstring of `UniaxialAnisotropy` must be corrected from a
-$\sin^2/\sin^4$ parameterization to the implemented
-$-K_{u1}q^2-K_{u2}q^4$ convention.
+Note that the implemented uniaxial convention follows the $-K_{u1}q^2-K_{u2}q^4$ form rather than a $\sin^2/\sin^4$ parameterization; see {doc}`uniaxial` for the exact signs and effective field.
 
 ## Required numerical validation
 

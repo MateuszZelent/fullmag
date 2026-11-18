@@ -5,6 +5,9 @@ export const ABSORBING_BOUNDARY_PROFILES = [
   "linear",
   "quadratic",
   "smootherstep",
+  "logarithmic",
+  "tanh",
+  "custom",
 ] as const;
 export const ABSORBING_BOUNDARY_FRAMES = ["object", "universe"] as const;
 
@@ -16,6 +19,7 @@ export interface AbsorbingBoundaryDraft {
   faces: string[];
   profile: string;
   frame: string;
+  expression: string;
 }
 
 type RecordValue = Record<string, unknown>;
@@ -43,11 +47,15 @@ export function absorbingBoundaryDraftFromObject(object: unknown): AbsorbingBoun
     faces,
     profile: typeof config?.profile === "string" ? config.profile : "smootherstep",
     frame: typeof config?.frame === "string" ? config.frame : "object",
+    expression: typeof config?.expression === "string" ? config.expression : "",
   };
 }
 
 export function absorbingBoundaryDraftKey(draft: AbsorbingBoundaryDraft): string {
-  return JSON.stringify(draft);
+  return JSON.stringify({
+    ...draft,
+    expression: draft.profile === "custom" ? draft.expression : "",
+  });
 }
 
 export function buildAbsorbingBoundaryPatch(
@@ -87,5 +95,11 @@ export function buildAbsorbingBoundaryPatch(
     profile: draft.profile,
     frame: draft.frame,
   };
+  if (draft.profile === "custom") {
+    if (!draft.expression.trim() || draft.expression.length > 256) {
+      return { error: "Enter a custom profile expression of 1 to 256 characters." };
+    }
+    boundary.expression = draft.expression;
+  }
   return { patch: { base_revision: baseRevision, absorbing_boundary: boundary } };
 }

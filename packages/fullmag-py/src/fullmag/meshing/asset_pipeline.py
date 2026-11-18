@@ -28,6 +28,7 @@ from fullmag.model.geometry import (
     Union,
 )
 
+from ._gmsh_stl_shells import StlTopologyError
 from .gmsh_bridge import (
     ALGO_3D_DELAUNAY,
     ALGO_3D_FRONTAL,
@@ -56,7 +57,7 @@ from ._gmsh_swept import (
     generate_disconnected_mixed_p1_mesh,
     _supports_scoped_layer_partitioned_box,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshQualityReport, _MIXED_CELL_LOCAL_FACETS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -227,7 +228,6 @@ _AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES = frozenset(
 )
 _SIZE_DISTRIBUTION_HISTOGRAM_BINS = 30
 _FROZEN_MAGNETIC_SUBMESH_MODE = "generated_frozen_magnetic_submesh"
-_PREEMPTIVE_IMPORTED_STL_FALLBACK = "single_imported_stl_preemptive_fallback"
 _SUPPORTED_DOMAIN_MESH_MODES = frozenset(
     {
         "generated_shared_domain_mesh",
@@ -269,11 +269,18 @@ def _validate_shared_mesh_assembly_policy(
     return effective
 
 
-def _is_stl_imported_geometry(geometry: Geometry) -> bool:
-    return (
-        isinstance(geometry, ImportedGeometry)
-        and Path(geometry.source).suffix.lower() == ".stl"
-    )
+def _reject_anonymous_import_fallback(geometries: Sequence[Geometry], error: Exception) -> None:
+    """Imported components must retain their exact source-surface owners."""
+    if len(geometries) <= 1:
+        return
+    for geometry in geometries:
+        while isinstance(geometry, Translate):
+            geometry = geometry.geometry
+        if isinstance(geometry, ImportedGeometry):
+            raise StlTopologyError(
+                'Cannot fall back to concatenated STL: exact imported '
+                'source-component ownership would be lost'
+            ) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,24 +667,50 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
 
 
 def _write_frozen_boundary_ascii_stl(mesh: MeshData, path: Path) -> Path:
+    """Export the closed cell exterior without mutating the frozen artifact.
+
+    Published facets may be an unoriented subset of physical interfaces, with
+    periodic cuts omitted. They cannot define this temporary closed solid.
+    """
+    owners: dict[tuple[int, ...], tuple[tuple[int, ...], int] | None] = {}
+    for ordinal, family in enumerate(mesh.cell_types):
+        cell = mesh.cell_node_ids(ordinal)
+        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
+            face = tuple(int(cell[index]) for index in local_face)
+            key = tuple(sorted(face))
+            if key in owners:
+                if owners[key] is None:
+                    raise ValueError("frozen magnetic mesh has a nonmanifold cell face")
+                owners[key] = None
+            else:
+                owners[key] = (face, ordinal)
+
+    triangles: list[np.ndarray] = []
+    for owner in owners.values():
+        if owner is None:
+            continue
+        face, ordinal = owner
+        ids = np.asarray(face, dtype=np.int32)
+        cell_center = mesh.nodes[mesh.cell_node_ids(ordinal)].mean(axis=0)
+        candidates = [ids] if len(ids) == 3 else [ids[[0,1,2]], ids[[0,2,3]]]
+        for triangle in candidates:
+            vertices = np.asarray(mesh.nodes[triangle], dtype=np.float64)
+            normal = np.cross(vertices[1]-vertices[0], vertices[2]-vertices[0])
+            if not np.all(np.isfinite(normal)) or float(np.linalg.norm(normal)) == 0.0:
+                raise ValueError("frozen magnetic mesh has a degenerate exterior triangle")
+            if float(np.dot(normal, cell_center-vertices.mean(axis=0))) > 0.0:
+                triangle = triangle[[0,2,1]]
+            triangles.append(triangle)
+    if not triangles:
+        raise ValueError("frozen magnetic mesh has no closed exterior surface")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as handle:
         handle.write("solid frozen_magnetic_boundary\n")
-        triangles: list[np.ndarray] = []
-        for ordinal, facet_type in enumerate(mesh.facet_types):
-            facet = mesh.facet_node_ids(ordinal)
-            if facet_type == "tri3":
-                triangles.append(facet)
-            else:
-                triangles.extend((facet[[0, 1, 2]], facet[[0, 2, 3]]))
         for face in triangles:
             v0, v1, v2 = np.asarray(mesh.nodes[face], dtype=np.float64)
             normal = np.cross(v1 - v0, v2 - v0)
-            norm = float(np.linalg.norm(normal))
-            if norm > 0.0:
-                normal = normal / norm
-            else:
-                normal = np.zeros(3, dtype=np.float64)
+            normal = normal / float(np.linalg.norm(normal))
             handle.write(
                 f"  facet normal {normal[0]:.17g} {normal[1]:.17g} {normal[2]:.17g}\n"
             )
@@ -3052,14 +3085,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "automatic conformal object-region meshing requires OCC-compatible "
                 "owner geometries"
             )
-    preemptive_imported_stl_fallback = (
-        len(geometries) == 1
-        and _is_stl_imported_geometry(geometries[0])
-        and not single_geometry_occ_direct
-        and not conformal_occ_direct
-        and not conformal_object_regions
-    )
-
     with tempfile.TemporaryDirectory(prefix="fullmag-fem-domain-components-") as tmp_dir:
         component_descriptors: list[ComponentDescriptor] = []
         trimesh_module: object | None = None
@@ -3124,24 +3149,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     tuple(float(value) for value in bounds_min),
                     tuple(float(value) for value in bounds_max),
                 )
-        if preemptive_imported_stl_fallback:
-            fallbacks_triggered.append(_PREEMPTIVE_IMPORTED_STL_FALLBACK)
-            emit_progress(
-                "Single imported STL shared-domain mesh is routed directly to "
-                "concatenated STL fallback for numerical stability"
-            )
-
         size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
         airbox_bounds = _rectangular_airbox_bounds_from_options(airbox, bounds_by_name)
-        component_aware_mesh_options = not preemptive_imported_stl_fallback
-
         mesh_options = _mesh_options_from_runtime_metadata(
             mesh_workflow,
             geometries=geometries,
             default_hmax=size_field_default_hmax,
             bounds_by_name=bounds_by_name,
             airbox_bounds=airbox_bounds,
-            component_aware=component_aware_mesh_options,
+            component_aware=True,
             per_object_recipes=per_object_recipes,
             object_regions=object_regions,
         )
@@ -3153,7 +3169,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 _policy,
                 default_hmax=size_field_default_hmax,
                 bounds_by_name=bounds_by_name,
-                component_aware=component_aware_mesh_options,
+                component_aware=True,
             )
             if recipe_fields:
                 mesh_options = _dc_replace(
@@ -3210,13 +3226,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             planned_build_mode = "single_geometry_occ"
         elif conformal_occ_direct:
             planned_build_mode = "conformal_occ"
-        elif preemptive_imported_stl_fallback:
-            planned_build_mode = "concatenated_stl_fallback"
         else:
             planned_build_mode = "component_aware"
         if planned_build_mode in _AIRBOX_FEATURE_UNSUPPORTED_BUILD_MODES:
             require_no_airbox_feature_refinement(airbox, route=planned_build_mode)
-        if planned_build_mode in {"conformal_occ", "single_geometry_occ"} and component_aware_mesh_options:
+        if planned_build_mode in {"conformal_occ", "single_geometry_occ"}:
             body_clamp_fields = _study_default_body_clamp_fields(
                 geometries,
                 hints,
@@ -3591,8 +3605,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 # Decide between native OCC-conformal pipeline or single-pass STL pipeline
                 from ._gmsh_occ import generate_shared_domain_mesh_via_occ
 
-                is_stl_multi = len(geometries) > 1 and any(isinstance(g, ImportedGeometry) for g in geometries)
-
                 try:
                     if conformal_occ_direct:
                         build_mode = "conformal_occ"
@@ -3720,16 +3732,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"Conformal OCC mesh: geometry→volume mapping established for "
                             f"{len(result.component_volume_tags)} components"
                         )
-                    elif is_stl_multi:
-                        build_mode = "component_aware"
-                        raise RuntimeError(
-                            "Multi-component STL meshing is routed to concatenated STL fallback for numerical stability"
-                        )
-                    elif preemptive_imported_stl_fallback:
-                        build_mode = "concatenated_stl_fallback"
-                        raise RuntimeError(
-                            "Single imported STL meshing is routed to concatenated STL fallback for numerical stability"
-                        )
                     else:
                         build_mode = "component_aware"
                         emit_progress_event(
@@ -3752,6 +3754,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"{len(result.component_volume_tags)} components"
                         )
                 except Exception as primary_exc:
+                    if isinstance(primary_exc, StlTopologyError):
+                        raise
                     if conformal_object_regions:
                         raise
                     initial_primary_error = primary_exc
@@ -3779,24 +3783,22 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             primary_exc = None  # successfully recovered!
                         except Exception as stl_exc:
+                            if isinstance(stl_exc, StlTopologyError):
+                                raise
                             component_fallback_error = stl_exc
                             primary_exc = stl_exc
 
                     if primary_exc is not None:
+                        _reject_anonymous_import_fallback(geometries, primary_exc)
                         fallback_failure_context = (
                             initial_primary_error,
                             component_fallback_error,
                         )
                         build_mode = "concatenated_stl_fallback"
-                        if _PREEMPTIVE_IMPORTED_STL_FALLBACK in fallbacks_triggered:
-                            emit_progress(
-                                "Generating concatenated STL mesh for single imported STL"
-                            )
-                        else:
-                            fallbacks_triggered.append("component_aware_import_failed")
-                            emit_progress(
-                                f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
-                            )
+                        fallbacks_triggered.append("component_aware_import_failed")
+                        emit_progress(
+                            f"Component-aware mesh failed ({primary_exc!r}), falling back to concatenated STL"
+                        )
                         # Rebuild mesh options for the non-component STL path so local
                         # refinement fields do not depend on recovered component tags.
                         # This preserves per-object hmax behavior (Box/Bounds thresholds)

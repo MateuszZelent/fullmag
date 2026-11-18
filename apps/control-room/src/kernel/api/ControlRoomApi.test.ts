@@ -1423,10 +1423,10 @@ describe("ControlRoomApi", () => {
     type CreateScratchSessionInput = Parameters<typeof api.sessions.create>[0];
     expectTypeOf<CreateScratchSessionInput>().toEqualTypeOf<{
       backend: "fdm" | "fem";
-      device: "cpu";
+      device: "cpu" | "gpu";
       name: string;
       output_storage?: OutputStorageSettings | null;
-      precision: "double";
+      precision: "double" | "single";
       replace_current?: boolean;
     }>();
     expectTypeOf<typeof created.scene_document.schema_version>().toEqualTypeOf<"0.3">();
@@ -7180,5 +7180,35 @@ describe("API instance fence", () => {
     await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
     await expect(api.sessions.current.status()).rejects.toMatchObject({ code: "API_INSTANCE_MISMATCH" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("imported STL source-surface facade", () => {
+  it("pins object, scene and byte identity on the typed conditional binary read", async () => {
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url); observedHeaders = new Headers(init?.headers);
+        return new Response(null, { status: 304, headers: { ...contractHeaders, etag: '"source-a"' } });
+      } });
+    const result = await api.model.sourceSurfaceTopology("body-a", {
+      scene_revision: 7, source_sha256: "a".repeat(64),
+    }, { etag: '"source-a"', sessionScopeKey: "session=one&epoch=one%401" });
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe("/v2/sessions/current/model/objects/body-a/source-surface/topology");
+    expect(url.searchParams.get("scene_revision")).toBe("7");
+    expect(url.searchParams.get("source_sha256")).toBe("a".repeat(64));
+    expect(observedHeaders.get("if-none-match")).toBe('"source-a"');
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe("session=one&epoch=one%401");
+    expect(result.status).toBe("not-modified");
+  });
+  it("surfaces stale source conflicts instead of silently reading another topology", async () => {
+    const api = new ControlRoomApi({ baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () => jsonResponse({ error: "source changed" }, { status: 409 }) });
+    await expect(api.model.sourceSurfaceTopology("body-a", {
+      scene_revision: 7, source_sha256: "a".repeat(64),
+    })).rejects.toMatchObject({ status: 409 });
   });
 });

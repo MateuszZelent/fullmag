@@ -23,22 +23,13 @@ pub fn normalize_scene_document_magnetization_assets(scene: &mut SceneDocument) 
 }
 
 pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> SceneDocument {
-    let objects = builder
+    let mut objects = builder
         .geometries
         .iter()
         .map(scene_object_from_geometry)
         .collect::<Vec<_>>();
+    let materials = restore_material_assets(builder, &mut objects);
     let scene_fdm = scene_fdm_from_builder(builder.fdm.as_ref(), &objects);
-    let materials = builder
-        .geometries
-        .iter()
-        .map(|geometry| SceneMaterialAsset {
-            id: material_id_for_geometry(&geometry.name),
-            name: format!("{} material", geometry.name),
-            properties: geometry.material.clone(),
-            references: Vec::new(),
-        })
-        .collect::<Vec<_>>();
     let magnetization_assets = builder
         .geometries
         .iter()
@@ -70,6 +61,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         magnetization_assets,
         field_drives: crate::SceneFieldDrivesState {
             drives: builder.field_drives.clone(),
+            mask_drives: builder.mask_field_drives.clone(),
         },
         monitors: crate::SceneMonitorState {
             planar: builder.planar_monitors.clone(),
@@ -219,6 +211,7 @@ pub fn scene_document_to_script_builder(
             }
 
             Ok(ScriptBuilderGeometryEntry {
+                source_asset: object.geometry.source_asset.clone(),
                 name: builder_geometry_name_for_object(object),
                 region_name: object.region_name.clone(),
                 geometry_kind: object.geometry.geometry_kind.clone(),
@@ -246,6 +239,7 @@ pub fn scene_document_to_script_builder(
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
 
     Ok(ScriptBuilderState {
+        material_assets: Some(material_assets_metadata(scene)),
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
         requested_backend: Some(normalized_scene.study.requested_backend.clone()),
@@ -298,6 +292,7 @@ pub fn scene_document_to_script_builder(
             .map(builder_mesh_interface_from_scene)
             .collect(),
         field_drives: normalized_scene.field_drives.drives.clone(),
+        mask_field_drives: normalized_scene.field_drives.mask_drives.clone(),
         planar_monitors: normalized_scene.monitors.planar.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         current_transports: normalized_scene.current_transports.clone(),
@@ -311,6 +306,134 @@ pub fn scene_document_to_script_builder(
         antenna_spectrum_requests: normalized_scene.antenna_spectrum_requests.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
+}
+
+fn material_assets_metadata(scene: &SceneDocument) -> crate::SceneMaterialAssetsMetadata {
+    use crate::MaterialDmiCoefficient::{Bulk, Interfacial};
+    use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi};
+
+    let mut inactive_dmi: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    let mut active_dmi_without_coefficient: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for object in &scene.objects {
+        let Some(material) = scene.materials.iter().find(|entry| entry.id == object.material_ref) else {
+            continue;
+        };
+        for (kind, flag, key, value) in [
+            (InterfacialDmi, Interfacial, "dind", material.properties.dind),
+            (BulkDmi, Bulk, "dbulk", material.properties.dbulk),
+        ] {
+            if let Some(entry) = object.physics_stack.iter().rev().find(|entry| entry.kind == kind) {
+                if !entry.enabled {
+                    inactive_dmi.entry(object.id.clone()).or_default().push(flag);
+                } else if value.is_none()
+                    && entry.params.as_ref().and_then(|params| params.get(key)).and_then(Value::as_f64) == Some(0.0)
+                {
+                    active_dmi_without_coefficient.entry(object.id.clone()).or_default().push(flag);
+                }
+            }
+        }
+    }
+    crate::SceneMaterialAssetsMetadata {
+        version: crate::SceneMaterialAssetsVersion::V1,
+        materials: scene.materials.clone(),
+        assignments: scene.objects.iter().filter(|object| scene.materials.iter().any(|material| material.id == object.material_ref))
+            .map(|object| (object.id.clone(),object.material_ref.clone())).collect(),
+        object_ids: scene.objects.iter().map(|object| (builder_geometry_name_for_object(object),object.id.clone())).collect(),
+        inactive_dmi,
+        active_dmi_without_coefficient,
+    }
+}
+
+fn restore_material_assets(builder: &ScriptBuilderState, objects: &mut [SceneObject]) -> Vec<SceneMaterialAsset> {
+    let Some(metadata) = builder.material_assets.as_ref() else {
+        return builder.geometries.iter().map(|geometry| SceneMaterialAsset {
+            id: material_id_for_geometry(&geometry.name), name: format!("{} material", geometry.name),
+            properties: geometry.material.clone(), references: Vec::new(), source: None,
+        }).collect();
+    };
+    for (geometry,object) in builder.geometries.iter().zip(objects.iter_mut()) {
+        if let Some(id) = metadata.object_ids.get(&geometry.name) { object.id = id.clone(); }
+    }
+    let effective = builder.geometries.iter().zip(objects.iter_mut()).map(|(geometry,object)| {
+        let mut properties = geometry.material.clone();
+        if let Some(original) = metadata.assignments.get(&object.id)
+            .and_then(|id| metadata.materials.iter().find(|material| &material.id == id)) {
+            use crate::MaterialDmiCoefficient::{Bulk, Interfacial};
+            use ScriptBuilderMagneticInteractionKind::{BulkDmi, InterfacialDmi, RotatedInterfacialDmi};
+
+            let inactive = metadata.inactive_dmi.get(&object.id).map(Vec::as_slice).unwrap_or_default();
+            let active_without_coefficient = metadata.active_dmi_without_coefficient
+                .get(&object.id).map(Vec::as_slice).unwrap_or_default();
+            let rotated = geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == RotatedInterfacialDmi);
+            for (flag, kind, key, effective, saved) in [
+                (Interfacial, InterfacialDmi, "dind", &mut properties.dind, original.properties.dind),
+                (Bulk, BulkDmi, "dbulk", &mut properties.dbulk, original.properties.dbulk),
+            ] {
+                let active = geometry.physics_stack.iter().any(|entry| entry.enabled && entry.kind == kind);
+                // The generator uses executable zero to retain an enabled module
+                // when its catalog copy has no corresponding coefficient.
+                if active_without_coefficient.contains(&flag) && *effective == Some(0.0) && active {
+                    *effective = None;
+                    continue;
+                }
+                if effective.is_some() || (flag == Interfacial && rotated) || active {
+                    continue;
+                }
+                if inactive.contains(&flag) {
+                    *effective = saved;
+                    if !object.physics_stack.iter().any(|entry| entry.kind == kind) {
+                        object.physics_stack.push(ScriptBuilderMagneticInteractionEntry {
+                            kind,
+                            enabled: false,
+                            params: Some(Value::Object([(key.to_owned(), Value::from(saved.unwrap_or(0.0)))].into_iter().collect())),
+                        });
+                    }
+                } else if saved == Some(0.0) {
+                    *effective = saved;
+                }
+            }
+        }
+        properties
+    }).collect::<Vec<_>>();
+    let mut materials = metadata.materials.clone();
+    // Effective DSL values win. Shared copies remain shared only while equal.
+    for original in &metadata.materials {
+        let mut assigned = objects.iter().enumerate()
+            .filter(|(_,object)| metadata.assignments.get(&object.id) == Some(&original.id))
+            .map(|(index,object)| (index,object.id.clone())).collect::<Vec<_>>();
+        assigned.sort_by(|a,b| a.1.cmp(&b.1));
+        let selected = assigned.iter().find(|(index,_)| effective[*index] == original.properties)
+            .or(assigned.first());
+        let Some((selected_index,_)) = selected else { continue; };
+        let primary_properties = effective[*selected_index].clone();
+        if let Some(material) = materials.iter_mut().find(|material| material.id == original.id) { material.properties = primary_properties.clone(); }
+        let mut forks: Vec<(crate::ScriptBuilderMaterialState,String)> = Vec::new();
+        for (index,object_id) in assigned {
+            let properties = &effective[index];
+            let id = if properties == &primary_properties { original.id.clone() }
+            else if let Some((_,id)) = forks.iter().find(|(candidate,_)| candidate == properties) { id.clone() }
+            else {
+                use sha2::{Digest,Sha256};
+                let digest = Sha256::digest(format!("{}\0{object_id}",original.id).as_bytes());
+                let stem = format!("mat:script:{}",digest[..12].iter().map(|byte|format!("{byte:02x}")).collect::<String>());
+                let mut id = stem.clone();
+                let mut suffix = 1;
+                while materials.iter().any(|material| material.id == id) { id = format!("{stem}:{suffix}"); suffix += 1; }
+                let mut fork = original.clone(); fork.id = id.clone(); fork.properties = properties.clone();
+                materials.push(fork); forks.push((properties.clone(),id.clone())); id
+            };
+            objects[index].material_ref = id;
+        }
+    }
+    for (geometry,object) in builder.geometries.iter().zip(objects.iter_mut()) {
+        if metadata.assignments.contains_key(&object.id) { continue; }
+        let stem = material_id_for_geometry(&geometry.name);
+        let mut id = stem.clone(); let mut suffix = 1;
+        while materials.iter().any(|material| material.id == id) { id = format!("{stem}:{suffix}"); suffix += 1; }
+        object.material_ref = id.clone();
+        materials.push(SceneMaterialAsset {id,name:format!("{} material",geometry.name),properties:geometry.material.clone(),references:Vec::new(),source:None});
+    }
+    materials
 }
 
 fn migrate_legacy_fdm_demag_realization(scene: &mut SceneDocument) {
@@ -503,6 +626,7 @@ pub fn scene_document_to_script_builder_overrides(
             "role": object.role,
             "visualization_hint": object.visualization_hint,
             "geometry_kind": object.geometry.geometry_kind,
+            "source_asset": object.geometry.source_asset,
             "geometry_params": geometry_params,
             "bounds_min": object.geometry.bounds_min,
             "bounds_max": object.geometry.bounds_max,
@@ -511,6 +635,7 @@ pub fn scene_document_to_script_builder_overrides(
         }));
     }
     let mut overrides = serde_json::json!({
+        "material_assets": material_assets_metadata(scene),
         "runtime_selection": {
             "backend": scene.study.requested_backend,
             "device": scene.study.requested_device,
@@ -714,6 +839,10 @@ pub fn scene_document_to_script_builder_overrides(
             serde_json::to_value(storage).unwrap_or(Value::Null)
         }).unwrap_or(Value::Null),
         "field_drives": builder.field_drives.iter()
+            .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        // Replaces the loaded mask antennas, as for regional drives.
+        "mask_field_drives": builder.mask_field_drives.iter()
             .map(|drive| serde_json::to_value(drive).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
         "initial_state": builder.initial_state.as_ref().map(|initial_state| serde_json::json!({
@@ -992,6 +1121,9 @@ fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
         Value::String(geo.geometry_kind.clone()),
     );
     map.insert("geometry_params".to_string(), geo.geometry_params.clone());
+    if let Some(reference) = &geo.source_asset {
+        map.insert("source_asset".to_string(), serde_json::to_value(reference).unwrap());
+    }
     map.insert("visualization_hint".to_string(), serde_json::json!(geo.visualization_hint));
     map.insert(
         "bounds_min".to_string(),
@@ -1386,6 +1518,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         name: geometry.name.clone(),
         role: "magnet".to_string(),
         geometry: SceneGeometry {
+            source_asset: geometry.source_asset.clone(),
             geometry_kind: geometry.geometry_kind.clone(),
             geometry_params,
             bounds_min: geometry.bounds_min,
@@ -2633,8 +2766,90 @@ mod tests {
         assert!(scene_document_to_script_builder(&scene).is_err());
     }
 
+    #[test]
+    fn imported_source_asset_survives_scene_builder_and_overrides() {
+        let original = scene_document_from_script_builder(&sample_builder());
+        let mut encoded = serde_json::to_value(&original).unwrap();
+        let reference = serde_json::json!({
+            "asset_id": "asset-stl-source",
+            "content_sha256": "a".repeat(64),
+            "archive_path": "project/assets/geometry/source.stl"
+        });
+        encoded["objects"][0]["geometry"]["source_asset"] = reference.clone();
+        let scene: SceneDocument = serde_json::from_value(encoded).unwrap();
+        let builder = scene_document_to_script_builder(&scene).unwrap();
+        let builder_value = serde_json::to_value(&builder).unwrap();
+        assert_eq!(builder_value["geometries"][0]["source_asset"], reference);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["source_asset"], reference);
+        let restored = scene_document_from_script_builder(&builder);
+        let restored_value = serde_json::to_value(restored).unwrap();
+        assert_eq!(restored_value["objects"][0]["geometry"]["source_asset"], reference);
+    }
+
+    #[test]
+    fn material_library_roundtrip_restores_dormant_dmi_and_legacy_references() {
+        use ScriptBuilderMagneticInteractionKind::InterfacialDmi;
+
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.materials[0].references = (0..65).map(|index| crate::SceneMaterialReference {
+            label: Some(format!("Reference {index}")), url: None, citation: None,
+        }).collect();
+        scene.materials[0].properties.dind = Some(-0.001);
+        let interaction = scene.objects[0].physics_stack.iter_mut()
+            .find(|entry| entry.kind == InterfacialDmi).unwrap();
+        interaction.enabled = false;
+        interaction.params = Some(serde_json::json!({"dind":-0.001}));
+        let mut builder = scene_document_to_script_builder(&scene).unwrap();
+        // Canonical Python only emits executable DMI. Its editor metadata
+        // provides the dormant value and explicit disabled state on import.
+        builder.geometries[0].physics_stack.retain(|entry| entry.kind != InterfacialDmi);
+        builder.geometries[0].material.dind = None;
+        let builder: ScriptBuilderState = serde_json::from_value(serde_json::to_value(builder).unwrap()).unwrap();
+        let restored = scene_document_from_script_builder(&builder);
+        assert_eq!(restored.materials[0].properties.dind, Some(-0.001));
+        assert_eq!(restored.materials[0].references, scene.materials[0].references);
+        assert!(restored.objects[0].physics_stack.iter()
+            .any(|entry| entry.kind == InterfacialDmi && !entry.enabled));
+    }
+
+    #[test]
+    fn material_library_roundtrip_preserves_source_identity_and_manual_edits() {
+        let mut builder = sample_builder();
+        builder.geometries[0].object_regions.clear();
+        builder.geometries[0].allocated_region_ids.clear();
+        let mut second = builder.geometries[0].clone();
+        second.name = "Second sample".into();
+        builder.geometries.push(second);
+        let mut scene = scene_document_from_script_builder(&builder);
+        let original_id = scene.materials[0].id.clone();
+        scene.objects[0].id = "object:first".into();
+        scene.objects[1].id = "object:second".into();
+        scene.objects[1].material_ref = original_id.clone();
+        scene.materials[0].source = Some(serde_json::from_value(serde_json::json!({
+            "catalog_id":"builtin:permalloy","catalog_revision":1,"name":"Permalloy",
+            "kind":"builtin","properties":{"Ms":800000.0,"Aex":1.3e-11,"alpha":0.01,"Dind":null,"Dbulk":null},
+            "references":[{"citation":"Reference A"},{"citation":"Reference B"}]
+        })).unwrap());
+        scene.materials[0].references = scene.materials[0].source.as_ref().unwrap().references.clone();
+        let source = scene.materials[0].source.clone();
+        let mut exported = scene_document_to_script_builder(&scene).unwrap();
+        exported.geometries[0].material.ms = Some(900000.0);
+        let restored = scene_document_from_script_builder(&exported);
+        assert_eq!(restored.objects[0].id,"object:first");
+        assert_eq!(restored.objects[1].id,"object:second");
+        assert_ne!(restored.objects[0].material_ref,restored.objects[1].material_ref);
+        assert_eq!(restored.objects[1].material_ref,original_id);
+        let changed = restored.materials.iter().find(|material| material.id == restored.objects[0].material_ref).unwrap();
+        assert_eq!(changed.properties.ms,Some(900000.0));
+        assert_eq!(changed.source,source);
+        assert_eq!(changed.references.len(),2);
+        assert_eq!(restored.materials.len(),scene.materials.len()+1);
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            material_assets: None,
             revision: 7,
             backend: Some("fem".to_string()),
             requested_backend: None,
@@ -2704,6 +2919,10 @@ mod tests {
                 adaptive_max_passes: 2,
                 adaptive_error_tolerance: "1e-3".to_string(),
                 order: None,
+                domain_mesh_mode: None,
+                domain_mesh_source: None,
+                domain_region_markers: None,
+                domain_object_region_markers: None,
             },
             universe: Some(ScriptBuilderUniverseState {
                 mode: "auto".to_string(),
@@ -2786,6 +3005,7 @@ mod tests {
                 sample_index: Some(0),
             }),
             geometries: vec![ScriptBuilderGeometryEntry {
+                source_asset: None,
                 name: "flower".to_string(),
                 region_name: Some("core".to_string()),
                 geometry_kind: "ImportedGeometry".to_string(),
@@ -2994,6 +3214,7 @@ mod tests {
                 },
             }],
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),

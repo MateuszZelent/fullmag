@@ -638,6 +638,25 @@ export type FieldDriveReplaceRequest =
   components["schemas"]["FieldDriveReplaceRequest"];
 export type FieldDriveDeleteRequest =
   components["schemas"]["FieldDriveDeleteRequest"];
+export type MaskFieldDriveListResource =
+  components["schemas"]["MaskFieldDriveListResource"];
+export type MaskFieldDriveResource =
+  components["schemas"]["MaskFieldDriveResource"];
+export type MaskFieldDriveCreateRequest =
+  components["schemas"]["MaskFieldDriveCreateRequest"];
+export type MaskFieldDriveReplaceRequest =
+  components["schemas"]["MaskFieldDriveReplaceRequest"];
+export type MaskTermResource = components["schemas"]["MaskTermResource"];
+export type MaskFunctionResource =
+  components["schemas"]["MaskFunctionResource"];
+export type ReadyAntennaListResource =
+  components["schemas"]["ReadyAntennaListResource"];
+export type ReadyAntennaResource =
+  components["schemas"]["ReadyAntennaResource"];
+export type ReadyAntennaTermsRequest =
+  components["schemas"]["ReadyAntennaTermsRequest"];
+export type ReadyAntennaTermsResource =
+  components["schemas"]["ReadyAntennaTermsResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
 export type RegionDiagnosticsResource =
   components["schemas"]["RegionDiagnosticsResource"];
@@ -736,6 +755,8 @@ export type AuthoringTransactionRequest =
     })
   | (BaseAuthoringTransaction & {
       kind: "create_material";
+      source?: SceneMaterialSource | null;
+      assign_to_object_id?: string | null;
       material_id: string;
       name: string;
       properties: MaterialPropertiesResource;
@@ -1453,3 +1474,20 @@ export interface WorkspaceRootWire {
   readonly recursive: boolean;
   readonly enabled: boolean;
 }
+
+export type ImportedSourceSurfaceResource = components["schemas"]["ImportedSourceSurfaceResource"];
+export type ImportedSourceSurfaceQuery = components["schemas"]["ImportedSourceSurfaceQuery"];
+
+export type MaterialLibraryResource = components["schemas"]["MaterialLibraryResource"];
+export type MaterialLibraryMutationResource = components["schemas"]["MaterialLibraryMutationResource"];
+export type MaterialLibraryEntryResource = components["schemas"]["MaterialLibraryEntryResource"];
+export type MaterialLibraryWriteRequest = components["schemas"]["MaterialLibraryWriteRequest"];
+export type MaterialLibraryUpdateRequest = components["schemas"]["MaterialLibraryUpdateRequest"];
+export type MaterialLibraryDeleteRequest = components["schemas"]["MaterialLibraryDeleteRequest"];
+export type MaterialLibraryDeleteResource = components["schemas"]["MaterialLibraryDeleteResource"];
+export type SceneMaterialSource = components["schemas"]["SceneMaterialSource"];
+export type PublishedMaterialVersion = components["schemas"]["PublishedMaterialVersion"];
+export type MaterialVersionPublishRequest = components["schemas"]["MaterialVersionPublishRequest"];
+export type MaterialVersionUpdateRequest = components["schemas"]["MaterialVersionUpdateRequest"];
+export type MaterialVersionMutationResource = components["schemas"]["MaterialVersionMutationResource"];
+export type SceneMaterialResource = components["schemas"]["SceneMaterialResource"];

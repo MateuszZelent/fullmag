@@ -544,6 +544,7 @@ part does not promote the others.
 | Capability | FDM CPU reference | FDM GPU production | FEM CPU public | FEM GPU public | Current truth |
 |---|---|---|---|---|---|
 | `RegionalFieldDrive` / `prescribed_zeeman_mask` import compatibility | `reference_executable` | `unsupported` with explicit rejection | `source_visible` only | `unsupported` | Current truth before ADR 0019 implementation: FDM CPU consumes the legacy materialized mask; native FEM has no qualifying projection/RHS proof. Planner-visible intent is not executable evidence. New authoring exports only `RegionalFieldDrive` and no lane may fall back to `SolvedAntennaDrive` or another device. |
+| `MaskFieldDrive` (`mask_field_drive.v1`, hand-written masks, ADR 0081) | `reference_executable` | `development_executable` | `development_executable` | `development_executable` | Function and array masks times time functions, stage actions Add/Update/Remove, `H_drive`. Evidence through the managed DEV API (physics note 0922 section 10): a mask term equals the built-in regional drive bit for bit on FDM CPU and FEM CPU, to 2.2e-16 on FDM CUDA and 1.4e-17 on FEM GPU; one script on FEM CPU and FDM CPU agrees to 9.5e-15. Bounds: single-grid FDM with one magnet; P1 FEM, not the Rust reference reduction of statically periodic plans; at most 8 mask terms per stage on GPU lanes. No production receipt; Rust tests are not compiled locally; the 100 ps racetrack comparison with mumax3 gives the antenna response to 0.7 % (the whole solver differs by up to 1.9e-2 near the track). |
 | variable-width 3D microstrip/CPW layout | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Current constant-width antenna structs and box preview do not encode ordered width/gap stations or explicit return conductors. |
 | `StudyIR::AntennaFieldSolve(model="quasistatic_conduction_biot_savart_3d")` | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Initial target is native FEM CPU/MFEM H1 conduction plus adaptive 3D Biot-Savart. Current `mqs_2p5d_az` is an infinite-strip approximation and does not satisfy this row. |
 | `SolvedAntennaDrive` consumption | `unsupported` | `unsupported` | `unsupported` | `unsupported` | Each lane is promoted independently after artifact compatibility, stale rejection, waveform, `H_ant`, and LLG parity gates pass. |
@@ -914,3 +915,22 @@ PASS. Rust regression source nie były kompilowane. Multilayer/GPU runtime
 i końcowe Compute po restore pozostają NOT VERIFIED.
 Nie promuje to FDM CPU/GPU ani FEM CPU/GPU do `validated`; kwalifikacja
 naukowa i pozostałe bramki lane'ów zachowują dotychczasowy status.
+
+
+### Imported STL authoring (ADR 0081)
+
+`ImportedGeometry` with a local `.stl` source, explicit positive SI scale and
+`volume="full"` is an authored FEM input for the shared mesher in both strict
+and extended modes. FEM CPU/GPU consume the resulting conforming MeshIR;
+preprocessing does not select a solver device. FDM execution and imported CSG
+children remain unsupported. Open surfaces may be displayed, but do not pass
+volume meshing; touching, intersecting, open or ambiguous shells fail before
+fallback. Preview topology never qualifies as a solver mesh.
+
+The geometry capability is `Preview` (`fem=true`, `fdm=false`, `dsl=true`,
+`boolean=false`). This records implemented authoring support, not production
+or scientific qualification. Managed runtime, GPU execution and mesh/airbox
+convergence remain separate gates. Requested GPU intent must fail explicitly
+when unavailable and must never fall back to CPU. Source byte identity, units,
+scale and asset ownership survive archive round-trip under ADR 0081; the
+scientific domain partition is defined in physics note 0100 section 8.3.

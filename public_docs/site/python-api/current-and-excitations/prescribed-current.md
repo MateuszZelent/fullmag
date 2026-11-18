@@ -16,48 +16,38 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 A prescribed-density module records current intent directly; it is not a silent replacement for a solved ohmic problem.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+Construction validates typed current parameters in Python; calling `to_ir()` lowers the object into its canonical `ProblemIR` record for study capture and planner validation.
 
 (python-api-current-and-excitations-prescribed-current-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-current_transport-2
-
-q_{\mathrm{IR}} = \mathrm{current_transport}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object current_transport. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+With `model="prescribed_density"`, `CurrentTransport` defines a spatially uniform charge current density $\mathbf{J}_c = (J_x, J_y, J_z)$ directly without solving the charge conservation PDE $\nabla\cdot(\sigma\nabla V)=0$. Downstream modules consume $\mathbf{J}_c$ for spin-transfer torque, spin-orbit torque, or Oersted field evaluation as documented in {doc}`../../physics/interactions/spin-transfer-torque/index`, {doc}`../../physics/interactions/spin-orbit-torque/index`, and {doc}`../../physics/interactions/oersted-field/index`.
 
 (python-api-current-and-excitations-prescribed-current-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+Prescribed charge current density $\mathbf{J}_c$ is authored as a three-component Cartesian vector in $\mathrm{A\,m^{-2}}$; module identifiers (`name`), `model`, and `coupling` selectors are dimensionless ($1$).
 
 (python-api-current-and-excitations-prescribed-current-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`name` must be non-empty, `current_density` must be a finite three-component vector when `model="prescribed_density"`, and contradictory options (such as `bidirectional` coupling without an ohmic solve) fail closed during construction or lowering.
 
 (python-api-current-and-excitations-prescribed-current-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.CurrentTransport(name=..., model="prescribed_density", current_density=...)
+`fm.CurrentTransport(name=..., model="prescribed_density", current_density=...)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `name` | `str` | `required` | `1` | non-empty | transport module ID | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
-| `model` | `str` | `prescribed_density` | `1` | supported model name | current closure | FEM/FDM CPU/GPU: IR; resolved module | `model` |
-| `current_density` | `tuple[float,float,float]` | `None` | `A/m^2` | required for prescribed_density; finite | prescribed current density | FEM/FDM CPU/GPU: IR; resolved module | `current_density` |
-| `coupling` | `str` | `one_way` | `1` | one_way or bidirectional | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | `coupling` |
+| `name` | `str` | `required` | $1$ | non-empty | transport module ID | FEM/FDM CPU/GPU: IR; resolver-specific | `name` |
+| `model` | `str` | `prescribed_density` | $1$ | supported model name | current closure | FEM/FDM CPU/GPU: IR; resolved module | `model` |
+| `current_density` | `tuple[float,float,float]` | `None` | $\mathrm{A\,m^{-2}}$ | required for `prescribed_density`; finite | prescribed current density | FEM/FDM CPU/GPU: IR; resolved module | `current_density` |
+| `coupling` | `str` | `one_way` | $1$ | `one_way` or `bidirectional` | coupling direction | FEM/FDM CPU/GPU: IR; resolved module | `coupling` |
 
 ### Stage-first example
 
@@ -78,46 +68,44 @@ value = fm.CurrentTransport(name="j", model="prescribed_density", current_densit
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, attach `canonical_ir` through the study current-transport registration interface or pass `current_source` by `name` to downstream spin-torque or Oersted modules.
 
 (python-api-current-and-excitations-prescribed-current-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed current_transport record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits a typed dictionary with `"kind": "current_transport"`, `"name"`, `"model": "prescribed_density"`, `"current_density"`, and `"coupling"`.
 
 (python-api-current-and-excitations-prescribed-current-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` is preserved in `ProblemIR` independently of `resolved execution`. `Validation errors` reject invalid types, missing current-density vectors, non-finite components, and incompatible `coupling` settings, while `unsupported combinations` fail closed at the planner or backend boundary.
 
 (python-api-current-and-excitations-prescribed-current-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies the uniform current density and canonical `ProblemIR` only; discrete evaluation of downstream torque or magnetic field terms is owned by the FEM/FDM backend lanes documented in {doc}`../../physics/interactions/spin-transfer-torque/index` and {doc}`../../physics/interactions/spin-orbit-torque/index`.
 
 (python-api-current-and-excitations-prescribed-current-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/current_transport.py symbol class CurrentTransport. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/current_transport.py` (`class CurrentTransport`). Constructor parameters, validation branches, defaults, and `to_ir()` keys follow that class directly.
 
 (python-api-current-and-excitations-prescribed-current-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_prescribed_density_serializes_to_ir, test_oersted_field_from_current_solution_serializes_to_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering authoring and IR serialization include `test_prescribed_density_serializes_to_ir` and `test_oersted_field_from_current_solution_serializes_to_ir`. Live solver execution and device parity require separate backend qualification.
 
 (python-api-current-and-excitations-prescribed-current-limitations)=
 ## Limitations and Control Room
 
-Prescribed current densities and upstream current-transport bindings for spin-torque (`SpinAuthoringInspector`: `zhang_li`, `slonczewski`, `prescribed_sot`) and Oersted calculations are configurable in Control Room via `TransportAuthoringInspector` and `SpinAuthoringInspector`. Spatially varying scripted current-density arrays without an exposed UI control remain Python-only (`not implemented`).
+Prescribed current densities and upstream current-transport bindings for spin-torque (`SpinAuthoringInspector`: `zhang_li`, `slonczewski`, `prescribed_sot`) and Oersted calculations are configurable in Control Room via `TransportAuthoringInspector` and `SpinAuthoringInspector`. Spatially varying scripted current-density arrays without an exposed UI control remain `Python-only`.
 
-### Control Room crosswalk
+### Control Room support
 
-| Python/API surface | Control Room path | Status | Transaction |
+| Python/API surface | Control Room path | Status | Interaction |
 |---|---|---|---|
 | Prescribed current density vector / waveform & downstream torque binding | `TransportAuthoringInspector` & `SpinAuthoringInspector` | `partial` | `runAuthoringMutationWithHistory` on `scene_revision` |
-| Arbitrary array or callable prescribed current profiles | Python DSL | `not implemented` | Python-only until implemented |
+| Arbitrary array or callable prescribed current profiles | Python DSL | `Python-only` | Authored directly in Python |
 
 ```{image} /_static/images/ui/inspector-spin-transport-sot-stt.png
 :alt: Control Room Transport and Spin Torque inspectors configuring prescribed current sources and SOT/STT parameters
@@ -130,16 +118,12 @@ See {doc}`/frontend/capability-register` and {doc}`/frontend/inspectors/physics-
 (python-api-current-and-excitations-prescribed-current-scientific-bibliography)=
 ## Scientific bibliography
 
-- T. Valet and A. Fert, Theory of the perpendicular magnetoresistance, Phys. Rev. B 48 (1993), DOI: https://doi.org/10.1103/PhysRevB.48.7099
-- S. Takahashi and S. Maekawa, Spin current, Phys. Rev. B 67 (2003), DOI: https://doi.org/10.1103/PhysRevB.67.052409
+- T. Valet and A. Fert, “Theory of the perpendicular magnetoresistance in magnetic multilayers,” *Physical Review B* **48**(10), 7099–7113 (1993), [doi:10.1103/PhysRevB.48.7099](https://doi.org/10.1103/PhysRevB.48.7099).
+- S. Takahashi and S. Maekawa, “Spin injection and detection in magnetic nanostructures,” *Physical Review B* **67**(5), 052409 (2003), [doi:10.1103/PhysRevB.67.052409](https://doi.org/10.1103/PhysRevB.67.052409).
 
 (python-api-current-and-excitations-prescribed-current-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/current_transport.py | class CurrentTransport | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/current_transport.py::class CurrentTransport
-- Source-map: current-and-excitations/prescribed-current.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `class CurrentTransport` | public constructor and IR lowering |

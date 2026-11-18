@@ -59,6 +59,7 @@ pub fn scene_execution_input_view(scene: &SceneDocument) -> Result<Value, serde_
                         }
                     } else if key == "materials" {
                         entry.remove("references");
+                        entry.remove("source");
                     } else {
                         entry.remove("ui_label");
                     }

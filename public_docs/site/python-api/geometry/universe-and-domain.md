@@ -16,50 +16,40 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The universe carries domain policy; mesh generation and backend realization happen after authoring.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: domain periodicity and exterior mesh policy validate in Python and lower to `ProblemIR` before shared-domain or structured grid generation.
 
 (python-api-geometry-universe-and-domain-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-universe_domain
-
-q_{\mathrm{IR}} = \mathrm{universe_domain}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object universe_domain. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+The computational domain $\Omega \subset \mathbb{R}^3$ specifies open or periodic boundary axes $\hat{\mathbf{e}}_i$ ($i \in \{x,y,z\}$), periodic magnetostatic kernel summation or image counts, and exterior airbox / grid sizing bounds $h_{\min} \le h_{\max}$. Physical domain and exterior closure semantics are documented in {doc}`../../physics/geometry-and-materials`, {doc}`../meshing/fem/airbox/index`, and {doc}`../boundary-conditions/periodic-boundary-conditions`.
 
 (python-api-geometry-universe-and-domain-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+Mesh spacing parameters (`mesh.cell_size`, `mesh.hmin`, `mesh.hmax`) use SI metres ($\mathrm{m}$). Boolean periodicity flags (`pbc.x/y/z`), `pbc.demag`, `pbc.images`, and geometric grading ratios (`mesh.growth_rate`) are dimensionless ($1$).
 
 (python-api-geometry-universe-and-domain-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`cell_size`, `hmin`, `hmax`, and `growth_rate` must be positive finite values when supplied, with `hmin <= hmax`, and `pbc.images` must be a positive integer when provided. Unsupported combinations—such as periodic airbox demagnetization paired with an incompatible FDM policy—fail closed at lowering or resolution.
 
 (python-api-geometry-universe-and-domain-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.pbc(...) and StudyUniverseHandle.mesh(...)
+`fm.pbc(...)` and `StudyUniverseHandle.mesh(...)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `pbc.x/y/z` | `bool` | `False` | `1` | boolean | periodic axis flags | FEM/FDM CPU/GPU: IR; resolver-specific | `periodic axes` |
-| `pbc.demag` | `str` | `open` | `1` | supported demag mode | open-domain demag choice | FEM/FDM CPU/GPU: IR; resolver-specific | `demag` |
-| `pbc.images` | `int or None` | `None` | `1` | positive when supplied | periodic image count | FEM/FDM CPU/GPU: IR; resolver-specific | `images` |
-| `mesh.cell_size` | `tuple[float,float,float] or None` | `None` | `m` | positive components | structured cell size | FDM CPU/GPU: IR; FEM resolver-specific | `cell_size` |
-| `mesh.hmax/hmin` | `float or None` | `None` | `m` | positive when supplied; hmin <= hmax | unstructured size bounds | FEM CPU/GPU: IR; FDM resolver-specific | `hmax/hmin` |
-| `mesh.growth_rate` | `float or None` | `None` | `1` | positive when supplied | mesh grading growth | FEM/FDM CPU/GPU: IR; resolver-specific | `growth_rate` |
+| `pbc.x/y/z` | `bool` | `False` | $1$ | boolean | periodic axis flags | FEM/FDM CPU/GPU: IR; resolver-specific | `periodic axes` |
+| `pbc.demag` | `str` | `open` | $1$ | supported demag mode | open-domain demag choice | FEM/FDM CPU/GPU: IR; resolver-specific | `demag` |
+| `pbc.images` | `int or None` | `None` | $1$ | positive when supplied | periodic image count | FEM/FDM CPU/GPU: IR; resolver-specific | `images` |
+| `mesh.cell_size` | `tuple[float,float,float] or None` | `None` | $\mathrm{m}$ | positive components | structured cell size | FDM CPU/GPU: IR; FEM resolver-specific | `cell_size` |
+| `mesh.hmax/hmin` | `float or None` | `None` | $\mathrm{m}$ | positive when supplied; hmin <= hmax | unstructured size bounds | FEM CPU/GPU: IR; FDM resolver-specific | `hmax/hmin` |
+| `mesh.growth_rate` | `float or None` | `None` | $1$ | positive when supplied | mesh grading growth | FEM/FDM CPU/GPU: IR; resolver-specific | `growth_rate` |
 
 ### Stage-first example
 
@@ -82,46 +72,44 @@ value = fm.FdmPbc(axes=(True, False, False), demag="open")
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, `fm.pbc(...)` and `study.universe.mesh(...)` update the active study domain policy directly before stage compilation.
 
 (python-api-geometry-universe-and-domain-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed universe_domain record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`FdmPbc.to_ir()` emits `{"axes": [...], "demag": ...}` (with optional periodic image settings), while `StudyUniverseHandle.mesh(...)` lowers exterior bounds, padding, and airbox mesh grading parameters into study/mesh workflow fields in `ProblemIR`.
 
 (python-api-geometry-universe-and-domain-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves periodic axes, demag mode, image counts, and exterior mesh sizing in `ProblemIR` independently of `resolved execution`. `Validation errors` reject non-positive mesh bounds (`hmin > hmax`) or invalid demag modes, while `unsupported combinations` fail closed at backend resolution.
 
 (python-api-geometry-universe-and-domain-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies domain periodicity and sizing policy only; periodic lattice summation, airbox FEM conformal meshing, and solver-specific boundary closures are executed by the meshing and demagnetization backends.
 
 (python-api-geometry-universe-and-domain-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/world.py symbol class StudyUniverseHandle. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/world.py` (`class StudyUniverseHandle`). Constructor options, validation branches, defaults, and lowered `ProblemIR` keys come directly from that module.
 
 (python-api-geometry-universe-and-domain-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_study_pbc_serializes_problem_ir_and_default_fem_pairs, test_fem_backend_emits_shared_domain_mesh_asset_for_manual_universe. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository tests covering domain periodicity and exterior shared-domain meshing include `test_study_pbc_serializes_problem_ir_and_default_fem_pairs` and `test_fem_backend_emits_shared_domain_mesh_asset_for_manual_universe`. Live solver runtime and Control Room browser behavior require separate qualification.
 
 (python-api-geometry-universe-and-domain-limitations)=
 ## Limitations and Control Room
 
-Exterior domain / Airbox geometry bounds, padding, and FEM airbox mesh sizing are configured in Control Room via the Universe / **Airbox Mesh Parameters** inspector (`Model Explorer -> Universe / Airbox`), with geometry-only inspection on FDM sessions and full exterior mesh sizing controls on FEM sessions (see {doc}`/frontend/meshing/airbox-mesh`). Advanced multi-box or custom airbox grading strategies without matching inspector fields remain Python-only (`not implemented`).
+Exterior domain / Airbox geometry bounds, padding, and FEM airbox mesh sizing are configured in Control Room via the Universe / **Airbox Mesh Parameters** inspector (`Model Explorer -> Universe / Airbox`), with geometry-only inspection on FDM sessions and full exterior mesh sizing controls on FEM sessions (see {doc}`/frontend/meshing/airbox-mesh`). Advanced multi-box or custom airbox grading strategies without matching inspector fields remain `Python-only`.
 
-### Control Room crosswalk
+### Control Room support
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Domain bounds, padding mode, & airbox mesh sizing | `Model Explorer -> Universe / Airbox` (**Airbox Mesh Parameters**) | `partial` (FEM editable; FDM geometry subset) | Scene / domain mesh invalidation on commit |
-| Unsupported custom exterior rules | Python DSL | `not implemented` | Author in Python |
+| Unsupported custom exterior rules | Python DSL | `Python-only` | Author in Python |
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Control Room FEM Mesh and Airbox Parameters inspector panel
@@ -134,15 +122,11 @@ See {doc}`/frontend/capability-register` and {doc}`/frontend/meshing/airbox-mesh
 (python-api-geometry-universe-and-domain-scientific-bibliography)=
 ## Scientific bibliography
 
-- C. Geuzaine and J.-F. Remacle, Gmsh: a three-dimensional finite element mesh generator, Int. J. Numer. Meth. Eng. 79 (2009), DOI: https://doi.org/10.1002/nme.2579
+- C. Geuzaine and J.-F. Remacle, “Gmsh: A 3-D finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79**(11), 1309–1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579) | [Open-access HAL PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf).
 
 (python-api-geometry-universe-and-domain-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/world.py::class StudyUniverseHandle
-- Source-map: geometry/universe-and-domain.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | public constructor and IR lowering |

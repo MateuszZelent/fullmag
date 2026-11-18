@@ -175,6 +175,21 @@ This low-level policy is currently inert: `_resolve_per_object_mesh_options` acc
 compatibility but does not read its fields. Use explicit interface, object, and airbox targets;
 the resolved target report records which effective value controlled each partition.
 
+### Exhaustive public-API and Python-to-ProblemIR mapping
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `MeshSizeControls.calibrate_for` | `str \| None` | `None` | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Recorded calibration-family data. | Unattached | `none` |
+| `MeshSizeControls.size_preset` | `str \| None` | `None` | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Named size-policy data. | Unattached | `none` |
+| `MeshSizeControls.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Upper element-size data. | Unattached | `none` |
+| `MeshSizeControls.minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Lower element-size data. | Unattached | `none` |
+| `MeshSizeControls.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | Standalone compatibility payload; constructor does not validate it. | Element-growth data. | Unattached | `none` |
+| `MeshSizeControls.curvature_factor` | `float \| None` | `None` | $1$ | Standalone compatibility payload; constructor does not validate it. | Curvature-sizing data. | Unattached | `none` |
+| `MeshSizeControls.narrow_region_resolution` | `float \| None` | `None` | $1$ | Standalone compatibility payload; constructor does not validate it. | Narrow-region data. | Unattached | `none` |
+| `SharedMeshAssemblyPolicy.interface_hmax_factor` | `float` | `0.5` | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | `shared_mesh_assembly_policy.interface_hmax_factor` |
+| `SharedMeshAssemblyPolicy.enforce_conforming` | `bool` | `True` | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | `shared_mesh_assembly_policy.enforce_conforming` |
+| `SharedMeshAssemblyPolicy.airbox_hmax_factor` | `float` | `3.0` | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | `shared_mesh_assembly_policy.airbox_hmax_factor` |
+
 ## Stage-first commands
 
 | Python command | Scope | Effect |
@@ -243,7 +258,7 @@ exception. The repository integration pattern is
 `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py`; this example
 shortens the SP4 qualification run while preserving its stage-first domain, film, and relaxation setup.
 
-## Control Room crosswalk
+## Control Room support
 
 ### Airbox Mesh Parameters
 
@@ -436,32 +451,20 @@ contract and exposes object/region mesh membership read-only in the Control Room
    [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
 
 (python-api-discretization-mesh-controls-source-code-index)=
-### Exhaustive public-API and Python-to-ProblemIR mapping
-
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|---|
-| MeshSizeControls.calibrate_for | str \| None | None | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Recorded calibration-family data. | Unattached | none |
-| MeshSizeControls.size_preset | str \| None | None | $1$ | Standalone compatibility payload; no authoring facade attaches it to ProblemIR. | Named size-policy data. | Unattached | none |
-| MeshSizeControls.maximum_element_size | float \| None | None | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Upper element-size data. | Unattached | none |
-| MeshSizeControls.minimum_element_size | float \| None | None | $\mathrm{m}$ | Standalone compatibility payload; constructor does not validate it. | Lower element-size data. | Unattached | none |
-| MeshSizeControls.maximum_element_growth_rate | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Element-growth data. | Unattached | none |
-| MeshSizeControls.curvature_factor | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Curvature-sizing data. | Unattached | none |
-| MeshSizeControls.narrow_region_resolution | float \| None | None | $1$ | Standalone compatibility payload; constructor does not validate it. | Narrow-region data. | Unattached | none |
-| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | Strictly greater than zero and no greater than one. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.interface_hmax_factor |
-| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.enforce_conforming |
-| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | shared_mesh_assembly_policy.airbox_hmax_factor |
-
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
 ## Source-code index
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
 |---|---|---|---|---|---|---|
-| unattached compatibility payload | Python data model only | `packages/fullmag-py/src/fullmag/model/discretization.py` | `MeshSizeControls.to_ir` | repository-wide attachment audit | limitation documented | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
-| UI object lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `applyPolicy`, `buildMesh` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
-| UI airbox lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `submitAirboxPolicyDraft`, `build` | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) |
+| reusable size policy | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class MeshSizeControls` | constructor and attachment audit | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| shared assembly policy | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class SharedMeshAssemblyPolicy` | assembly policy tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/model/discretization.py) |
+| public size validation | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/world.py` | `_validate_mesh_control_values` | validation tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/world.py) |
+| preset resolution | FEM CPU/GPU authoring | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `resolve_user_mesh_size_controls` | preset resolution tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) |
+| size-field composition | FEM CPU/GPU meshing | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` | `_build_field_stack` | size-field plan tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py) |
+| target precedence | FEM CPU/GPU meshing | `packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py` | `resolve_shared_domain_targets` | target precedence tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/_mesh_targets.py) |
+| UI object lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
+| UI object request | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `buildObjectMeshPolicyReplaceRequest` | model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
+| UI airbox lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `AirboxMeshParametersPanel` | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) |
+| UI airbox request | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts` | `buildAirboxMeshPolicyReplaceRequest` | draft/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/airboxMeshPolicyDraft.ts) |
 | UI region controls | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx) |
 | final provenance | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |
 

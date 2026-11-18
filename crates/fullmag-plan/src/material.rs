@@ -1,8 +1,8 @@
 use fullmag_ir::{
     AbsorbingBoundaryFaceIR, AbsorbingBoundaryFrameIR, AbsorbingBoundaryLayerIR,
-    AbsorbingBoundaryProfileIR, GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan,
-    MaterialFieldSourceKind, MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR,
-    RegionFrameIR, RegionShapeIR,
+    GeometryEntryIR, MaterialFieldLocationIR, MaterialFieldPlan, MaterialFieldSourceKind,
+    MaterialParameterFieldIR, MaterialParameterNameIR, ProblemIR, RegionFrameIR, RegionShapeIR,
+    ResolvedAbsorbingBoundaryProfile,
 };
 use std::collections::BTreeSet;
 
@@ -557,26 +557,13 @@ fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
     ])
 }
 
-fn smootherstep(value: f64) -> f64 {
-    let t = value.clamp(0.0, 1.0);
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-}
-
-fn absorbing_profile_value(profile: AbsorbingBoundaryProfileIR, value: f64) -> f64 {
-    let t = value.clamp(0.0, 1.0);
-    match profile {
-        AbsorbingBoundaryProfileIR::Linear => t,
-        AbsorbingBoundaryProfileIR::Quadratic => t * t,
-        AbsorbingBoundaryProfileIR::Smootherstep => smootherstep(t),
-    }
-}
-
 fn absorbing_face_weight(
     face: AbsorbingBoundaryFaceIR,
     point: [f64; 3],
     bounds: [f64; 6],
     layer: &AbsorbingBoundaryLayerIR,
-) -> f64 {
+    profile: &ResolvedAbsorbingBoundaryProfile,
+) -> Result<f64, String> {
     let (axis, positive) = match face {
         AbsorbingBoundaryFaceIR::XPlus => (0, true),
         AbsorbingBoundaryFaceIR::XMinus => (0, false),
@@ -591,15 +578,12 @@ fn absorbing_face_weight(
         point[axis] - bounds[axis]
     };
     if !distance.is_finite() || distance < 0.0 || distance > layer.total_width_m {
-        return 0.0;
+        return Ok(0.0);
     }
-    let ramp_start = layer.total_width_m - layer.ramp_width_m;
-    let t = if distance <= ramp_start {
-        1.0
-    } else {
-        (layer.total_width_m - distance) / layer.ramp_width_m
-    };
-    absorbing_profile_value(layer.profile, t)
+    if distance <= layer.total_width_m - layer.ramp_width_m {
+        return Ok(1.0);
+    }
+    profile.evaluate((layer.total_width_m - distance) / layer.ramp_width_m)
 }
 
 fn apply_absorbing_boundary_layer(
@@ -620,6 +604,9 @@ fn apply_absorbing_boundary_layer(
     if values.len() != points.len() {
         return Err("absorbing boundary alpha field length does not match points".to_string());
     }
+    let profile = layer
+        .compile_profile()
+        .map_err(|error| format!("absorbing boundary for '{owner_object_id}': {error}"))?;
     let (profile_points, bounds) = match layer.frame {
         AbsorbingBoundaryFrameIR::Object => {
             let local = points
@@ -649,11 +636,12 @@ fn apply_absorbing_boundary_layer(
         }
     };
     for (value, point) in values.iter_mut().zip(profile_points) {
-        let weight = layer
-            .faces
-            .iter()
-            .map(|face| absorbing_face_weight(*face, point, bounds, layer))
-            .fold(0.0, f64::max);
+        let mut weight: f64 = 0.0;
+        for &face in &layer.faces {
+            let face_weight = absorbing_face_weight(face, point, bounds, layer, &profile)
+                .map_err(|error| format!("absorbing boundary for '{owner_object_id}': {error}"))?;
+            weight = weight.max(face_weight);
+        }
         *value += layer.max_damping * weight;
         if !value.is_finite() || *value < 0.0 {
             return Err(format!(
@@ -773,6 +761,7 @@ pub(crate) fn build_material_field_plans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fullmag_ir::AbsorbingBoundaryProfileIR;
 
     fn layer(profile: AbsorbingBoundaryProfileIR) -> AbsorbingBoundaryLayerIR {
         AbsorbingBoundaryLayerIR {
@@ -782,6 +771,7 @@ mod tests {
             faces: vec![AbsorbingBoundaryFaceIR::XPlus],
             profile,
             frame: AbsorbingBoundaryFrameIR::Object,
+            expression: None,
         }
     }
 
@@ -810,6 +800,54 @@ mod tests {
         assert!((values[1] - 0.35).abs() < 1e-12);
         assert!((values[2] - 0.6).abs() < 1e-12);
         assert!((values[3] - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn absorbing_boundary_profiles_materialize_ramp_and_plateau() {
+        use AbsorbingBoundaryProfileIR::{Custom, Logarithmic, Tanh};
+
+        let points = [
+            [0.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [9.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ];
+        let mut problem = ProblemIR::bootstrap_example();
+        for (profile, expression, midpoint) in [
+            (Logarithmic, None, 5.5_f64.ln() / 10.0_f64.ln()),
+            (Tanh, None, 0.5),
+            (Custom, Some("u**3"), 0.125),
+        ] {
+            let mut config = layer(profile);
+            config.expression = expression.map(str::to_string);
+            problem.magnets[0].absorbing_boundary = Some(config);
+            let mut values = [0.1; 5];
+            apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, [0.0; 3])
+                .expect("profile should materialize");
+            assert_eq!(values[0], 0.1);
+            assert_eq!(values[1], 0.1);
+            assert!((values[2] - (0.1 + 0.5 * midpoint)).abs() < 1e-12);
+            assert_eq!(values[3..], [0.6, 0.6]);
+        }
+    }
+
+    #[test]
+    fn absorbing_boundary_checks_unprobed_sample_during_materialization() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let mut config = layer(AbsorbingBoundaryProfileIR::Custom);
+        // A dyadic pole lies exactly between the validation samples.
+        config.expression = Some("u*(u-0.009765625)/(u-0.009765625)".into());
+        config.compile_profile().expect("probe should pass");
+        config.total_width_m = 1.0;
+        config.ramp_width_m = 1.0;
+        config.faces = vec![AbsorbingBoundaryFaceIR::XMinus];
+        problem.magnets[0].absorbing_boundary = Some(config);
+        let mut values = [0.1; 2];
+        let points = [[0.0, 0.0, 0.0], [507.0 / 512.0, 0.0, 0.0]];
+        let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, [0.0; 3])
+            .unwrap_err();
+        assert!(error.contains("expression is undefined"));
     }
 
     #[test]

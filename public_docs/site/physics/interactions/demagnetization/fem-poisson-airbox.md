@@ -449,6 +449,10 @@ The boundary source computes the effective Robin coefficient, excludes periodic 
 from the Robin mass, and rejects a missing Dirichlet boundary marker. The energy source explicitly
 uses the negative $\mu_0/2$ magnetization-field product and does not add a second surface term.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes FEM airbox demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: physical and solver parameters without a matching UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-poisson-validation)=
 ## 10. Validation and qualification
 
@@ -514,8 +518,4 @@ execution, never hidden behind a GPU request.
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `initialize_demag_poisson_hypre_device_solver` | Device Hypre solver and preconditioner setup. | FEM GPU |
 | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_device_stage_impl` | Device-stage demag orchestration and timings. | FEM GPU |
 | `backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu` | `gpu_rk_reduce_final_demag_energy_terms` | Device demag energy reduction and ownership checks. | FEM GPU |
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
 

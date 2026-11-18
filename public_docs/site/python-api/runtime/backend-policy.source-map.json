@@ -47,7 +47,7 @@
         "python": "BackendTarget",
         "type": "`str` enum",
         "default": "`\"auto\"`",
-        "si_unit": "\\mathrm{s}",
+        "si_unit": "1",
         "validation": "`auto`, `fdm`, `fem`, `hybrid`",
         "meaning": "Solver backend family",
         "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",

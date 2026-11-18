@@ -1926,6 +1926,54 @@ pub fn fem_p1_magnetization_field_semantics(
     .map_err(|error| error.to_string())
 }
 
+/// Describe magnetic support for the real FEM H1/P1 equilibrium M0 input of
+/// a frequency-response plan. This is intentionally separate from response
+/// field output semantics and uses the same validated marker normalization as
+/// ordinary FEM magnetization.
+pub(crate) fn fem_frequency_response_equilibrium_field_semantics(
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<Option<FemP1MagnetizationFieldSemantics>, String> {
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        return Ok(None);
+    };
+    if response.fe_order != 1 {
+        return Ok(None);
+    }
+    fullmag_ir::validate_mesh_for_execution(&response.mesh)
+        .map_err(|errors| errors.join("; "))?;
+    if response.equilibrium_magnetization.len() != response.mesh.nodes.len() {
+        return Err(format!(
+            "FEM frequency-response equilibrium M0 has {} samples for {} canonical mesh nodes",
+            response.equilibrium_magnetization.len(),
+            response.mesh.nodes.len()
+        ));
+    }
+
+    // Reuse the FEM marker contract without changing the frequency-response
+    // output layout or borrowing its native response-node map.
+    let mut support_plan = fullmag_ir::FemPlanIR::default();
+    support_plan.mesh = response.mesh.clone();
+    support_plan.mesh_build_report = response.mesh_build_report.clone();
+    support_plan.object_segments = response.object_segments.clone();
+    support_plan.mesh_parts = response.mesh_parts.clone();
+    let normalized_markers = normalized_runtime_element_markers(&support_plan)
+        .map_err(|error| error.message)?;
+    let active_node_mask = crate::preview::mesh_quantity_active_mask_with_element_markers(
+        "m",
+        &response.mesh,
+        &normalized_markers,
+    )
+    .ok_or_else(|| "FEM frequency-response equilibrium magnetic support is unavailable".to_string())?;
+    let topology_fingerprint = response.mesh.topology_fingerprint_v6();
+    FemP1MagnetizationFieldSemantics::new(
+        &topology_fingerprint,
+        response.mesh.nodes.len(),
+        active_node_mask,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
 fn collect_streamed_provenance_files(
     directory: &Path,
     files: &mut Vec<std::path::PathBuf>,
@@ -8437,6 +8485,7 @@ mod tests {
                 solved_antenna_drive_bases: Vec::new(),
                 field_drives: Vec::new(),
                 field_drive_geometry_masks: Vec::new(),
+                mask_field_term_bases: Vec::new(),
                 time_stage: Default::default(),
                 current_modules: Vec::new(),
                 charge_transport_plans: Vec::new(),

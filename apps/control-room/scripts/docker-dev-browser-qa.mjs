@@ -433,7 +433,17 @@ const canvasState = async (page) => page.locator(".fm-viewport-3d canvas").first
 const viewportDomObservation = async (page) => page.locator(".fm-viewport-3d").evaluate((viewport) => {
   const datasetEntries = Object.entries(viewport.dataset);
   const quantityLabels = [...viewport.querySelectorAll("[data-quantity-id]")];
+  const refresh = viewport.querySelector(".fm-viewport-3d__refresh-countdown");
+  const refreshRect = refresh?.getBoundingClientRect();
   return {
+    field_refresh: refresh ? {
+      aria_label: refresh.getAttribute("aria-label")?.slice(0, 256) ?? "",
+      detail: refresh.querySelector(".fm-viewport-3d__refresh-countdown-detail")?.textContent?.trim().slice(0, 128) ?? "",
+      pulse_id: refresh.getAttribute("data-pulse-id"),
+      state: refresh.getAttribute("data-refresh-state"),
+      title: refresh.querySelector(".fm-viewport-3d__refresh-countdown-title")?.textContent?.trim().slice(0, 128) ?? "",
+      visible: Boolean(refreshRect?.width > 0 && refreshRect?.height > 0),
+    } : null,
     dataset: Object.fromEntries(datasetEntries.slice(0, 64).map(([key, value]) => [key, value.slice(0, 1024)])),
     dataset_entry_count: datasetEntries.length,
     dataset_truncated: datasetEntries.length > 64 || datasetEntries.some(([, value]) => value.length > 1024),
@@ -1714,6 +1724,8 @@ const requireRunPerformanceInteger = (value, label) => {
 
 const RUN_PERFORMANCE_MAX_SNAPSHOTS = 8;
 const RUN_PERFORMANCE_MAX_OBSERVATION_MS = 20_000;
+// Spread the bounded reads across the observation window, including busy reads.
+const RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS = 2_500;
 const RUN_PERFORMANCE_REQUEST_TIMEOUT_MS = 1_000;
 
 const readRunPerformanceApiContext = async (page, expectedSession) => {
@@ -2009,12 +2021,21 @@ const runAutomaticPerformanceBrowserQa = async (page, expectedSession) => {
         break;
       }
     }
-    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS && Date.now() + 750 < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS &&
+        Date.now() + RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, RUN_PERFORMANCE_SNAPSHOT_INTERVAL_MS));
     }
   }
   if (!selectedMetric || panelMatches.length === 0) {
-    throw new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    const error = new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+    error.partialProof = {
+      state: "not-verified",
+      window_ms: Date.now() - (deadline - RUN_PERFORMANCE_MAX_OBSERVATION_MS),
+      api_requests: apiContext.requests,
+      api_snapshots: apiSnapshots,
+      panel: await observeRunPerformancePanel(panel),
+    };
+    throw error;
   }
   const refreshedPair = panelMatches.find((first, index) => panelMatches.slice(index + 1).some((second) =>
     first.api.state === "running" && second.api.state === "running" &&

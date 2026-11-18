@@ -11,7 +11,7 @@ source_of_truth: docs/physics/llg_conventions.md
 FullMag uses SI units exclusively across its Python DSL, `ProblemIR`, solver backends, and
 observables. Every interaction page defines exact symbols, signs, coordinate orientation,
 magnetization normalization, and limits of validity. See {doc}`foundations/conventions-and-units`
-for the authoritative foundation contract and {ref}`fig-fullmag-object-interaction-architecture`
+for the authoritative foundation contract and {numref}`fig-fullmag-object-interaction-architecture`
 for the end-to-end authoring-to-execution pipeline.
 
 | Symbol | Meaning | SI unit |
@@ -22,7 +22,7 @@ for the end-to-end authoring-to-execution pipeline.
 | $\mathbf{H}$ | magnetic field | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf{B}$ | magnetic flux density | $\mathrm{T}$ |
 | $\mu_0$ | vacuum permeability ($4\pi\times 10^{-7}$) | $\mathrm{N\,A^{-2}}$ |
-| $\gamma_{\mu_0}$ | reduced gyromagnetic constant ($\mu_0|\gamma_e|\approx 2.211\times 10^5$) | $\mathrm{m\,(A\,s)^{-1}}$ |
+| $\gamma_{\mu_0}$ | reduced gyromagnetic constant ($\mu_0\lvert\gamma_e\rvert \approx 2.211\times 10^5$) | $\mathrm{m\,(A\,s)^{-1}}$ |
 | $A$ | exchange stiffness | $\mathrm{J\,m^{-1}}$ |
 | $t$ | simulation time | $\mathrm{s}$ |
 | $f$ | frequency | $\mathrm{Hz}$ |
@@ -42,21 +42,6 @@ for the end-to-end authoring-to-execution pipeline.
   field $\mathbf{E} = -\nabla V$ follow positive-charge transport sign conventions throughout
   Oersted, spin-transfer torque, and spin-orbit transport modules.
 
-The project-wide convention is maintained in docs/physics/llg_conventions.md and
-docs/physics/0000-physics-documentation-standard.md. Public pages may summarize it, but may not
-introduce a second sign or unit convention.
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+For the complete unit contract, variational derivation, and `ProblemIR` serialization rules, see
+{doc}`foundations/conventions-and-units`.
 

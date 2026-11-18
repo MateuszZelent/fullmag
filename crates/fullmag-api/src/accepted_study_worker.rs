@@ -42,6 +42,13 @@ use accepted_worker_execution_receipt::{
     WORKER_EXECUTION_STARTED_RECEIPT,
 };
 
+#[path = "accepted_live_layout_mask.rs"]
+mod accepted_live_layout_mask;
+
+#[cfg(test)]
+#[path = "accepted_live_layout_tests.rs"]
+mod accepted_live_layout_tests;
+
 const RUNNER_INITIAL_STATE_FILE: &str = "m_initial.json";
 pub(crate) const RUNNER_FINAL_STATE_FILE: &str = "m_final.json";
 const WORKER_PRELAUNCH_FAILED_RECEIPT: &str = "worker_prelaunch_failed.v1.json";
@@ -55,18 +62,22 @@ const WORKER_EXECUTION_COMPLETED_RECEIPT: &str = "worker_execution_completed.v1.
 // ordinary current-live resource revisions. The sidecar is not a durable
 // output: it is not CAS-pinned and never replaces the final accepted state.
 // When the solver returns, the field payload is removed and only a scalar
-// header of the last step remains. Transfer cost is bounded twice: the runner
-// copies magnetization from the device only every
-// `ACCEPTED_LIVE_FIELD_EVERY_N` steps, and the worker writes at most one
-// scalar header per `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL` and one magnetization
-// payload per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL`.
+// header of the last step remains. The runner owns the field cadence: it
+// copies magnetization (device-to-host on GPU) and evaluates the observation
+// catalog only for steps admitted by `ACCEPTED_LIVE_FIELD_EVERY_N` and at most
+// once per `ACCEPTED_LIVE_FIELD_MIN_INTERVAL` of wall time, and republishes
+// the last accepted step when its loop ends. The worker writes every payload
+// it receives and at most one scalar-only header per
+// `ACCEPTED_LIVE_SCALAR_MIN_INTERVAL`.
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_FILE: &str = "live_observation.v1.json";
 pub(crate) const ACCEPTED_LIVE_OBSERVATION_SCHEMA: &str = "fullmag.accepted_live_observation.v1";
 const ACCEPTED_LIVE_MAGNETIZATION_PREFIX: &str = "live_observation_m.";
 const ACCEPTED_LIVE_MAGNETIZATION_SUFFIX: &str = ".f64le";
 pub(crate) const ACCEPTED_LIVE_FIELD_EVERY_N: u64 = 1;
 const ACCEPTED_LIVE_SCALAR_MIN_INTERVAL: Duration = Duration::from_millis(500);
-const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::ZERO;
+/// Half the projector's 500 ms poll period, so each poll sees a payload at
+/// most one interval old while the solver stops paying for unread captures.
+const ACCEPTED_LIVE_FIELD_MIN_INTERVAL: Duration = Duration::from_millis(250);
 pub(crate) const ACCEPTED_OBSERVABLE_CAPTURE_FILE: &str = "accepted_observables_capture.v1.json";
 const ACCEPTED_LIVE_MAX_FIELD_BYTES: u64 = 128 * 1024 * 1024;
 /// Upper bound for one live magnetization payload (2^21 samples = 48 MiB).
@@ -114,6 +125,10 @@ pub(crate) struct AcceptedLiveMagnetizationRef {
     /// Exact study layout of the pinned execution plan.
     pub(crate) layout: serde_json::Value,
     pub(crate) space_fingerprint: String,
+    /// Large FEM P1 support is stored in an immutable sidecar; readers hydrate
+    /// it before returning the canonical layout to projection consumers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_support_mask: Option<accepted_live_layout_mask::FemSupportMaskRef>,
     /// Present only for native FEM local-node AoS payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) fem_local_node_map: Option<fullmag_runner::LiveFemLocalNodeMapIdentity>,
@@ -167,7 +182,6 @@ pub(crate) struct AcceptedLiveObservationWriter {
     sequence: u64,
     magnetization_sequence: u64,
     last_scalar_write: Option<Instant>,
-    last_field_write: Option<Instant>,
     current_magnetization: Option<AcceptedLiveMagnetizationRef>,
     recent_clock: std::collections::VecDeque<(u64, f64, f64)>,
     reported_failure: bool,
@@ -220,7 +234,6 @@ impl AcceptedLiveObservationWriter {
             sequence: 0,
             magnetization_sequence: 0,
             last_scalar_write: None,
-            last_field_write: None,
             current_magnetization: None,
             recent_clock: std::collections::VecDeque::new(),
             reported_failure: false,
@@ -235,10 +248,18 @@ impl AcceptedLiveObservationWriter {
         }
     }
 
-    /// Avoid requesting costly device-to-host snapshots when the bounded
-    /// observation writer cannot publish this plan's magnetization domain.
+    /// Runner cadence for live field payloads. Avoids costly device-to-host
+    /// snapshots when the bounded observation writer cannot publish this
+    /// plan's magnetization domain, and caps captures by wall time otherwise.
     /// Scalar headers remain enabled independently of this cadence.
-    pub(crate) fn field_sampling_interval(&self) -> u64 {
+    pub(crate) fn field_cadence(&self) -> fullmag_runner::LiveFieldCadence {
+        fullmag_runner::LiveFieldCadence::new(
+            self.field_sampling_interval(),
+            ACCEPTED_LIVE_FIELD_MIN_INTERVAL,
+        )
+    }
+
+    fn field_sampling_interval(&self) -> u64 {
         let publishable = self.magnetization_domain.as_ref().is_some_and(|domain| {
             domain.sample_count > 0
                 && domain.sample_count <= ACCEPTED_LIVE_MAX_MAGNETIZATION_SAMPLES
@@ -289,10 +310,9 @@ impl AcceptedLiveObservationWriter {
             self.recent_clock.pop_front();
         }
         let now = Instant::now();
-        let field_due = update.magnetization.is_some()
-            && self
-                .last_field_write
-                .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_FIELD_MIN_INTERVAL);
+        // The runner already applied the field cadence; a payload that
+        // reaches the worker is the newest admitted accepted state.
+        let field_due = update.magnetization.is_some();
         let scalar_due = self
             .last_scalar_write
             .is_none_or(|last| now.duration_since(last) >= ACCEPTED_LIVE_SCALAR_MIN_INTERVAL);
@@ -300,11 +320,14 @@ impl AcceptedLiveObservationWriter {
             return;
         }
         let mut staged_magnetization = None;
+        let mut field_publication_error = None;
         if field_due {
             match self.write_magnetization(update) {
                 Ok(Some(reference)) => staged_magnetization = Some(reference),
                 Ok(None) => {}
-                Err(error) => self.report_failure(&error),
+                Err(error) => {
+                    field_publication_error = Some(error);
+                }
             }
         }
         let previous_magnetization = staged_magnetization
@@ -318,18 +341,61 @@ impl AcceptedLiveObservationWriter {
         } else {
             self.last_stats.clone().unwrap_or_else(|| stats.clone())
         };
+        if let Some(error) = field_publication_error {
+            let previous = self.current_magnetization.take();
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = previous {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = previous;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
+            return;
+        }
         if let Err(error) = self.write_header(&header_stats) {
+            let rollback_magnetization = if staged_magnetization.is_some() {
+                self.current_magnetization.take();
+                previous_magnetization
+            } else {
+                self.current_magnetization.take()
+            };
             if let Some(staged) = staged_magnetization.as_ref() {
-                self.current_magnetization = previous_magnetization;
                 let _ = fs::remove_file(self.attempt_output_dir.join(&staged.file_name));
             }
-            self.report_failure(&error);
+            // A field/support failure must not pin the scalar cursor at an old
+            // step. Publish this update without m, retaining the old payload
+            // only if the scalar-only header also cannot be written.
+            self.current_magnetization = None;
+            match self.write_header(&header_stats) {
+                Ok(()) => {
+                    if let Some(previous) = rollback_magnetization {
+                        let _ = fs::remove_file(
+                            self.attempt_output_dir.join(previous.file_name),
+                        );
+                    }
+                    self.last_scalar_write = Some(now);
+                    self.report_failure(&error);
+                }
+                Err(scalar_error) => {
+                    self.current_magnetization = rollback_magnetization;
+                    self.report_failure(&anyhow::anyhow!(
+                        "{error:#}; scalar-only live header also failed: {scalar_error:#}"
+                    ));
+                }
+            }
             return;
         }
         self.last_scalar_write = Some(now);
-        if staged_magnetization.is_some() {
-            self.last_field_write = Some(now);
-        }
         if let Some(previous) = previous_magnetization {
             // Best effort: the header no longer references this payload.
             let _ = fs::remove_file(self.attempt_output_dir.join(previous.file_name));
@@ -483,6 +549,7 @@ impl AcceptedLiveObservationWriter {
             content_sha256: fullmag_application::study_artifact_content_sha256(&bytes),
             layout: domain.layout.clone(),
             space_fingerprint: domain.space_fingerprint.clone(),
+            active_support_mask: None,
             fem_local_node_map,
             fields,
         }))
@@ -490,6 +557,14 @@ impl AcceptedLiveObservationWriter {
 
     fn write_header(&mut self, stats: &fullmag_runner::StepStats) -> Result<()> {
         let sequence = self.sequence.saturating_add(1);
+        let (magnetization, pending_support_mask) = match self.current_magnetization.as_ref() {
+            Some(reference) => {
+                let (reference, pending) =
+                    accepted_live_layout_mask::compact_reference_for_header(reference)?;
+                (Some(reference), pending)
+            }
+            None => (None, None),
+        };
         let header = AcceptedLiveObservationHeader {
             schema_version: ACCEPTED_LIVE_OBSERVATION_SCHEMA.to_owned(),
             run_id: self.run_id.clone(),
@@ -505,11 +580,18 @@ impl AcceptedLiveObservationWriter {
                 .unwrap_or(0),
             stats: Some(stats.clone()),
             operation_progress: None,
-            magnetization: self.current_magnetization.clone(),
+            magnetization,
         };
         let bytes = serde_json::to_vec(&header).context("serialize live observation header")?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > ACCEPTED_LIVE_HEADER_MAX_BYTES {
             bail!("live observation header exceeds its bounded size");
+        }
+        if let Some(pending) = pending_support_mask {
+            accepted_live_layout_mask::publish_immutable_mask(
+                &self.attempt_output_dir,
+                &pending.reference,
+                &pending.bytes,
+            )?;
         }
         write_live_file_atomically(&self.attempt_output_dir, ACCEPTED_LIVE_OBSERVATION_FILE, &bytes)?;
         self.sequence = sequence;
@@ -766,7 +848,7 @@ pub(crate) fn read_accepted_live_observation(
         // The worker may have removed the sidecar after the solver returned.
         Err(_) => return Ok(None),
     };
-    let header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
+    let mut header: AcceptedLiveObservationHeader = serde_json::from_slice(&header_bytes)
         .context("decode accepted live observation header")?;
     if header.schema_version != ACCEPTED_LIVE_OBSERVATION_SCHEMA
         || header.run_id != run_id
@@ -778,6 +860,9 @@ pub(crate) fn read_accepted_live_observation(
         bail!("accepted live observation identity differs from its task attempt");
     }
     accepted_antenna_progress::validate_header_payload(&header)?;
+    if let Some(reference) = header.magnetization.as_mut() {
+        accepted_live_layout_mask::hydrate_reference_layout(&attempt_dir, reference)?;
+    }
     let mut magnetization_values = None;
     let mut fields = Vec::new();
     if let Some(reference) = header.magnetization.as_ref() {
@@ -3070,7 +3155,7 @@ fn execute_accepted_worker_start_with_snapshot(
             &execution_plan,
             format!("fdm_{}", request.device),
         );
-        let field_sampling_interval = live_observation.field_sampling_interval();
+        let field_cadence = live_observation.field_cadence();
         let frozen = match accepted_step.resolved_input.frozen_stage_context.as_ref() {
             Some(binding) => {
                 let fullmag_ir::BackendPlanIR::Fdm(plan) = &execution_plan.backend_plan else {
@@ -3087,7 +3172,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 &problem, &execution_plan, until_seconds, &attempt_output_dir,
                 storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
                 interrupt_requested, &context.frozen, context.source_frozen_plan.as_ref(),
-                field_sampling_interval, |update| {
+                field_cadence, |update| {
                     live_observation.observe(&update);
                     StepAction::Continue
                 })
@@ -3099,7 +3184,7 @@ fn execute_accepted_worker_start_with_snapshot(
             until_seconds,
             &attempt_output_dir,
             storage.as_ref().map(|value| value.data_root()).unwrap_or(&attempt_output_dir),
-            field_sampling_interval,
+            field_cadence,
             &display_selection,
             interrupt_requested,
             false,

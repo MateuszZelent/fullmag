@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-thermal_noise",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_thermal_noise"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_thermal_noise",
@@ -63,7 +46,7 @@
         "python": "fm.ThermalNoise.temperature",
         "type": "float",
         "default": "required",
-        "si_unit": "K",
+        "si_unit": "$\\mathrm{K}$",
         "validation": "strictly positive",
         "meaning": "bath temperature",
         "backend_support": "FEM/FDM CPU/GPU: IR; stochastic runtime qualification required",
@@ -73,7 +56,7 @@
         "python": "fm.ThermalNoise.seed",
         "type": "int or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "positive integer when supplied",
         "meaning": "reproducibility seed",
         "backend_support": "FEM/FDM CPU/GPU: IR; stochastic runtime qualification required",

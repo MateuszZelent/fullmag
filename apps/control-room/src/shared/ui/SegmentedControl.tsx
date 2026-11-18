@@ -14,6 +14,8 @@ export interface SegmentedControlProps<T extends string> {
   className?: string;
   columns?: 2 | 3 | 4;
   disabled?: boolean;
+  /** Keep focus while rejecting changes until the current save completes. */
+  pending?: boolean;
   options: readonly SegmentedControlOption<T>[];
   value: T;
   onValueChange: (value: T) => void;
@@ -24,6 +26,7 @@ export function SegmentedControl<T extends string>({
   className,
   columns,
   disabled = false,
+  pending = false,
   options,
   value,
   onValueChange,
@@ -43,6 +46,10 @@ export function SegmentedControl<T extends string>({
       option.disabled ? [] : [index],
     );
     if (disabled || enabledIndexes.length === 0) return;
+    if (pending) {
+      if (["Home", "End", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(event.key)) event.preventDefault();
+      return;
+    }
 
     let nextIndex: number | undefined;
     if (event.key === "Home") {
@@ -74,6 +81,7 @@ export function SegmentedControl<T extends string>({
   return (
     <div
       aria-label={ariaLabel}
+      aria-busy={pending || undefined}
       className={cn(
         "grid min-w-0 gap-0.5 rounded-fm-segment border border-fm-subtle bg-fm-disabled p-0.5 shadow-fm-control-inset",
         columns === 2 && "grid-cols-2",
@@ -94,7 +102,7 @@ export function SegmentedControl<T extends string>({
           <button
             aria-label={option.accessibleLabel}
             aria-checked={checked}
-            aria-disabled={itemDisabled || undefined}
+            aria-disabled={itemDisabled || pending || undefined}
             className={cn(
               "h-fm-control-sm min-w-0 rounded-fm-segment px-2",
               "font-fm-ui text-fm-control leading-tight outline-none",
@@ -117,7 +125,7 @@ export function SegmentedControl<T extends string>({
             title={option.accessibleLabel}
             type="button"
             onClick={() => {
-              if (!itemDisabled) onValueChange(option.value);
+              if (!itemDisabled && !pending) onValueChange(option.value);
             }}
             onKeyDown={(event) => selectByKeyboard(event, index)}
           >

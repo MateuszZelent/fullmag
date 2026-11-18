@@ -50,7 +50,7 @@ FDM or FEM representation and records the realized array or coefficient field in
 Material authoring, numerical materialization, and scientific qualification are distinct:
 
 1. Python validates typed values and serializable identities.
-2. ProblemIR preserves units, frames, object/region references, and field definitions.
+2. `ProblemIR` preserves units, frames, object/region references, and field definitions.
 3. The planner checks parameter/location/device capability.
 4. The runtime builds or uploads the mesh-aligned representation.
 5. Interaction-specific validation establishes whether the resolved field is scientifically
@@ -67,22 +67,3 @@ Material authoring, numerical materialization, and scientific qualification are 
   projection contract;
 - treating successful serialization as proof of GPU support;
 - leaving equal-priority overlapping assignments to insertion order.
-
-Use the detailed pages above for exact constructor fields, ProblemIR destinations, backend
-boundaries, and validation requirements.
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Material` (`ObjectMaterialPanel`), `ObjectAbsorbingBoundaryPanel` for absorbing boundary damping profiles, and `ObjectRegionsPanel` / `ObjectRegionMagneticParametersPanel` for per-region magnetic overrides. Spatial parameter fields, elastic laws, magnetostriction, and any parameters not exposed by those panels are `TODO: frontend support`. See {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
-
-```{image} /_static/images/ui/inspector-material-and-regions.png
-:alt: Control Room Object Regions inspector listing realized regions (Pinning Annulus and Skyrmion Core on obj_yig_film) where per-region material overrides are scoped
-:width: 92%
-```
-
-## API and source scope
-
-The category index introduces the precedence model but no standalone constructor. Child pages provide exact Python fields, units, realization semantics, limitations, bibliography, and source-code references.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

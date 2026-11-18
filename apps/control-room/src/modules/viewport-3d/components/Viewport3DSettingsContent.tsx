@@ -25,6 +25,13 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/shared/ui/Tabs";
+import {
+  VIEWPORT_3D_CAPTURE_PROFILE_DESCRIPTION,
+  VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS,
+  VIEWPORT_3D_QUALITY_PROFILE_LABELS,
+  VIEWPORT_3D_QUALITY_PROFILE_OPTIONS,
+  type Viewport3DQualityProfileId,
+} from "@/shared/viewport3dQualityLabels";
 
 import { Viewport3DVisualizationModeControl } from "./Viewport3DVisualizationModeControl";
 import { viewport3dStore, useViewport3DCommandState } from "../viewport3dStore";
@@ -36,21 +43,6 @@ type Viewport3DSettingsContentProps = {
   onSectionChange: (section: Viewport3DSettingsSection) => void;
   onCommand: (id: string) => void;
   cameraContent: ReactNode;
-};
-
-const QUALITY_OPTIONS = [
-  ["interactive-lite", "Interactive Lite"],
-  ["interactive", "Interactive"],
-  ["balanced", "Balanced"],
-  ["figure", "Figure"],
-] as const;
-
-const QUALITY_LABELS: Record<(typeof QUALITY_OPTIONS)[number][0] | "capture", string> = {
-  "interactive-lite": "Interactive Lite",
-  interactive: "Interactive",
-  balanced: "Balanced",
-  figure: "Figure",
-  capture: "Capture",
 };
 
 const SETTINGS_SECTIONS: readonly {
@@ -71,10 +63,21 @@ export function Viewport3DSettingsContent({
 }: Viewport3DSettingsContentProps) {
   const state = useViewport3DCommandState();
   const appearance = state.appearance;
-  const requestedQuality = state.visualProfileId === "capture"
-    ? state.captureReturnProfileId ?? "interactive"
+  const isTemporaryCapture = state.visualProfileId === "capture" &&
+    state.captureReturnProfileId !== null;
+  const selectedQuality = state.visualProfileId === "capture" &&
+    state.captureReturnProfileId !== null
+    ? state.captureReturnProfileId
     : state.visualProfileId;
-  const currentQualityLabel = QUALITY_LABELS[state.visualProfileId];
+  const currentQualityLabel = selectedQuality === "capture"
+    ? "Capture"
+    : VIEWPORT_3D_QUALITY_PROFILE_LABELS[selectedQuality];
+  const qualityDescription = selectedQuality === "capture"
+    ? VIEWPORT_3D_CAPTURE_PROFILE_DESCRIPTION
+    : VIEWPORT_3D_QUALITY_PROFILE_DESCRIPTIONS[selectedQuality as Viewport3DQualityProfileId];
+  const qualityOptions = selectedQuality === "capture"
+    ? [...VIEWPORT_3D_QUALITY_PROFILE_OPTIONS, ["capture", "Capture"] as const]
+    : VIEWPORT_3D_QUALITY_PROFILE_OPTIONS;
 
   return (
     <section
@@ -316,24 +319,25 @@ export function Viewport3DSettingsContent({
           </TabsContent>
 
           <TabsContent forceMount hidden={activeSection !== "quality"} className="fm-viewport-3d-settings__panel" value="quality">
-            <SettingsGroup title="Render quality">
+            <SettingsGroup title="Quality and effects">
               <Choice
+                describedBy="fm-view-quality-help fm-view-quality-description"
                 id="fm-view-quality"
                 label="Quality profile"
-                onChange={(value) => viewport3dStore.setVisualProfile(value as typeof requestedQuality)}
-                options={QUALITY_OPTIONS}
-                value={requestedQuality}
+                onChange={(value) => viewport3dStore.setVisualProfile(value as typeof selectedQuality)}
+                options={qualityOptions}
+                value={selectedQuality}
               />
-              <p className="fm-viewport-3d-settings__help">
-                Rendering detail and cost, independent of the visualization mode above.
+              <p className="fm-viewport-3d-settings__help" id="fm-view-quality-help">
+                Quality controls render detail and GPU cost. Scientific preserves exact field colors.
               </p>
-              <p className="fm-viewport-3d-settings__status" role="status">
-                {state.visualProfileId === "capture"
-                  ? `Requested: ${QUALITY_LABELS[requestedQuality]}; active for export: ${currentQualityLabel}.`
-                  : `Requested and active: ${currentQualityLabel}.`}
+              <p className="fm-viewport-3d-settings__help" id="fm-view-quality-description">
+                {qualityDescription}
               </p>
-              <p className="fm-viewport-3d-settings__help">
-                Interactive Lite omits shadows and AO. Higher profiles increase shadow detail; Figure uses full-resolution AO.
+              <p className="fm-viewport-3d-settings__status" id="fm-view-quality-status" role="status">
+                {isTemporaryCapture
+                  ? `Active quality: ${currentQualityLabel}. Exporting PNG.`
+                  : `Active quality: ${currentQualityLabel}.`}
               </p>
 
               <TogglePreference
@@ -364,7 +368,7 @@ export function Viewport3DSettingsContent({
               <EffectStatus label="Bloom" diagnostic={state.appearanceDiagnostics.bloom} />
 
               <TogglePreference
-                description="Filtered shadows for Presentation geometry and field-colored surfaces. Interactive Lite does not include shadows."
+                description={`Filtered shadows for Presentation geometry and field-colored surfaces. ${VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"]} does not render shadows.`}
                 disabled={appearance.renderMode !== "presentation"}
                 id="fm-view-shadows"
                 label="Soft shadows"
@@ -382,7 +386,7 @@ export function Viewport3DSettingsContent({
                   appearance.renderMode !== "presentation"
                     ? "Only active in Presentation mode"
                     : state.visualProfileId === "interactive-lite"
-                      ? "Unavailable in Interactive Lite quality"
+                      ? `Unavailable in ${VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"]} quality`
                       : null
                 }
                 requested={appearance.softShadows}
@@ -486,6 +490,7 @@ function SettingsGroup({
 }
 
 function Choice({
+  describedBy,
   disabled = false,
   id,
   label,
@@ -493,6 +498,7 @@ function Choice({
   options,
   value,
 }: {
+  describedBy?: string;
   disabled?: boolean;
   id: string;
   label: string;
@@ -514,10 +520,11 @@ function Choice({
       >
         <SelectTrigger
           aria-label={label}
+          aria-describedby={describedBy}
           className="fm-viewport-3d-settings__select"
           id={id}
         >
-          <SelectValue />
+          <SelectValue>{options.find(([optionValue]) => optionValue === value)?.[1]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {options.map(([optionValue, optionLabel]) => (

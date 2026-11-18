@@ -53,6 +53,7 @@ import {
   Zap,
 } from "lucide-react";
 import { VIEW_DIRECTION_COMMANDS } from "@/modules/viewport-3d/public";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 import { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 import {
@@ -138,6 +139,7 @@ import {
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
@@ -203,6 +205,12 @@ function physicsInteractionMenu(
     label: "Field Drive",
     commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   };
+  const createMaskAntennaItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-mask-antenna",
+    label: "Mask Antenna",
+    commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
+  };
   const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
     (discretization === "fdm" || discretization === "fem")
     ? [
@@ -239,7 +247,7 @@ function physicsInteractionMenu(
         value: "Discretization unresolved; FDM/FEM controls are unavailable",
         tone: "warning",
       },
-      ...(scope === "global" ? [createFieldDriveItem] : []),
+      ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
     ];
   }
   return [
@@ -261,7 +269,7 @@ function physicsInteractionMenu(
         commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
-    ...(scope === "global" ? [createFieldDriveItem] : []),
+    ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
   ];
 }
 
@@ -1968,22 +1976,22 @@ function buildRenderQualityAction({
         items: [
           {
             commandId: "viewport-3d.profile-interactive-lite",
-            label: "Interactive Lite",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
             value: "interactive-lite",
           },
           {
             commandId: "viewport-3d.profile-interactive",
-            label: "Interactive",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
             value: "interactive",
           },
           {
             commandId: "viewport-3d.profile-balanced",
-            label: "Balanced",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
             value: "balanced",
           },
           {
             commandId: "viewport-3d.profile-figure",
-            label: "Figure",
+            label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
             value: "figure",
           },
           {

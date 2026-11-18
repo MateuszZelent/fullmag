@@ -241,9 +241,7 @@ convergence evidence; the shared continuum equation does not prove discrete pari
 (dmi-boundary-implementation-mapping)=
 ## Implementation mapping
 
-The Python classes own coefficient and normal serialization. FEM interfacial and bulk DMI
-residuals are implemented in separate interaction modules; FDM planning owns the canonical
-normal legality rule. The source map below gives stable path-plus-symbol identities.
+The Python classes own coefficient and normal serialization, FEM interfacial and bulk DMI residuals are implemented in separate interaction modules, and FDM planning owns the canonical normal legality rule. See the source-code index below for the corresponding modules and symbols.
 
 (dmi-boundary-validation)=
 ## Validation

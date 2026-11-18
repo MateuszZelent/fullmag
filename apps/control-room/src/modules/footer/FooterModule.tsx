@@ -54,7 +54,8 @@ import {
   selectFooterTelemetryStatus,
 } from "./FooterTelemetry";
 import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
-import { OperationsPanel, ProblemsPanel } from "./OperationsProblemsPanel";
+import { ProblemsPanel } from "./OperationsProblemsPanel";
+import { RunProgressPanel } from "./RunProgressPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
 const FOOTER_PANEL_CLASS_NAME =
@@ -81,6 +82,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
   const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
   const tabList = useRef<HTMLDivElement>(null);
   const [telemetryNavigationHost, setTelemetryNavigationHost] = useState<HTMLDivElement | null>(null);
+  const [telemetryStatusHost, setTelemetryStatusHost] = useState<HTMLDivElement | null>(null);
   const status = useSessionStatusSelector(selectFooterTelemetryStatus, {
     isEqual: footerTelemetryStatusEquals,
   });
@@ -160,7 +162,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             <FileText size={14} aria-hidden="true" />
             Engine
           </TabsTrigger>
-          <TabsTrigger value="operations" className="fm-footer__tab" title="Published commands and mesh builds">
+          <TabsTrigger value="operations" className="fm-footer__tab" title="Simulation progress: steps, timings, commands and errors">
             <ListChecks size={14} aria-hidden="true" />
             Operations
           </TabsTrigger>
@@ -173,11 +175,10 @@ function FooterModuleContent({ kernel }: ModuleProps) {
             Quick Chart
           </TabsTrigger>
         </TabsList>
-        <div
-          className="fm-footer__telemetry-navigation"
-          ref={setTelemetryNavigationHost}
-          hidden={activeTab !== "telemetry"}
-        />
+        <div className="fm-footer__telemetry-header" hidden={activeTab !== "telemetry"}>
+          <div className="fm-footer__telemetry-status" ref={setTelemetryStatusHost} />
+          <div className="fm-footer__telemetry-navigation" ref={setTelemetryNavigationHost} />
+        </div>
       </PanelChrome>
 
       <TabsContent value="logs" className={FOOTER_CONTENT_CLASS_NAME}>
@@ -203,6 +204,7 @@ function FooterModuleContent({ kernel }: ModuleProps) {
                 bus={kernel.bus}
                 status={status}
                 stageExecution={stageExecution}
+                statusHost={telemetryStatusHost}
                 view={telemetryTab}
               />
             </TabsContent>
@@ -228,10 +230,11 @@ function FooterModuleContent({ kernel }: ModuleProps) {
 
       <TabsContent value="operations" className={FOOTER_CONTENT_CLASS_NAME}>
         {activeTab === "operations" ? (
-          <div
-            className={`${FOOTER_PANEL_CLASS_NAME} [&>.fm-footer-mesh-jobs]:overflow-auto`}
-          >
-            <OperationsPanel />
+          <div className={FOOTER_PANEL_CLASS_NAME}>
+            <RunProgressPanel
+              sessionSolverState={status?.solver.state ?? null}
+              stageExecution={stageExecution}
+            />
           </div>
         ) : null}
       </TabsContent>

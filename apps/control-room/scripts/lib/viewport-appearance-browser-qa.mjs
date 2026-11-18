@@ -758,12 +758,12 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
   await ensureSettingsOpen(page, "Quality", timeout);
   const originalQuality = await readChoice(page, "Quality profile", timeout);
   const originalAo = await settings.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked();
+  const originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
   let originalRoughness;
   let originalMetalness;
-  let originalShadows;
   let difference = null;
   let presentationPng = null;
-  const profiles = ["Interactive Lite", "Interactive", "Balanced", "Figure"];
+  const profiles = ["Fast", "Standard", "Detailed", "Figure"];
   const isolatedQaBox = new Set(lightingAudit?.litPrimitiveObjectIds ?? []).has("qa-studio-box");
   let renderingError = null;
   try {
@@ -772,7 +772,6 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
     originalRoughness = await readRangeValue(settings, "fm-view-roughness");
     originalMetalness = await readRangeValue(settings, "fm-view-metalness");
     await setSwitch(page, "Ambient occlusion", false, timeout);
-    originalShadows = await settings.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
     await setSwitch(page, "Soft shadows", false, timeout);
     await setRangeValue(page, "#fm-view-metalness", 1);
     await setRangeValue(page, "#fm-view-roughness", 0.1);
@@ -817,7 +816,7 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
       }
       qualityPixels.push({ profile, blackened_pixels: blackenedPixels });
     }
-    await choose(page, "Quality profile", "Interactive", "fm-view-quality", timeout);
+    await choose(page, "Quality profile", "Standard", "fm-view-quality", timeout);
     const exportProof = await runViewportExportBrowserQa(page, {
       assertCanvas, pngDecoder, timeout, expectedCaptureDpr: 1,
     });
@@ -839,10 +838,11 @@ async function checkPresentationRendering(page, settings, { assertCanvas, pngDec
       if (originalRoughness !== undefined || originalMetalness !== undefined || originalShadows !== undefined) {
         await choose(page, "Visualization mode", "Presentation", undefined, timeout);
       }
+      // Figure selection applies its preset, so restore quality before manual effect choices.
+      await choose(page, "Quality profile", originalQuality, "fm-view-quality", timeout);
       if (originalShadows !== undefined) await setSwitch(page, "Soft shadows", originalShadows, timeout);
       if (originalRoughness !== undefined) await setRangeValue(page, "#fm-view-roughness", originalRoughness);
       if (originalMetalness !== undefined) await setRangeValue(page, "#fm-view-metalness", originalMetalness);
-      await choose(page, "Quality profile", originalQuality, "fm-view-quality", timeout);
       await choose(page, "Geometry appearance", originalLighting, "fm-view-lighting", timeout);
       await choose(page, "Visualization mode", originalMode, undefined, timeout);
       await setSwitch(page, "Ambient occlusion", originalAo, timeout);

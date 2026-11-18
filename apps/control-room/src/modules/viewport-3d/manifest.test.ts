@@ -93,6 +93,18 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.rotation-camera")).toBeDefined();
     expect(registry.get("viewport-3d.rotation-object")).toBeDefined();
     expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
+    expect(registry.get("viewport-3d.profile-interactive-lite")).toMatchObject({
+      title: "Use Fast quality profile",
+    });
+    expect(registry.get("viewport-3d.profile-interactive")).toMatchObject({
+      title: "Use Standard quality profile",
+    });
+    expect(registry.get("viewport-3d.profile-balanced")).toMatchObject({
+      title: "Use Detailed quality profile",
+    });
+    expect(registry.get("viewport-3d.profile-figure")).toMatchObject({
+      title: "Use Figure quality profile",
+    });
     expect(registry.get("viewport-3d.fdm-topography-toggle")).toBeDefined();
     expect(registry.get("viewport-3d.inspect-toggle")).toBeDefined();
     expect(registry.get("viewport-3d.fdm-topography-component-magnitude"))
