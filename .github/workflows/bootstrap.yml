@@ -799,6 +799,7 @@ jobs:
       - name: Verify absorbing boundary inspector editing
         run: >-
           pnpm --dir apps/control-room exec vitest run
+          src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.test.ts
           src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
           src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.dom.test.tsx
 

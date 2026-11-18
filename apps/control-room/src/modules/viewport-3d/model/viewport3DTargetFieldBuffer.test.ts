@@ -80,6 +80,47 @@ function responseMetadataFixture(
 }
 
 describe("viewport3DTargetFieldBuffer", () => {
+  it.each([
+    ["fem", "cell", "full", false],
+    ["fem", null, "full", false],
+    ["fem", "node", "full", true],
+    ["fem", "cell", "part", false],
+    ["fem", "node", "part", true],
+    ["fdm", "cell", "full", true],
+  ] as const)("checks %s damping at %s for %s surfaces even with equal counts", (discretization, location, scope, allowed) => {
+    const cellCount = 4;
+    const nodeCount = 4;
+    const scoped = scope === "part";
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization,
+        liveDampingLocation: location,
+        domainGenerationId: "301",
+        meshTopologyHash: "mesh-a",
+        meshTopologyRevision: "5",
+        pointCount: discretization === "fem" ? nodeCount : cellCount,
+      },
+      fieldVector: vectorFixture({
+        domainGenerationId: "301",
+        formatVersion: 3,
+        indexing: scoped ? "explicit_node_indices" : "full_domain",
+        meshTopologyHash: "mesh-a",
+        meshTopologyRevision: "5",
+        nComp: 1,
+        nodeIndices: scoped ? Uint32Array.of(1, 3) : null,
+        pointCount: scoped ? 2 : cellCount,
+        quantityId: "mat_alpha",
+        scopeKind: scope,
+        scopeId: scoped ? "part-a" : null,
+      }),
+      query: { component: "magnitude", scope_kind: scope, scope_id: scoped ? "part-a" : undefined },
+      targetIds: ["part-a"],
+    });
+
+    expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "magnitude", "mat_alpha")).toBe(allowed);
+    if (!allowed) expect(buffer.domainCompatibility.reason).toBe("damping-location-mismatch");
+  });
+
   it("fails closed when a malformed session identity omits string fields", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture(),
