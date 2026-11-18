@@ -388,6 +388,43 @@
         "source-de-air-input-growth",
         "source-de-air-request-admission"
       ]
+    },
+    {
+      "id": "eq-poisson-airbox-exact-poisson-lu",
+      "symbols": [
+        "potential",
+        "P",
+        "magnetic_to_potential",
+        "q",
+        "lu_factors",
+        "lu_permutations"
+      ],
+      "sources": [
+        "source-modal-poisson-lu",
+        "source-cpu-schur-poisson-lu",
+        "source-floquet-poisson-lu"
+      ]
+    },
+    {
+      "id": "eq-poisson-airbox-augmented-shift",
+      "symbols": [
+        "augmented_shift_matrix",
+        "scaled_shift",
+        "descriptor_scales",
+        "real_split",
+        "Aqq",
+        "rotated_split_mass",
+        "mass_blocks",
+        "potential_to_magnetic",
+        "magnetic_to_potential",
+        "gauge_poisson_block",
+        "q_restriction",
+        "shift_rhs"
+      ],
+      "sources": [
+        "source-augmented-shift-solver",
+        "source-cpu-schur-augmented-shift"
+      ]
     }
   ],
   "symbols": [
@@ -917,6 +954,60 @@
       "id": "air_refinement_index",
       "latex": "$n$",
       "meaning": "indeks poziomu diagnostycznego, nie stopień wielomianu FEM",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "lu_factors",
+      "latex": "$L$, $U$",
+      "meaning": "trójkątne czynniki faktoryzacji LU bloku $P$",
+      "si_unit": "$1$, $\\mathrm{m}$"
+    },
+    {
+      "id": "lu_permutations",
+      "latex": "$\\Pi_{r}$, $\\Pi_{c}$",
+      "meaning": "permutacje wierszy (pivotowanie) i kolumn (METIS)",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "augmented_shift_matrix",
+      "latex": "$K_{\\hat\\tau}$",
+      "meaning": "rzadka macierz rozszerzona (q, φ) przesunięta o $\\hat\\tau$",
+      "si_unit": "$1$, $\\mathrm{A^{-1}}$, $\\mathrm{A\\,m}$, $\\mathrm{m}$"
+    },
+    {
+      "id": "scaled_shift",
+      "latex": "$\\hat\\tau$",
+      "meaning": "przeskalowane przesunięcie widmowe $\\omega_{\\mathrm{target}}/a$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "descriptor_scales",
+      "latex": "$s$, $m_s$, $a$",
+      "meaning": "skale deskryptora: operatora, masy i częstości",
+      "si_unit": "$\\mathrm{s\\,m^{-3}}$, $\\mathrm{m^{-3}}$, $\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "rotated_split_mass",
+      "latex": "$J(B_{qq})$, $\\mathcal B$",
+      "meaning": "obrócony blok masy real-split",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "gauge_poisson_block",
+      "latex": "$P_{g}$",
+      "meaning": "blok Poissona z wierszem i kolumną cechowania",
+      "si_unit": "$\\mathrm{m}$, $\\mathrm{m^3}$"
+    },
+    {
+      "id": "q_restriction",
+      "latex": "$\\Pi_{q}$",
+      "meaning": "restrykcja do bloku $q$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "shift_rhs",
+      "latex": "$b$",
+      "meaning": "prawa strona kroku shift-invert",
       "si_unit": "$1$"
     }
   ],
@@ -1517,6 +1608,48 @@
       "symbol": "floquet_bloch_scalar_heterogeneous_source_k0_consistency",
       "responsibility": "Compare heterogeneous Gamma source and reciprocal feedback to K0 shared-domain assembly.",
       "evidence_status": "GHA38298716226 native_CPU_MFEM_assembly_PASS; full_eigen_GPU_science_NOT_VERIFIED"
+    },
+    {
+      "id": "source-modal-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/modal_poisson_lu.hpp",
+      "symbol": "configure_modal_poisson_lu",
+      "responsibility": "Select MUMPS with METIS ordering when PETSc provides it, otherwise native PETSc LU with the caller's shift policy; expose the resolved package.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "configure_production_context",
+      "responsibility": "K0 Schur scalar Poisson PREONLY LU through the shared helper.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-floquet-poisson-lu",
+      "path": "backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp",
+      "symbol": "solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context",
+      "responsibility": "Floquet P(k) PREONLY LU through the shared helper and poisson_factorization_package provenance.",
+      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+    },
+    {
+      "id": "source-petsc-build-metadata",
+      "path": "docker/fem-gpu/write_petsc_build_metadata.py",
+      "symbol": "main",
+      "responsibility": "Record PETSc configure options and external-package macros; fail the toolchain build when MUMPS, METIS, ScaLAPACK or OpenBLAS is missing.",
+      "evidence_status": "source_visible; toolchain_build_NOT_VERIFIED"
+    },
+    {
+      "id": "source-augmented-shift-solver",
+      "path": "backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp",
+      "symbol": "create_augmented_shift_solver",
+      "responsibility": "Assemble and factor the real-split augmented (q, phi) shift matrix with MUMPS/METIS and apply its q-block inverse as the exact shift-invert action.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
+    },
+    {
+      "id": "source-cpu-schur-augmented-shift",
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
+      "responsibility": "Select the augmented exact shift preconditioner for K0 STSINVERT and fall back to the magnetic-only preconditioner.",
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     }
   ],
   "public_api": {

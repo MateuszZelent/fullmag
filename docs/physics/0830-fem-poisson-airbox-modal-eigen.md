@@ -2114,3 +2114,177 @@ znaczenia NEV/NCV/MPD: [dokumentacja SLEPc EPSGetDimensions](https://slepc.upv.e
 
 
 Native CPU/MFEM assembly korekty nodalnego Ms: GHA38298716226 PASS, clean090c13b,1/1CTest i marker hetero moments/Gamma observed. SLEPc OFF; dowód nie obejmuje pełnego eigensolve, GPU ani naukowej kwalifikacji dyspersji. Receipt d6b173bb /native log1ea7cf63, pełne SHA w ci-evidence-20261010.json.
+
+## Realizacja LU dokładnego rozwiązania Poissona (MUMPS/METIS)
+
+Status: zmiana realizacji FEM CPU w toolchainie Docker DEV; build i runtime
+nowego toolchainu **NOT VERIFIED** do czasu świeżego managed buildu i
+porównania residuali na identycznym modelu. Operator, równania, tolerancje,
+budżety iteracji, preconditioner shift-invert i bramki certyfikacji nie
+zmieniają się.
+
+Każde zastosowanie operatora Schura z {eq}`eq-poisson-airbox-modal-block`
+wymaga dokładnego rozwiązania skalarnego bloku Poissona:
+
+```{math}
+:label: eq-poisson-airbox-exact-poisson-lu
+\phi=-P^{-1}A_{\phi q}q,
+\qquad
+\Pi_{r}\,P\,\Pi_{c}=L\,U .
+```
+
+Faktoryzacja jest wykonywana raz na kontekst operatora i używana przez
+`KSPPREONLY`; rozwiązanie pozostaje dokładną odwrotnością w precyzji
+podwójnej. Zmienia się wyłącznie pakiet rzadkiej faktoryzacji. Gdy PETSc
+udostępnia MUMPS (`PETSC_HAVE_MUMPS`), blok Poissona K0 i blok $P(k)$ Floqueta
+używają MUMPS z porządkowaniem METIS (`ICNTL(7)=5`, przy `PETSC_HAVE_METIS`).
+MUMPS stosuje progowe częściowe pivotowanie, więc strukturalnie zerowa
+diagonala wiersza gauge w rozszerzonym bloku Poissona nie wymaga przesunięcia
+faktoryzacji. Natywne LU PETSc stosowało tu `MAT_SHIFT_NONZERO`, które przy
+zerowym pivocie zaburza odwrotność. Bez MUMPS zachowana jest natywna ścieżka
+z dotychczasową polityką przesunięcia (`MAT_SHIFT_NONZERO` dla K0,
+`MAT_SHIFT_NONE` dla $P(k)$). Nieodwracalny $P(k)$ nadal kończy się
+fail-closed, bez regularyzacji.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $P$ | skalarny blok sztywności Poissona | $\mathrm{m}$ |
+| $\phi$ | wektor współczynników dynamicznego potencjału | $\mathrm{A}$ |
+| $A_{\phi q}$ | blok sprzężenia magnetyzacja→potencjał | $\mathrm{A\,m}$ |
+| $q$ | współczynniki modalne w płaszczyźnie stycznej | $1$ |
+| $L$, $U$ | trójkątne czynniki faktoryzacji LU bloku $P$ | $1$, $\mathrm{m}$ |
+| $\Pi_{r}$, $\Pi_{c}$ | permutacje wierszy (pivotowanie) i kolumn (METIS) | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja, NOT VERIFIED | Poisson K0 i $P(k)$ przez MUMPS/METIS, gdy PETSc go udostępnia; pakiet w provenance `poisson_factorization_package` |
+| FEM | GPU | bez zmian | lane GPU rozwiązuje Poissona przez CG+BoomerAMG na urządzeniu |
+| FDM | CPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+| FDM | GPU | nie dotyczy | FDM nie używa tego bloku Poissona |
+
+Provenance: diagnostyka K0 zapisuje `poisson_factorization_package`, a wynik
+Floqueta pole o tej samej nazwie, z wartością `mumps_lu_metis`, `mumps_lu` albo
+`petsc_default_lu`. Toolchain zapisuje rozwiązaną konfigurację PETSc w
+`share/fullmag/petsc-build-metadata.json` każdego prefiksu i przerywa build,
+gdy brakuje MUMPS, METIS, ScaLAPACK lub OpenBLAS. Preconditionery shifted
+KSP (LU bloku magnetycznego z jawnym przesunięciem) pozostają przy natywnym
+LU, ponieważ ich konfiguracja przesunięcia jest częścią opisanej diagnostyki.
+Obraz CI `docker/fem-cpu` zachowuje natywne LU do czasu osobnej zmiany jego
+kontraktu.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-modal-poisson-lu | backends/fem/cpu/frequency_domain/modal_poisson_lu.hpp + configure_modal_poisson_lu | Wybór MUMPS/METIS albo natywnego LU; NOT VERIFIED runtime |
+| source-cpu-schur-poisson-lu | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + configure_production_context | Poisson K0 przez wspólny helper |
+| source-floquet-poisson-lu | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + solve_floquet_shared_domain_sparse_modal_spectrum_reusing_context | $P(k)$ Floqueta przez wspólny helper i provenance pakietu |
+| source-petsc-build-metadata | docker/fem-gpu/write_petsc_build_metadata.py + main | Metadane PETSc i wymagane pakiety w toolchainie |
+
+## Dokładny shift-invert K0 przez rzadki układ rozszerzony (q, φ)
+
+Status: zmiana realizacji kroku shift-invert FEM CPU K0 (audyt
+`2026-11-18-eigensolve-performance-and-gpu-readiness-audit.md`, pozycja A1).
+Build Docker DEV i runtime headless CPU zmierzone A/B na jednym modelu
+(tabela niżej); qualification, GPU, Floquet $k\neq0$ i run zaakceptowany
+**NOT VERIFIED**. Pencil własny, cel, wymiary Krylova, tolerancje, residual oryginalnego
+deskryptora i bramki certyfikacji nie zmieniają się. Zmienia się wyłącznie
+preconditioner KSP wewnątrz `STSINVERT`.
+
+Krok shift-invert rozwiązuje układ z przeskalowanym, rozszczepionym na część
+rzeczywistą i urojoną operatorem Schura przesuniętym o $\hat\tau$. Ten operator jest
+dopełnieniem Schura bloku $q$ rzadkiej macierzy rozszerzonej, więc jego
+odwrotność jest blokiem $q$ jednego rozwiązania rzadkiego układu:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift
+K_{\hat\tau}=
+\begin{bmatrix}
+s\,\mathcal R(A_{qq})+\hat\tau m_{s}\,J(B_{qq}) & s\,\mathcal R(A_{q\phi})\\
+\mathcal R(A_{\phi q}) & \mathcal R(P_{g})
+\end{bmatrix},
+\qquad
+\Bigl(s\,\mathcal R\bigl(A_{qq}-A_{q\phi}P_{g}^{-1}A_{\phi q}\bigr)-\hat\tau m_{s}\,\mathcal B\Bigr)^{-1} b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Tożsamość wynika z eliminacji wierszy Poissona,
+$\phi=-P_{g}^{-1}A_{\phi q}q$ (blok $\phi$), identycznej z akcją operatora Schura z
+{eq}`eq-poisson-airbox-modal-block` i
+{eq}`eq-poisson-airbox-exact-poisson-lu`. $J(B_{qq})$ jest obróconym blokiem masy
+real-split, tym samym, którego używa macierz masy pencilu ($\mathcal B$). Skale
+$s=m_s/a$ i $m_s$ są tymi samymi skalami deskryptora, których używa operator
+EPS, więc $K_{\hat\tau}$ odtwarza dokładnie operator przesunięty widziany przez ST.
+
+Realizacja: jedna faktoryzacja LU macierzy $K_{\hat\tau}$ (MUMPS, porządkowanie
+METIS `ICNTL(7)=5`, progowe częściowe pivotowanie) na każde przesunięcie,
+podana jako prawy preconditioner `PCSHELL` metody FGMRES
+(`PC_RIGHT`, `KSP_NORM_UNPRECONDITIONED`). Test zbieżności KSP sprawdza więc
+residuum operatora przesuniętego z {eq}`eq-poisson-airbox-augmented-shift`
+dla prawej strony $b$. FGMRES składa rozwiązanie z bazy już
+przekształconej przez $K_{\hat\tau}^{-1}$, więc jego residuum jest
+residuum prawdziwym. Standardowy GMRES (lewy albo prawy) wykonuje
+dodatkowe zastosowanie $K_{\hat\tau}^{-1}$, którego błąd zaokrągleń nie
+wchodzi do szacowanego residuum. Na modelu z wymiarem real-split 4824 EPS
+z GMRES nie zbiegł w 2412 restartach przy obu stronach preconditionera,
+a z FGMRES zbiegł w 20. Ścieżka $K_{\hat\tau}$ zawsze wybiera FGMRES
+(`shifted_ksp_type` w diagnostyce). Przy dokładnej odwrotności FGMRES
+zbiega w 1–2 iteracjach, a tolerancja `shifted_ksp_rtol` i limit iteracji
+pozostają bez zmian. Macierz
+magnetyczna bez sprzężenia demag pozostaje macierzą preconditionera ST
+i ścieżką zapasową, gdy PETSc nie ma MUMPS, gdy
+`FULLMAG_K0_AUGMENTED_SHIFT=0` albo gdy faktoryzacja się nie powiedzie.
+Dokładna gęsta materializacja operatora przesuniętego pozostaje dla
+wymiaru real-split do 512 (status `exact_preconditioner.status` bez zmian).
+Powyżej tego progu, gdy MUMPS jest dostępny, zastępuje ją faktoryzacja
+$K_{\hat\tau}$ (status `superseded_by_augmented_shift`), ponieważ gęsta
+materializacja wymaga dwóch rozwiązań Poissona na kolumnę i gęstego LU.
+Nieudana faktoryzacja $K_{\hat\tau}$ przechodzi wtedy na preconditioner
+magnetyczny.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| $K_{\hat\tau}$ | rzadka macierz rozszerzona (q, φ) przesunięta o $\hat\tau$ | $1$, $\mathrm{A^{-1}}$, $\mathrm{A\,m}$, $\mathrm{m}$ |
+| $\hat\tau$ | przeskalowane przesunięcie widmowe $\omega_{\mathrm{target}}/a$ | $1$ |
+| $s$, $m_s$, $a$ | skale deskryptora: operatora, masy i częstości | $\mathrm{s\,m^{-3}}$, $\mathrm{m^{-3}}$, $\mathrm{s^{-1}}$ |
+| $J(B_{qq})$, $\mathcal B$ | obrócony blok masy real-split | $\mathrm{m^3}$ |
+| $P_{g}$ | blok Poissona z wierszem i kolumną cechowania | $\mathrm{m}$, $\mathrm{m^3}$ |
+| $\Pi_{q}$ | restrykcja do bloku $q$ | $1$ |
+| $b$ | prawa strona kroku shift-invert | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniona realizacja, zmierzona w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
+| FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
+| FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
+| FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
+
+Provenance: `shifted_preconditioner_kind` przyjmuje
+`augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
+`magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
+obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
+liczbę iteracji FGMRES/GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
+preconditioner do osobnej zmiany.
+
+Pomiar A/B (2026-11-18): `examples/fem_eigen_k0_poisson_airbox_production.py`
+z gałęzi PR #452 (relaksacja, potem jeden mod najbliższy 2 GHz). Uruchomiono
+`fullmag-bin <skrypt> --backend fem --headless` bez live API, w kontenerze
+backend grupy Docker DEV z limitem 16 CPU. „Bez $K_{\hat\tau}$” oznacza
+`FULLMAG_K0_AUGMENTED_SHIFT=0` na tym samym buildzie albo build sprzed
+zmiany. Częstotliwość we wszystkich przypadkach wynosi 6,0100362431 GHz,
+a residuum deskryptora jest certyfikowane.
+
+| Wymiar real-split ($\phi$) | Wariant | Rozwiązania Poissona | EPS [s] | Restarty EPS | Czas całkowity [s] |
+| --- | --- | --- | --- | --- | --- |
+| 344 (386) | gęsta dokładna (bez zmian) | 790 | 0,02 | 13 | 7,1 |
+| 1288 (1510) | bez $K_{\hat\tau}$: gęsta dokładna | 2748 | 0,68 | 16 | 11,8 |
+| 1288 (1510) | $K_{\hat\tau}$ + FGMRES | 186 | 0,28 | 16 | 9,8 |
+| 4824 (5244) | bez $K_{\hat\tau}$: gęsta dokładna (budowa 58,6 s) | 9886 | 28,7 | 21 | 132 |
+| 4824 (5244) | $K_{\hat\tau}$ + GMRES | 28 928 operatorów | 471 | 2412, bez zbieżności | — |
+| 4824 (5244) | $K_{\hat\tau}$ + FGMRES | 228 | 2,7 | 20 | 21,7 |
+| 10816 (11352) | bez $K_{\hat\tau}$: preconditioner magnetyczny | — | > 3300 | brak zbieżności w czasie pomiaru | > 3300 |
+| 10816 (11352) | $K_{\hat\tau}$ + FGMRES | 328 | 14,2 | 30 | 54,7 |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; runtime zmierzony w Docker DEV (headless) |
+| source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |

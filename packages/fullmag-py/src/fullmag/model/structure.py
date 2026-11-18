@@ -403,6 +403,9 @@ class ObjectRegion:
     _texture_assignment_callback: Callable[[ObjectRegion], None] | None = field(
         default=None, repr=False, compare=False
     )
+    _simpleantenna_factory: Callable[[], object] | None = field(
+        default=None, repr=False, compare=False
+    )
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
@@ -434,6 +437,19 @@ class ObjectRegion:
         if self.material_overrides is None:
             self.material_overrides = []
         self.material = ObjectRegionMaterialProxy(self)
+
+    @property
+    def add_simpleantenna(self) -> object:
+        """Antennas that act on this region: ``region.add_simpleantenna.arbitrary_mask(...)``."""
+        if self._context_guard is not None:
+            self._context_guard()
+        factory = self._simpleantenna_factory
+        if factory is None:
+            raise RuntimeError(
+                "region.add_simpleantenna is available for regions created with "
+                "magnet.add_region(...) in an active study"
+            )
+        return factory()
 
     @property
     def texture(self) -> InitialMagnetization | None:

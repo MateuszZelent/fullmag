@@ -46,7 +46,7 @@ pub use fdm::{
     Abm3StepTelemetry, AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
     AdaptiveAttemptRecord, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
     AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau, CubicAnisotropyConfig,
-    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
+    DemagKernelSpectra, DriveTimeFunction, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
     EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1, FdmCpuStateCopyTelemetry,
     FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
@@ -483,7 +483,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });
@@ -529,7 +529,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0], [0.0, -1.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });

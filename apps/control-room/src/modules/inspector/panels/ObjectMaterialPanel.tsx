@@ -1648,9 +1648,18 @@ function ObjectMaterialPanelView({
               />
               {materialData?.source ? (
                 <>
-                  <FieldRow label="Catalog source" value={`${materialData.source.name} · version ${materialData.source.catalog_revision}`} />
+                  <FieldRow label="Catalog source" value={`${materialData.source.name} · revision ${materialData.source.catalog_revision}`} />
                   <FieldRow label="Catalog entry" value={materialData.source.kind === "builtin" ? "Built-in"
                     : materialData.source.kind === "modified" ? "Modified variant" : "Custom"} />
+                  {materialData.source.version ? (
+                    <FieldRow label="Published version" value={`${materialData.source.version.family}.${materialData.source.version.version}`} />
+                  ) : null}
+                  {materialData.source.version?.source_project ? (
+                    <FieldRow label="Source project" value={materialData.source.version.source_project} />
+                  ) : null}
+                  {materialData.source.version?.copied_from_family ? (
+                    <FieldRow label="Source family" value={materialData.source.version.copied_from_family} />
+                  ) : null}
                 </>
               ) : null}
               <FieldRow label="Used by" value={`${materialUsages.length} object${materialUsages.length === 1 ? "" : "s"}${materialUsages.length ? `: ${materialUsages.slice(0, 5).map((usage) => usage.name || usage.id).join(", ")}${materialUsages.length > 5 ? ", …" : ""}` : ""}`} />

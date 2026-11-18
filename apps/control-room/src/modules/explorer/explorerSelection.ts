@@ -18,6 +18,7 @@ import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import type { ExplorerNode } from "./explorerTypes";
 import { legacyStatusFacets } from "./builders/explorerNodeState";
+import { MASK_FIELD_DRIVE_MODULE_KIND } from "./builders/physicsGraphTree";
 
 type StudyStageSelectionKind = Extract<
   SelectionRef,
@@ -742,6 +743,15 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     if (node.physicsModuleKind === "regional_field_drive") {
       return {
         fieldDriveId: node.physicsModuleId,
+        kind: "physics.field-drive",
+        nodeId: node.id,
+        type: "physics-field-drive",
+      };
+    }
+    if (node.physicsModuleKind === MASK_FIELD_DRIVE_MODULE_KIND) {
+      return {
+        fieldDriveId: node.physicsModuleId,
+        fieldDriveKind: "mask",
         kind: "physics.field-drive",
         nodeId: node.id,
         type: "physics-field-drive",

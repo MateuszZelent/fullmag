@@ -17,6 +17,7 @@ pub mod execution_profile;
 pub mod execution_profile_materialization;
 pub mod field_drive_validation;
 pub mod frequency_response_contract;
+pub mod mask_field_drive;
 pub mod mechanics;
 pub mod mesh_assets;
 pub mod mesh_hints;
@@ -68,6 +69,7 @@ pub use execution_profile_materialization::{
 };
 pub use field_drive_validation::*;
 pub use frequency_response_contract::*;
+pub use mask_field_drive::*;
 pub use mechanics::*;
 pub use mesh_assets::*;
 pub use mesh_hints::*;
@@ -444,6 +446,9 @@ pub struct ProblemIR {
     pub current_modules: Vec<CurrentModuleIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<RegionalFieldDriveIR>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_drives: Vec<MaskFieldDriveIR>,
     /// Typed composition-first microwave antenna resources.  These fields
     /// are additive to the 0.3 wire contract so existing scenes remain
     /// readable while antenna authoring can already use the canonical
@@ -574,6 +579,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             field_drives: Vec<RegionalFieldDriveIR>,
             #[serde(default)]
+            mask_field_drives: Vec<MaskFieldDriveIR>,
+            #[serde(default)]
             antenna_port_modes: Vec<AntennaPortModeIR>,
             #[serde(default)]
             antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
@@ -648,6 +655,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             validation_profile: wire.validation_profile,
             current_modules: wire.current_modules,
             field_drives: wire.field_drives,
+            mask_field_drives: wire.mask_field_drives,
             antenna_port_modes: wire.antenna_port_modes,
             antenna_field_solve_stages: wire.antenna_field_solve_stages,
             antenna_target_projections: wire.antenna_target_projections,
@@ -805,6 +813,7 @@ impl ProblemIR {
             },
             current_modules: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),
             antenna_target_projections: Vec::new(),
@@ -906,6 +915,7 @@ impl ProblemIR {
         validate_current_modules(self, &mut errors);
         validate_antenna_composition_v03(self, &mut errors);
         validate_field_drives(self, &mut errors);
+        crate::mask_field_drive::validate_mask_field_drives(self, &mut errors);
         validate_planar_monitors(self, &mut errors);
         validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
@@ -950,7 +960,8 @@ impl ProblemIR {
                 errors.push("field_only requires explicitly authored geometry".into());
             }
             if !self.magnets.is_empty() || !self.materials.is_empty() || !self.energy_terms.is_empty()
-                || !self.field_drives.is_empty() || !self.solved_antenna_drives.is_empty()
+                || !self.field_drives.is_empty() || !self.mask_field_drives.is_empty()
+                || !self.solved_antenna_drives.is_empty()
                 || !self.spin_torque_modules.is_empty() || !self.spin_transport_modules.is_empty()
                 || !self.magnetization_constraints.is_empty() || self.temperature.is_some()
                 || self.current_density.is_some() || !self.couplings.is_empty()

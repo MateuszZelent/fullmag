@@ -1235,8 +1235,6 @@ fn spawn_attached_runtime(
         .arg(backend)
         .arg("--mode")
         .arg("strict")
-        .arg("--precision")
-        .arg("double")
         .env("FULLMAG_API_PORT", api_port.to_string())
         .env("FULLMAG_ATTACHED_SESSION_ID", session_id)
         .env(crate::control_room::live_publisher_scope::ATTACHED_SCOPE_ENV, publisher_scope)
@@ -1246,6 +1244,8 @@ fn spawn_attached_runtime(
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    // The canonical session script owns the attached runtime's device selection.
+    command.env_remove("FULLMAG_FDM_EXECUTION");
     command.env_remove("FULLMAG_ATTACHED_GRID_REFRESH_COMMAND_ID");
     if let Some(command_id) = grid_refresh_command_id {
         command.env("FULLMAG_ATTACHED_GRID_REFRESH_COMMAND_ID", command_id);

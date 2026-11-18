@@ -46,8 +46,8 @@ pub use shared::observables::{
 pub use shared::VectorFieldSoA;
 
 pub use shared::terms::{
-    CubicAnisotropyConfig, EffectiveFieldTerms, MagnetoelasticTermConfig, OerstedCylinderConfig,
-    RegionalFieldDriveTerm, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula,
+    CubicAnisotropyConfig, DriveTimeFunction, EffectiveFieldTerms, MagnetoelasticTermConfig,
+    OerstedCylinderConfig, RegionalFieldDriveTerm, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula,
     UniaxialAnisotropyConfig, ZhangLiFormula, ZhangLiSttConfig,
 };
 pub use shared::types::{

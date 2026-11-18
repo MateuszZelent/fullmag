@@ -766,6 +766,7 @@ __global__ void external_energy_blocks_kernel(
     const Scalar *regional_drive_z,
     const RegionalFieldDriveParams *regional_drive_params,
     const double *regional_drive_points,
+    RegionalFieldDriveHostMultipliers regional_drive_host,
     uint32_t regional_drive_count,
     uint64_t regional_drive_cell_count,
     double evaluation_time_s)
@@ -786,13 +787,13 @@ __global__ void external_energy_blocks_kernel(
             field_z += oe_scale * to_f64(oe_z[idx]);
         }
         field_x += regional_field_drive_component(
-            regional_drive_x, regional_drive_params, regional_drive_points,
+            regional_drive_x, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
         field_y += regional_field_drive_component(
-            regional_drive_y, regional_drive_params, regional_drive_points,
+            regional_drive_y, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
         field_z += regional_field_drive_component(
-            regional_drive_z, regional_drive_params, regional_drive_points,
+            regional_drive_z, regional_drive_params, regional_drive_points, regional_drive_host,
             regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
         double mdoth =
             to_f64(mx[idx]) * field_x + to_f64(my[idx]) * field_y + to_f64(mz[idx]) * field_z;
@@ -1424,6 +1425,7 @@ double reduce_external_energy_fp64(Context &ctx) {
         static_cast<const double *>(ctx.regional_field_drive_z),
         ctx.regional_field_drive_params,
         ctx.regional_field_drive_points,
+        context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
         ctx.regional_field_drive_count,
         ctx.cell_count,
         ctx.current_time);
@@ -1465,6 +1467,7 @@ double reduce_external_energy_fp32(Context &ctx) {
         static_cast<const float *>(ctx.regional_field_drive_z),
         ctx.regional_field_drive_params,
         ctx.regional_field_drive_points,
+        context_regional_field_drive_host_multipliers(ctx, ctx.current_time),
         ctx.regional_field_drive_count,
         ctx.cell_count,
         ctx.current_time);

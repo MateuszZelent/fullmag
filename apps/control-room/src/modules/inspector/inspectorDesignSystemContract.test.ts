@@ -235,6 +235,7 @@ describe("Inspector design-system reference contract", () => {
     "SaveStateStageInspector.tsx",
     "ChangeDeviceStageInspector.tsx",
     "UnsupportedStageInspector.tsx",
+    "MaskFieldDriveStageInspector.tsx",
   ])("keeps stages/%s on compact Inspector groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
 

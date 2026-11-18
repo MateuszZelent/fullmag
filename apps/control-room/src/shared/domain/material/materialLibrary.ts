@@ -1,6 +1,9 @@
 import type {
+  MaterialLibraryEntryResource,
   MaterialPropertiesResource,
   MaterialReferenceResource,
+  PublishedMaterialVersion,
+  SceneMaterialSource,
 } from "@/kernel/api/apiTypes";
 
 export type MaterialPropertyKey = "Ms" | "Aex" | "alpha" | "Dind" | "Dbulk";
@@ -82,6 +85,34 @@ export interface MaterialSourceSnapshot {
   readonly kind: "builtin" | "custom" | "modified";
   readonly properties: Readonly<MaterialPropertiesResource>;
   readonly references?: readonly MaterialReferenceResource[] | null;
+  readonly version?: SceneMaterialSource["version"];
+}
+
+export type MaterialCatalogSelection = MaterialLibraryEntryResource | PublishedMaterialVersion;
+
+export function copyMaterialSource(source: MaterialSourceSnapshot): SceneMaterialSource {
+  return {
+    catalog_id: source.catalog_id,
+    catalog_revision: source.catalog_revision,
+    name: source.name,
+    kind: source.kind,
+    properties: { ...source.properties },
+    references: (source.references ?? []).map((reference) => ({ ...reference })),
+    ...(source.version ? { version: { ...source.version } } : {}),
+  };
+}
+
+/** Published aliases name model copies; their source keeps the frozen publication name. */
+export function materialCatalogSelectionSnapshot(selection: MaterialCatalogSelection) {
+  if ("display_name" in selection) {
+    return { name: selection.display_name, source: copyMaterialSource(selection.source) };
+  }
+  const source = copyMaterialSource({
+    catalog_id: selection.id, catalog_revision: selection.revision,
+    name: selection.name, kind: selection.kind, properties: selection.properties,
+    references: selection.references,
+  });
+  return { name: selection.name, source };
 }
 
 export interface MaterialSourcePropertyChange {

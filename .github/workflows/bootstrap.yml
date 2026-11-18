@@ -143,7 +143,10 @@ jobs:
           cargo test -p fullmag-runner --lib antenna_field_solution::direct_quadrature
 
       - name: Run material library and scene assignment contracts
-        run: cargo test --locked -p fullmag-api --bin fullmag-api material_library
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api material_library
+          cargo test --locked -p fullmag-workspace --lib material_catalog
+          cargo test --locked -p fullmag-application --lib script_source_capture
 
       - name: Run shared accepted-inspection read contracts
         run: |
@@ -292,6 +295,9 @@ jobs:
 
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
+
+      - name: Run field_expr.v1 mask function and time bytecode contracts
+        run: cargo test --locked -p fullmag-expr
 
       - name: Run periodic XY multilayer PG-BB contracts
         run: |
@@ -1233,7 +1239,8 @@ jobs:
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
 
       - name: Run canonical material library script roundtrip contracts
-        run: python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py
+        run: |
+          python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py packages/fullmag-py/tests/test_accepted_source_capture.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

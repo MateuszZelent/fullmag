@@ -2,7 +2,6 @@ import type {
   AuthoringTransactionResponse,
   MaterialPatchRequest,
   MaterialPropertiesResource,
-  MaterialLibraryEntryResource,
   MaterialReferenceResource,
   SceneMaterialSource,
   MaterialResource,
@@ -12,7 +11,10 @@ import type {
 
 import { authoringWriteOptions } from "@/kernel/authoring/authoringHistoryMutation";
 import {
+  copyMaterialSource,
+  materialCatalogSelectionSnapshot,
   materialPropertiesFromDraft,
+  type MaterialCatalogSelection,
 } from "@/shared/domain/material/materialLibrary";
 
 export interface CreateMaterialDraft {
@@ -147,27 +149,17 @@ export interface MaterialAssetAssignment {
 }
 
 function copySource(source: SceneMaterialSource | null | undefined): SceneMaterialSource | null {
-  return source ? {
-    ...source,
-    properties: { ...source.properties },
-    references: (source.references ?? []).map((reference) => ({ ...reference })),
-  } : null;
+  return source ? copyMaterialSource(source) : null;
 }
 
-export function materialAssetFromLibraryEntry(entry: MaterialLibraryEntryResource): MaterialAssetAssignment {
+export function materialAssetFromLibraryEntry(entry: MaterialCatalogSelection): MaterialAssetAssignment {
+  const { name, source } = materialCatalogSelectionSnapshot(entry);
   return {
     materialId: `mat:${crypto.randomUUID()}`,
-    name: entry.name,
-    properties: { ...entry.properties },
-    references: (entry.references ?? []).map((reference) => ({ ...reference })),
-    source: {
-      catalog_id: entry.id,
-      catalog_revision: entry.revision,
-      name: entry.name,
-      kind: entry.kind,
-      properties: { ...entry.properties },
-      references: (entry.references ?? []).map((reference) => ({ ...reference })),
-    },
+    name,
+    properties: { ...source.properties },
+    references: (source.references ?? []).map((reference) => ({ ...reference })),
+    source,
   };
 }
 

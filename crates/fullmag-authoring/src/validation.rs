@@ -1288,56 +1288,163 @@ fn validate_scene_field_drives(
             )));
         }
 
-        let require_object = |object_id: &str| {
-            if object_ids.contains(object_id) {
+        let label = "regional field drive";
+        validate_scene_field_target(scene, object_ids, label, &drive.id, &drive.target)?;
+        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
+            require_scene_object(object_ids, label, &drive.id, object_id)?;
+        }
+        validate_scene_drive_stages(&stage_ids, label, &drive.id, &drive.activation)?;
+    }
+    for (index, drive) in scene.field_drives.mask_drives.iter().enumerate() {
+        let label = "mask antenna";
+        if drive.id.trim().is_empty() || !drive_ids.insert(drive.id.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{label} id '{}' must be non-empty and unique among field drives",
+                drive.id
+            )));
+        }
+        validate_mask_drive_definition(
+            drive,
+            &format!("field_drives.mask_drives[{index}]"),
+        )?;
+        validate_scene_field_target(scene, object_ids, label, &drive.id, &drive.target)?;
+        validate_scene_drive_stages(&stage_ids, label, &drive.id, &drive.activation)?;
+    }
+    if let Some(pipeline) = &scene.study.study_pipeline {
+        validate_staged_mask_drive_definitions(&pipeline.nodes)?;
+    }
+    // Scenes without a pipeline carry their stages in `study.stages`.
+    for (index, stage) in scene.study.stages.iter().enumerate() {
+        if stage.kind == "add_mask_field_drive" {
+            validate_staged_mask_drive(&format!("study.stages[{index}] drive"), stage.extra.get("drive"))?;
+        }
+    }
+    Ok(())
+}
+
+/// The checks of the mask antenna CRUD (`validate_definition`: equations,
+/// arrays, names, shape), so that a scene written as a whole cannot hold an
+/// antenna the dedicated routes would refuse.
+fn validate_mask_drive_definition(
+    drive: &fullmag_ir::MaskFieldDriveIR,
+    label: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    let mut errors = Vec::new();
+    drive.validate_definition(label, &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(SceneDocumentValidationError::new(errors.join("\n")))
+    }
+}
+
+/// The antenna of one `add_mask_field_drive` stage.
+fn validate_staged_mask_drive(
+    label: &str,
+    payload: Option<&Value>,
+) -> Result<(), SceneDocumentValidationError> {
+    let Some(payload) = payload else {
+        return Err(SceneDocumentValidationError::new(format!(
+            "mask_field_drive_invalid: {label} is missing"
+        )));
+    };
+    let drive: fullmag_ir::MaskFieldDriveIR = serde_json::from_value(payload.clone())
+        .map_err(|error| {
+            SceneDocumentValidationError::new(format!("mask_field_drive_invalid: {label}: {error}"))
+        })?;
+    validate_mask_drive_definition(&drive, label)
+}
+
+/// Antennas carried by `add_mask_field_drive` stages (`payload.drive`).
+fn validate_staged_mask_drive_definitions(
+    nodes: &[StudyPipelineNode],
+) -> Result<(), SceneDocumentValidationError> {
+    for node in nodes {
+        match node {
+            StudyPipelineNode::Primitive(node)
+                if node.stage_kind == crate::StudyPrimitiveStageKind::AddMaskFieldDrive =>
+            {
+                validate_staged_mask_drive(&format!("stage '{}' drive", node.id), node.payload.get("drive"))?;
+            }
+            StudyPipelineNode::Group(node) => {
+                validate_staged_mask_drive_definitions(&node.children)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn require_scene_object(
+    object_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    object_id: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if object_ids.contains(object_id) {
+        Ok(())
+    } else {
+        Err(SceneDocumentValidationError::new(format!(
+            "{label} '{drive_id}' references missing object '{object_id}'"
+        )))
+    }
+}
+
+/// The object or region a field drive targets exists in the scene.
+fn validate_scene_field_target(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    target: &FieldTargetIR,
+) -> Result<(), SceneDocumentValidationError> {
+    match target {
+        FieldTargetIR::Global {} => Ok(()),
+        FieldTargetIR::Object { object_id } => {
+            require_scene_object(object_ids, label, drive_id, object_id)
+        }
+        FieldTargetIR::Region {
+            object_id,
+            region_id,
+        } => {
+            require_scene_object(object_ids, label, drive_id, object_id)?;
+            let object = scene
+                .objects
+                .iter()
+                .find(|object| object.id == *object_id)
+                .unwrap();
+            let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
+                || object
+                    .regions
+                    .iter()
+                    .any(|region| region.region_id == *region_id);
+            if exists {
                 Ok(())
             } else {
                 Err(SceneDocumentValidationError::new(format!(
-                    "regional field drive '{}' references missing object '{}'",
-                    drive.id, object_id
+                    "{label} '{drive_id}' references missing region '{region_id}' on object '{object_id}'"
                 )))
             }
-        };
-        match &drive.target {
-            FieldTargetIR::Global {} => {}
-            FieldTargetIR::Object { object_id } => require_object(object_id)?,
-            FieldTargetIR::Region {
-                object_id,
-                region_id,
-            } => {
-                require_object(object_id)?;
-                let object = scene
-                    .objects
-                    .iter()
-                    .find(|object| object.id == *object_id)
-                    .unwrap();
-                let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
-                    || object
-                        .regions
-                        .iter()
-                        .any(|region| region.region_id == *region_id);
-                if !exists {
-                    return Err(SceneDocumentValidationError::new(format!(
-                        "regional field drive '{}' references missing region '{}' on object '{}'",
-                        drive.id, region_id, object_id
-                    )));
-                }
-            }
         }
-        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
-            require_object(object_id)?;
-        }
-        if let DriveActivationIR::StageIds {
-            stage_ids: requested,
-        } = &drive.activation
-        {
-            for stage_id in requested {
-                if !stage_ids.contains(stage_id) {
-                    return Err(SceneDocumentValidationError::new(format!(
-                        "regional field drive '{}' references missing stage '{}'",
-                        drive.id, stage_id
-                    )));
-                }
+    }
+}
+
+/// Stage-scoped activation names existing pipeline stages.
+fn validate_scene_drive_stages(
+    stage_ids: &BTreeSet<String>,
+    label: &str,
+    drive_id: &str,
+    activation: &DriveActivationIR,
+) -> Result<(), SceneDocumentValidationError> {
+    if let DriveActivationIR::StageIds {
+        stage_ids: requested,
+    } = activation
+    {
+        for stage_id in requested {
+            if !stage_ids.contains(stage_id) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{label} '{drive_id}' references missing stage '{stage_id}'"
+                )));
             }
         }
     }
@@ -4258,6 +4365,77 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    fn mask_antenna_json(output_z: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "mask_field_drive.v1",
+            "id": "antenna", "name": "Antenna", "enabled": true,
+            "target": { "kind": "global" },
+            "shape": { "kind": "box", "size": [1e-6, 1e-6, 1e-8], "center": [0.0, 0.0, 0.0] },
+            "position_m": [0.0, 0.0, 0.0],
+            "frame": "world",
+            "terms": [{ "mask": { "kind": "function", "function": {
+                "expression_version": "field_expr.v1", "outputs": ["0", "0", output_z]
+            }}}],
+            "time_origin": "stage_local",
+            "activation": { "kind": "all_time_evolution" }
+        })
+    }
+
+    /// A scene written as a whole (PUT/PATCH) gets the checks of the mask
+    /// antenna routes: a broken equation is refused when the scene is saved,
+    /// not later at export or preparation.
+    #[test]
+    fn mask_antenna_definition_is_validated_in_whole_scene_writes() {
+        let scene = |drive: serde_json::Value| -> SceneDocument {
+            serde_json::from_value(serde_json::json!({
+                "version": "scene.v2",
+                "field_drives": { "mask_drives": [drive] }
+            }))
+            .expect("scene fixture should deserialize")
+        };
+        validate_scene_document(&scene(mask_antenna_json("1e-4")))
+            .expect("a valid mask antenna passes");
+        let error = validate_scene_document(&scene(mask_antenna_json("1e-4 *")))
+            .expect_err("a broken equation must fail closed");
+        assert!(
+            error.message.contains("field_drives.mask_drives[0]"),
+            "{}",
+            error.message
+        );
+
+        let staged = |drive: serde_json::Value| -> SceneDocument {
+            serde_json::from_value(serde_json::json!({
+                "version": "scene.v2",
+                "study": { "study_pipeline": { "version": "study_pipeline.v1", "nodes": [{
+                    "node_kind": "primitive", "id": "on", "label": "Add antenna",
+                    "stage_kind": "add_mask_field_drive", "payload": { "drive": drive }
+                }]}}
+            }))
+            .expect("scene fixture should deserialize")
+        };
+        validate_scene_document(&staged(mask_antenna_json("1e-4")))
+            .expect("a valid staged mask antenna passes");
+        let error = validate_scene_document(&staged(mask_antenna_json("1e-4 *")))
+            .expect_err("a broken staged equation must fail closed");
+        assert!(error.message.contains("stage 'on' drive"), "{}", error.message);
+
+        let flat = |drive: serde_json::Value| -> SceneDocument {
+            serde_json::from_value(serde_json::json!({
+                "version": "scene.v2",
+                "study": { "stages": [{
+                    "kind": "add_mask_field_drive", "entrypoint_kind": "flat_add_mask_field_drive",
+                    "drive": drive
+                }]}
+            }))
+            .expect("scene fixture should deserialize")
+        };
+        validate_scene_document(&flat(mask_antenna_json("1e-4")))
+            .expect("a valid flat-stage mask antenna passes");
+        let error = validate_scene_document(&flat(mask_antenna_json("1e-4 *")))
+            .expect_err("a broken flat-stage equation must fail closed");
+        assert!(error.message.contains("study.stages[0] drive"), "{}", error.message);
     }
 
     #[test]

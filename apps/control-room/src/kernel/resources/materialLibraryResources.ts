@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useEffectEvent } from "react";
 import { WORKSPACE_MATERIAL_LIBRARY_PATH } from "../api/apiPaths";
-import type { MaterialLibraryResource } from "../api/apiTypes";
+import type { MaterialLibraryResource, MaterialVersionPublishRequest, MaterialVersionUpdateRequest } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { useResource } from "./useResource";
 
@@ -27,4 +27,20 @@ export function useMaterialLibraryResource({ enabled = true }: { enabled?: boole
     if (enabled) refreshExistingCatalog();
   }, [enabled, api]);
   return resource;
+}
+
+export function useMaterialLibraryVersionMutations() {
+  const { api, resources } = useKernel();
+  return {
+    async publish(input: MaterialVersionPublishRequest) {
+      const result = await api.workspace.publishMaterialVersion(input);
+      resources.invalidate(MATERIAL_LIBRARY_RESOURCE_KEY, result.catalog_revision);
+      return result.published;
+    },
+    async update(family: string, version: string, input: MaterialVersionUpdateRequest) {
+      const result = await api.workspace.updateMaterialVersion(family, version, input);
+      resources.invalidate(MATERIAL_LIBRARY_RESOURCE_KEY, result.catalog_revision);
+      return result.published;
+    },
+  };
 }

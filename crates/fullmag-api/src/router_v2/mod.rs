@@ -375,6 +375,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_authoring_field_drive),
         )
         .route(
+            "/v2/sessions/current/model/mask-field-drives",
+            get(handlers::model::get_authoring_mask_field_drives)
+                .post(handlers::model::create_authoring_mask_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/mask-field-drives/:drive_id",
+            axum::routing::put(handlers::model::replace_authoring_mask_field_drive)
+                .delete(handlers::model::delete_authoring_mask_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/ready-antennas",
+            get(handlers::model::get_ready_antennas),
+        )
+        .route(
+            "/v2/sessions/current/model/ready-antennas/terms",
+            post(handlers::model::build_ready_antenna_terms),
+        )
+        .route(
             "/v2/sessions/current/model/regions/:region_id",
             patch(handlers::model::patch_authoring_region),
         )
@@ -927,6 +945,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             "/v2/workspace/material-library/:id",
             axum::routing::put(handlers::material_library::update_material)
                 .delete(handlers::material_library::delete_material),
+        )
+        .route(
+            "/v2/workspace/material-library/versions",
+            post(handlers::material_library::publish_version),
+        )
+        .route(
+            "/v2/workspace/material-library/versions/:family/:version",
+            patch(handlers::material_library::patch_version),
         )
         .route(
             "/v2/workspace/items",
