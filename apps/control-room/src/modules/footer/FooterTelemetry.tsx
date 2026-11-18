@@ -58,6 +58,7 @@ import {
 } from "./antennaFieldEta";
 
 import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
+import { useBalancedMetricRows } from "./useBalancedMetricRows";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -206,6 +207,7 @@ export function FooterTelemetry({
     else groups.push({ id, metrics: [metric] });
     return groups;
   }, []);
+  const metricsGridRef = useBalancedMetricRows(telemetry.metrics.length);
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -259,7 +261,7 @@ export function FooterTelemetry({
 
       <TooltipProvider delayDuration={250} skipDelayDuration={120}>
         <div className="fm-footer-telemetry__metrics">
-          <div role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+          <div ref={metricsGridRef} role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
             {metricGroups.map(({ id, metrics }) => (
               <div
                 className="fm-footer-telemetry__group"

@@ -160,6 +160,7 @@ fn absorber_layer(
         faces: vec![fullmag_ir::AbsorbingBoundaryFaceIR::XPlus],
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Linear,
         frame,
+        expression: None,
     }
 }
 

@@ -311,7 +311,7 @@ jobs:
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
           cargo test --locked -p fullmag-plan --lib fdm_region_
           cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
-          cargo test --locked -p fullmag-plan --lib fdm_cuda_absorbing_boundary_plans_cellwise_damping
+          cargo test --locked -p fullmag-plan --lib absorbing_boundary_
           cargo test --locked -p fullmag-plan --lib intra_object_region_exchange_defaults_harmonic_mean
           cargo test --locked -p fullmag-plan --lib exchange_scale_zero_disables_interface_exchange
           cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
@@ -446,6 +446,9 @@ jobs:
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
+
+      - name: Run absorbing boundary scene validation
+        run: cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
 
       - name: Run scene thermal intent preservation contracts
         run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
@@ -1011,6 +1014,8 @@ jobs:
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_docker_diagnostic_source_checks.py -v
+          python -B scripts/test_docker_volume_preowner_probe_stop.py -v
           python -B scripts/test_backend_native_contracts.py -v
           python -B scripts/test_docker_native_contract_integration.py -v
           python -B -m unittest scripts.test_analyze_accepted_cuda_trace -v

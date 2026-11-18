@@ -180,9 +180,13 @@
 
 .fm-footer-telemetry__metrics-grid {
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 136px), 1fr));
-  align-content: start;
+  /* Wrapping flex instead of an auto-fill grid: every row, including the
+   * last one, grows its readouts to the full dock width, so no empty tracks
+   * are left at the end of a row. --fm-metric-basis follows dock density. */
+  --fm-metric-basis: 136px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -204,7 +208,10 @@
   flex-direction: column;
   justify-content: center;
   gap: 1px;
-  min-width: 0;
+  /* --fm-metric-width is the balanced share set by useBalancedMetricRows. */
+  flex: 1 1 var(--fm-metric-width, var(--fm-metric-basis));
+  box-sizing: border-box;
+  min-width: min(100%, var(--fm-metric-basis));
   min-height: 38px;
   /* Hairline cell edges instead of a gap over a filled grid background: the
    * unused part of the last row and the area below it stay panel-coloured. */
@@ -287,9 +294,7 @@
 
 /* Low dock: one line per readout, label left and value right. */
 @container footer-metrics (height < 84px) {
-  .fm-footer-telemetry__metrics-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr));
-  }
+  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 176px; }
 
   .fm-footer-telemetry__metric {
     flex-direction: row;
@@ -307,9 +312,7 @@
 
 /* Tall dock: readouts gain size instead of stretching empty cards. */
 @container footer-metrics (height >= 168px) and (width >= 640px) {
-  .fm-footer-telemetry__metrics-grid {
-    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  }
+  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 168px; }
 
   .fm-footer-telemetry__metric { min-height: 48px; gap: 2px; }
   .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-lg); }

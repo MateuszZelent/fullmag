@@ -280,6 +280,19 @@ export function ObjectAbsorbingBoundaryPanel({
               <option key={profile} value={profile}>{profile}</option>
             ))}
           </FormField>
+          {draft.profile === "custom" ? (
+            <FormField
+              label="Expression"
+              type="text"
+              mono
+              value={draft.expression}
+              maxLength={256}
+              placeholder="u**3"
+              hint="u runs from 0 at the start of the ramp to 1 at the plateau."
+              help="Use u, decimal numbers, +, -, *, /, **, parentheses, and abs, sqrt, exp, log, log1p, tanh, sin, or cos. The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
+              onChange={(event) => update({ expression: event.target.value })}
+            />
+          ) : null}
           <FormField
             label="Frame"
             type="select"

@@ -4037,7 +4037,7 @@ mod tests {
                 &[],
                 Some(crate::types::LiveStepConsumer {
                     grid: plan.grid.cells,
-                    field_every_n: 1,
+                    field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                     initial_snapshot: true,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4262,7 +4262,7 @@ mod tests {
                 &[],
                 Some(crate::types::LiveStepConsumer {
                     grid: candidate_plan.grid.cells,
-                    field_every_n: 1,
+                    field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                     initial_snapshot: true,
                     display_selection: None,
                     interrupt_requested: None,
@@ -4388,7 +4388,7 @@ mod tests {
             &[],
             Some(crate::types::LiveStepConsumer {
                 grid: plan.grid.cells,
-                field_every_n: 1,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(1),
                 initial_snapshot: false,
                 display_selection: Some(&display),
                 interrupt_requested: None,
