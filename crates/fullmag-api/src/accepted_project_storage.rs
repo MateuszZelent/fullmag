@@ -141,6 +141,27 @@ impl AcceptedProjectStorage {
         Ok(())
     }
 
+    pub(crate) fn preflight_capacity(
+        problem: &ProblemIR,
+        store: &SessionStore,
+        step_id: &str,
+        required: u64,
+    ) -> Result<()> {
+        let (settings, _, output) = Self::configuration(problem, store, step_id)?
+            .context("driven response requires canonical project output storage")?;
+        let scratch = settings.temp_dir.as_deref().context("project scratch parent missing")?;
+        for path in [store.root(), output.as_path(), Path::new(scratch)] {
+            let existing = path.ancestors().find(|ancestor| ancestor.is_dir())
+                .with_context(|| format!("no existing storage ancestor for {}", path.display()))?;
+            let available = fullmag_runtime_control::local_resources::available_storage_bytes(existing)
+                .with_context(|| format!("measure storage at {}", existing.display()))?;
+            if available < required {
+                bail!("driven response needs {required} bytes of storage, but {} has {available} bytes available", existing.display());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare(
         problem: &ProblemIR,
         store: &SessionStore,

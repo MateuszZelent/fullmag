@@ -2496,11 +2496,21 @@ fn prepare_live_accepted(
                 .ok_or_else(|| unsupported("frequency response reserve overflow".into()));
             budget.memory_bytes = budget.memory_bytes.max(multiply(estimate.peak_working_bytes_upper_bound, 2)?)
                 .max(multiply(estimate.publisher_output_bytes_upper_bound, 8)?);
-            let staged_and_retained_bytes = multiply(estimate.native_output_bytes_upper_bound, 2)?
-                .checked_add(multiply(estimate.publisher_output_bytes_upper_bound, 4)?)
-                .and_then(|total| total.checked_add(estimate.scratch_bytes_upper_bound))
-                .ok_or_else(|| unsupported("frequency response storage reserve overflow".into()))?;
+            let staged_and_retained_bytes =
+                crate::accepted_fem_frequency_response_worker::storage_reservation_bytes(estimate)
+                    .ok_or_else(|| unsupported("frequency response storage reserve overflow".into()))?;
             budget.storage_bytes = budget.storage_bytes.max(staged_and_retained_bytes);
+            if matches!(std::env::var("FULLMAG_HOST_LEDGER_PROFILE").as_deref(), Ok("group-ledger-v1")) {
+                let storage_limit = std::env::var("FULLMAG_DOCKER_STORAGE_BYTES")
+                    .ok().and_then(|bytes| bytes.parse::<u64>().ok())
+                    .unwrap_or(7 * 1024_u64.pow(3));
+                if budget.storage_bytes > storage_limit {
+                    return Err(ApiError::unprocessable_with_code(
+                        "accepted_frequency_response_storage_budget",
+                        format!("Frequency response needs {} bytes of storage; this DEV group allows {storage_limit}. An operator can approve a larger limit with FULLMAG_DEV_BACKEND_STORAGE_GIB.", budget.storage_bytes),
+                    ));
+                }
+            }
             deferred_response.remove(&execution_step.step_id);
         }
         step_ids.push(execution_step.step_id.clone());

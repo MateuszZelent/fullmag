@@ -283,6 +283,12 @@ pub(crate) fn execute(
         &step.claim,
         &step.step_id,
     )?;
+    crate::accepted_project_storage::AcceptedProjectStorage::preflight_capacity(
+        &prepared.problem,
+        store,
+        &step.step_id,
+        prepared.required_free_storage_bytes,
+    )?;
     let attempt =
         match retry_store_writer_busy(|| create_private_attempt_output_dir(store, &step.claim)) {
             Ok(path) => path,

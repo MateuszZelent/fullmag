@@ -34,6 +34,7 @@ pub(crate) struct PreparedFrequencyResponse {
     pub(crate) preparation_plan_fingerprint: String,
     pub(crate) plan_digest: String,
     pub(crate) output_storage_budget: u64,
+    pub(crate) required_free_storage_bytes: u64,
     pub(crate) memory_budget: u64,
     pub(crate) artifact_limits: AcceptedFrequencyResponseArtifactLimits,
     pub(crate) resolved_device: String,
@@ -214,7 +215,9 @@ pub(crate) fn prepare(
     let estimate =
         fullmag_runner::preflight_frequency_response_artifact_resources(plan, artifact_limits)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    if estimate.scratch_bytes_upper_bound > step.claim.lease.budget.storage_bytes {
+    let required_free_storage_bytes = storage_reservation_bytes(estimate)
+        .context("driven-response storage reserve overflow")?;
+    if required_free_storage_bytes > step.claim.lease.budget.storage_bytes {
         bail!("driven-response native and published closure exceed accepted scratch budget");
     }
     let stage_mesh = StageFemMeshAsset::build_from_backend_plan(&execution_plan.backend_plan)
@@ -253,11 +256,20 @@ pub(crate) fn prepare(
         preparation_plan_fingerprint: preparation.plan_fingerprint,
         plan_digest,
         output_storage_budget,
+        required_free_storage_bytes,
         memory_budget,
         artifact_limits,
         resolved_device: runtime.resolved_device.clone(),
         gpu_uuid: runtime.gpu_uuid.clone(),
     })
+}
+
+pub(crate) fn storage_reservation_bytes(
+    estimate: fullmag_runner::AcceptedFrequencyResponseResourceEstimate,
+) -> Option<u64> {
+    estimate.native_output_bytes_upper_bound.checked_mul(2)?
+        .checked_add(estimate.publisher_output_bytes_upper_bound.checked_mul(4)?)?
+        .checked_add(estimate.scratch_bytes_upper_bound)
 }
 
 pub(crate) fn validate_plan_scope(
@@ -743,6 +755,21 @@ mod tests {
                 data_kind: StudyPortDataKind::Artifact,
             })
             .collect()
+    }
+
+    #[test]
+    fn response_storage_reservation_counts_native_publication_and_scratch() {
+        let estimate = fullmag_runner::AcceptedFrequencyResponseResourceEstimate {
+            native_output_bytes_upper_bound: 10,
+            publisher_output_bytes_upper_bound: 20,
+            scratch_bytes_upper_bound: 3,
+            ..Default::default()
+        };
+        assert_eq!(storage_reservation_bytes(estimate), Some(103));
+        assert_eq!(storage_reservation_bytes(fullmag_runner::AcceptedFrequencyResponseResourceEstimate {
+            scratch_bytes_upper_bound: u64::MAX,
+            ..estimate
+        }), None);
     }
 
     #[test]

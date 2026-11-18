@@ -19,9 +19,12 @@ pub const ACCEPTED_FREQUENCY_RESPONSE_DEFAULT_INDEX_LIMIT_BYTES: u64 = 1 << 20;
 pub const ACCEPTED_FREQUENCY_RESPONSE_DEFAULT_BUNDLE_LIMIT_BYTES: u64 = 256 << 20;
 const MAX_NATIVE_MANIFEST_BYTES: u64 = 16 << 20;
 const MAX_NATIVE_SMALL_JSON_BYTES: u64 = 16 << 20;
-const MAX_NATIVE_POINT_METADATA_BYTES: u64 = 64 << 20;
 const MAX_NATIVE_FIELD_METADATA_BYTES: u64 = 64 << 10;
 const JSON_OBJECT_SLOP_BYTES: u64 = 16 << 10;
+const NATIVE_SWEEP_FIXED_OVERHEAD_BYTES: u64 = 64 << 10;
+const MAX_NATIVE_OBSERVABLE_PROVENANCE_BYTES: u64 = 2 << 10;
+const MAX_COMPACT_POINT_METADATA_BYTES: u64 = 64 << 10;
+const MAX_COMPACT_SWEEP_POINT_BYTES: u64 = 4 << 10;
 const PLACEHOLDER_SHA256: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Resource ceilings supplied by admission before the native solve starts.
@@ -149,11 +152,7 @@ pub fn preflight_frequency_response_artifact_resources(
     // phase arrays, then duplicates the dense points array into v1/v2 sweeps
     // and per-point JSON. Eight simultaneous dense-text copies conservatively
     // cover std::string growth and append_format's temporary formatting buffer.
-    let dense_per_point = checked_add(
-        checked_mul(native_nodes, 204, "dense response JSON point bound")?,
-        JSON_OBJECT_SLOP_BYTES,
-        "dense response JSON point bound",
-    )?;
+    let dense_per_point = native_dense_point_json_upper_bound(native_nodes)?;
     let native_dense_json_bytes = checked_add(
         checked_mul(
             checked_mul(dense_per_point, frequency_count, "dense response sweep bound")?,
@@ -371,6 +370,14 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
     // Inventory every explicit input before reading the sweep. This catches
     // aggregate and dense-JSON overflow before a large source file is loaded.
     source_budget.inventory(&native_root, &source_paths, &point_paths, &diagnostic_paths, sweep_v1_path, sweep_v2_path)?;
+    validate_native_dense_source_bounds(
+        &source_budget,
+        &point_paths,
+        sweep_v1_path,
+        sweep_v2_path,
+        descriptor.native_node_count,
+        frequency_count,
+    )?;
     let (sweep_v1, sweep_v1_sha256) = parse_hashed_json::<NativeSweepV1>(
         &native_root.join(sweep_v1_path),
         source_budget.file_len(sweep_v1_path)?,
@@ -511,7 +518,8 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
     for index in 0..frequencies.len() {
         let frequency_index = u64::try_from(index).map_err(|_| invalid("frequency index exceeds u64"))?;
         let point_path = &point_paths[index];
-        let point_bytes = source_budget.read(&native_root, point_path, MAX_NATIVE_POINT_METADATA_BYTES, true)?;
+        let point_metadata_bound = native_dense_point_json_upper_bound(descriptor.native_node_count)?;
+        let point_bytes = source_budget.read(&native_root, point_path, point_metadata_bound, true)?;
         let source_point_sha256 = sha256(&point_bytes);
         validate_strict_json(&point_bytes, "native point metadata")?;
         let native_point: NativePoint = serde_json::from_slice(&point_bytes).map_err(json_error)?;
@@ -536,6 +544,22 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
         if !residual.is_finite() || residual < 0.0 || residual > solver_relative_tolerance {
             return Err(invalid(format!("native point relative residual gate failed at index {index}")));
         }
+        validate_native_observables(&native_point, index)?;
+        if sweep_v1.points[index].susceptibility_tensor != native_point.susceptibility_tensor
+            || sweep_v2.points[index].susceptibility_tensor != native_point.susceptibility_tensor
+            || sweep_v1.points[index].susceptibility_tensor_provenance.as_ref()
+                != native_point.susceptibility_tensor_provenance.as_ref()
+            || sweep_v2.points[index].susceptibility_tensor_provenance.as_ref()
+                != native_point.susceptibility_tensor_provenance.as_ref()
+            || sweep_v1.points[index].absorbed_power_density != native_point.absorbed_power_density
+            || sweep_v2.points[index].absorbed_power_density != native_point.absorbed_power_density
+            || sweep_v1.points[index].absorbed_power_density_provenance.as_ref()
+                != native_point.absorbed_power_density_provenance.as_ref()
+            || sweep_v2.points[index].absorbed_power_density_provenance.as_ref()
+                != native_point.absorbed_power_density_provenance.as_ref()
+        {
+            return Err(invalid(format!("native sweep observable metadata differs from point {index}")));
+        }
         let field_spec = validate_point_field_spec(
             &native_point,
             index,
@@ -552,6 +576,10 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
             response_amplitude: native_point.response_amplitude,
             response_phase: native_point.response_phase,
             residual_l2_norm: native_point.residual_l2_norm,
+            susceptibility_tensor: native_point.susceptibility_tensor,
+            susceptibility_tensor_provenance: native_point.susceptibility_tensor_provenance.as_ref(),
+            absorbed_power_density: native_point.absorbed_power_density,
+            absorbed_power_density_provenance: native_point.absorbed_power_density_provenance.as_ref(),
             relative_residual_l2_norm: residual,
             solver_relative_tolerance,
             converged: true,
@@ -579,6 +607,9 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
             field: field_spec.as_ref().map(|field| &field.compact),
         };
         let compact_point_bytes = serde_json::to_vec(&compact_metadata).map_err(json_error)?;
+        if compact_point_bytes.len() as u64 > MAX_COMPACT_POINT_METADATA_BYTES {
+            return Err(invalid(format!("compact point metadata {index} exceeds its bounded size")));
+        }
         let mut point_files = Vec::new();
         let mut point_total = 0_u64;
         push_output(
@@ -615,11 +646,15 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
             solver_relative_tolerance,
             files: point_files,
         });
-        compact_points.push(CompactSweepPoint {
+        let compact_sweep_point = CompactSweepPoint {
             frequency_index,
             frequency_hz: expected_frequency,
             response_amplitude: native_point.response_amplitude,
             response_phase: native_point.response_phase,
+            susceptibility_tensor: native_point.susceptibility_tensor,
+            susceptibility_tensor_provenance: native_point.susceptibility_tensor_provenance.clone(),
+            absorbed_power_density: native_point.absorbed_power_density,
+            absorbed_power_density_provenance: native_point.absorbed_power_density_provenance.clone(),
             relative_residual_l2_norm: residual,
             solver_relative_tolerance,
             converged: true,
@@ -636,7 +671,11 @@ pub fn collect_publish_accepted_frequency_response_artifacts(
             magnetic_node_indices_sha256: &descriptor.magnetic_node_indices_sha256,
             source_mesh_topology_fingerprint: &source_mesh.topology_fingerprint,
             source_point_sha256: source_point_sha256.clone(),
-        });
+        };
+        if serialized_len(&compact_sweep_point)? > MAX_COMPACT_SWEEP_POINT_BYTES {
+            return Err(invalid(format!("compact sweep point {index} exceeds its 4 KiB estimate")));
+        }
+        compact_points.push(compact_sweep_point);
     }
 
     let source_provenance = NativeSweepProvenance {
@@ -787,6 +826,49 @@ fn checked_add(left: u64, right: u64, label: &str) -> Result<u64, RunError> {
 fn checked_mul(left: u64, right: u64, label: &str) -> Result<u64, RunError> {
     left.checked_mul(right)
         .ok_or_else(|| invalid(format!("{label} aggregate size overflow")))
+}
+
+fn native_dense_point_json_upper_bound(native_nodes: u64) -> Result<u64, RunError> {
+    checked_add(
+        checked_mul(native_nodes, 204, "dense response JSON point bound")?,
+        JSON_OBJECT_SLOP_BYTES,
+        "dense response JSON point bound",
+    )
+}
+
+fn validate_native_dense_source_bounds(
+    source_budget: &SourceBudget,
+    point_paths: &[String],
+    sweep_v1_path: &str,
+    sweep_v2_path: &str,
+    native_nodes: u64,
+    frequency_count: u64,
+) -> Result<(), RunError> {
+    let dense_point_bound = native_dense_point_json_upper_bound(native_nodes)?;
+    for path in point_paths {
+        if source_budget.file_len(path)? > dense_point_bound {
+            return Err(invalid(format!("native point metadata `{path}` exceeds its estimated dense JSON bound")));
+        }
+    }
+    let dense_sweep_bound = checked_add(
+        checked_mul(dense_point_bound, frequency_count, "native dense sweep JSON bound")?,
+        NATIVE_SWEEP_FIXED_OVERHEAD_BYTES,
+        "native dense sweep JSON bound",
+    )?;
+    for path in [sweep_v1_path, sweep_v2_path] {
+        if source_budget.file_len(path)? > dense_sweep_bound {
+            return Err(invalid(format!("native sweep `{path}` exceeds its estimated dense JSON bound")));
+        }
+    }
+    let dense_source_bound = checked_add(
+        checked_mul(dense_point_bound, checked_mul(frequency_count, 3, "native dense point and sweep count")?, "native dense source points")?,
+        2 * NATIVE_SWEEP_FIXED_OVERHEAD_BYTES,
+        "native dense source bound",
+    )?;
+    if source_budget.dense_json_bytes > dense_source_bound {
+        return Err(invalid("native dense JSON source exceeds its preflight estimate"));
+    }
+    Ok(())
 }
 
 struct CountingWriter {
@@ -1099,6 +1181,14 @@ struct NativePoint {
     residual_l2_norm: Option<f64>,
     relative_residual_l2_norm: f64,
     #[serde(default)]
+    susceptibility_tensor: Option<[[f64; 2]; 1]>,
+    #[serde(default)]
+    susceptibility_tensor_provenance: Option<NativeSusceptibilityTensorProvenance>,
+    #[serde(default)]
+    absorbed_power_density: Option<f64>,
+    #[serde(default)]
+    absorbed_power_density_provenance: Option<NativeAbsorbedPowerDensityProvenance>,
+    #[serde(default)]
     response_field_payload_path: Option<String>,
     #[serde(default)]
     response_tangent_field_payload_path: Option<String>,
@@ -1129,6 +1219,43 @@ struct NativePoint {
     component_response_amplitude: Option<StrictIgnoredAny>,
     #[serde(default)]
     component_response_phase: Option<StrictIgnoredAny>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeSusceptibilityTensorProvenance {
+    kind: String,
+    basis: String,
+    component_pair_count: u64,
+    full_tensor: bool,
+    response_quantity: String,
+    response_units: String,
+    dimensionless_si_susceptibility: bool,
+    requires_ms_for_chi_si: bool,
+    ms_factor_applied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ms_source: Option<String>,
+    normalization: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeAbsorbedPowerDensityProvenance {
+    kind: String,
+    basis: String,
+    physical_power_density: bool,
+    units: String,
+    requires_mu0_ms_factor: bool,
+    mu0_ms_factor_applied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ms_source: Option<String>,
+    normalization: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume_weighted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spatial_reduction: Option<String>,
+    absolute_value_applied: bool,
+    full_power_density: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1177,6 +1304,14 @@ struct CompactPointMetadata<'a> {
     response_phase: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     residual_l2_norm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    susceptibility_tensor: Option<[[f64; 2]; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    susceptibility_tensor_provenance: Option<&'a NativeSusceptibilityTensorProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    absorbed_power_density: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    absorbed_power_density_provenance: Option<&'a NativeAbsorbedPowerDensityProvenance>,
     relative_residual_l2_norm: f64,
     solver_relative_tolerance: f64,
     converged: bool,
@@ -1223,6 +1358,14 @@ struct CompactSweepPoint<'a> {
     response_amplitude: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_phase: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    susceptibility_tensor: Option<[[f64; 2]; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    susceptibility_tensor_provenance: Option<NativeSusceptibilityTensorProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    absorbed_power_density: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    absorbed_power_density_provenance: Option<NativeAbsorbedPowerDensityProvenance>,
     relative_residual_l2_norm: f64,
     solver_relative_tolerance: f64,
     converged: bool,
@@ -1371,6 +1514,117 @@ fn validate_sweeps(
     let first_payload = expected_payload_paths.first();
     if v2.response_field_payload_path.as_ref() != first_payload {
         return Err(invalid("native v2 primary field payload path differs from ordered payload list"));
+    }
+    Ok(())
+}
+
+fn validate_native_observables(point: &NativePoint, index: usize) -> Result<(), RunError> {
+    if point.susceptibility_tensor.is_some()
+        != point.susceptibility_tensor_provenance.is_some()
+    {
+        return Err(invalid(format!("native susceptibility value/provenance pair is incomplete at point {index}")));
+    }
+    if let Some(tensor) = point.susceptibility_tensor {
+        if tensor[0].iter().any(|value| !value.is_finite()) {
+            return Err(invalid(format!("native susceptibility pair is non-finite at point {index}")));
+        }
+    }
+    if let Some(provenance) = &point.susceptibility_tensor_provenance {
+        validate_susceptibility_tensor_provenance(provenance, index)?;
+        if serialized_len(provenance)? > MAX_NATIVE_OBSERVABLE_PROVENANCE_BYTES {
+            return Err(invalid(format!("native susceptibility provenance exceeds its bounded size at point {index}")));
+        }
+    }
+    if point.absorbed_power_density.is_some()
+        != point.absorbed_power_density_provenance.is_some()
+    {
+        return Err(invalid(format!("native absorption proxy value/provenance pair is incomplete at point {index}")));
+    }
+    if point.absorbed_power_density.is_some_and(|value| !value.is_finite()) {
+        return Err(invalid(format!("native absorption proxy is non-finite at point {index}")));
+    }
+    if let Some(provenance) = &point.absorbed_power_density_provenance {
+        validate_absorption_proxy_provenance(provenance, index)?;
+        if serialized_len(provenance)? > MAX_NATIVE_OBSERVABLE_PROVENANCE_BYTES {
+            return Err(invalid(format!("native absorption proxy provenance exceeds its bounded size at point {index}")));
+        }
+    }
+    if let (Some(susceptibility), Some(absorption)) = (
+        &point.susceptibility_tensor_provenance,
+        &point.absorbed_power_density_provenance,
+    ) {
+        if (susceptibility.kind == "drive_projected_si_susceptibility")
+            != absorption.mu0_ms_factor_applied
+        {
+            return Err(invalid(format!("native observable provenance disagrees about the Ms factor at point {index}")));
+        }
+    }
+    Ok(())
+}
+
+fn validate_susceptibility_tensor_provenance(
+    provenance: &NativeSusceptibilityTensorProvenance,
+    index: usize,
+) -> Result<(), RunError> {
+    let has_ms = provenance.kind == "drive_projected_si_susceptibility";
+    let valid_common = provenance.basis == "local_tangent_drive"
+        && provenance.component_pair_count == 1
+        && !provenance.full_tensor;
+    let valid_ms = provenance.response_quantity == "delta_M_over_h_drive"
+        && provenance.response_units == "dimensionless"
+        && provenance.dimensionless_si_susceptibility
+        && !provenance.requires_ms_for_chi_si
+        && provenance.ms_factor_applied
+        && matches!(provenance.ms_source.as_deref(), Some("per_node_field" | "uniform"))
+        && provenance.normalization == "sum(Ms*response*conj(drive))/sum(abs(drive)^2)";
+    let valid_scalar = provenance.kind == "drive_projected_scalar"
+        && provenance.response_quantity == "delta_m_over_h_drive"
+        && provenance.response_units == "m/A"
+        && !provenance.dimensionless_si_susceptibility
+        && provenance.requires_ms_for_chi_si
+        && !provenance.ms_factor_applied
+        && provenance.ms_source.is_none()
+        && provenance.normalization == "sum(response*conj(drive))/sum(abs(drive)^2)";
+    if !valid_common
+        || (has_ms && !valid_ms)
+        || (!has_ms && !valid_scalar)
+    {
+        return Err(invalid(format!("native susceptibility provenance is not the supported single projected pair at point {index}")));
+    }
+    Ok(())
+}
+
+fn validate_absorption_proxy_provenance(
+    provenance: &NativeAbsorbedPowerDensityProvenance,
+    index: usize,
+) -> Result<(), RunError> {
+    let with_ms = provenance.units == "drive_projected_proxy_not_W_per_m3";
+    let valid_common = provenance.kind == "drive_projected_absorption_proxy"
+        && provenance.basis == "local_tangent_drive"
+        && !provenance.physical_power_density
+        && !provenance.absolute_value_applied
+        && !provenance.full_power_density;
+    let valid_ms = provenance.requires_mu0_ms_factor == false
+        && provenance.mu0_ms_factor_applied
+        && matches!(provenance.ms_source.as_deref(), Some("per_node_field" | "uniform"))
+        && provenance.normalization
+            == "0.5*mu0*omega*imag(sum(Ms*response*conj(drive)))/tangent_dof_count"
+        && provenance.volume_weighted == Some(false)
+        && provenance.spatial_reduction.as_deref()
+            == Some("drive_projected_tangent_dof_average");
+    let valid_without_ms = provenance.units == "proxy_not_W_per_m3"
+        && provenance.requires_mu0_ms_factor
+        && !provenance.mu0_ms_factor_applied
+        && provenance.ms_source.is_none()
+        && provenance.normalization
+            == "0.5*omega*imag(sum(response*conj(drive)))/tangent_dof_count"
+        && provenance.volume_weighted.is_none()
+        && provenance.spatial_reduction.is_none();
+    if !valid_common
+        || (with_ms && !valid_ms)
+        || (!with_ms && !valid_without_ms)
+    {
+        return Err(invalid(format!("native absorption metadata is not a physical power density or has unsupported units at point {index}")));
     }
     Ok(())
 }
@@ -1862,6 +2116,8 @@ fn validate_point_field_spec(
         payload_paths.push((primary_compat.clone(), xyz_length));
     }
     let component_basis = if spatial_fields { "global_xyz" } else { "local_tangent_frame" };
+    let complex_pair_count = checked_mul(native_node_count, components, "response complex-pair count")?;
+    let payload_value_count = checked_mul(complex_pair_count, 2, "response point value count")?;
     let compact = CompactFieldReference {
         storage_format: "zarr",
         component_basis,
@@ -1873,8 +2129,8 @@ fn validate_point_field_spec(
         shape: [native_node_count, components, 2],
         node_indexing: "explicit_node_indices",
         component_count: components,
-        complex_pair_count: 2,
-        payload_value_count: checked_mul(native_node_count, components * 2, "response point value count")?,
+        complex_pair_count,
+        payload_value_count,
         available_views: ["complex", "real", "imag", "abs", "amplitude", "phase", "phase_rotated_real"],
         default_view: "phase_rotated_real",
         default_phase_rad: 0.0,
@@ -2129,8 +2385,45 @@ mod tests {
             "component_response_phase": [-0.3, 0.7],
             "residual_l2_norm": 1.0e-9,
             "relative_residual_l2_norm": 1.0e-9,
+            "susceptibility_tensor": [[0.25, 0.5]],
+            "susceptibility_tensor_provenance": fixture_susceptibility_provenance(),
+            "absorbed_power_density": 0.125,
+            "absorbed_power_density_provenance": fixture_absorption_provenance(),
             "residual_source": "matrix_free_gmres",
             "excitation_provenance": { "kind": "field", "phase_rad": 0.0 }
+        })
+    }
+
+    fn fixture_susceptibility_provenance() -> Value {
+        json!({
+            "kind": "drive_projected_si_susceptibility",
+            "basis": "local_tangent_drive",
+            "component_pair_count": 1,
+            "full_tensor": false,
+            "response_quantity": "delta_M_over_h_drive",
+            "response_units": "dimensionless",
+            "dimensionless_si_susceptibility": true,
+            "requires_ms_for_chi_si": false,
+            "ms_factor_applied": true,
+            "ms_source": "uniform",
+            "normalization": "sum(Ms*response*conj(drive))/sum(abs(drive)^2)"
+        })
+    }
+
+    fn fixture_absorption_provenance() -> Value {
+        json!({
+            "kind": "drive_projected_absorption_proxy",
+            "basis": "local_tangent_drive",
+            "physical_power_density": false,
+            "units": "drive_projected_proxy_not_W_per_m3",
+            "requires_mu0_ms_factor": false,
+            "mu0_ms_factor_applied": true,
+            "ms_source": "uniform",
+            "normalization": "0.5*mu0*omega*imag(sum(Ms*response*conj(drive)))/tangent_dof_count",
+            "volume_weighted": false,
+            "spatial_reduction": "drive_projected_tangent_dof_average",
+            "absolute_value_applied": false,
+            "full_power_density": false
         })
     }
 
@@ -2178,8 +2471,8 @@ mod tests {
         );
 
         let points = json!([
-            {"frequency_index": 0, "frequency_point_artifact_path": POINT_PATHS[0], "response_field_payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0", "frequency_hz": 1.0e9, "response_amplitude": 0.4, "response_phase": 0.5, "residual_l2_norm": 1.0e-9, "relative_residual_l2_norm": 1.0e-9, "m_complex": [[0.1, -0.2], [0.3, 0.4]]},
-            {"frequency_index": 1, "frequency_point_artifact_path": POINT_PATHS[1], "response_field_payload_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0", "frequency_hz": 2.0e9, "response_amplitude": 0.4, "response_phase": 0.5, "residual_l2_norm": 1.0e-9, "relative_residual_l2_norm": 1.0e-9, "m_complex": [[0.1, -0.2], [0.3, 0.4]]}
+            {"frequency_index": 0, "frequency_point_artifact_path": POINT_PATHS[0], "response_field_payload_path": "response/field_payloads.zarr/frequency_0000/vector_xyz_complex/0.0.0", "frequency_hz": 1.0e9, "response_amplitude": 0.4, "response_phase": 0.5, "residual_l2_norm": 1.0e-9, "relative_residual_l2_norm": 1.0e-9, "susceptibility_tensor": [[0.25, 0.5]], "susceptibility_tensor_provenance": fixture_susceptibility_provenance(), "absorbed_power_density": 0.125, "absorbed_power_density_provenance": fixture_absorption_provenance(), "m_complex": [[0.1, -0.2], [0.3, 0.4]]},
+            {"frequency_index": 1, "frequency_point_artifact_path": POINT_PATHS[1], "response_field_payload_path": "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0", "frequency_hz": 2.0e9, "response_amplitude": 0.4, "response_phase": 0.5, "residual_l2_norm": 1.0e-9, "relative_residual_l2_norm": 1.0e-9, "susceptibility_tensor": [[0.25, 0.5]], "susceptibility_tensor_provenance": fixture_susceptibility_provenance(), "absorbed_power_density": 0.125, "absorbed_power_density_provenance": fixture_absorption_provenance(), "m_complex": [[0.1, -0.2], [0.3, 0.4]]}
         ]);
         write_json(
             root,
@@ -2308,11 +2601,50 @@ mod tests {
             file.relative_path.ends_with("vector_xyz_complex/0.0.0")
                 && file.bytes == [1.0_f64, 0.1, 2.0, 0.2, 3.0, 0.3].iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<_>>()
         }));
+        let point_metadata = artifacts.points[0]
+            .files
+            .iter()
+            .find(|file| file.relative_path == POINT_PATHS[0])
+            .expect("compact point metadata is published");
+        let point_metadata: Value = serde_json::from_slice(&point_metadata.bytes).unwrap();
+        assert_eq!(point_metadata["component_count"], json!(3));
+        assert_eq!(point_metadata["complex_pair_count"], json!(3));
+        assert_eq!(point_metadata["payload_value_count"], json!(6));
+        assert_eq!(point_metadata["field"]["shape"], json!([1, 3, 2]));
+        assert_eq!(point_metadata["field"]["complex_pair_count"], json!(3));
+        assert_eq!(point_metadata["field"]["payload_value_count"], json!(6));
+        assert_eq!(point_metadata["susceptibility_tensor"], json!([[0.25, 0.5]]));
+        assert_eq!(point_metadata["susceptibility_tensor_provenance"]["response_units"], "dimensionless");
+        assert_eq!(point_metadata["susceptibility_tensor_provenance"]["full_tensor"], false);
+        assert_eq!(point_metadata["absorbed_power_density"], json!(0.125));
+        assert_eq!(point_metadata["absorbed_power_density_provenance"]["physical_power_density"], false);
+        assert_eq!(point_metadata["absorbed_power_density_provenance"]["units"], "drive_projected_proxy_not_W_per_m3");
+        for dense_key in ["m_complex", "component_response_amplitude", "component_response_phase"] {
+            assert!(point_metadata.get(dense_key).is_none(), "compact point must omit dense source key {dense_key}");
+        }
+        for suffix in ["vector_xyz_complex/0.0.0", "vector_xyz.bin"] {
+            let payload = artifacts.points[0]
+                .files
+                .iter()
+                .find(|file| file.relative_path.ends_with(suffix))
+                .expect("Cartesian XYZ payload is included");
+            assert_eq!(payload.bytes.len(), 3 * 2 * std::mem::size_of::<f64>());
+        }
         assert!(!artifacts.global_files.iter().any(|file| file.relative_path.contains("magnetic_response_sweep.v1")));
         assert!(!artifacts.global_files.iter().any(|file| file.relative_path.contains("magnetic_response_sweep.v2")));
         assert!(!artifacts.points.iter().flat_map(|point| &point.files).any(|file| file.relative_path.contains("unreferenced")));
         let index = artifacts.global_files.iter().find(|file| file.relative_path.ends_with("magnetic_response_sweep.v3.json")).expect("compact v3 index exists");
         assert!(index.bytes.len() as u64 <= default_limits().max_index_bytes);
+        let compact_sweep: Value = serde_json::from_slice(&index.bytes).unwrap();
+        let sweep_point = &compact_sweep["points"][0];
+        assert_eq!(sweep_point["susceptibility_tensor"], json!([[0.25, 0.5]]));
+        assert_eq!(sweep_point["susceptibility_tensor_provenance"]["response_units"], "dimensionless");
+        assert_eq!(sweep_point["absorbed_power_density"], json!(0.125));
+        assert_eq!(sweep_point["absorbed_power_density_provenance"]["physical_power_density"], false);
+        assert!(serde_json::to_vec(sweep_point).unwrap().len() as u64 <= MAX_COMPACT_SWEEP_POINT_BYTES);
+        for dense_key in ["m_complex", "component_response_amplitude", "component_response_phase"] {
+            assert!(sweep_point.get(dense_key).is_none(), "compact sweep must omit dense source key {dense_key}");
+        }
         let generation_member = artifacts.artifact_generation.content.members.get(&index.relative_path).expect("index is committed");
         assert_eq!(generation_member.byte_length, index.bytes.len() as u64);
         assert_eq!(generation_member.sha256, format!("sha256:{:x}", Sha256::digest(&index.bytes)));
