@@ -88,6 +88,17 @@ inline bool augmented_shift_solver_enabled() noexcept
     return value == nullptr || std::strcmp(value, "0") != 0;
 }
 
+// Floquet k != 0 counterpart; FULLMAG_FLOQUET_AUGMENTED_SHIFT=0 keeps the
+// magnetic-only shifted preconditioner for an A/B measurement.
+inline bool floquet_augmented_shift_solver_enabled() noexcept
+{
+    if (!kAugmentedShiftSolverAvailable) {
+        return false;
+    }
+    const char *value = std::getenv("FULLMAG_FLOQUET_AUGMENTED_SHIFT");
+    return value == nullptr || std::strcmp(value, "0") != 0;
+}
+
 namespace augmented_shift_detail {
 
 inline std::uint64_t csr_row_count(const CsrMatrixView &matrix, std::uint64_t row) noexcept
@@ -123,6 +134,8 @@ inline bool csr_shape_matches(
         (matrix.row_offsets[rows] == 0u ||
          (matrix.column_indices != nullptr && matrix.values != nullptr));
 }
+
+inline bool factor_augmented_shift_matrix(PetscInt split_q_count, AugmentedShiftSolver *out);
 
 }  // namespace augmented_shift_detail
 
@@ -278,6 +291,26 @@ inline bool create_augmented_shift_solver(
         return false;
     }
 
+    return augmented_shift_detail::factor_augmented_shift_matrix(2 * q_count, out);
+}
+
+namespace augmented_shift_detail {
+
+// Factor out->matrix (already assembled, owned by `out`) with MUMPS and
+// allocate the solve vectors.  On failure every resource is released.
+inline bool factor_augmented_shift_matrix(PetscInt split_q_count, AugmentedShiftSolver *out)
+{
+    if (out == nullptr || out->matrix == nullptr) {
+        return false;
+    }
+    Mat matrix = out->matrix;
+    PetscInt rows = 0;
+    PetscInt columns = 0;
+    if (MatGetSize(matrix, &rows, &columns) != 0 || rows != columns ||
+        split_q_count <= 0 || split_q_count >= rows) {
+        destroy_augmented_shift_solver(out);
+        return false;
+    }
 #if defined(PETSC_HAVE_MUMPS)
     PC pc = nullptr;
     // A failed factorization (for example MUMPS workspace exhaustion) is an
@@ -321,7 +354,7 @@ inline bool create_augmented_shift_solver(
         destroy_augmented_shift_solver(out);
         return false;
     }
-    out->split_q_count = 2 * q_count;
+    out->split_q_count = split_q_count;
     out->dimension = rows;
     out->apply_count = 0;
     return true;
@@ -329,6 +362,49 @@ inline bool create_augmented_shift_solver(
     destroy_augmented_shift_solver(out);
     return false;
 #endif
+}
+
+}  // namespace augmented_shift_detail
+
+// Assemble K = [[top_left, top_right], [bottom_left, bottom_right]] from
+// existing sequential AIJ blocks (borrowed, unchanged) and factor it.  Used by
+// the Floquet lane, whose operator blocks already exist as PETSc matrices.
+inline bool create_augmented_shift_solver_from_blocks(
+    Mat top_left,
+    Mat top_right,
+    Mat bottom_left,
+    Mat bottom_right,
+    AugmentedShiftSolver *out)
+{
+    if (out == nullptr || !kAugmentedShiftSolverAvailable || top_left == nullptr ||
+        top_right == nullptr || bottom_left == nullptr || bottom_right == nullptr) {
+        return false;
+    }
+    destroy_augmented_shift_solver(out);
+    PetscInt q_rows = 0, q_columns = 0, phi_rows = 0, phi_columns = 0;
+    PetscInt tr_rows = 0, tr_columns = 0, bl_rows = 0, bl_columns = 0;
+    if (MatGetSize(top_left, &q_rows, &q_columns) != 0 ||
+        MatGetSize(bottom_right, &phi_rows, &phi_columns) != 0 ||
+        MatGetSize(top_right, &tr_rows, &tr_columns) != 0 ||
+        MatGetSize(bottom_left, &bl_rows, &bl_columns) != 0 ||
+        q_rows != q_columns || phi_rows != phi_columns || q_rows <= 0 || phi_rows <= 0 ||
+        tr_rows != q_rows || tr_columns != phi_rows ||
+        bl_rows != phi_rows || bl_columns != q_rows) {
+        return false;
+    }
+    Mat blocks[4] = {top_left, top_right, bottom_left, bottom_right};
+    Mat nest = nullptr;
+    if (MatCreateNest(PETSC_COMM_SELF, 2, nullptr, 2, nullptr, blocks, &nest) != 0) {
+        return false;
+    }
+    const PetscErrorCode convert_error =
+        MatConvert(nest, MATAIJ, MAT_INITIAL_MATRIX, &out->matrix);
+    MatDestroy(&nest);
+    if (convert_error != 0 || out->matrix == nullptr) {
+        destroy_augmented_shift_solver(out);
+        return false;
+    }
+    return augmented_shift_detail::factor_augmented_shift_matrix(q_rows, out);
 }
 
 // y = S_sigma^{-1} r: the q-block of K_sigma^{-1} [r; 0].

@@ -2253,7 +2253,7 @@ magnetyczny.
 
 | Solver | Urządzenie | Stan | Uzasadnienie |
 | --- | --- | --- | --- |
-| FEM | CPU | zmieniona realizacja, zmierzona w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
+| FEM | CPU | zmieniona realizacja; K0 i Floquet zmierzone w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny (`shifted_preconditioner_kind`); Floquet: `factorization_shift_policy` |
 | FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
 | FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
 | FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
@@ -2262,8 +2262,67 @@ Provenance: `shifted_preconditioner_kind` przyjmuje
 `augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
 `magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
 obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
-liczbę iteracji FGMRES/GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
-preconditioner do osobnej zmiany.
+liczbę iteracji FGMRES/GMRES.
+
+### Wariant Floquet
+
+Status: zmiana realizacji preconditionera wewnętrznego shifted KSP Floqueta
+(k ≠ 0 oraz Γ w przebiegu Floqueta). Build Docker DEV i runtime headless CPU
+zmierzone A/B na jednym modelu (tabela niżej). Qualification, GPU, ścieżka k
+z wieloma próbkami i run zaakceptowany: **NOT VERIFIED**. Operator macierzowo-wolny Floqueta stosuje obrót fazowy
+$\mathcal R_{\sigma}$ do wyniku działania Schura, a jego macierzą masy jest
+rozszczepienie real-split $\mathcal R(B_{qq})$ bez obrotu. Ta sama eliminacja
+wierszy Poissona daje układ rozszerzony dla danego wektora falowego:
+
+```{math}
+:label: eq-poisson-airbox-augmented-shift-floquet
+K_{\hat\tau}=
+\begin{bmatrix}
+\mathcal R_{\sigma}A_{qq}-\hat\tau\,\mathcal R(B_{qq}) & \mathcal R_{\sigma}A_{q\phi}\\
+A_{\phi q} & P
+\end{bmatrix},
+\qquad
+\bigl(\mathcal R_{\sigma}(A_{qq}-A_{q\phi}P^{-1}A_{\phi q})-\hat\tau\,\mathcal R(B_{qq})\bigr)^{-1}b
+=\Pi_{q}\,K_{\hat\tau}^{-1}
+\begin{bmatrix} b\\ 0\end{bmatrix}.
+```
+
+Bloki $A_{qq}$, $A_{q\phi}$ i masa niosą tę samą normalizację co MatShell
+(`normalize_native_floquet_pencil`). $P$ i $A_{\phi q}$ pozostają w
+jednostkach fizycznych, tak jak w działaniu Schura. Wszystkie bloki są
+rozszczepione real-split. $\mathcal R_{\sigma}A_{q\phi}$ powstaje jako
+iloczyn rzadkiej macierzy obrotu i bloku $A_{q\phi}$. Faktoryzacja MUMPS z
+METIS zastępuje magnetyczne LU tylko poza gęstą materializacją dokładną
+(wymiar real-split ≤ 512). Kolejne próby EPS przy tym samym celu
+wykorzystują ją ponownie. Wewnętrzny shifted KSP pozostaje prawostronnym
+GMRES z certyfikowanym testem prawdziwego residuum, więc niedokładne
+zastosowanie preconditionera nie może zostać uznane za zbieżne.
+`factorization_shift_policy` w wyniku przyjmuje wtedy wartość
+`augmented_exact_shift_mumps`, a `factorization_shift_amount` wartość 0.
+`FULLMAG_FLOQUET_AUGMENTED_SHIFT=0` lub nieudana faktoryzacja zachowują
+dotychczasowe magnetyczne LU z przesunięciem pivotów.
+
+Pomiar A/B (2026-11-19): model `examples/fem_eigen_k0_poisson_airbox_production.py`
+(z gałęzi PR #452: relaksacja, potem jeden mod najbliższy 2 GHz) z
+`k_vector=(5·10⁶ rad/m, 0, 0)`, `FloquetBC` na ścianach x i y oraz
+`magnetostatic_bc="floquet_airbox"`. Uruchomienie headless bez live API, w
+kontenerze backend grupy Docker DEV.
+
+| $q$ | Wariant | Wynik | Rozwiązania przesunięte | Iteracje KSP | Częstotliwość | Czas całkowity [s] |
+| --- | --- | --- | --- | --- | --- | --- |
+| 44 | gęsta dokładna (bez zmian) | zbieżny | 32 | 288 | 6,05560 GHz | 20,4 |
+| 644 | magnetyczne LU (przed) | błąd: EPSSolve 91, wewnętrzny KSP bez zbieżności | — | — | — | 11,9 |
+| 644 | $K_{\hat\tau}$ | zbieżny | 32 | 288 | 6,05683 GHz | 15,9 |
+| 2412 | magnetyczne LU (przed) | błąd: EPSSolve 91, wewnętrzny KSP bez zbieżności | — | — | — | 44,3 |
+| 2412 | $K_{\hat\tau}$ | zbieżny | 32 | 288 | 6,05686 GHz | 65,9 |
+
+Dla $q \ge 644$ dotychczasowy preconditioner nie daje wyniku na tym modelu.
+Z $K_{\hat\tau}$ przebieg zbiega, a częstotliwość zbiega wraz z zagęszczaniem
+siatki.
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-floquet-augmented-shift | backends/fem/cpu/frequency_domain/modal/floquet_modal_solver.cpp + create_native_floquet_augmented_shift_solver | Bloki $K_{\hat\tau}$ Floqueta z obrotem fazowym i faktoryzacja; runtime zmierzony w Docker DEV (headless) |
 
 Pomiar A/B (2026-11-18): `examples/fem_eigen_k0_poisson_airbox_production.py`
 z gałęzi PR #452 (relaksacja, potem jeden mod najbliższy 2 GHz). Uruchomiono
