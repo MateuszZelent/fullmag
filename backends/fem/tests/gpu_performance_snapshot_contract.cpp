@@ -28,6 +28,7 @@ int main()
     delta.exchange_launches = 2u;
     delta.exchange_nnz_visited = 31u;
     delta.demag_solves = 3u;
+    delta.demag_iterations = 17u;
     delta.normalization_launches = 4u;
     delta.normalization_readbacks = 1u;
     delta.control_fences = 1u;
@@ -47,6 +48,8 @@ int main()
     assert(committed.completed_execution_id == 101u);
     assert(committed.completed_operator_id == 202u);
     assert(committed.completed_attempt_count == 1u);
+    assert(committed.physical_demag_iterations == 17u);
+    assert(committed.accepted_demag_iterations == 17u);
     assert(committed.physical_rhs_evaluations == 5u);
     assert(committed.accepted_rhs_evaluations == 5u);
     assert(committed.physical_device_to_device_bytes == 96u);
@@ -56,6 +59,7 @@ int main()
     GpuPerformanceCounterDelta rejected{};
     rejected.rhs_evaluations = 2u;
     rejected.demag_solves = 1u;
+    rejected.demag_iterations = 5u;
     gpu_performance_note(state, rejected);
     gpu_performance_reject_attempt(state);
     auto after_reject = gpu_performance_snapshot(state);
@@ -63,10 +67,13 @@ int main()
     assert(after_reject.physical_rhs_evaluations == 7u);
     assert(after_reject.accepted_rhs_evaluations == 5u);
     assert(after_reject.rejected_attempt_count == 1u);
+    assert(after_reject.physical_demag_iterations == 22u);
+    assert(after_reject.accepted_demag_iterations == 17u);
 
     gpu_performance_begin_attempt(state, 8u, 103u, 204u);
     GpuPerformanceCounterDelta accepted_after_retry{};
     accepted_after_retry.rhs_evaluations = 3u;
+    accepted_after_retry.demag_iterations = 11u;
     gpu_performance_note(state, accepted_after_retry);
     gpu_performance_commit_attempt(state);
     auto after_retry_commit = gpu_performance_snapshot(state);
@@ -74,6 +81,8 @@ int main()
     assert(after_retry_commit.physical_rhs_evaluations == 10u);
     assert(after_retry_commit.accepted_rhs_evaluations == 10u);
     assert(after_retry_commit.rejected_attempt_count == 1u);
+    assert(after_retry_commit.physical_demag_iterations == 33u);
+    assert(after_retry_commit.accepted_demag_iterations == 33u);
 
     gpu_performance_begin_attempt(state, 9u, 104u, 205u);
     gpu_performance_note(state, rejected);
@@ -83,5 +92,7 @@ int main()
     assert(after_failure.physical_rhs_evaluations == 12u);
     assert(after_failure.accepted_rhs_evaluations == 10u);
     assert(after_failure.failed_attempt_count == 1u);
+    assert(after_failure.physical_demag_iterations == 38u);
+    assert(after_failure.accepted_demag_iterations == 33u);
     return 0;
 }

@@ -87,6 +87,7 @@ struct GpuDemagFemBemWorkspace {
     uint32_t *d_boundary_tdofs = nullptr;
     uint32_t *d_boundary_permutation = nullptr;
     double *d_bem_boundary_values = nullptr;
+    double *d_u1_solution = nullptr;
     uint32_t *d_near_row_offsets = nullptr;
     uint32_t *d_near_column_indices = nullptr;
     double *d_near_values = nullptr;

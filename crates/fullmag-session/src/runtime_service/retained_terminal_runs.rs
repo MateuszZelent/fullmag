@@ -1160,8 +1160,10 @@ fn validate_unapplied_heartbeat_suffix(
     }
 
     let receipt = read_matching_worker_exit_receipt(store, run_id, task, tasks, lease, budget)?;
-    if receipt.status_success || !receipt.exit_code.is_some_and(|code| code != 0) {
-        bail!("unapplied terminal heartbeat requires a failed nonzero process-exit receipt");
+    // A reaped process terminated by signal has no numeric exit code. The
+    // receipt's task validation already requires its failure reason.
+    if receipt.status_success || receipt.exit_code == Some(0) {
+        bail!("unapplied terminal heartbeat requires a failed process-exit receipt");
     }
     Ok(())
 }
@@ -2389,6 +2391,26 @@ mod tests {
     }
 
     #[test]
+    fn reaped_signal_failure_may_close_unapplied_final_heartbeat_read_only() {
+        let mut fixture = fixture();
+        add_unapplied_heartbeat_suffix(&mut fixture, "heartbeat");
+        let path = fixture.store.root().join(format!(
+            "runs/{RUN_ID}/worker_process_exit_receipts/process-exit-terminal.json"
+        ));
+        let mut receipt: FmsWorkerProcessExitReceipt =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        receipt.exit_code = None;
+        receipt.failure_reason = Some("worker terminated by SIGSEGV (signal 11)".into());
+        write_json(&path, &receipt);
+
+        let _writer = fixture.store.write_transaction().unwrap();
+        let before = tree_snapshot(fixture.store.root());
+        validate_retained_terminal_runs(&fixture.store, std::slice::from_ref(&fixture.pin))
+            .unwrap();
+        assert_eq!(before, tree_snapshot(fixture.store.root()));
+    }
+
+    #[test]
     fn claimed_cancelled_run_requires_applied_stop_and_reaped_worker() {
         let mut cancelled = fixture();
         add_claimed_cancellation(&mut cancelled);
@@ -2443,6 +2465,32 @@ mod tests {
         receipt.lease_heartbeat_sequence = 1;
         write_json(&path, &receipt);
         assert!(validate(&mismatched).is_err());
+
+        let mut successful = fixture();
+        add_unapplied_heartbeat_suffix(&mut successful, "heartbeat");
+        let path = successful.store.root().join(format!(
+            "runs/{RUN_ID}/worker_process_exit_receipts/process-exit-terminal.json"
+        ));
+        let mut receipt: FmsWorkerProcessExitReceipt =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        receipt.status_success = true;
+        receipt.exit_code = Some(0);
+        receipt.failure_reason = None;
+        write_json(&path, &receipt);
+        assert!(validate(&successful).is_err());
+
+        let mut zero_exit = fixture();
+        add_unapplied_heartbeat_suffix(&mut zero_exit, "heartbeat");
+        let path = zero_exit.store.root().join(format!(
+            "runs/{RUN_ID}/worker_process_exit_receipts/process-exit-terminal.json"
+        ));
+        let mut receipt: FmsWorkerProcessExitReceipt =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        receipt.status_success = false;
+        receipt.exit_code = Some(0);
+        receipt.failure_reason = Some("supervisor reported a failed worker".into());
+        write_json(&path, &receipt);
+        assert!(validate(&zero_exit).is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ const TooltipTrigger = TooltipPrimitive.Trigger;
 
 function TooltipContent({
   className,
+  collisionPadding = 8,
   ref,
   sideOffset = 6,
   ...props
@@ -19,6 +20,7 @@ function TooltipContent({
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         ref={ref}
+        collisionPadding={collisionPadding}
         sideOffset={sideOffset}
         className={cn("fm-tooltip", className)}
         {...props}

@@ -373,7 +373,7 @@ function InterfaceFields({ draft, scene, identityReadOnly, patch }: { scene: Sce
         {interfaceTraceSelection(draft) === "stored" ? <option value="stored" disabled>Stored binding (review before rebind)</option> : null}
         {INTERFACE_TRACE_DIRECTIONS.map((direction) => <option key={direction.surfaceId} value={direction.surfaceId}>{direction.surfaceId + " normal-metal trace → " + direction.oppositeId + " ferromagnet trace"}</option>)}
       </FormField>
-      <div className="fm-help-text" role="status">
+      <div className="fm-help-text">
         <div>Normal-metal scope: {draft.normalObject || "not selected"} / {draft.normalRegion || "whole object"}</div>
         <div>Ferromagnet scope: {draft.ferromagnetObject || "not selected"} / {draft.ferromagnetRegion || "whole object"}</div>
         <div>Each region is selected by its authored scope. Review scope changes before Apply; stored object references require an explicit rebind.</div>

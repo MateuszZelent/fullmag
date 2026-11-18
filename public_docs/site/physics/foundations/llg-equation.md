@@ -102,6 +102,15 @@ Under a stationary external field and zero direct current torque ($\boldsymbol{\
 \le 0.
 ```
 
+```{figure} /_static/diagrams/llg-precession-damping-sphere.svg
+:alt: Three-panel numerically computed diagram of LLG dynamics on the unit sphere S^2: (a) 3D helical precession trajectory (s_prec = 1) vs geodesic overdamped trajectory (s_prec = 0) and tangent precession/damping torque vectors; (b) monotonic free-energy decay and Larmor oscillation curves; and (c) discrete Runge-Kutta radial drift and renormalization back onto S^2.
+:width: 100%
+:name: fig-llg-precession-damping-sphere
+:figclass: fm-physics-figure
+
+Numerically integrated LLG dynamics ($\alpha = 0.28$, $\mathbf{H}_{\mathrm{eff}} \parallel +\hat{\mathbf{z}}$): **(a)** 3D orthographic projection on $\mathbb{S}^2$ comparing physical helical damped precession ($s_{\mathrm{prec}} = 1$) with pure-damping geodesic relaxation ($s_{\mathrm{prec}} = 0$, `llg_overdamped`) and tangent torque vectors in $T_{\mathbf{m}}\mathbb{S}^2$; **(b)** monotonic normalized energy dissipation $E(t)/E_0$, axial relaxation $m_z(t)$, and Larmor oscillation envelope $m_x(t)^2$; **(c)** $\mathcal{O}(\Delta t^{p+1})$ explicit RK radial drift and renormalization back onto $\mathbb{S}^2$ (`normalize_aos_field`, `norm_tolerance`, `max_spin_rotation`; see Landau & Lifshitz 1935, Gilbert 2004, and Abert 2019, [arXiv:1810.12365](https://arxiv.org/abs/1810.12365)).
+```
+
 (physics-foundations-llg-equation-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
@@ -138,16 +147,18 @@ Under a stationary external field and zero direct current torque ($\boldsymbol{\
 ```text
 study.solver(
     *,
+    fix_dt: float | None = None,
+    dt_initial: float | None = None,
+    dt_max: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
+    dt: float | None = None,
+    max_error: float | None = None,
+    dt_min: float | None = None,
     integrator: str | None = None,
     gamma: float | None = None,
-    fixed_timestep: float | None = None,
-    adaptive_timestep: AdaptiveTimestep | None = None,
-    field_refresh: FieldRefreshPolicy | None = None,
-    dt_init: float | None = None,
-    dt_min: float | None = None,
-    dt_max: float | None = None,
-    rtol: float | None = None,
-    atol: float | None = None,
+    g: float | None = None,
+    demag_interval_s: float | None = None,
 ) -> StudyBuilder
 ```
 
@@ -174,55 +185,57 @@ fm.LLG(
 | `Material.alpha` | `float \| FieldSpec` | material-dependent | $1$ | finite and $\ge 0$ | dimensionless Gilbert damping $\alpha(\mathbf{x})$ | FEM/FDM CPU/GPU | `materials[].alpha` |
 | `Material.Ms` | `float \| FieldSpec` | material-dependent | $\mathrm{A\,m^{-1}}$ | finite and $\ge 0$ | saturation magnetization $M_s(\mathbf{x})$ | FEM/FDM CPU/GPU | `materials[].ms` |
 
+Note: `fullmag.model.dynamics.INTEGRATOR_ALIASES` normalizes `"dp54"` to `"rk45"`, and `"bs23"` or `"rk32"` to `"rk23"`.
+
 ```python
 # %%
 import fullmag as fm
 
-world = fm.World(
-    dx=5e-9,
-    dy=5e-9,
-    dz=5e-9,
-    nx=20,
-    ny=5,
-    nz=1,
-    boundaries=fm.BoundaryConfig.open(method="fft"),
-)
-film = world.add_box(
-    "permalloy",
-    size=(100e-9, 25e-9, 5e-9),
-    material=fm.Material.permalloy(Ms=8.0e5, Aex=1.3e-11, alpha=0.02),
-    m_init=fm.VectorFieldSpec.uniform((1.0, 0.1, 0.0)),
-    demag=True,
-)
+nm = 1.0e-9
+study = fm.study("llg_precession_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(5 * nm, 5 * nm, 5 * nm))
+film = study.geometry(fm.Box(size=(100 * nm, 25 * nm, 5 * nm)), name="permalloy")
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.1, 0.0)
 
-study = fm.study(world, target="fdm", device="cpu", precision="fp64")
+study.demag()
+study.exchange()
+study.b_ext(20e-3, 2e-3, 0.0)
+adaptive_policy = fm.AdaptiveTimestep(
+    atol=1e-6,
+    rtol=1e-4,
+    dt_initial=1e-13,
+    dt_min=1e-15,
+    dt_max=5e-12,
+    safety=0.9,
+    growth_limit=2.0,
+    shrink_limit=0.2,
+)
 study.solver(
     integrator="rk45",
     gamma=2.211e5,
-    adaptive_timestep=fm.AdaptiveTimestep(
-        atol=1e-6,
-        rtol=1e-4,
-        dt_initial=1e-13,
-        dt_min=1e-15,
-        dt_max=5e-12,
-        safety=0.9,
-        growth_limit=2.0,
-        shrink_limit=0.2,
-    ),
+    adaptive_timestep=adaptive_policy,
 )
-study.stages.add_time(
-    name="precession",
-    duration=0.5e-9,
-    Bx=20e-3,
-    By=2e-3,
-    Bz=0.0,
-    save_m_every=50e-12,
+study.stages.add_run(
+    until=0.5e-9,
+    stage_id="precession",
+).autosave(
+    fm.StageAutosave(fields=[fm.FieldAutosave("m", every=50e-12)])
 )
 
-ir = study.to_problem_ir()
-assert ir["study"]["kind"] == "stage_workflow"
-assert ir["study"]["dynamics"]["integrator"] == "rk45"
-assert ir["study"]["dynamics"]["gyromagnetic_ratio"] == 2.211e5
+llg_ir = fm.LLG(
+    gamma=2.211e5,
+    integrator="rk45",
+    adaptive_timestep=adaptive_policy,
+).to_ir()
+assert llg_ir["kind"] == "llg"
+assert llg_ir["integrator"] == "rk45"
+assert llg_ir["gyromagnetic_ratio"] == 2.211e5
 ```
 
 (physics-foundations-llg-equation-problem-ir)=
@@ -233,27 +246,20 @@ The `LLG` policy serializes into `study.dynamics` inside `ProblemIR`:
 
 ```json
 {
-  "study": {
-    "kind": "stage_workflow",
-    "dynamics": {
-      "equation": "llg",
-      "gyromagnetic_ratio": 221100.0,
-      "integrator": "rk45",
-      "fixed_timestep": null,
-      "adaptive_timestep": {
-        "atol": 1e-06,
-        "rtol": 0.0001,
-        "dt_initial": 1e-13,
-        "dt_min": 1e-15,
-        "dt_max": 5e-12,
-        "safety": 0.9,
-        "growth_limit": 2.0,
-        "shrink_limit": 0.2,
-        "max_spin_rotation": null,
-        "norm_tolerance": null
-      },
-      "field_refresh": null
-    }
+  "kind": "llg",
+  "gyromagnetic_ratio": 221100.0,
+  "integrator": "rk45",
+  "fixed_timestep": null,
+  "adaptive_timestep": {
+    "tolerance_mode": "advanced",
+    "atol": 1e-06,
+    "rtol": 0.0001,
+    "dt_initial": 1e-13,
+    "dt_min": 1e-15,
+    "safety": 0.9,
+    "growth_limit": 2.0,
+    "shrink_limit": 0.2,
+    "dt_max": 5e-12
   }
 }
 ```
@@ -309,9 +315,13 @@ After spatial discretization of $\mathbf{H}_{\mathrm{eff}}$ on either an unstruc
 <!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
-1. L. D. Landau and E. M. Lifshitz, *On the theory of the dispersion of magnetic permeability in ferromagnetic bodies*, Phys. Z. Sowjetunion **8**, 153 (1935).
-2. T. L. Gilbert, *A phenomenological theory of damping in ferromagnetic materials*, IEEE Trans. Magn. **40**, 3443 (2004).
-3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York (1963).
+1. L. D. Landau and E. M. Lifshitz, "On the theory of the dispersion of magnetic permeability in ferromagnetic bodies," *Phys. Z. Sowjetunion* **8**, 153–169 (1935); reprinted in *Perspectives in Theoretical Physics*, 51–65 (1992), [doi:10.1016/B978-0-08-036364-6.50008-9](https://doi.org/10.1016/B978-0-08-036364-6.50008-9).
+2. T. L. Gilbert, "A Phenomenological Theory of Damping in Ferromagnetic Materials," *IEEE Transactions on Magnetics* **40**(6), 3443–3449 (2004). [doi:10.1109/TMAG.2004.836740](https://doi.org/10.1109/TMAG.2004.836740).
+3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+4. A. Baker, M. Beg, G. Ashton, M. Albert, D. Chernyshenko, W. Wang, S. Zhang, M.-A. Bisotti, M. Franchin, C. L. Hu, R. Stamps, T. Hesjedal, and H. Fangohr, "Proposal of a micromagnetic standard problem for ferromagnetic resonance simulations," *Journal of Magnetism and Magnetic Materials* **421**, 428–439 (2017). [doi:10.1016/j.jmmm.2016.08.009](https://doi.org/10.1016/j.jmmm.2016.08.009) · [arXiv:1603.05419 (OA)](https://arxiv.org/abs/1603.05419).
+5. J. Leliaert, J. Mulkers, J. De Clercq, A. Coene, M. Dvornik, and B. Van Waeyenberge, "Adaptively time stepping the stochastic Landau-Lifshitz-Gilbert equation at nonzero temperature: Implementation and validation in MuMax3," *AIP Advances* **7**(12) (2017). [doi:10.1063/1.5003957](https://doi.org/10.1063/1.5003957) · [Open Access (CC-BY PDF)](https://aip.scitation.org/doi/pdf/10.1063/1.5003957) · [arXiv:1709.01682](https://arxiv.org/abs/1709.01682).
+6. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+7. N. J. Mauser, C.-M. Pfeiler, D. Praetorius, and M. Ruggeri, "Unconditional well-posedness and IMEX improvement of a family of predictor-corrector methods in micromagnetics," *Applied Numerical Mathematics* **180**, 33–54 (2022). [doi:10.1016/j.apnum.2022.05.008](https://doi.org/10.1016/j.apnum.2022.05.008) · [Open Access (CC-BY PDF)](https://www.sciencedirect.com/science/article/pii/S0168927422001313/pdf) · [arXiv:2112.00451](https://arxiv.org/abs/2112.00451).
 
 (physics-foundations-llg-equation-source-code-index)=
 <!-- (source-code-index)= -->

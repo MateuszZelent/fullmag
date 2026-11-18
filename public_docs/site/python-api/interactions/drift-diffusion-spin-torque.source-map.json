@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-spin_drift_diffusion",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_spin_drift_diffusion"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_spin_drift_diffusion",
@@ -63,7 +46,7 @@
         "python": "id",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "module identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
@@ -73,7 +56,7 @@
         "python": "current_source_id",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "charge-current source link",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
@@ -83,7 +66,7 @@
         "python": "domain",
         "type": "typed collection",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "spin transport domain",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
@@ -93,7 +76,7 @@
         "python": "materials",
         "type": "typed collection",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "spin transport materials",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
@@ -103,7 +86,7 @@
         "python": "interfaces/boundaries",
         "type": "typed collections",
         "default": "empty",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed entries",
         "meaning": "interface and boundary contracts",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",
@@ -113,7 +96,7 @@
         "python": "solver",
         "type": "object or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed solver when supplied",
         "meaning": "solver request",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -123,7 +106,7 @@
         "python": "requested_execution",
         "type": "object or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed execution request",
         "meaning": "requested device/precision",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -133,7 +116,7 @@
         "python": "mode",
         "type": "str",
         "default": "steady",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "steady or transient; transient requires physical capacitance",
         "meaning": "time regime",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved spin runtime required",

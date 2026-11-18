@@ -46,4 +46,32 @@ describe("field-map tensor shortcuts", () => {
     expect(stale.result?.status).toBe("completed");
     expect(stale.queuePatch).toHaveBeenCalledWith({ planar: { layers: { vectors: false, mesh: false } } });
   });
+
+  it("exports CSV data with the crop window of the current source", async () => {
+    const crop = { u_min_m: -1e-8, u_max_m: 1e-8, v_min_m: 0, v_max_m: 2e-8 };
+    const state = vi.fn().mockResolvedValue({
+      planar: {
+        component: "magnitude",
+        crop,
+        default_slice: { plane: "xy" },
+        quantity_id: "m",
+        resolution: { height: 64, width: 64 },
+        source: { kind: "default" },
+        view_scope: { kind: "monitor_target" },
+      },
+    });
+    const meta = vi.fn().mockResolvedValue({});
+    const scalar = vi.fn().mockResolvedValue({ status: "not-modified" });
+    const emptyMask = vi.fn().mockResolvedValue({ status: "not-modified" });
+    const command = fieldMapViewCommands.find((entry) => entry.id === "field-map.export-data")!;
+    const result = await command.run({
+      api: { data: { fields: { planar: { emptyMask, meta, scalar } } }, visualization: { state } } as never,
+      source: "test",
+    });
+    expect(result?.status).toBe("failed");
+    const window = { window_u_min_m: "-1e-8", window_u_max_m: "1e-8", window_v_min_m: "0", window_v_max_m: "2e-8" };
+    for (const request of [meta, scalar, emptyMask]) {
+      expect(request).toHaveBeenCalledWith("m", { kind: "default" }, expect.objectContaining(window), undefined);
+    }
+  });
 });

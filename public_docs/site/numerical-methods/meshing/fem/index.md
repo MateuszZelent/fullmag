@@ -14,8 +14,6 @@ source_of_truth: "FEM/mesh policy schemas, Gmsh generation, shared-domain resour
 (public-docs-numerical-methods-meshing-fem-index)=
 # Finite-element meshing
 
-**Last changes: 12:31 24.08.2026**
-
 Fullmag FEM meshing combines object-owned policies, a universe-owned airbox policy and a shared-domain build that produces typed cells, facets, markers, quality and provenance.
 
 ::::{admonition} Implementation status
@@ -288,7 +286,3 @@ shared-domain/index
 ferromagnet/index
 airbox/index
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

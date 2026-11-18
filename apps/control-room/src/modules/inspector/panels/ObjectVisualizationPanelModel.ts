@@ -2853,7 +2853,8 @@ export interface VisualizationPanelSection {
     | "quantity-source"
     | "surface-coloring"
     | "vectors"
-    | "wireframe";
+    | "wireframe"
+    | "wireframe-mesh";
   title: string;
 }
 
@@ -3106,11 +3107,13 @@ export function buildAirboxVisibilityDiagnostic({
 export function buildVisualizationPanelSections({
   artifactInspection = false,
   effectiveSettings,
+  lane = "unresolved",
   settings,
   target,
 }: {
   artifactInspection?: boolean;
   effectiveSettings: VisualizationTargetSettings;
+  lane?: ObjectVisualizationLane;
   settings: VisualizationTargetSettings;
   target?: VisualizationTargetRef;
 }): VisualizationPanelSection[] {
@@ -3223,6 +3226,24 @@ export function buildVisualizationPanelSections({
     id: "wireframe",
     title: "Wireframe",
   });
+
+  if (
+    lane === "fem" &&
+    capabilities?.showWireframeGeometryScopeControl === true
+  ) {
+    sections.push({
+      disabled: passDisabled,
+      fields: [
+        {
+          id: "wireframeGeometryScope",
+          kind: "mode",
+          label: "Wireframe mesh",
+        },
+      ],
+      id: "wireframe-mesh",
+      title: "Wireframe mesh",
+    });
+  }
 
   if (capabilities?.supportsVectors !== false) {
     const vectorFields: VisualizationPanelField[] = [

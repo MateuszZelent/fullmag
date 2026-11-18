@@ -1381,7 +1381,7 @@ mod control_room_guard_tests {
                 "\"/v2/sessions/current/data/mesh-region-memberships\":{{}},",
                 "\"/v2/sessions/current/simulation/objects/{{object_id}}/metrics\":{{}}",
                 "}},\"x-fullmag-study-primitive-stage-kinds\":",
-                "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"],",
+                "[\"add_field_drive\",\"add_mask_field_drive\",\"update_mask_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"],",
                 "\"x-fullmag-build-identity\":{{",
                 "\"built_at_utc\":\"{}\",",
                 "\"git_commit\":\"{}\",",
@@ -2396,8 +2396,10 @@ fn api_openapi_response_is_compatible_with_identity(
     response: &str,
     allow_unknown_snapshot: bool,
 ) -> bool {
-    const REQUIRED_STAGE_KINDS: [&str; 5] = [
+    const REQUIRED_STAGE_KINDS: [&str; 7] = [
         "add_field_drive",
+        "add_mask_field_drive",
+        "update_mask_field_drive",
         "remove_field_drive",
         "table_autosave",
         "autosave",

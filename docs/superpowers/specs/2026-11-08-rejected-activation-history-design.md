@@ -1,0 +1,9 @@
+# Archiwizacja jednej odrzuconej aktywacji regionalnej — kontrakt
+
+Cel: zwolnić jeden z 64 slotów bez usuwania dowodów, zmiany limitów ani odtwarzania Solve. Istniejący preview/apply, blokady writer/ledger/native/operation, manifest bajtów, atomowe przeniesienie i czytnik logicznych ścieżek pozostają właścicielem operacji.
+
+Jawny profil `rejected-no-run-v1` wymaga identycznych receipt/terminal: failed-confirmed/rejected, jednoznaczne API400/422, niezmienionych source/provenance/authorization/result, braku Run/session w odpowiedzi i braku reconciliation. Pełny inventory SessionStore musi pod blokadami wykluczyć request, jego hash/idempotency key, source i activation w RunIntent/admission/intake/lease/receipt. Inne aktywne referencje, helper, marker active/unresolved i drift nadal blokują apply. Wszystkie oryginalne pliki control/logów muszą istnieć także w eksporcie obok oryginalnego źródła na ext4 WSL. Brak Run nie wymaga nieistniejącego Zarr wyników.
+
+Archiwalny rekord zachowuje run_id=null i jawny qualification_kind. Istniejące udane archiwa i ich dowody Zarr pozostają bez zmian. Regresje: odrzucenie ukrytego Run/admission/lease, source/provenance drift, błędny status/reconciliation; istniejące testy atomowego resume, aktywnych referencji i czytania po starej ścieżce; managed preview/apply jednego przypiętego rekordu i kontrola 64→63 oraz zgodności wszystkich bajtów.
+
+Profil v1 celowo wymaga braku poprzedniego workspace: `retirement=null` i dokładnego `retirement_result={state:retirement-only,retirement:null}`. Każde wycofanie poprzednika, także `startup_failed`, pozostaje jawną odmową. Nie pomija się żadnego poddrzewa SessionStore. Kandydat wykonania: `22ce790f32c4427292bd761b8af6ec65` (błąd dodatniości A podczas wczytywania źródła, brak RunIntent o tym źródle). Wcześniejsze preview innych rekordów pozostają zachowane jako odmowy.

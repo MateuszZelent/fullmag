@@ -61,7 +61,7 @@ function WorkspaceColumnContent({
       </section>
     ) : <ViewportTabHost />;
   }
-  if (playbackSelection && slotId === "panel-left") {
+  if (playbackSelection && !playbackSelection.studyResult && slotId === "panel-left") {
     return (
       <section aria-label="Saved result folder summary" className="fm-saved-results-playback__summary" data-saved-results-folder-summary="read-only">
         <h2 className="fm-saved-results-playback__summary-title">Saved result folder</h2>
@@ -105,7 +105,7 @@ function SortableWorkspaceColumn({ column, playbackSelection, visible, drawer, d
   onMove: (direction: -1 | 1) => void;
 }) {
   const reportDocked = useCallback((docked: boolean) => onDockChange(column.slotId, docked), [column.slotId, onDockChange]);
-  const title = playbackSelection && column.slotId === "panel-left" ? "Saved folder" : column.label;
+  const title = playbackSelection && !playbackSelection.studyResult && column.slotId === "panel-left" ? "Saved folder" : column.label;
   return <SortableItem id={column.slotId}>{({ attributes, isDragging, listeners, setNodeRef, style }) => (
     <div ref={setNodeRef} className="fm-dock-column" data-dragging={isDragging} style={style}>
       <PanelFrame id={column.slotId} title={title} visible={visible} drawer={drawer} drawerSide={column.slotId === "panel-left" ? "left" : "right"} drawerShared={drawerShared} floatable={column.slotId !== "viewport-main"} suspendWhenHidden={column.slotId !== "panel-right"} onDockChange={reportDocked} onHide={onHide} onMove={onMove}
@@ -120,7 +120,7 @@ function SortableWorkspaceColumn({ column, playbackSelection, visible, drawer, d
 export function WorkspaceDockLayout() {
   const kernel = useKernel();
   const playbackSelection = useSavedResultsPlaybackSelection();
-  const playbackOnly = playbackSelection !== null;
+  const playbackOnly = Boolean(playbackSelection && !playbackSelection.studyResult);
   const projectOnly = useWorkspaceContentScope() === "project";
   const panelVisible = useLayoutSelector((layout) => layout.panelVisible);
   const hasAuxViewportModule = !projectOnly && !playbackOnly && kernel.modules.forSlot("viewport-aux").length > 0;
@@ -200,7 +200,7 @@ export function WorkspaceDockLayout() {
       </> : null}
     </ResizablePanelGroup>
     {!playbackOnly ? (
-      <div className="fm-panel-restore-bar" aria-label="Restore hidden panels">
+      <div role="group" className="fm-panel-restore-bar" aria-label="Restore hidden panels">
         {!panelVisible.left ? <Button data-restore-panel="panel-left" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("left", true)}>Restore Explorer</Button> : null}
         {!panelVisible.right ? <Button data-restore-panel="panel-right" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("right", true)}>Restore Inspector</Button> : null}
         {!projectOnly && !panelVisible.bottom ? <Button data-restore-panel="panel-bottom" size="sm" variant="secondary" onClick={() => kernel.layout.setPanelVisible("bottom", true)}>Restore Diagnostics</Button> : null}

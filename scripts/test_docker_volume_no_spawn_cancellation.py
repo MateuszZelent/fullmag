@@ -184,7 +184,7 @@ class NamespacedApplyTests(unittest.TestCase):
                 @contextmanager
                 def operation(self,*args):yield {'receipt':{'attempt':'f'*32}}
             actual={'Id':cid,'Image':image,'State':{'Running':True,'StartedAt':'2026-10-28T01:00:00Z'},
-                    'Config':{},'HostConfig':{},'Mounts':[{'Destination':'/host-ledger','Type':'volume','Name':'fullmag-dev-group-ledger-v1-test'}]}
+                    'Config':{},'HostConfig':{},'Mounts':[{'Destination':'/host-ledger','Type':'volume','Name':'control'}]}
             def capture(*args,**kwargs):
                 return SimpleNamespace(stdout=json.dumps([{'Config':{}}] if args[0]=='image' else [actual]).encode())
             args=SimpleNamespace(repo_root=folder,source_root=folder,request=request_file,request_sha256=target.sha(raw),
@@ -195,6 +195,8 @@ class NamespacedApplyTests(unittest.TestCase):
                  mock.patch('docker_compose_identity.validate_source_labels'),\
                  mock.patch('fullmag_storage.resolve_layout',return_value={}),\
                  mock.patch('docker_volume_dev._validate_retained_service'),\
+                 mock.patch('docker_group_ledger.retained_profile',return_value={'volume_name':'control','ledger_subpath':'private/ledger'}),\
+                 mock.patch('docker_group_ledger.validate_container') as ledger_attestation,\
                  mock.patch.object(target,'toolchain_configuration',return_value={'services':{'fem-gpu-toolchain':{'build':{'args':{'FULLMAG_CUDA_BASE_IMAGE':image}}}}}),\
                  mock.patch.object(target,'BuildControl',return_value=Control()),\
                  mock.patch.object(target,'docker_capture',side_effect=capture),\
@@ -202,6 +204,7 @@ class NamespacedApplyTests(unittest.TestCase):
                  mock.patch.object(target,'guest',side_effect=[before,before,result,after]) as call:
                 outcome=target.cancel(args)
             self.assertEqual(outcome['state'],'cancelled-no-spawn')
+            self.assertEqual(ledger_attestation.call_count, 3)
             inputs=call.call_args_list[2].args[2]
             self.assertEqual(inputs['request_path'],'/opt/fullmag/control/cancel-failed-no-spawn/attempts/'+'f'*32+'/request.json')
             self.assertNotIn('namespaces/',inputs['result_path'])

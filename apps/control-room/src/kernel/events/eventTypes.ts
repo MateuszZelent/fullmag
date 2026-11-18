@@ -5,6 +5,7 @@ import type {
   CommandOutcomeStatus,
 } from "../commands/commandTypes";
 import type { MeshBuildConfirmCommandId } from "../authoring/meshBuildConfirmation";
+import type { StudyComputeObservation } from "../commands/studyComputeObservations";
 import type { ModuleId, SlotId } from "../types";
 import type { LayoutState } from "../layout/layoutTypes";
 
@@ -130,6 +131,9 @@ export interface KernelEventMap {
   "mesh:topology-rendered": {
     meshRevision: number | string;
     rendererId: string;
+  };
+  "study:compute-observation": StudyComputeObservation & {
+    state: "started" | "rejected";
   };
   "command:submitted": {
     commandId: string;

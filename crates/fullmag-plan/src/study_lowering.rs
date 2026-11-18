@@ -272,12 +272,14 @@ impl StudyExecutionPlan {
                         "lowered union DAG violates topological order".into(),
                     ));
                 }
-                if step.enabled
-                    && step.completion_dependencies.contains(dependency)
-                    && !self.steps[*position].enabled
-                {
+                let executable_dependency = step.completion_dependencies.contains(dependency)
+                    || step.inputs.iter().any(|input| matches!(
+                        &input.source, fullmag_authoring::StudyInputSource::StepOutput { step_id, .. }
+                            if step_id == dependency
+                    ));
+                if step.enabled && executable_dependency && !self.steps[*position].enabled {
                     return Err(StudyLoweringError::Contract(
-                        "enabled completion dependency targets a disabled step".into(),
+                        "enabled executable dependency targets a disabled step".into(),
                     ));
                 }
             }
@@ -357,7 +359,9 @@ where
         let step = steps_by_id.get(step_id.as_str()).ok_or_else(|| {
             StudyLoweringError::Contract(format!("topological step `{step_id}` is missing"))
         })?;
-        for input in &step.inputs {
+        // Disabled definitions retain their authoring edges for provenance.
+        // Only executable consumers need executable dependency sources.
+        for input in step.inputs.iter().filter(|_| step.enabled) {
             if let fullmag_authoring::StudyInputSource::StepOutput {
                 step_id: source_step,
                 ..
@@ -393,12 +397,18 @@ where
                     step.step_id
                 )));
             }
-            Some(
-                lower_problem_plan(&problem).map_err(|error| StudyLoweringError::Planner {
-                    step_id: step.step_id.clone(),
-                    reasons: error.reasons,
-                })?,
-            )
+            let execution = lower_problem_plan(&problem).map_err(|error| StudyLoweringError::Planner {
+                step_id: step.step_id.clone(),
+                reasons: error.reasons,
+            })?;
+            if let Some(overlay) = &step.initial_state_overlay {
+                crate::study_magnetization_overlay_mask(&problem, &execution, overlay.scopes())
+                    .map_err(|error| StudyLoweringError::Planner {
+                        step_id: step.step_id.clone(),
+                        reasons: error.reasons,
+                    })?;
+            }
+            Some(execution)
         };
 
         lowered_steps.push(StudyStepExecutionPlan {

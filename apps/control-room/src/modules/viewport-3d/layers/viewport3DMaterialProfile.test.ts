@@ -1,41 +1,58 @@
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES } from "../viewport3dAppearancePreferences";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 describe("viewport3D material profile", () => {
-  it("keeps quantitative shade strength independent from visual quality", () => {
-    const interactive = resolveViewport3DMaterialProfile(
+  it("shades field colors only in studio Presentation across visual quality profiles", () => {
+    const scientific = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive"),
     );
-    const figure = resolveViewport3DMaterialProfile(
-      getViewport3DVisualProfile("figure"),
+    const interactivePresentation = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+      { ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES, renderMode: "presentation" },
     );
-    const capture = resolveViewport3DMaterialProfile(
-      getViewport3DVisualProfile("capture"),
+    const litePresentation = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive-lite"),
+      { ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES, renderMode: "presentation" },
     );
 
-    expect(interactive.magneticSurface.shadeStrength).toBe(0);
-    expect(figure.magneticSurface.shadeStrength).toBe(0);
-    expect(capture.magneticSurface.shadeStrength).toBe(0);
-    expect(figure.magneticSurface.toneMapped).toBe(false);
-    expect(capture.magneticSurface.toneMapped).toBe(false);
+    expect(scientific.magneticSurface).toEqual({
+      presentation: null,
+      shadeStrength: 0,
+      toneMapped: false,
+    });
+    expect(interactivePresentation.magneticSurface.shadeStrength).toBe(1);
+    expect(interactivePresentation.magneticSurface.toneMapped).toBe(true);
+    expect(interactivePresentation.magneticSurface.presentation).toEqual({
+      metalness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialMetalness,
+      roughness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialRoughness,
+      shadows: true,
+    });
+    expect(litePresentation.magneticSurface.shadeStrength).toBe(1);
+    expect(litePresentation.magneticSurface.presentation?.shadows).toBe(false);
   });
 
-  it("keeps quantitative field colors unshaded in both geometry lighting modes", () => {
-    const studio = resolveViewport3DMaterialProfile(
+  it("keeps field colors unshaded in Scientific and flat Presentation", () => {
+    const scientificStudio = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive"),
-      { lightingMode: "studio" },
+      { ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES, lightingMode: "studio" },
     );
-    const flat = resolveViewport3DMaterialProfile(
-      getViewport3DVisualProfile("capture"),
-      { lightingMode: "flat" },
+    const presentationFlat = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+      {
+        ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
+        lightingMode: "flat",
+        renderMode: "presentation",
+      },
     );
 
-    expect(studio.magneticSurface.shadeStrength).toBe(0);
-    expect(flat.magneticSurface.shadeStrength).toBe(0);
-    expect(studio).not.toHaveProperty("fieldColorShading");
-    expect(flat).not.toHaveProperty("fieldColorShading");
+    expect(scientificStudio.magneticSurface.shadeStrength).toBe(0);
+    expect(scientificStudio.magneticSurface.presentation).toBeNull();
+    expect(presentationFlat.magneticSurface.shadeStrength).toBe(0);
+    expect(presentationFlat.magneticSurface.presentation).toBeNull();
+    expect(presentationFlat.magneticSurface.toneMapped).toBe(false);
   });
 
   it("keeps lite materials un-tonemapped", () => {
@@ -47,20 +64,38 @@ describe("viewport3D material profile", () => {
     expect(profile.primitivePreview.toneMapped).toBe(false);
   });
 
-  it("keeps quantitative surfaces flat while enabling studio for uniform geometry", () => {
+  it("keeps Scientific magnetic surfaces exact while enabling studio for uniform geometry", () => {
     const interactive = resolveViewport3DMaterialProfile(
       getViewport3DVisualProfile("interactive"),
     );
 
     expect(interactive.magneticSurface).toEqual({
+      presentation: null,
       shadeStrength: 0,
       toneMapped: false,
     });
     expect(interactive.primitivePreview).toEqual({ toneMapped: false });
     expect(interactive.uniformGeometry.lit).toBe(true);
-    expect(interactive.magneticSurface).not.toHaveProperty("metalness");
-    expect(interactive.magneticSurface).not.toHaveProperty("roughness");
     expect(interactive.primitivePreview).not.toHaveProperty("emissiveIntensity");
+  });
+
+  it("uses appearance material parameters and quality-gated shadows for Presentation fields", () => {
+    const profile = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("balanced"),
+      {
+        ...DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES,
+        materialMetalness: 0.18,
+        materialRoughness: 0.72,
+        renderMode: "presentation",
+        softShadows: false,
+      },
+    );
+
+    expect(profile.magneticSurface.presentation).toEqual({
+      metalness: 0.18,
+      roughness: 0.72,
+      shadows: false,
+    });
   });
 
   it("keeps lighting mode independent from capture quality", () => {

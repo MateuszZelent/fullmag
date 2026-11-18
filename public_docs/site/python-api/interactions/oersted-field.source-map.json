@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-oersted_field",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_oersted_field"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_oersted_field",
@@ -63,7 +46,7 @@
         "python": "source",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty current transport source",
         "meaning": "current solution identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; solved transport runtime required",
@@ -73,7 +56,7 @@
         "python": "model",
         "type": "str",
         "default": "from_current_solution",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "current source model",
         "meaning": "field reconstruction model",
         "backend_support": "FEM/FDM CPU/GPU: IR; solved transport runtime required",
@@ -83,7 +66,7 @@
         "python": "id",
         "type": "str or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty when supplied; otherwise derived",
         "meaning": "stable interaction identifier",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

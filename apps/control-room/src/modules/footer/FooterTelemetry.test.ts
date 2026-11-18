@@ -4,6 +4,7 @@ import type {
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
+  ScalarWindowResource,
   SceneResource,
   SolverStatusResource,
   StageExecutionResource,
@@ -422,6 +423,7 @@ describe("FooterTelemetry", () => {
       max_torque_T: 0.002,
       active_runtime_seconds: 0.25,
       pseudo_time_seconds: null,
+      relaxation_algorithm: "llg_overdamped",
       revision: 5,
       run_id: status.run?.run_id ?? null,
       runtime_state: "running",
@@ -437,9 +439,419 @@ describe("FooterTelemetry", () => {
 
     expect(byId.time?.label).toBe("Sim time");
     expect(byId.time?.detail).toBe("Physical simulation time");
+    expect(byId.time?.value).toBe("4.000000e-9");
+    expect(byId.time?.unit).toBe("s");
     expect(byId["sim-time"]).toBeUndefined();
+    expect(byId.dt?.value).toBe("1.000000e-13");
+    expect(byId.dt?.unit).toBe("s");
+    expect(byId["active-solver"]?.value).toBe("LLG + RK23");
     expect(byId["active-runtime"]?.label).toBe("Runtime");
     expect(byId["active-runtime"]?.detail).toBe("Active compute time");
+  });
+
+  it("marks zero time and dt not applicable for BB without published pseudotime", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 0 },
+        solver: {
+          ...status.solver,
+          algorithm: null,
+          dt: 0,
+          relaxation_algorithm: "projected_gradient_bb",
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      null,
+      solverStatusFixture({
+        algorithm: null,
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: "rk23",
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 0,
+        pseudo_time_seconds: null,
+        relaxation_algorithm: null,
+        revision: 6,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "relax",
+        step_index: 0,
+        warnings: [],
+      }),
+      {
+        revision: 23,
+        row: { solver_dt: 0, step: 0, time: 0 },
+        requestScopeEpoch: "test-api:0",
+        runId: "run-1",
+        sessionId: "session-1",
+        step: 0,
+        time: 0,
+      },
+    );
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId["active-solver"]?.value).toBe("BB");
+    expect(byId["active-solver"]?.detail).toContain("Barzilai–Borwein");
+    expect(byId.time?.value).toBe("—");
+    expect(byId.time?.unit).toBeUndefined();
+    expect(byId.time?.detail).toContain("does not integrate physical time");
+    expect(byId.dt?.value).toBe("—");
+    expect(byId.dt?.unit).toBeUndefined();
+    expect(byId.dt?.subdetail).toBe("Not applicable: no physical timestep is used");
+    expect(byId.step?.subdetail).toBe("Physical time not applicable");
+  });
+
+  it("preserves zero physical time and dt for an active LLG integrator", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 0 },
+        solver: {
+          ...status.solver,
+          algorithm: null,
+          dt: 0,
+          relaxation_algorithm: "llg_overdamped",
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(telemetryStatus, null, solverStatusFixture({
+      algorithm: null,
+      can_accept_commands: false,
+      converged: false,
+      dt_seconds: 0,
+      integrator: "rk23",
+      is_busy: true,
+      last_error: null,
+      max_torque_T: 0,
+      active_runtime_seconds: 0,
+      pseudo_time_seconds: null,
+      relaxation_algorithm: "llg_overdamped",
+      revision: 7,
+      run_id: status.run?.run_id ?? null,
+      runtime_state: "running",
+      runtime_status_code: "running",
+      runtime_status_kind: "running",
+      session_status: "running",
+      sim_time_seconds: 0,
+      stage_kind: "relax",
+      step_index: 0,
+      warnings: [],
+    }));
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId["active-solver"]?.value).toBe("LLG + RK23");
+    expect(byId.time?.value).toBe("0.000000e+0");
+    expect(byId.time?.unit).toBe("s");
+    expect(byId.dt?.value).toBe("0.000000e+0");
+    expect(byId.dt?.unit).toBe("s");
+  });
+
+  it.each([
+    { solverTime: 0, expectedTime: "0.000000e+0" },
+    { solverTime: 3601, expectedTime: "3,601" },
+  ])("preserves current-run time $solverTime without inferring a solver from foreign provenance", ({ solverTime, expectedTime }) => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: solverTime },
+        solver: {
+          ...status.solver,
+          algorithm: null,
+          relaxation_algorithm: null,
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const mismatchedExecution: StageExecutionResource = {
+      session_id: status.session.session_id,
+      session_epoch: status.session.session_epoch,
+      request_scope_epoch: status.session.request_scope_epoch,
+      run_id: "previous-run",
+      revision: 9,
+      runtime_state: "running",
+      active_stage_index: 0,
+      active_stage_kind: "relax",
+      completed_stage_indexes: [],
+      stage_statuses: ["running"],
+      total_stages: 1,
+      stages: [{
+        index: 0,
+        stage_id: "runtime-stage",
+        status: "running",
+        converged: false,
+        current_settle_step_method: "projected_gradient_bb",
+      }],
+    };
+    const foreignSolverStatus = solverStatusFixture({
+      algorithm: "projected_gradient_bb",
+      can_accept_commands: false,
+      converged: false,
+      dt_seconds: 9e-6,
+      integrator: "rk23",
+      is_busy: true,
+      last_error: null,
+      max_torque_T: 0,
+      pseudo_time_seconds: 7e-6,
+      relaxation_algorithm: "projected_gradient_bb",
+      revision: 9,
+      run_id: "previous-run",
+      runtime_state: "running",
+      runtime_status_code: "running",
+      runtime_status_kind: "running",
+      session_status: "running",
+      sim_time_seconds: 8e-6,
+      stage_kind: "relax",
+      step_index: 99,
+      warnings: [],
+    });
+    for (const solverStatus of [null, foreignSolverStatus]) {
+      const model = buildFooterTelemetryModel(
+        telemetryStatus,
+        null,
+        solverStatus,
+        null,
+        mismatchedExecution,
+      );
+      const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+      expect(byId["active-solver"]?.value).toBe("Unknown");
+      expect(byId["active-solver"]?.detail).toContain("Runtime solver provenance unavailable");
+      expect(byId.time?.value).toBe(expectedTime);
+      expect(byId.time?.unit).toBe("s");
+      expect(byId.dt?.value).toBe("1.000000e-12");
+      expect(byId.dt?.unit).toBe("s");
+    }
+  });
+
+  it("prioritizes the matching active runtime stage method for the solver indicator", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        solver: {
+          ...status.solver,
+          relaxation_algorithm: "projected_gradient_bb",
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const execution: StageExecutionResource = {
+      session_id: status.session.session_id,
+      session_epoch: status.session.session_epoch,
+      request_scope_epoch: status.session.request_scope_epoch,
+      run_id: status.run!.run_id,
+      revision: 10,
+      runtime_state: "running",
+      active_stage_index: 0,
+      active_stage_kind: "relax",
+      completed_stage_indexes: [],
+      stage_statuses: ["running"],
+      total_stages: 1,
+      stages: [{
+        index: 0,
+        stage_id: "active-runtime-stage",
+        status: "running",
+        converged: false,
+        current_settle_step_method: "tangent_plane_implicit",
+      }],
+    };
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      null,
+      solverStatusFixture({
+        algorithm: "projected_gradient_bb",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: null,
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 0,
+        pseudo_time_seconds: null,
+        relaxation_algorithm: "nonlinear_cg",
+        revision: 10,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "relax",
+        step_index: 0,
+        warnings: [],
+      }),
+      null,
+      execution,
+    );
+
+    expect(model.metrics.find((metric) => metric.id === "active-solver")?.value).toBe("TPI");
+  });
+
+  it("uses active Heun dynamics over stale BB and integrator telemetry", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        run: { ...status.run!, solver_time: 0 },
+        solver: {
+          ...status.solver,
+          algorithm: "fdm",
+          dt: 0,
+          relaxation_algorithm: "projected_gradient_bb",
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const execution: StageExecutionResource = {
+      session_id: status.session.session_id,
+      session_epoch: status.session.session_epoch,
+      request_scope_epoch: status.session.request_scope_epoch,
+      run_id: status.run!.run_id,
+      revision: 11,
+      runtime_state: "running",
+      active_stage_index: 0,
+      active_stage_kind: "hysteresis",
+      completed_stage_indexes: [],
+      stage_statuses: ["running"],
+      total_stages: 1,
+      stages: [{
+        index: 0,
+        stage_id: "active-heun-stage",
+        status: "running",
+        converged: false,
+        current_settle_step_method: "heun_dynamics_settle",
+      }],
+    };
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      null,
+      solverStatusFixture({
+        algorithm: "fdm",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 0,
+        integrator: "rk23",
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 0,
+        pseudo_time_seconds: 9e-6,
+        relaxation_algorithm: "projected_gradient_bb",
+        revision: 11,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "hysteresis",
+        step_index: 2,
+        warnings: [],
+      }),
+      {
+        revision: 25,
+        row: { pseudo_time_s: 9e-6, solver_dt: 0, step: 2, time: 0 },
+        requestScopeEpoch: "test-api:0",
+        runId: "run-1",
+        sessionId: "session-1",
+        step: 2,
+        time: 0,
+      },
+      execution,
+    );
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId["active-solver"]?.value).toBe("LLG + HEUN");
+    expect(byId["active-solver"]?.detail).toBe(
+      "Landau–Lifshitz–Gilbert overdamped with Heun integrator",
+    );
+    expect(byId.time?.label).toBe("Sim time");
+    expect(byId.time?.value).toBe("0.000000e+0");
+    expect(byId.time?.unit).toBe("s");
+    expect(byId["sim-time"]).toBeUndefined();
+    expect(byId.dt?.value).toBe("0.000000e+0");
+    expect(byId.dt?.unit).toBe("s");
+  });
+
+  it("shows an exact-run integrator without inferring an LLG solver", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        solver: {
+          ...status.solver,
+          algorithm: "fdm",
+          relaxation_algorithm: null,
+          state: "running",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      null,
+      solverStatusFixture({
+        algorithm: "fdm",
+        can_accept_commands: false,
+        converged: false,
+        dt_seconds: 1e-12,
+        integrator: "rk23",
+        is_busy: true,
+        last_error: null,
+        max_torque_T: 0,
+        active_runtime_seconds: 0,
+        pseudo_time_seconds: null,
+        relaxation_algorithm: null,
+        revision: 12,
+        run_id: status.run?.run_id ?? null,
+        runtime_state: "running",
+        runtime_status_code: "running",
+        runtime_status_kind: "running",
+        session_status: "running",
+        sim_time_seconds: 0,
+        stage_kind: "relax",
+        step_index: 0,
+        warnings: [],
+      }),
+    );
+    const solverMetric = model.metrics.find((metric) => metric.id === "active-solver");
+
+    expect(solverMetric?.value).toBe("RK23");
+    expect(solverMetric?.detail).toBe("Runtime integrator rk23");
+    expect(solverMetric?.detail).not.toContain("LLG");
   });
 
   it("uses live scalar samples for fast footer telemetry values", () => {
@@ -538,6 +950,21 @@ describe("FooterTelemetry", () => {
       revision: 1,
       status: "ready",
     });
+    const scalarWindow: ScalarWindowResource = {
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      current_observation: {
+        request_scope_epoch: telemetryStatus.requestScopeEpoch,
+        run_id: telemetryStatus.run!.run_id,
+        scalar_revision: 22,
+        session_id: telemetryStatus.sessionId,
+        source_step: 99,
+      },
+      observation_frames: [],
+      returned_rows: 1,
+      revision: 22,
+      rows: [[99, 1.25e-9, 0.25, -0.5, 0.75, 15]],
+      total_rows: 1,
+    };
     const model = buildFooterTelemetryModel(
       telemetryStatus,
       objectMetrics,
@@ -546,21 +973,7 @@ describe("FooterTelemetry", () => {
       null,
       null,
       null,
-      {
-        columns: ["step", "time", "mx", "my", "mz"],
-        current_observation: {
-          request_scope_epoch: "test-api:0",
-          run_id: "run-1",
-          scalar_revision: 22,
-          session_id: "session-1",
-          source_step: 99,
-        },
-        observation_frames: [],
-        returned_rows: 1,
-        revision: 22,
-        rows: [[99, 1.25e-9, 0.25, -0.5, 0.75]],
-        total_rows: 1,
-      },
+      scalarWindow,
     );
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
@@ -623,12 +1036,15 @@ describe("FooterTelemetry", () => {
 
     expect(byId.time?.label).toBe("Pseudo time");
     expect(byId.time?.detail).toBe("Direct minimizer pseudotime");
+    expect(byId.time?.value).toBe("9.000000e-6");
+    expect(byId.time?.unit).toBe("s");
     expect(byId["sim-time"]?.label).toBe("Sim time");
     expect(byId["sim-time"]?.detail).toBe("Physical simulation time");
     expect(byId["active-runtime"]?.label).toBe("Runtime");
     expect(byId["active-runtime"]?.value).toBe("0.200 s");
     expect(byId.dt?.label).toBe("Pseudo dt");
     expect(byId.dt?.detail).toBe("Minimizer pseudotime step");
+    expect(byId["active-solver"]?.value).toBe("BB");
     expect(byId.step?.subdetail).toBe("t=0.000000e+0 s");
   });
 
@@ -1295,6 +1711,7 @@ describe("FooterTelemetry", () => {
         solver: {
           ...status.solver,
           max_torque_T: 0.008,
+          relaxation_algorithm: "projected_gradient_bb",
         },
       },
       error: null,
@@ -1306,6 +1723,20 @@ describe("FooterTelemetry", () => {
     expect(selected).not.toBe(status);
     expect(footerTelemetryStatusEquals(selected, sameTelemetry)).toBe(true);
     expect(footerTelemetryStatusEquals(selected, nextTelemetry)).toBe(false);
+    const nextAlgorithmTelemetry = selectFooterTelemetryStatus({
+      data: {
+        ...status,
+        solver: {
+          ...status.solver,
+          relaxation_algorithm: "projected_gradient_bb",
+        },
+      },
+      error: null,
+      refetch: () => {},
+      revision: 4,
+      status: "ready",
+    });
+    expect(footerTelemetryStatusEquals(selected, nextAlgorithmTelemetry)).toBe(false);
   });
 
   it("uses the selected scene object as the telemetry object source", () => {

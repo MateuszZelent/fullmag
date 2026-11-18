@@ -86,6 +86,7 @@ class _Control:
         self.document = document
         self.events = events
         self.writes: list[tuple[str, object]] = []
+        self.read_bytes_calls: list[tuple[str, bool]] = []
         self.operation_value = _Operation(events)
 
     def prepare(self) -> None:
@@ -99,6 +100,13 @@ class _Control:
         if optional:
             return None
         raise AssertionError("unexpected control read: " + relative)
+
+    def read_bytes(self, relative: str, *, optional: bool = False) -> bytes | None:
+        self.read_bytes_calls.append((relative, optional))
+        value = self.read(relative, optional=optional)
+        if value is None:
+            return None
+        return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
     def operation(self, phase: str, _inputs: object) -> _Operation:
         if phase != "recreate-services":

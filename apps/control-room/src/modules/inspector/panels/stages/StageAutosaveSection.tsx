@@ -23,7 +23,7 @@ export function StageAutosaveSection({
     <section className="fm-stage-autosave" aria-label="Stage autosave">
       <div className="fm-stage-autosave__heading">
         <div>
-          <strong>Autosave</strong>
+          <h3 className="m-0 text-[length:inherit] font-bold">Autosave</h3>
           <p>Persist data owned by this {owner === "relax" ? "Relax" : "Run"} stage.</p>
         </div>
         <FormField

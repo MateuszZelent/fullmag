@@ -1,6 +1,7 @@
 import type {
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
+  RuntimeStageInitialStateRequest,
   StructuredCommandRequest,
 } from "../api/apiTypes";
 
@@ -45,6 +46,28 @@ export function buildStudyRuntimeCommand(
   }) as SimpleStudyRuntimeCommand;
 }
 
+export type StudyPhysicalStageCommandKind = "run" | "relax";
+
+export function buildAuthoredStudyStageCommand(
+  kind: StudyPhysicalStageCommandKind,
+  stageId: string,
+  options: Omit<StudyRuntimeCommandOptions, "target"> & { initialState?: RuntimeStageInitialStateRequest } = {},
+): StructuredCommandRequest {
+  const target: Extract<RuntimeCommandTarget, { kind: "stage_id" }> = {
+    kind: "stage_id",
+    stage_id: stageId,
+  };
+  const intent = {
+    client_intent_id: options.clientIntentId ?? createRuntimeClientIntentId(kind),
+    initial_state: options.initialState ?? { kind: "default_for_target" as const },
+    precondition: options.precondition,
+    reason: options.reason ?? "user_requested",
+    requested_at_unix_ms: options.requestedAtUnixMs ?? Date.now(),
+    target,
+  };
+  return kind === "run" ? { ...intent, kind: "run" } : { ...intent, kind: "relax" };
+}
+
 function defaultTargetForKind(
   kind: SimpleStudyRuntimeCommandKind,
 ): RuntimeCommandTarget {
@@ -62,7 +85,7 @@ function defaultTargetForKind(
   }
 }
 
-function createRuntimeClientIntentId(kind: SimpleStudyRuntimeCommandKind): string {
+function createRuntimeClientIntentId(kind: SimpleStudyRuntimeCommandKind | StudyPhysicalStageCommandKind): string {
   const random =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()

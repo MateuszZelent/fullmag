@@ -50,11 +50,22 @@ pub fn materialize_captured_study_input(
 pub fn materialize_study_execution(
     study: &StudyPlan,
     inputs: Vec<StudyStepExecutionInput>,
-    mut lookup: impl FnMut(&str, &str) -> Result<ExecutionProfileIR, String>,
+    lookup: impl FnMut(&str, &str) -> Result<ExecutionProfileIR, String>,
 ) -> Result<StudyProblemCatalog, String> {
     study
         .validate_for_execution()
         .map_err(|error| error.to_string())?;
+    let entries = bind_study_execution_entries(study, inputs, lookup)?;
+    StudyProblemCatalog::from_entries(study, entries).map_err(|error| error.to_string())
+}
+
+/// Bind authored inputs for qualification and graph selection. A caller
+/// must construct a validated catalog before admitting any execution.
+pub fn bind_study_execution_entries(
+    study: &StudyPlan,
+    inputs: Vec<StudyStepExecutionInput>,
+    mut lookup: impl FnMut(&str, &str) -> Result<ExecutionProfileIR, String>,
+) -> Result<Vec<StudyProblemCatalogEntry>, String> {
     let enabled: BTreeMap<_, _> = study
         .steps
         .iter()
@@ -102,7 +113,7 @@ pub fn materialize_study_execution(
             step, bound, snapshot,
         ));
     }
-    StudyProblemCatalog::from_entries(study, entries).map_err(|error| error.to_string())
+    Ok(entries)
 }
 
 fn materialize_input(

@@ -26,6 +26,7 @@ import {
   createMeshPartScalarShaderMaterials,
   MESH_PART_SURFACE_USER_DATA,
 } from "./MeshPartLayer";
+import { resolveMeshPartSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   buildMeshPartScalarColorRetentionKey,
   resolveMeshPartCommittedScalarColorState,
@@ -509,15 +510,143 @@ describe("MeshPartLayer", () => {
     expect(source).not.toContain("applyScalarShaderColorBuffer");
   });
 
-  it("uses unlit materials for mesh part fallback surfaces", () => {
+  it("selects PBR only for uniform presentation surfaces and preserves quantitative color paths", () => {
+    const profile = {
+      magneticSurface: {
+        presentation: { roughness: 0.27, metalness: 0.64, shadows: true },
+        toneMapped: true,
+      },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.27,
+        metalness: 0.64,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.64,
+      receiveShadow: true,
+      roughness: 0.27,
+      toneMapped: true,
+      vertexColors: false,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: true,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.64,
+      receiveShadow: true,
+      roughness: 0.27,
+      toneMapped: true,
+      vertexColors: true,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "scalar-shader",
+      receiveShadow: true,
+      vertexColors: false,
+    });
+
+    const scientificProfile = {
+      ...profile,
+      magneticSurface: { presentation: null, toneMapped: false },
+      uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+    };
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: scientificProfile,
+    })).toMatchObject({ kind: "lambert", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: true,
+      materialProfile: scientificProfile,
+    })).toEqual({
+      castShadow: false,
+      kind: "basic",
+      receiveShadow: false,
+      toneMapped: false,
+      vertexColors: true,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: scientificProfile,
+    })).toMatchObject({ kind: "scalar-shader", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: true,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        magneticSurface: {
+          ...profile.magneticSurface,
+          presentation: { ...profile.magneticSurface.presentation, shadows: false },
+        },
+      },
+    })).toMatchObject({ kind: "scalar-shader", castShadow: false, receiveShadow: false });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+      },
+    })).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolveMeshPartSurfaceMaterialPlan({
+      hasScalarShaderMaterial: false,
+      hasUploadedVertexScalarColors: false,
+      materialProfile: {
+        ...profile,
+        magneticSurface: { presentation: null, toneMapped: false },
+        uniformGeometry: {
+          ...profile.uniformGeometry,
+          lit: false,
+          pbr: false,
+        },
+      },
+    })).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
+    expect(source).toContain("resolveMeshPartSurfaceMaterialPlan({");
+    expect(source).toContain("<meshStandardMaterial");
     expect(source).toContain("<meshBasicMaterial");
-    expect(source).not.toContain("<meshStandardMaterial");
-    expect(source).not.toContain("MeshStandardMaterial");
+    expect(source).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(source).toContain("computeVertexNormals");
   });
 

@@ -6,6 +6,7 @@
 
 pub(crate) mod convergence;
 pub(crate) mod direct_minimizer;
+pub(crate) mod multilayer_bb;
 mod direct_minimizer_reference;
 pub(crate) mod provenance;
 pub(crate) mod vector_math;
@@ -17,10 +18,16 @@ pub(crate) use convergence::{
     RelaxationTorqueConfirmation, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
 pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projected_gradient_bb};
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+pub(crate) use direct_minimizer_reference::{
+    execute_nonlinear_cg_with_observer, execute_projected_gradient_bb_with_observer,
+    DirectMinimizerAcceptedSample, DirectMinimizerAcceptedStateObserver,
+};
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use provenance::apply_fem_direct_minimizer_policy_provenance;
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;
 pub(crate) use provenance::{
-    apply_energy_minimizer_provenance, native_direct_minimizer_realization,
-    CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
+    apply_energy_minimizer_provenance, cpu_direct_minimizer_realization,
+    expected_cpu_direct_minimizer_realization, native_direct_minimizer_realization,
+    CUDA_FDM_HOST_DIRECT_MINIMIZER_REALIZATION,
 };

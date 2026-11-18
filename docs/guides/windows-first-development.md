@@ -261,16 +261,16 @@ just windows-build fdm cpu dev
 just windows-build fdm gpu dev
 just windows-build fem cpu dev
 just windows-build fem gpu dev
-just fullmag build=True dev fdm cpu .\examples\example.py
-just fullmag build=True dev fem gpu .\examples\example.py
+just fullmag-reference build=True dev fdm cpu .\examples\example.py
+just fullmag-reference build=True dev fem gpu .\examples\example.py
 ```
 
-The legacy headless route offers `skip_local_changes=true` (or
+The legacy `fullmag-reference` headless route offers `skip_local_changes=true` (or
 `-SkipLocalChanges` on the PowerShell launcher) for an explicitly unqualified
 diagnostic build from a changing checkout:
 
 ```text
-just fullmag build=True headless fdm gpu skip_local_changes=true .\path\case.py
+just fullmag-reference build=True headless fdm gpu skip_local_changes=true .\path\case.py
 ```
 
 This only disables the before/after source-snapshot equality gate. The launcher
@@ -287,9 +287,15 @@ kontrolę integralności i nie wymaga flagi `skip_local_changes`.
 Existing FEM images are reused. Set `FULLMAG_WINDOWS_REBUILD_FEM_IMAGE=1` for a
 deliberate image rebuild after changing a FEM Dockerfile or its dependencies.
 
-On Windows, `just fullmag` selects the Windows route automatically; the legacy
-`windows=True` option remains accepted for compatibility. `build=False` reuses
-the lane-specific cache and runtime.
+The public `just fullmag master examples/model.py` command uses the managed
+Docker Compose DEV group, with GUI as its two-argument default. Add an explicit
+`gui` or `headless` prefix for the extended form. On Windows this route uses
+Docker Desktop; see the [Docker console workflow](docker-volume-development.md#konsola-interaktywna).
+
+The examples above remain on the lane-specific native qualification/reference
+path under the private `just fullmag-reference` recipe. On Windows it selects
+the Windows route automatically; `windows=True` remains accepted there, and
+`build=False` reuses that lane's cache and runtime.
 
 Before and after a manual `just` invocation, use the storage information and
 inventory recipes when available (`just storage-info` and

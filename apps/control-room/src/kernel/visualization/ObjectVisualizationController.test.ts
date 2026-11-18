@@ -43,9 +43,46 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("serializes only the independent wireframe geometry scope", () => {
+    const target = { id: "object:film", kind: "object" as const };
+
+    const override = visualizationStateOverrideFromTargetPatch(target, {
+      wireframeGeometryScope: "full",
+    });
+
+    expect(override).toEqual({
+      scope: "object",
+      scope_id: "film",
+      display: { wireframe_geometry_scope: "full" },
+    });
+  });
+
+  it("acknowledges an explicit wireframe mesh scope by visualization revision", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    controller.patchTargetPending(target, { wireframeGeometryScope: "full" }, 8, "wireframe-scope");
+
+    controller.acknowledgePendingTargetPatches({
+      revision: 9,
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { wireframe_geometry_scope: "full" },
+        },
+      ],
+    } as never);
+
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+    expect(controller.getSnapshot().overrides?.["object:film"]).toMatchObject({
+      wireframeGeometryScope: "full",
+    });
+  });
+
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
+      wireframeGeometryScope: "surface",
       surfaceOpacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
       primitiveVisible: false,
@@ -63,6 +100,10 @@ describe("ObjectVisualizationController", () => {
       wireframeColor: "var(--fm-border-strong)",
       wireframeOpacityPercent: 100,
       wireframeVisible: false,
+    });
+    expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
+      geometryScope: "full",
+      wireframeGeometryScope: "full",
     });
     expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
       activeQuantityId: "H_demag",
@@ -138,6 +179,7 @@ describe("ObjectVisualizationController", () => {
       primaryRenderModes: ["wireframe", "points"],
       showBoundsControl: true,
       showGeometryScopeControl: false,
+      showWireframeGeometryScopeControl: false,
       supportsFieldData: true,
       supportsPoints: true,
       supportsVectorSurfaceOffset: false,
@@ -147,6 +189,7 @@ describe("ObjectVisualizationController", () => {
       primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
       showBoundsControl: true,
       showGeometryScopeControl: true,
+      showWireframeGeometryScopeControl: true,
       supportsFieldData: true,
       supportsPoints: true,
       supportsVectorSurfaceOffset: true,
@@ -220,6 +263,7 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
       primaryRenderModes: ["wireframe", "points"],
       supportsPoints: true,
+      showWireframeGeometryScopeControl: false,
       supportsVectorSurfaceOffset: false,
     });
   });
@@ -311,10 +355,12 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(target)).toMatchObject({
       supportsFieldData: true,
       supportsVectors: true,
+      showWireframeGeometryScopeControl: false,
     });
     expect(controller.getSettings(target)).toMatchObject({
       activeQuantityId: "H_demag",
       vectorsVisible: true,
+      wireframeGeometryScope: "full",
     });
   });
 
@@ -1578,6 +1624,112 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("defaults a legacy registry entry's independent wireframe scope to Surface", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 16,
+        overrides: [],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              label: "Film",
+              scope: "object",
+              scope_id: "film",
+              settings: {
+                active_quantity_id: "m",
+                geometry_scope: "full",
+                vector_budget: 37,
+                wireframe_visible: true,
+              },
+              source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "full",
+      vectorBudget: 37,
+      wireframeGeometryScope: "surface",
+      wireframeVisible: true,
+    });
+  });
+
+  it("hydrates an explicit Full wireframe scope independently from vector geometry scope", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 17,
+        overrides: [],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              label: "Film",
+              scope: "object",
+              scope_id: "film",
+              settings: {
+                active_quantity_id: "m",
+                geometry_scope: "surface",
+                vector_budget: 37,
+                wireframe_geometry_scope: "full",
+                wireframe_visible: true,
+              },
+              source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: 37,
+      wireframeGeometryScope: "full",
+      wireframeVisible: true,
+    });
+  });
+
+  it("hydrates a persisted wireframe scope override without changing other display settings", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "film", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 18,
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { wireframe_geometry_scope: "full" },
+          },
+        ],
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      geometryScope: "surface",
+      vectorBudget: DEFAULT_OBJECT_VISUALIZATION.vectorBudget,
+      wireframeGeometryScope: "full",
+      wireframeVisible: DEFAULT_OBJECT_VISUALIZATION.wireframeVisible,
+    });
+  });
+
   it("normalizes scalar quantities from the effective target registry to colormap rendering", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };
@@ -2415,6 +2567,35 @@ describe("ObjectVisualizationController", () => {
           wireframe: { opacity: 0.45, visible: true },
         },
         style: { vector_alpha: 0.55 },
+      },
+    ]);
+  });
+
+  it("removes only the wireframe mesh scope and preserves vector geometry scope", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: {
+              geometry_scope: "full",
+              wireframe_geometry_scope: "full",
+              wireframe: { visible: true },
+            },
+          },
+        ],
+        { id: "object:film", kind: "object" },
+        "wireframeGeometryScope",
+      ),
+    ).toEqual([
+      {
+        scope: "object",
+        scope_id: "film",
+        display: {
+          geometry_scope: "full",
+          wireframe: { visible: true },
+        },
       },
     ]);
   });

@@ -189,6 +189,10 @@ export function buildViewport3DFdmTargetViews({
   const unassignedTargetId = unassignedOwnerObjectId
     ? visualizationTargetIdForSceneObject(unassignedOwnerObjectId)
     : null;
+  const modelRegionIds = model.regionIds;
+  if (!modelRegionIds || modelRegionIds.length !== model.count) {
+    return incompatible("sampled-model-membership-unavailable");
+  }
   for (const numericRegionId of realizedRegionIds) {
     if (numericRegionId === FMRM_INACTIVE_REGION_ID) continue;
     if (numericRegionId === 0) {
@@ -217,7 +221,7 @@ export function buildViewport3DFdmTargetViews({
   };
   for (let instanceOrdinal = 0; instanceOrdinal < model.count; instanceOrdinal += 1) {
     const cellOrdinal = model.cellIndices[instanceOrdinal];
-    const numericRegionId = model.regionIds[instanceOrdinal];
+    const numericRegionId = modelRegionIds[instanceOrdinal];
     if (
       cellOrdinal === undefined ||
       cellOrdinal >= membership.cell_count ||

@@ -272,6 +272,28 @@ class CandidateRetirementTests(unittest.TestCase):
         )
 
     @staticmethod
+    def _unpublished_shared_candidate_receipt(fixture):
+        receipt_path = fixture["candidate"] / "backend-build-receipt.json"
+        receipt, _ = backend._read_json(
+            receipt_path, "unpublished shared candidate receipt"
+        )
+        receipt["build"] = dict(receipt["build"])
+        receipt["build"]["cuda_architectures"] = "89-real"
+        backend._write_json(
+            receipt_path,
+            receipt,
+            "unpublished shared candidate receipt",
+        )
+        return receipt
+
+    @staticmethod
+    def _shared_store_environment():
+        return {
+            "FULLMAG_SHARED_BACKEND_STORE": "/opt/fullmag/shared-backend",
+            backend.DEV_CUDA_ARCHITECTURES_ENV: "89-real",
+        }
+
+    @staticmethod
     def _current_snapshot(fixture):
         current = backend._validated_package(
             fixture["package"],
@@ -763,6 +785,147 @@ class CandidateRetirementTests(unittest.TestCase):
             self.assertEqual(completed["state"], "succeeded")
             self.assertEqual(self._current_snapshot(fixture), current_before)
 
+    def test_unpublished_shared_candidate_resumes_from_sealed_source_after_capture_overwrite(self):
+        with self._fixture("stale") as fixture:
+            receipt = self._unpublished_shared_candidate_receipt(fixture)
+            self.assertNotIn("shared_package", receipt)
+
+            with patch.dict(
+                os.environ,
+                {**self._shared_store_environment(), "FULLMAG_SHARED_BACKEND_STORE": ""},
+            ):
+                self.assertTrue(
+                    backend._package_matches_fresh_live_manifest(
+                        receipt,
+                        fixture["candidate_manifest"],
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    ),
+                    "candidate source, native, toolchain, and build identity should match",
+                )
+            with patch.dict(os.environ, self._shared_store_environment()):
+                self.assertFalse(
+                    backend._package_matches_fresh_live_manifest(
+                        receipt,
+                        fixture["candidate_manifest"],
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    ),
+                    "published-package eligibility must still require its shared binding",
+                )
+                spec = self._qualify(fixture)
+                current_before = self._current_snapshot(fixture)
+                archive, _manifest = self._action_prepared_archive(fixture, spec)
+
+                overwritten_path, _ = fixture_module.BackendPackageTests._live_manifest(
+                    fixture["root"], commit="c" * 40, capture_id="new-capture"
+                )
+                self._live_manifest_path(fixture).write_bytes(
+                    overwritten_path.read_bytes()
+                )
+                (fixture["candidate"] / "bin" / "fullmag-bin").unlink()
+
+                result = retirement.recover_pending_retirements(
+                    backend,
+                    fixture["package"],
+                    fixture["control_root"],
+                    fixture["build_root"],
+                    fixture["current"],
+                )
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0].action, "retired")
+            self.assertFalse(fixture["candidate"].exists())
+            completed, _ = retirement._read_archive_manifest(backend, archive)
+            self.assertEqual(completed["state"], "succeeded")
+            self.assertEqual(self._current_snapshot(fixture), current_before)
+
+    def test_unpublished_same_source_candidate_is_not_promoted_in_shared_environment(self):
+        with self._fixture("fresh") as fixture:
+            receipt = self._unpublished_shared_candidate_receipt(fixture)
+            self.assertNotIn("shared_package", receipt)
+            with patch.dict(
+                os.environ,
+                {**self._shared_store_environment(), "FULLMAG_SHARED_BACKEND_STORE": ""},
+            ):
+                self.assertTrue(
+                    backend._package_matches_fresh_live_manifest(
+                        receipt,
+                        fixture["candidate_manifest"],
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    )
+                )
+            with patch.dict(os.environ, self._shared_store_environment()):
+                self.assertFalse(
+                    backend._package_matches_fresh_live_manifest(
+                        receipt,
+                        fixture["candidate_manifest"],
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    ),
+                    "a source-matching receipt still needs the shared binding for promotion",
+                )
+                spec = self._qualify(fixture)
+                result = retirement.retire_candidate(
+                    backend,
+                    spec,
+                    fixture["candidate_manifest"],
+                    fixture["toolchain"],
+                    backend.BACKEND_CARGO_PROFILE,
+                    fixture["current"],
+                )
+
+            self.assertEqual(result.action, "retired")
+            self.assertEqual(result.classification, "stale")
+            self.assertFalse(fixture["candidate"].exists())
+
+    def test_shared_matcher_requires_a_valid_binding_but_source_matcher_does_not(self):
+        with self._fixture("fresh") as fixture:
+            receipt = self._unpublished_shared_candidate_receipt(fixture)
+            manifest = fixture["candidate_manifest"]
+
+            with patch.dict(os.environ, self._shared_store_environment()):
+                self.assertTrue(
+                    backend._package_source_matches_fresh_live_manifest(
+                        receipt,
+                        manifest,
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    )
+                )
+                self.assertFalse(
+                    backend._package_matches_fresh_live_manifest(
+                        receipt,
+                        manifest,
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    )
+                )
+
+                import backend_shared_store as shared
+
+                identity = backend._shared_package_identity(
+                    manifest,
+                    fixture["toolchain"],
+                    "89-real",
+                )
+                bound_receipt = {
+                    **receipt,
+                    "shared_package": {
+                        "schema": shared.SCHEMA,
+                        "key": shared.key_for(identity),
+                    },
+                }
+                self.assertTrue(
+                    backend._package_matches_fresh_live_manifest(
+                        bound_receipt,
+                        manifest,
+                        fixture["toolchain"],
+                        backend.BACKEND_CARGO_PROFILE,
+                    )
+                )
+
     def test_pending_archive_alone_never_authorizes_deletion(self):
         with self._fixture("stale") as fixture:
             spec = self._qualify(fixture)
@@ -1096,34 +1259,48 @@ class CandidateRetirementTests(unittest.TestCase):
 
     def test_malformed_candidate_receipt_source_native_and_build_bindings_preserve_candidate(self):
         mutations = {
-            "source": lambda receipt: {
-                **dict(receipt["source"]),
-                "source_digest": "0" * 64,
-            },
-            "native_source_identity": lambda receipt: {
-                **dict(receipt["native_source_identity"]),
-                "source_snapshot_sha256": "0" * 64,
-            },
-            "build": lambda receipt: {
-                **dict(receipt["build"]),
-                "mode": "invalid-mode",
-            },
+            "source": (
+                "source",
+                lambda receipt: {
+                    **dict(receipt["source"]),
+                    "source_digest": "0" * 64,
+                },
+            ),
+            "native_source_identity": (
+                "native_source_identity",
+                lambda receipt: {
+                    **dict(receipt["native_source_identity"]),
+                    "source_snapshot_sha256": "0" * 64,
+                },
+            ),
+            "build": (
+                "build",
+                lambda receipt: {
+                    **dict(receipt["build"]),
+                    "mode": "invalid-mode",
+                },
+            ),
+            "build.cuda_architectures": (
+                "build",
+                lambda receipt: {
+                    **dict(receipt["build"]),
+                    "cuda_architectures": "88-real",
+                },
+            ),
         }
-        for field, mutate in mutations.items():
-            with self.subTest(field=field), self._fixture("stale") as fixture:
+        for label, (field, mutate) in mutations.items():
+            with self.subTest(field=label), self._fixture("stale") as fixture:
+                receipt = self._unpublished_shared_candidate_receipt(fixture)
                 receipt_path = fixture["candidate"] / "backend-build-receipt.json"
-                receipt, _ = backend._read_json(
-                    receipt_path,
-                    "candidate receipt before provenance mutation",
-                )
                 receipt[field] = mutate(receipt)
                 backend._write_json(
                     receipt_path,
                     receipt,
                     f"malformed candidate receipt {field}",
                 )
-                with self.assertRaises(backend.BackendBuildError):
-                    self._qualify(fixture)
+                with patch.dict(os.environ, self._shared_store_environment()):
+                    with self.assertRaises(backend.BackendBuildError):
+                        self._qualify(fixture)
                 self.assertTrue(fixture["candidate"].is_dir())
                 archives = Path(backend.BACKEND_CONTROL_ROOT) / retirement.RETIREMENT_NAMESPACE_NAME
                 staging = Path(backend.BACKEND_CONTROL_ROOT) / retirement.RETIREMENT_STAGING_NAMESPACE_NAME

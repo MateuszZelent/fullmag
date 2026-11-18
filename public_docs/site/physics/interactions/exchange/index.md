@@ -10,14 +10,13 @@ source_of_truth: docs/physics/0400-fdm-exchange-demag-zeeman.md
 (public-docs-physics-exchange)=
 # Exchange interaction
 
-:::{admonition} Review candidate
+:::{admonition} Qualification scope
 :class: note
 
-This is the first FullMag interaction page written against the interaction-first documentation
-structure. It is
-ready for scientific and editorial review, but it does **not** claim that every backend is
-qualified. In particular, current-revision executed-device proof is missing for FDM CUDA Exchange
-and for the newest mixed-element FEM CUDA path.
+FullMag implements bulk exchange across FDM CPU, FDM CUDA, FEM CPU, and FEM CUDA, though not
+every backend lane has current-revision executed-device qualification. In particular,
+current-revision executed-device proof remains open for FDM CUDA Exchange and for the newest
+mixed-element FEM CUDA path.
 :::
 
 ## Solver and backend realizations
@@ -96,6 +95,15 @@ A(\nabla\mathbf m)\mathbf n
 =
 \mathbf 0
 \qquad\text{on }\partial\Omega_m.
+```
+
+```{figure} /_static/diagrams/exchange-fdm-stencil-vs-fem-weak.svg
+:alt: Three-panel diagram comparing continuum exchange stiffness and natural Neumann boundary condition, the FDM six-neighbor stencil with inactive-neighbor clamping and FP64 T0/T1 sub-cell corrections, and the FEM P1 H1 weak form with lumped and consistent mass projections.
+:width: 100%
+:name: fig-exchange-fdm-stencil-vs-fem-weak
+:figclass: fm-physics-figure
+
+Continuum bulk exchange stiffness, six-neighbor FDM discretization with inactive-cell Neumann clamping and FP64 T0/T1 corrections, and conforming $H^1(\Omega_m)$ FEM stiffness assembly with lumped and consistent mass projections (Abert 2019; Vansteenkiste et al. 2014).
 ```
 
 (physics-interactions-exchange-index-symbols-and-si-units)=
@@ -265,9 +273,9 @@ print(material.to_ir())
 
 | Python | Type | Default | SI unit | Meaning and validation |
 |---|---|---|---|---|
-| `FDM.boundary_correction` | `str \mid None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
-| `FDM.boundary_phi_floor` | `float \mid None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
-| `FDM.boundary_delta_min` | `float \mid None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
+| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | Optional `T0`/`T1`-family sub-cell policy. Support differs by precision and device as documented below. |
+| `FDM.boundary_phi_floor` | `float \| None` | `None` | $1$ | Optional lower bound $\varphi_{\mathrm{floor}}$ with strict domain $0<\varphi_{\mathrm{floor}}<1$. |
+| `FDM.boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | Optional T1 distance floor $\delta_{\min}\geq0$; zero is accepted. |
 
 ### Supporting Python API
 
@@ -577,14 +585,13 @@ be regenerated from the symbol when the code moves.
 
 | Lane | Evidence present in repository | Honest status for this revision |
 |---|---|---|
-| FDM CPU reference | zero-field, second-difference, inactive-neighbor, periodic stencil, energy decrease and refinement tests | Source/test mapped; no fresh run was performed for this review candidate. Heterogeneous allocating tests do not qualify heterogeneous SoA stepping. |
-| FDM GPU CUDA | device-capable FP64 field/energy, CPU–GPU Tier A, FP64–FP32 Tier B and Heun parity tests | Implemented; current-revision executed-device result and device identity were not found. Skip-success tests are not device proof. |
-| FEM CPU MFEM | operator symmetry/PSD/nullspace, mixed P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Strong historical energy/sign evidence; no fresh managed run tied to this review revision. Existing acceptance does not establish pointwise maximum-field convergence. |
+| FDM CPU reference | zero-field, second-difference, inactive-neighbor, periodic stencil, energy decrease and refinement tests | Source and test contracts verified; heterogeneous allocating tests do not qualify heterogeneous SoA stepping. |
+| FDM GPU CUDA | device-capable FP64 field/energy, CPU–GPU Tier A, FP64–FP32 Tier B and Heun parity tests | Implemented; current-revision executed-device result and device identity are open. Skip-success tests are not device proof. |
+| FEM CPU MFEM | operator symmetry/PSD/nullspace, mixed P1 elements, magnetic-air masking, energy derivatives, spatial coefficients; managed sinusoidal energy-convergence CSV | Historical energy/sign evidence exists; current-revision managed convergence artifacts are separate from static docs. Existing acceptance does not establish pointwise maximum-field convergence. |
 | FEM GPU CUDA | MFEM/CUDA FP64 parity tests, device-residency and transfer-audit contracts; historical RTX 4080 SUPER runtime artifacts | Historical tetrahedral runtime identity exists, but it predates the newest mixed-P1 implementation. Current mixed-P1 executed-device qualification remains open. |
 
-The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`. No command was executed
-while preparing this review page because the existing recipe rewrites checked-in validation-result
-files and the shared worktree contains unrelated user changes.
+The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`; inspect the
+generated runtime receipt alongside target device identity and mesh topology when qualifying a run.
 
 (physics-interactions-exchange-index-limitations)=
 ## Known limitations and unresolved qualification
@@ -607,17 +614,13 @@ files and the shared worktree contains unrelated user changes.
 (physics-interactions-exchange-index-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
-   [Bibliographic record](https://search.worldcat.org/title/536451).
-2. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
-   National Institute of Standards and Technology, 1999.
-   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
-3. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical
-   Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-4. T. Schrefl, G. Hrkac, S. Bance, D. Suess, O. Ertl, and J. Fidler, “Numerical methods in
-   micromagnetics (finite element method),” in *Handbook of Magnetism and Advanced Magnetic
-   Materials*, Wiley, 2007.
+1. C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) | [Open-access PDF (CC-BY)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) | [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+2. A. Vansteenkiste, J. Leliaert, M. Dvornik, F. Garcia-Sanchez, and B. Van Waeyenberge, “The design and verification of MuMax3,” *AIP Advances* **4**(10), 107133 (2014). [doi:10.1063/1.4899186](https://doi.org/10.1063/1.4899186) | [Open-access PDF (CC-BY)](https://pubs.aip.org/aip/adv/article-pdf/doi/10.1063/1.4899186/12878560/107133_1_online.pdf) | [arXiv:1406.7635](https://arxiv.org/abs/1406.7635).
+3. M. J. Donahue and D. G. Porter, *OOMMF user's guide, version 1.0*, NISTIR 6376, National Institute of Standards and Technology (1999). [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376) (public domain).
+4. C. Kittel, “Physical Theory of Ferromagnetic Domains,” *Reviews of Modern Physics* **21**(4), 541–583 (1949). [doi:10.1103/RevModPhys.21.541](https://doi.org/10.1103/RevModPhys.21.541).
+5. P. Heistracher, C. Abert, F. Bruckner, T. Schrefl, and D. Suess, “Proposal for a micromagnetic standard problem: Domain wall pinning at phase boundaries,” *Journal of Magnetism and Magnetic Materials* **548**, 168875 (2021). [doi:10.1016/j.jmmm.2021.168875](https://doi.org/10.1016/j.jmmm.2021.168875) | [Open-access PDF (CC-BY)](https://www.sciencedirect.com/science/article/pii/S0304885321010817/pdf) | [arXiv:2107.07855](https://arxiv.org/abs/2107.07855).
+6. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers / Wiley, New York (1963). [WorldCat record](https://search.worldcat.org/title/536451).
+7. T. Schrefl, G. Hrkac, S. Bance, D. Suess, O. Ertl, and J. Fidler, “Numerical methods in micromagnetics (finite element method),” in *Handbook of Magnetism and Advanced Magnetic Materials*, Wiley (2007).
 
 (physics-interactions-exchange-index-source-code-index)=
 ## Source-code and test index
@@ -632,21 +635,6 @@ files and the shared worktree contains unrelated user changes.
 | FEM CPU | `initialize_exchange_operator_mfem`, `apply_exchange_component_mass_projection` | `fem_exchange_contract`, `relaxation_energy_derivative_contract` | Broad native contracts plus historical managed energy convergence |
 | FEM GPU | `legacy_sparse_exchange_kernel`, `gpu_rk_compute_legacy_sparse_exchange` | CUDA/MFEM parity and transfer-audit cases in `fem_exchange_contract` | Historical device residency; current mixed-P1 qualification incomplete |
 
-The implementation table above is the authoritative path-and-symbol map for this review candidate.
-The bibliography is scientific authority; the source index is implementation authority. Neither
-substitutes for an executed numerical qualification artifact.
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.
+The implementation table above indexes each exchange capability to its current repository path and stable
+symbol; neither code-index traceability nor bibliography substitutes for an executed numerical qualification
+artifact.

@@ -79,11 +79,11 @@ FemMeshRuntimeState make_mesh(
     return source;
 }
 
-std::unique_ptr<mfem::Mesh> build(const FemMeshRuntimeState &source)
+std::unique_ptr<mfem::Mesh> build(const FemMeshRuntimeState &source, fullmag::fem::FemMarkerMaps *maps = nullptr)
 {
     std::unique_ptr<mfem::Mesh> mesh;
     std::string error;
-    check(fullmag::fem::build_mfem_mesh(source, mesh, error), error.c_str());
+    check(fullmag::fem::build_mfem_mesh(source, mesh, error, maps), error.c_str());
     check(mesh != nullptr, "successful mixed MFEM build must return a mesh");
     return mesh;
 }
@@ -317,8 +317,8 @@ void single_element_families_preserve_geometry_dofs_vertices_and_attributes()
         check(mesh->GetNE() == 1, "single canonical cell must remain one MFEM element");
         check(mesh->GetElementGeometry(0) == item.geometry,
               "canonical cell family must map to its native MFEM geometry");
-        check(mesh->GetAttribute(0) == item.attribute,
-              "positive canonical cell marker must remain the MFEM attribute");
+        check(mesh->GetAttribute(0) == 1,
+              "single canonical region must have compact attribute one");
         std::vector<int> expected;
         for (uint32_t node : item.connectivity) expected.push_back(static_cast<int>(node));
         check_identity_vertices(*mesh, 0, expected);
@@ -339,8 +339,8 @@ void legal_int_max_marker_without_air_is_preserved()
         {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3},
         {static_cast<uint32_t>(std::numeric_limits<int>::max())});
     auto mesh = build(source);
-    check(mesh->GetAttribute(0) == std::numeric_limits<int>::max(),
-          "legal INT_MAX material marker must not require or compute an air attribute");
+    check(mesh->GetAttribute(0) == 1,
+          "legal INT_MAX material marker must have bounded compact storage");
 }
 
 void zero_marker_uses_an_unoccupied_positive_air_attribute()
@@ -351,9 +351,9 @@ void zero_marker_uses_an_unoccupied_positive_air_attribute()
         {FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4},
         {0,4,8}, {0,1,2,3, 4,5,6,7}, {2,0});
     auto mesh = build(source);
-    check(mesh->GetAttribute(0) == 2,
-          "non-zero canonical marker must remain unchanged");
-    check(mesh->GetAttribute(1) == 3,
+    check(mesh->GetAttribute(0) == 1,
+          "non-zero canonical marker must precede air in compact attributes");
+    check(mesh->GetAttribute(1) == 2,
           "air attribute must not collide with an existing positive marker");
 }
 
@@ -1204,7 +1204,8 @@ FemMeshRuntimeState typed_prism_pyramid_boundary()
 void typed_boundary_uses_owner_orientation_roles_and_attributes()
 {
     const auto source = typed_prism_pyramid_boundary();
-    auto mesh = build(source);
+    fullmag::fem::FemMarkerMaps maps;
+    auto mesh = build(source, &maps);
     check(mesh->GetNBE() == 8,
           "material interface must not become an MFEM boundary element");
     int triangles = 0;
@@ -1221,14 +1222,14 @@ void typed_boundary_uses_owner_orientation_roles_and_attributes()
         check(owner >= 0 && owner < mesh->GetNE(),
               "every canonical exterior/seam facet must keep its sole owner");
         boundary_attributes.push_back(mesh->GetBdrAttribute(boundary));
-        if (mesh->GetBdrAttribute(boundary) == 77) {
+        if (mesh->GetBdrAttribute(boundary) == maps.boundary.attribute(77u)) {
             found_periodic = true;
             mfem::Array<int> vertices;
             mesh->GetBdrElementVertices(boundary, vertices);
             check(vertices.Size() == 3 && vertices[0] == 0 && vertices[1] == 2 && vertices[2] == 1,
                   "boundary orientation must come from the owner face, not reversed input winding");
         }
-        check(mesh->GetBdrAttribute(boundary) != 20,
+        check(maps.boundary.attribute(20u) == 0,
               "material-interface marker must not leak into MFEM boundary attributes");
     }
     check(triangles == 6 && quads == 2,
@@ -1246,9 +1247,7 @@ void typed_boundary_uses_owner_orientation_roles_and_attributes()
             expected.push_back(static_cast<int>(source.facet_nodes[node]));
         }
         std::sort(expected.begin(), expected.end());
-        const int expected_attribute = source.facet_markers[facet] == 0u
-            ? 1
-            : static_cast<int>(source.facet_markers[facet]);
+        const int expected_attribute = maps.boundary.attribute(source.facet_markers[facet]);
         bool found_matching_boundary = false;
         for (int boundary = 0; boundary < mesh->GetNBE(); ++boundary) {
             if (mesh->GetBdrAttribute(boundary) != expected_attribute) {
@@ -1266,8 +1265,8 @@ void typed_boundary_uses_owner_orientation_roles_and_attributes()
     }
 
     std::sort(boundary_attributes.begin(), boundary_attributes.end());
-    check(boundary_attributes == std::vector<int>({1,12,13,14,15,16,17,77}),
-          "boundary markers must be preserved, with zero mapped to positive attribute one");
+    check(boundary_attributes == std::vector<int>({1,2,3,4,5,6,7,8}),
+          "boundary attributes must be compact, with canonical zero distinct and last");
 }
 
 void all_tet_periodic_seam_remains_an_attributed_boundary()
@@ -1288,12 +1287,13 @@ void all_tet_periodic_seam_remains_an_attributed_boundary()
     source.facet_markers = {91,2,3,4};
     source.n_boundary_faces = 4;
 
-    auto mesh = build(source);
+    fullmag::fem::FemMarkerMaps maps;
+    auto mesh = build(source, &maps);
     check(mesh->GetNBE() == 4,
           "all-tet typed boundary must keep all one-owner faces");
     bool found_periodic = false;
     for (int boundary = 0; boundary < mesh->GetNBE(); ++boundary) {
-        found_periodic = found_periodic || mesh->GetBdrAttribute(boundary) == 91;
+        found_periodic = found_periodic || mesh->GetBdrAttribute(boundary) == maps.boundary.attribute(91u);
     }
     check(found_periodic,
           "all-tet periodic seam marker must remain available to Robin-boundary exclusion");
@@ -1345,7 +1345,10 @@ void malformed_face_ownership_and_marker_inputs_fail_closed()
             {0,0,0, 1,0,0, 0,1,0, 0,0,1},
             {FULLMAG_FEM_CELL_TET4}, {0,4}, {0,1,2,3},
             {static_cast<uint32_t>(std::numeric_limits<int>::max()) + 1u});
-        expect_reject(source, "cell marker exceeds positive MFEM attribute range");
+        fullmag::fem::FemMarkerMaps maps;
+        auto mesh = build(source, &maps);
+        check(mesh->GetAttribute(0) == 1 && maps.domain.attribute(source.cell_markers[0]) == 1,
+              "full-u32 canonical marker must import without max-ID allocation");
     }
     {
         auto source = make_mesh(
@@ -2138,6 +2141,22 @@ void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
 
 } // namespace
 
+void run_mixed_regional_marker_contract()
+{
+    single_element_families_preserve_geometry_dofs_vertices_and_attributes();
+    zero_marker_uses_an_unoccupied_positive_air_attribute();
+    legal_int_max_marker_without_air_is_preserved();
+    conforming_mixed_domain_shares_faces_and_h1_dofs();
+    manufactured_linear_potential_recovers_on_tet_prism_and_pyramid();
+    typed_boundary_uses_owner_orientation_roles_and_attributes();
+    all_tet_periodic_seam_remains_an_attributed_boundary();
+    malformed_face_ownership_and_marker_inputs_fail_closed();
+    mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
+    mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();
+    mixed_p1_cpu_dmi_fields_and_energies_use_magnetic_prism6_mfem_oracle();
+}
+
+#ifndef FULLMAG_EMBED_MIXED_MARKER_CONTRACT
 int main()
 {
     const char *ncg_transaction_only =
@@ -2192,6 +2211,7 @@ int main()
     return 0;
 }
 
+#endif // standalone main
 #else
 
 int main()

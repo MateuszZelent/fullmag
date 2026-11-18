@@ -40,9 +40,15 @@ class FakeLiveSession:
         self.command_status = command_status
         self.completion = completion
         self.lock_inputs = False
+        self.magnetization_apply_commits = 0
+        self.drop_magnetization_apply_responses = 0
+        self.magnetization_receipts: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
         self._ids = itertools.count(1)
         api = self.api
         api.route("GET", f"{BASE}", self._current)
+        api.route("GET", f"{BASE}/status", {"session": {
+            "session_id": "s1", "session_epoch": "s1@1", "request_scope_epoch": "fake:1",
+        }})
         api.route("POST", "/v2/sessions", self._create)
         api.route("GET", f"{BASE}/model/scene", lambda _r: (200, self.scene, {}))
         api.route("POST", f"{BASE}/model/transactions", self._transaction)
@@ -82,6 +88,20 @@ class FakeLiveSession:
     def _transaction(self, request: RecordedRequest):
         body = request.json()
         self.transactions.append(body)
+        apply = body.get("magnetization_apply")
+        if apply:
+            operation_id = apply["operation_id"]
+            if (request.headers.get("idempotency-key") != operation_id
+                    or request.headers.get("x-fullmag-session-scope") !=
+                    "session=s1&epoch=s1%401&request_scope_epoch=fake%3A1"):
+                return api_error(400, "bad_request", "invalid magnetization apply identity")
+            if operation_id in self.magnetization_receipts:
+                previous, receipt = self.magnetization_receipts[operation_id]
+                if body != previous:
+                    return api_error(409, "magnetization_apply_intent_conflict", "body changed")
+                if self.scene["revision"] != receipt["scene_revision"]:
+                    return api_error(409, "magnetization_apply_scene_advanced", "scene advanced")
+                return self._magnetization_apply_reply(receipt)
         base = body.get("base_revision")
         if base is not None and base != self.scene["revision"]:
             return api_error(409, "revision_conflict", f"scene revision mismatch: base={base}, current={self.scene['revision']}")
@@ -100,7 +120,22 @@ class FakeLiveSession:
         else:
             return api_error(400, "bad_request", f"fake does not implement {kind}")
         self.scene["revision"] = revision + 1
-        return 200, {"transaction_kind": kind, "scene_revision": revision + 1, "committed_scene": self.scene}, {}
+        receipt = {"transaction_kind": kind, "scene_revision": revision + 1, "committed_scene": self.scene}
+        if apply:
+            self.magnetization_apply_commits += 1
+            receipt["transaction_kind"] = "apply_magnetization"
+            receipt["magnetization_apply"] = {
+                "operation_id": operation_id, "status": "initial_state_pending",
+            }
+            self.magnetization_receipts[operation_id] = (copy.deepcopy(body), copy.deepcopy(receipt))
+            return self._magnetization_apply_reply(receipt)
+        return 200, receipt, {}
+
+    def _magnetization_apply_reply(self, receipt: dict[str, Any]):
+        if self.drop_magnetization_apply_responses:
+            self.drop_magnetization_apply_responses -= 1
+            return None
+        return 200, receipt, {}
 
     def _command(self, request: RecordedRequest):
         body = request.json()

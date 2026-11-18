@@ -549,6 +549,10 @@ export interface ModelTreeFieldDriveSnapshot {
   label: string;
   targetKind: string;
   waveformKind: string;
+  /** Hand-written mask antenna (`mask_field_drive.v1`); absent for a regional drive. */
+  driveKind?: "mask";
+  targetObjectId?: string;
+  targetRegionId?: string;
 }
 
 export interface ModelTreeSnapshot {
@@ -627,6 +631,8 @@ interface ModelTreeStudySnapshot {
 }
 
 export interface ModelTreeStudyStageSnapshot {
+  /** Stable ID from the authored document, independent of runtime projection. */
+  authoredStageId?: string | null;
   pipelineNodeId?: string;
   pipelineEnabled?: boolean;
   pipelineLabel?: string | null;
@@ -683,6 +689,7 @@ export interface ModelTreeMeshSnapshot {
   latestBuildStatus?: string | null;
   lastError?: string | null;
   manifestSourceSceneRevision?: number | string | null;
+  manifestValidatedSceneRevision?: number | null;
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;

@@ -16,45 +16,35 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The signed bulk DMI constant is passed through unchanged.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates the signed bulk DMI constant in Python, while `to_ir()` emits the canonical `ProblemIR` record before mesh discretization.
 
 (python-api-interactions-bulk-dmi-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-bulk_dmi
-
-q_{\mathrm{IR}} = \mathrm{bulk_dmi}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object bulk_dmi. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+Bulk Dzyaloshinskii–Moriya interaction contributes the chiral energy density $w_{\mathrm{Dbulk}} = D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$ over the magnetic domain $\Omega_m$ with signed constant $D$. The continuum formulation, sign convention, and discrete operators are documented in {doc}`../../physics/interactions/dmi/bulk` and {doc}`../../physics/interactions/dmi/index`.
 
 (python-api-interactions-bulk-dmi-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+`fm.BulkDMI.D` is authored in joules per square metre ($\mathrm{J\,m^{-2}}$). Vector magnetization $\mathbf{m}$ is dimensionless unit length ($1$), and spatial gradients use inverse metres ($\mathrm{m^{-1}}$).
 
 (python-api-interactions-bulk-dmi-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`D` must be a finite real scalar; positive, negative, and zero values are preserved with their sign intact. Non-finite or non-numeric constants fail closed during construction.
 
 (python-api-interactions-bulk-dmi-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.BulkDMI(D)
+`fm.BulkDMI(D)`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `fm.BulkDMI.D` | `float` | `required` | `J/m^2` | finite; sign preserved | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolved support required | `D` |
+| `fm.BulkDMI.D` | `float` | `required` | $\mathrm{J\,m^{-2}}$ | finite; sign preserved | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolved support required | `D` |
 
 ### Stage-first example
 
@@ -75,52 +65,48 @@ value = fm.BulkDMI(D=1.0e-3)
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, set bulk DMI on the owning material or attach the interaction term through the study energy/material API.
 
 (python-api-interactions-bulk-dmi-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed bulk_dmi record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits `{"kind": "bulk_dmi", "D": ...}`, preserving the signed `D` value in $\mathrm{J\,m^{-2}}$.
 
 (python-api-interactions-bulk-dmi-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves the exact signed `D` constant in `ProblemIR` independently of `resolved execution`. `Validation errors` reject non-finite or missing inputs, while `unsupported combinations` fail closed if a selected solver path or boundary mode lacks bulk-DMI support.
 
 (python-api-interactions-bulk-dmi-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies the signed bulk-DMI constant and canonical `ProblemIR` only; chiral finite-difference stencils, FEM weak-form boundary terms, and CPU/GPU kernels are implemented by the solver backends.
 
 (python-api-interactions-bulk-dmi-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/energy.py symbol class BulkDMI. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/model/energy.py` (`class BulkDMI`). Constructor parameters, validation branches, and `to_ir()` keys come directly from that module.
 
 (python-api-interactions-bulk-dmi-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_dmi_terms_preserve_signed_constants_in_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering signed DMI IR lowering include `test_dmi_terms_preserve_signed_constants_in_ir`. Live solver runtime and Control Room browser behavior require separate qualification.
 
 (python-api-interactions-bulk-dmi-limitations)=
 ## Limitations and Control Room
 
-Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+Control Room has no standalone form route for `fm.BulkDMI`; bulk DMI coefficients are edited via owning object/region material panels (`Dbulk`) when exposed or authored in Python scripts. See {doc}`/frontend/capability-register`.
 
 (python-api-interactions-bulk-dmi-scientific-bibliography)=
 ## Scientific bibliography
 
-- I. E. Dzyaloshinsky, A thermodynamic theory of weak ferromagnetism, J. Phys. Chem. Solids 4 (1958), DOI: https://doi.org/10.1016/0022-3697(58)90076-3
+- I. Dzyaloshinsky, “A thermodynamic theory of “weak” ferromagnetism of antiferromagnetics,” *Journal of Physics and Chemistry of Solids* **4**(4), 241–255 (1958), [doi:10.1016/0022-3697(58)90076-3](https://doi.org/10.1016/0022-3697(58)90076-3).
+- T. Moriya, “Anisotropic Superexchange Interaction and Weak Ferromagnetism,” *Physical Review* **120**(1), 91–98 (1960), [doi:10.1103/PhysRev.120.91](https://doi.org/10.1103/PhysRev.120.91).
+- A. N. Bogdanov and U. Rößler, “Chiral Symmetry Breaking in Magnetic Thin Films and Multilayers,” *Physical Review Letters* **87**(3), 037203 (2001), [doi:10.1103/PhysRevLett.87.037203](https://doi.org/10.1103/PhysRevLett.87.037203) | [Open-access TUD repository](https://doi.org/10.17877/de290r-6428).
 
 (python-api-interactions-bulk-dmi-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/model/energy.py::class BulkDMI
-- Source-map: interactions/bulk-dmi.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `class BulkDMI` | public constructor and IR lowering |

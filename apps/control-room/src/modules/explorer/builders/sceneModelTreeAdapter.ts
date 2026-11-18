@@ -157,7 +157,8 @@ export function modelTreeSnapshotFromScene(
 function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
   const state = recordValue(value);
   const drives = Array.isArray(state?.drives) ? state.drives : [];
-  return drives.flatMap((candidate) => {
+  const maskDrives = Array.isArray(state?.mask_drives) ? state.mask_drives : [];
+  const regional = drives.flatMap((candidate) => {
     const drive = recordValue(candidate);
     const id = stringValue(drive?.id);
     if (!drive || !id) return [];
@@ -169,6 +170,25 @@ function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
       waveformKind: stringValue(recordValue(drive.waveform)?.kind) ?? "unresolved",
     }];
   });
+  const mask = maskDrives.flatMap((candidate) => {
+    const drive = recordValue(candidate);
+    const id = stringValue(drive?.id);
+    if (!drive || !id) return [];
+    const target = recordValue(drive.target);
+    const targetObjectId = stringValue(target?.object_id);
+    const targetRegionId = stringValue(target?.region_id);
+    return [{
+      driveKind: "mask" as const,
+      enabled: drive.enabled !== false,
+      id,
+      label: stringValue(drive.name) ?? id,
+      targetKind: stringValue(target?.kind) ?? "unresolved",
+      waveformKind: "mask",
+      ...(targetObjectId ? { targetObjectId } : {}),
+      ...(targetRegionId ? { targetRegionId } : {}),
+    }];
+  });
+  return [...regional, ...mask];
 }
 
 function isSyntheticAirboxSceneObject(value: unknown): boolean {
@@ -855,6 +875,7 @@ function sceneStudySnapshot(value: unknown): ModelTreeSnapshot["study"] {
       ...sceneStudyStageSnapshot(entry.payload, index),
       ...(entry.queueId ? {
         stageId: entry.queueId,
+        authoredStageId: entry.queueId,
         pipelineNodeId: entry.queueId,
         pipelineEnabled: entry.enabled,
         pipelineLabel: entry.label,
@@ -905,7 +926,9 @@ function sceneStudyStageSnapshot(
       kPathSamplingKind(stage.k_path) ??
       kPathSamplingKind(stage.eigen_k_path),
     maxSteps: scalarText(stage.max_steps),
+    authoredStageId: stringValue(stage.stage_id),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
+    pipelineEnabled: stage.enabled === false ? false : undefined,
     torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };

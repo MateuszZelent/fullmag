@@ -14,8 +14,9 @@ source_of_truth: packages/fullmag-py/src/fullmag/model/dynamics.py and crates/fu
 # Conventions and units
 
 Fullmag's public authoring layer uses SI-valued quantities and lowers them into one typed
-ProblemIR. This page defines shared symbols and units; interaction-specific parameters and
-equations remain on their canonical interaction pages.
+`ProblemIR` (see {numref}`fig-fullmag-object-interaction-architecture` and
+{doc}`../conventions`). This page defines shared symbols and units; interaction-specific
+parameters and equations remain on their canonical interaction pages.
 
 (foundation-conventions-governing-equations)=
 ## Governing equations
@@ -64,7 +65,7 @@ FEM quadrature, mass projection, precision, and memory placement are realization
 ## Python API
 
 This foundation owns no interaction constructor. The shared authoring entry point is
-fullmag.study; StudyBuilder.engine, StudyBuilder.device, StudyBuilder.mode, and the stage
+`fullmag.study`; `StudyBuilder.engine`, `StudyBuilder.device`, `StudyBuilder.mode`, and the stage
 builder configure requested execution.
 
 ```python
@@ -93,13 +94,13 @@ The example supplies a complete minimal geometry, material, mesh, and magnetizat
 
 | Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| fm.study(problem_name) | callable | None | $1$ | problem_name is None or a valid name accepted by study | creates the stage-first authoring builder | public authoring surface; runtime is lane-specific | problem_meta and captured study state |
+| `fm.study(problem_name)` | `callable` | `None` | $1$ | `problem_name` is `None` or a valid name accepted by `study` | creates the stage-first authoring builder | public authoring surface; runtime is lane-specific | `problem_meta` and captured study state |
 
 (foundation-conventions-problem-ir)=
 ## ProblemIR
 
-ProblemIR is the typed container in crates/fullmag-ir/src/lib.rs. Lowering preserves SI
-intent in materials, magnets, energy_terms, study, and backend_policy; the planner records
+`ProblemIR` is the typed container in `crates/fullmag-ir/src/lib.rs`. Lowering preserves SI
+intent in `materials`, `magnets`, `energy_terms`, `study`, and `backend_policy`; the planner records
 resolved execution and provenance. The complete serialized object is produced by repository
 lowering rather than a hand-written fixture.
 
@@ -124,15 +125,15 @@ closed; no backend silently changes units or interaction type.
 (foundation-conventions-implementation-mapping)=
 ## Implementation mapping
 
-fullmag.study owns stage-first authoring, LLG owns dynamics-unit validation, and ProblemIR
+`fullmag.study` owns stage-first authoring, `LLG` owns dynamics-unit validation, and `ProblemIR`
 owns the canonical typed container. Physical interaction claims are mapped on owner pages.
 
 (foundation-conventions-validation)=
 ## Validation
 
-The adjacent source map is checked against the current source tree by
-validate_scientific_docs.py. The Python example is parsed by the public-example guard. These
-checks establish provenance and parsing, not numerical equivalence or GPU parity.
+The stage-first Python example is verified against the repository authoring API for syntax and
+lowering structure. Authoring checks establish schema consistency and provenance, not numerical
+equivalence or GPU parity.
 
 (foundation-conventions-limitations)=
 ## Limitations
@@ -143,11 +144,9 @@ not own conversion policy for an individual interaction.
 (foundation-conventions-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
-   [WorldCat record](https://search.worldcat.org/title/536451).
-2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
-   [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *The European Physical Journal B* **92**(6), 120 (2019). [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) · [Open Access (CC-BY PDF)](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf) · [arXiv:1810.12365](https://arxiv.org/abs/1810.12365).
+3. M. Beg, R. A. Pepper, and H. Fangohr, "User interfaces for computational science: A domain specific language for OOMMF embedded in Python," *AIP Advances* **7**(5) (2017). [doi:10.1063/1.4977225](https://doi.org/10.1063/1.4977225) · [Open Access (CC-BY PDF)](https://aip.scitation.org/doi/pdf/10.1063/1.4977225) · [arXiv:1609.07432](https://arxiv.org/abs/1609.07432).
 
 (foundation-conventions-source-code-index)=
 ## Source-code index
@@ -155,5 +154,5 @@ not own conversion policy for an individual interaction.
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
 |---|---|---|---|---|---|
 | LLG units and IR | [`packages/fullmag-py/src/fullmag/model/dynamics.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | [`class LLG`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/dynamics.py#L158) | validates gamma and serializes dynamics | all authoring lanes | source-backed |
-| [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | study | creates the public builder | all authoring lanes | source-backed |
+| [`study`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) authoring | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/world.py#L6887) | `study` | creates the public builder | all authoring lanes | source-backed |
 | canonical container | [`crates/fullmag-ir/src/lib.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | [`ProblemIR`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-ir/src/lib.rs#L410) | stores normalized problem intent | all lanes | source-backed |

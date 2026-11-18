@@ -269,6 +269,22 @@ impl StudyStepKind {
     }
 }
 
+/// Overlay sampled from the accepted step's authored initializer after binding
+/// its one immutable base state. Scopes select degrees of freedom, not assets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "schema_version", deny_unknown_fields)]
+pub enum StudyInitialStateOverlay {
+    #[serde(rename = "fullmag.scoped-initial-state-overlay.v1")]
+    Scoped { scopes: Vec<fullmag_ir::RegionRefIR> },
+}
+
+impl StudyInitialStateOverlay {
+    pub fn scopes(&self) -> &[fullmag_ir::RegionRefIR] {
+        let Self::Scoped { scopes } = self;
+        scopes
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StudyStep {
@@ -292,6 +308,8 @@ pub struct StudyStep {
     pub until_seconds: Option<f64>,
     #[serde(default)]
     pub inputs: Vec<StudyInputPort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state_overlay: Option<StudyInitialStateOverlay>,
     /// Execution IDs that must durably succeed; these are not data ports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub completion_dependencies: Vec<String>,
@@ -339,6 +357,9 @@ impl Serialize for StudyPlan {
                     "completion dependencies require study_plan.v3",
                 ));
             }
+            if !v3 && step.initial_state_overlay.is_some() {
+                return Err(serde::ser::Error::custom("initial-state overlays require study_plan.v3 or later"));
+            }
             let mut value = serde_json::to_value(step).map_err(serde::ser::Error::custom)?;
             if v3 {
                 value
@@ -377,6 +398,9 @@ impl<'de> Deserialize<'de> for StudyPlan {
         for value in wire.steps {
             if wire.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 && value.pointer("/kind/kind").and_then(Value::as_str) == Some("closed_loop_inspection") {
                 return Err(D::Error::custom("closed_loop_inspection requires study_plan.v4"));
+            }
+            if !v3 && value.get("initial_state_overlay").is_some() {
+                return Err(D::Error::custom("initial-state overlays require study_plan.v3 or later"));
             }
             let field = value.get("completion_dependencies");
             if (v3 && !field.is_some_and(Value::is_array)) || (!v3 && field.is_some()) {
@@ -451,6 +475,9 @@ impl StudyPlan {
         let mut step_ids = BTreeSet::new();
         for step in &self.steps {
             validate_step_references(step)?;
+            if let Some(overlay) = &step.initial_state_overlay {
+                validate_initial_state_overlay(&self.schema_version, step, overlay)?;
+            }
             if let StudyStepKind::ClosedLoopInspection { stage_id, port_mode_id, output_id } = &step.kind {
                 if self.schema_version != STUDY_PLAN_SCHEMA_VERSION_V4 {
                     return Err(StudyContractError::Invalid("closed_loop_inspection requires study_plan.v4".into()));
@@ -554,6 +581,13 @@ impl StudyPlan {
                         from: step.step_id.clone(),
                         to: step_id.clone(),
                     });
+                }
+                if step.enabled && input.required
+                    && self.steps.iter().any(|source| source.step_id == *step_id && !source.enabled)
+                {
+                    return Err(StudyContractError::Invalid(
+                        "enabled required input targets a disabled step".into(),
+                    ));
                 }
                 let Some(source_kind) = outputs
                     .get(step_id.as_str())
@@ -781,6 +815,7 @@ fn migrate_node(
         execution_profile: defaults.execution_profile.clone(),
         until_seconds,
         inputs: Vec::new(),
+        initial_state_overlay: None,
         outputs,
         acceptance: StudyAcceptancePolicy::Any,
         acquisition: StudyAcquisitionPolicy::Exclusive,
@@ -824,6 +859,50 @@ fn node_id(node: &StudyPipelineNode) -> String {
         StudyPipelineNode::Macro(node) => node.id.clone(),
         StudyPipelineNode::Group(node) => node.id.clone(),
     }
+}
+
+fn validate_initial_state_overlay(
+    schema_version: &str,
+    step: &StudyStep,
+    overlay: &StudyInitialStateOverlay,
+) -> Result<(), StudyContractError> {
+    if !matches!(schema_version, STUDY_PLAN_SCHEMA_VERSION | STUDY_PLAN_SCHEMA_VERSION_V4)
+        || !matches!(&step.kind, StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax,
+        })
+    {
+        return Err(StudyContractError::Invalid(
+            "initial-state overlays require a v3 or v4 Run/Relax step".into(),
+        ));
+    }
+    let mut state_ports = step.inputs.iter().filter(|port| {
+        matches!(port.data_kind, StudyPortDataKind::State | StudyPortDataKind::InitialState)
+    });
+    let valid_base = state_ports.next().is_some_and(|port| port.required && matches!(
+        &port.source, StudyInputSource::StepOutput { .. } | StudyInputSource::PinnedArtifact { .. }
+    ));
+    if !valid_base || state_ports.next().is_some() {
+        return Err(StudyContractError::Invalid(
+            "initial-state overlay requires exactly one required predecessor or pinned artifact state port".into(),
+        ));
+    }
+    let scopes = overlay.scopes();
+    if scopes.is_empty() || scopes.len() > 4096 {
+        return Err(StudyContractError::Invalid(
+            "initial-state overlay must have between 1 and 4096 scopes".into(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for scope in scopes {
+        validate_reference(&scope.object_id, "initial_state_overlay.object_id")?;
+        if let Some(region_id) = &scope.region_id {
+            validate_reference(region_id, "initial_state_overlay.region_id")?;
+        }
+        if !seen.insert((&scope.object_id, &scope.region_id)) {
+            return Err(StudyContractError::Invalid("duplicate initial-state overlay scope".into()));
+        }
+    }
+    Ok(())
 }
 
 fn validate_step_references(step: &StudyStep) -> Result<(), StudyContractError> {
@@ -1328,6 +1407,41 @@ mod tests {
         let mut unknown = value;
         unknown["steps"][0]["future_dependency"] = json!([]);
         assert!(serde_json::from_value::<StudyPlan>(unknown).is_err());
+    }
+
+    #[test]
+    fn overlay_wire_requires_one_qualified_base_and_preserves_legacy_steps() {
+        let mut plan = completion_fixture();
+        let legacy = serde_json::to_value(&plan).unwrap();
+        assert!(legacy["steps"][1].get("initial_state_overlay").is_none());
+
+        let base = StudyInputPort {
+            port_id: "initial_state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::PinnedArtifact {
+                artifact_id: "state".into(),
+                content_sha256: "a".repeat(64),
+            },
+        };
+        let overlay = StudyInitialStateOverlay::Scoped {
+            scopes: vec![fullmag_ir::RegionRefIR { object_id: "strip".into(), region_id: None }],
+        };
+        plan.steps[1].inputs.push(base.clone());
+        plan.steps[1].initial_state_overlay = Some(overlay);
+        assert!(serde_json::to_value(&plan).is_err());
+        plan.schema_version = STUDY_PLAN_SCHEMA_VERSION.into();
+        plan.validate_for_execution().unwrap();
+        let wire = serde_json::to_value(&plan).unwrap();
+        assert_eq!(wire["steps"][1]["initial_state_overlay"]["schema_version"],
+            "fullmag.scoped-initial-state-overlay.v1");
+        assert_eq!(serde_json::from_value::<StudyPlan>(wire).unwrap(), plan);
+
+        plan.steps[1].inputs.clear();
+        assert!(plan.validate().is_err());
+        let another = StudyInputPort { port_id: "another_state".into(), ..base.clone() };
+        plan.steps[1].inputs = vec![base, another];
+        assert!(plan.validate().is_err());
     }
 
     #[test]

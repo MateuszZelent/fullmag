@@ -82,6 +82,32 @@ class AbsorbingBoundaryPythonTests(unittest.TestCase):
             ["x-"],
         )
 
+    def test_new_profiles_sample_ramp_and_plateau(self) -> None:
+        for profile, expression, midpoint in (
+            ("logarithmic", None, math.log(5.5) / math.log(10)),
+            ("tanh", None, 0.5),
+            ("custom", "u**3", 0.125),
+        ):
+            with self.subTest(profile=profile):
+                layer = fm.AbsorbingBoundaryLayer(
+                    4.0, 2.0, 0.8, profile=profile, expression=expression
+                )
+                bounds = (0., 0., 0., 10., 1., 1.)
+                self.assertEqual(layer.contribution((6., 0., 0.), bounds), 0.)
+                self.assertAlmostEqual(layer.contribution((7., 0., 0.), bounds), 0.8 * midpoint)
+                self.assertEqual(layer.contribution((9., 0., 0.), bounds), 0.8)
+
+    def test_custom_profile_rejects_invalid_expressions(self) -> None:
+        for expression in (
+            None, "", "u + 1", "u / (u - 0.5)", "2*u-u**4", "other(u)", "u.real",
+            "u # comment", "u**1_0", "01*u", "(-1)**0.5*u", "1/exp(999)*u",
+            "u**0x2", "u**0o2", "u**0b10",
+        ):
+            with self.subTest(expression=expression), self.assertRaisesRegex(ValueError, "expression"):
+                fm.AbsorbingBoundaryLayer(4., 2., 0.8, profile="custom", expression=expression)
+        with self.assertRaisesRegex(ValueError, "expression"):
+            fm.AbsorbingBoundaryLayer(4., 2., 0.8, profile="linear", expression="u")
+
     def test_prebuilt_parameters_can_be_attached_to_alpha(self) -> None:
         film = self._film()
         parameters = fm.AbsorbingBoundaryLayer(
@@ -120,7 +146,7 @@ film = study.geometry(fm.Box(1e-6, 1e-6, 1e-8), name="film")
 film.Ms = 800e3
 film.Aex = 13e-12
 film.alpha = 0.01
-film.alpha.absorbing_boundary(total_width=4e-7, ramp_width=3e-7, max_damping=0.5, faces=("x+", "y-"), profile="smootherstep", frame="object")
+film.alpha.absorbing_boundary(total_width=4.123456789012345e-7, ramp_width=3e-7, max_damping=0.5, faces=("x+", "y-"), profile="custom", expression="u**3", frame="object")
 study.stages.add_run(stage_id="run", until=1e-12)
 """,
                 encoding="utf-8",

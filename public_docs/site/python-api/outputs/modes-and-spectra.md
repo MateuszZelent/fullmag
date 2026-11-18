@@ -4,14 +4,13 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: modes-and-spectra.source-map.json and reviewed source revision 5e99782acbb7fb3f65d0cad872e102bf67733103
+source_of_truth: packages/fullmag-py/src/fullmag/model/outputs.py, crates/fullmag-plan/src/validate.rs
 ---
 
 (public-docs-python-api-outputs-modes-and-spectra)=
 # Modes and Spectra
 
 (python-api-outputs-modes-and-spectra-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Contract and scope
 
 This page records the eigenmode (`SaveMode`), eigenvalue spectrum (`SaveSpectrum`), and
@@ -19,7 +18,6 @@ eigensolver diagnostic (`SaveEigenDiagnostics`) output descriptors attached to `
 studies.
 
 (python-api-outputs-modes-and-spectra-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 Mode and spectrum mathematics belong to {doc}`../../numerical-methods/eigensolvers/index` and
@@ -28,7 +26,6 @@ is reconstructed into 3D magnetization coordinates $\delta\mathbf m_n = T\mathbf
 with its complex eigenvalue $\lambda_n = \sigma_n + \mathrm i\omega_n$ ($f_n = |\omega_n|/(2\pi)$).
 
 (python-api-outputs-modes-and-spectra-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 Spectrum entries are eigenfrequencies in hertz ($\mathrm{Hz}$) and decay rates in $\mathrm{s^{-1}}$;
@@ -37,7 +34,6 @@ optional reconstructed magnetostatic potential fields $\delta\phi_n$ carry units
 ($\mathrm{A}$).
 
 (python-api-outputs-modes-and-spectra-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and validity
 
 Mode index sets (`indices` or `branches`) must be non-negative, unique, and non-empty when
@@ -45,7 +41,6 @@ selecting explicit subsets; sample selectors (`sample_indices` or `sample_labels
 $\mathbf k$-path or bias-field sweep samples persist 3D spatial mode arrays.
 
 (python-api-outputs-modes-and-spectra-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -87,14 +82,12 @@ study.stages.add_eigenmodes(count=8, target="lowest", equilibrium_source="relax"
 ```
 
 (python-api-outputs-modes-and-spectra-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. ProblemIR
 
 `SaveMode.to_ir()`, `SaveSpectrum.to_ir()`, and `SaveEigenDiagnostics.to_ir()` emit
 `eigen_mode`, `eigen_spectrum`, and `eigen_diagnostics` records inside `sampling.outputs`.
 
 (python-api-outputs-modes-and-spectra-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip and failure semantics
 
 Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is
@@ -103,14 +96,12 @@ unsupported combinations are rejected explicitly rather than silently substitute
 negative mode/branch indices, an empty selection, and invalid scopes fail immediately.
 
 (python-api-outputs-modes-and-spectra-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization
 
 Materialization follows the native FEM modal eigensolver (`eigen/spectrum.v2.json`,
 `frequency_domain/manifest.v1.json`, and binary mode/potential payloads).
 
 (python-api-outputs-modes-and-spectra-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Implementation mapping
 
 | Class | Repository path | Stable symbol | Responsibility |
@@ -120,45 +111,54 @@ Materialization follows the native FEM modal eigensolver (`eigen/spectrum.v2.jso
 | Diagnostics output | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L340) | `class SaveEigenDiagnostics` | Modal solver residual and KSP diagnostic flags |
 
 (python-api-outputs-modes-and-spectra-validation)=
-<!-- (validation)= -->
 ## 10. Validation
 
 Ownership tests compare this inventory with live signatures and `validate_eigen_outputs` in
 `crates/fullmag-plan/src/validate.rs`.
 
 (python-api-outputs-modes-and-spectra-limitations)=
-<!-- (limitations)= -->
 ## 11. Limitations
 
 Output availability depends on the eigensolver realization and equilibrium source.
 
 (python-api-outputs-modes-and-spectra-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 Mode and spectrum definitions belong to {doc}`../../numerical-methods/eigensolvers/linearized-llg`.
 
-(python-api-outputs-modes-and-spectra-source-code-index)=
-<!-- (source-code-index)= -->
+## Control Room support
 
-## Control Room crosswalk
-
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
+Status: Mode-field and spectrum inspection are `partial`; 3D modal overlays and planar monitor frequency projections are `implemented` (`inspection-only`), while unlisted stage output toggles remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Outputs` | `partial` | Submit stage draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `not implemented` | Python-only until implemented |
+| `SaveMode`, `SaveSpectrum`, & `SaveEigenDiagnostics` selections | `Model Explorer -> Stages -> <stage> -> Outputs` (`EigenmodesOutputsStageInspectorPanel`) | `partial` | Submit stage draft; output resources are revised after execution |
+| Planar monitor definitions & frequency-domain spatial cuts | `Model Explorer -> Planar Monitors` (`PlanarMonitorInspectorPanel`, `PlanarMonitorDraftInspectorPanel`) | `partial` | Commit monitor geometry to `MODEL_PLANAR_MONITORS_PATH`; slice overlays query planar endpoints |
+| 3D eigenmode / driven response phasor & spatial profile | `3D Viewport` (`ModeVisualizationInspectorPanel`) | `inspection-only` | `real`, `imag`, `magnitude`, `phase_rotated_real` and $0\text{–}2\pi$ phase slider (`analysis.eigen.set-mode-3d-phase`) |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Outputs` | `Python-only` | Authored in Python |
 
-not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: [`apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx#L247) (`EigenmodesOutputsStageInspectorPanel`).
+```{image} /_static/images/ui/inspector-planar-monitor-and-frequency.png
+:alt: Control Room Planar Monitor Inspector showing View 3D/2D switcher, Monitor ID planar_mon_core, Name Mid-Plane RF Monitor, Length unit nm, and Domain target
+:align: center
+:width: 100%
+```
 
+```{image} /_static/images/ui/viewport-3d-eigenmode-spatial-profile.png
+:alt: 3D spatial eigenmode profile rendered in Control Room Viewport with phase projection controls
+:align: center
+:width: 100%
+```
+
+Output parameters outside the stage and result inspectors remain Python-only.
+See [Control Room capability register](/frontend/capability-register) and [Planar Monitors & Frequency-Domain Inspectors](/frontend/inspectors/analysis-and-frequency-domain).
+Frontend source owners: [`apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx#L247) (`EigenmodesOutputsStageInspectorPanel`), `PlanarMonitorInspectorPanel`, and `ModeVisualizationInspectorPanel`.
+
+(python-api-outputs-modes-and-spectra-source-code-index)=
 ## 13. Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Mode-field output selection and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L252) | `class SaveMode` | Mode-field output selection and lowering. | Source-map validator and focused API tests |
-| Spectrum output selection and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L231) | `class SaveSpectrum` | Spectrum output selection and lowering. | Source-map validator and focused API tests |
-| Eigen-solver diagnostic output selection and lowering. | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L340) | `class SaveEigenDiagnostics` | Eigen-solver diagnostic output selection and lowering. | Source-map validator and focused API tests |
-| Planner modal output validation. | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L950) | `validate_eigen_outputs` | Validates modal output requests against study configuration. | Rust planner source |
+| Mode-field output selection and lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L252) | `class SaveMode` | Mode-field output selection and lowering | Ownership and API contract tests |
+| Spectrum output selection and lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L231) | `class SaveSpectrum` | Spectrum output selection and lowering | Ownership and API contract tests |
+| Eigen-solver diagnostic output selection and lowering | [`packages/fullmag-py/src/fullmag/model/outputs.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/outputs.py#L340) | `class SaveEigenDiagnostics` | Eigen-solver diagnostic output selection and lowering | Ownership and API contract tests |
+| Planner modal output validation | [`crates/fullmag-plan/src/validate.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/validate.rs#L950) | `validate_eigen_outputs` | Validates modal output requests against study configuration | Rust planner source |

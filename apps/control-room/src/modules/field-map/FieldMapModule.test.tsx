@@ -3,10 +3,13 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DomainMetaResource, PlanarFieldMetaResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 
 import FieldMapModule from "./FieldMapModule";
+import { getRegisteredFieldMapCapture } from "./fieldMapCaptureRegistry";
 
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
@@ -15,7 +18,9 @@ const mocks = vi.hoisted(() => ({
   projectionStatus: vi.fn((meta: { fold_count: number; non_injective: boolean; overlap_count: number }) =>
     meta.non_injective || meta.fold_count > 0 || meta.overlap_count > 0 ? "ambiguous" : "resolved"),
   metaAvailable: true,
-  probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
+  domain: null as DomainMetaResource | null,
+  section: null as PlanarFieldMetaResource["section"] | null,
+
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
   renderReady: false,
@@ -38,6 +43,18 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
     layout: { get: () => ({ activeViewportMainModuleId: "field-map" }) },
     visualizationSync: { queuePatch: mocks.queuePatch },
   }),
+}));
+
+// The toolbar renders the command registry; PlanarToolbar.test.tsx covers it.
+vi.mock("./components/PlanarToolbar", () => ({
+  PlanarToolbar: () => <div aria-label="2D view tools" role="toolbar" />,
+}));
+
+// Radix Slider needs HTMLInputElement, which the test DOM does not provide.
+vi.mock("@/shared/ui/Slider", () => ({
+  Slider: ({ "aria-label": label, value }: { "aria-label"?: string; value: number[] }) => (
+    <input aria-label={label} readOnly type="range" value={value[0]} />
+  ),
 }));
 
 vi.mock("@/kernel/api/codecs", () => ({
@@ -133,6 +150,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
                 },
             overlap_count: 0,
             resolution: [256, 128],
+            section: mocks.section,
             sample_token: "planar-sample-v3:current",
             sampling_execution: "cpu",
           },
@@ -154,7 +172,16 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   // published only after every requested layer finished loading.
   usePlanarMaskResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
-  usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
+  planarWindowParams: (crop: { u_min_m: number; u_max_m: number; v_min_m: number; v_max_m: number } | null | undefined) =>
+    crop
+      ? {
+          window_u_min_m: String(crop.u_min_m),
+          window_u_max_m: String(crop.u_max_m),
+          window_v_min_m: String(crop.v_min_m),
+          window_v_max_m: String(crop.v_max_m),
+        }
+      : {},
+  usePlanarProbeLoader: () => null,
   usePlanarProfileResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarScalarResource: () => mocks.renderReady && !mocks.scalarPending
     ? { data: mocks.scalarData, error: null, status: "ready" }
@@ -172,7 +199,11 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  useDomainMetaResource: () => ({ data: null, error: null, status: "idle" }),
+  useDomainMetaResource: () => ({
+    data: mocks.domain,
+    error: null,
+    status: mocks.domain ? "ready" : "idle",
+  }),
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
@@ -209,6 +240,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 describe("FieldMapModule planar state ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fieldMapSurfaceStore.reset();
     mocks.metaData.clear();
     mocks.renderModel.mockReset();
     mocks.visualization.data = null;
@@ -217,10 +249,12 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
     mocks.metaAvailable = true;
+    mocks.domain = null;
+    mocks.section = null;
     mocks.scalarPending = false;
     mocks.metaPending = false;
     mocks.sourceDefinitionHash = null;
-    mocks.probeData = null;
+
     mocks.selection = emptySelection();
   });
 
@@ -232,6 +266,22 @@ describe("FieldMapModule planar state ownership", () => {
     expect(mocks.meta).toHaveBeenCalledWith("", { kind: "default" }, expect.any(Object), {
       enabled: false,
     });
+  });
+
+  it("registers and releases the current session capture with the mounted 2D module", async () => {
+    const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=api%3A1";
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+      expect(getRegisteredFieldMapCapture(sessionScopeKey)).not.toBeNull();
+
+      await act(async () => root.unmount());
+      expect(getRegisteredFieldMapCapture(sessionScopeKey)).toBeNull();
+    } finally {
+      dom.restore();
+    }
   });
 
   it("keeps the retained frame without reading missing metadata during refresh", async () => {
@@ -328,6 +378,94 @@ describe("FieldMapModule planar state ownership", () => {
         expect.any(Object),
         { enabled: true },
       );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("publishes base sample Airbox geometry instead of the magnetic domain grid", async () => {
+    const airboxPlanar = {
+      colormap: "viridis",
+      component: "magnitude",
+      default_slice: {
+        operator: { kind: "plane_sample" },
+        plane: "xy",
+        position_fraction: 0.5,
+      },
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: {
+        boundaries: false,
+        bounds: true,
+        contours: false,
+        mesh: true,
+        points: false,
+        probes: false,
+        raster: true,
+        vectors: false,
+      },
+      point_style: { color: "#ffffff", opacity: 1, size: 1 },
+      quality: "interactive",
+      quantity_id: "m",
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      source: { kind: "default" },
+      vector_style: {
+        color_mode: "orientation",
+        length_mode: "uniform",
+        monochrome_color: "#ffffff",
+        opacity: 1,
+        scale: 1,
+        thickness: 1,
+      },
+      view_scope: { kind: "airbox" },
+      viewport_colorbar_visible: true,
+      visible: true,
+      wireframe_style: { color: "#ffffff", opacity: 1 },
+    } satisfies NonNullable<VisualizationStateResource["planar"]>;
+    mocks.visualization.data = {
+      planar: airboxPlanar,
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    mocks.domain = {
+      bounds: { min: [0, 0, 10e-9], max: [100e-9, 100e-9, 40e-9] },
+      discretization: "fdm",
+      grid: {
+        origin: [0, 0, 10e-9],
+        shape: [40, 40, 12],
+        spacing: [2.5e-9, 2.5e-9, 2.5e-9],
+      },
+    } as unknown as DomainMetaResource;
+    mocks.section = {
+      cut_element_count: null,
+      layer_count: 26,
+      layer_index: 12,
+      layer_spacing_m: 2.5e-9,
+      layer_stops_m: [],
+      navigation_step_kind: "fdm_cell",
+      navigation_step_m: 2.5e-9,
+      normal_axis: "z",
+      normal_max_m: 60e-9,
+      normal_min_m: -5e-9,
+      plane: "xy",
+      requested_coordinate_m: 27.5e-9,
+      requested_fraction: 0.5,
+      resolved_coordinate_m: 26.25e-9,
+      stops_kind: "fdm_cell_layers",
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+
+      expect(fieldMapSurfaceStore.get().sectionGeometry).toMatchObject({
+        normalMin: -5e-9,
+        normalMax: 60e-9,
+        layerCount: 26,
+        layerSpacing: 2.5e-9,
+        nativeResolution: null,
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -471,7 +609,7 @@ describe("FieldMapModule planar state ownership", () => {
     }
   });
 
-  it("keeps source selection in the Inspector and exposes the D2D-01 toolbar over the same state", () => {
+  it("keeps display selection in the Inspector: an icon toolbar above and a status bar below", () => {
     mocks.visualization.data = {
       planar: {
         colormap: "viridis",
@@ -482,7 +620,7 @@ describe("FieldMapModule planar state ownership", () => {
           position_fraction: 0.5,
         },
         display_unit: "A/m",
-        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1.5 },
         layers: { mesh: true, raster: true, vectors: false },
         quantity_id: "m",
         quality: "interactive",
@@ -500,10 +638,40 @@ describe("FieldMapModule planar state ownership", () => {
 
     expect(html).not.toContain('aria-label="Planar field selection controls"');
     expect(html).not.toContain('aria-label="Source"');
-    // D2D-01: quantity, component, plane and layer controls sit above the map
-    // and write the same visualization/state.planar as the Inspector.
-    expect(html).toContain('aria-label="2D view controls"');
-    expect(html).toContain('aria-label="Component"');
+    // U1: quantity, component, scope, plane, operator and section selection
+    // live in the 2D Inspector; only tools sit above the map.
+    expect(html).toContain('aria-label="2D view tools"');
+    expect(html).not.toContain('aria-label="2D view controls"');
+    for (const label of ["Quantity", "Scope", "Free section", "Single layer", "No sample"]) {
+      expect(html).not.toContain(label);
+    }
+    expect(html).toContain('aria-label="2D view status"');
+    expect(html).toContain(">XY<");
+    expect(html).toContain(">150%<");
+    expect(html.indexOf('aria-label="2D view tools"')).toBeLessThan(html.indexOf("fm-field-map__canvas-stack"));
+    expect(html.indexOf("fm-field-map__canvas-stack")).toBeLessThan(html.indexOf('aria-label="2D view status"'));
+  });
+
+  it("keeps the toolbar and status bar over the loading state", () => {
+    mocks.visualization.data = {
+      planar: {
+        component: "magnitude", quantity_id: "m", source: { kind: "default" },
+        default_slice: { operator: { kind: "plane_sample" }, plane: "xz", position_fraction: 0.5 },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: { raster: true, mesh: false, vectors: false },
+        resolution: { width: 256, height: 128 }, view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    mocks.scalarPending = true;
+
+    const html = renderToStaticMarkup(<FieldMapModule />);
+
+    expect(html).toContain("Loading planar field");
+    expect(html).toContain('aria-label="2D view tools"');
+    expect(html).toContain('aria-label="2D view status"');
+    expect(html).toContain(">XZ<");
   });
 
   it("renders a horizontal scalar instrument with min, ramp, and max in display units", () => {
@@ -544,7 +712,6 @@ describe("FieldMapModule planar state ownership", () => {
       range: { max: 2_000, min: -1_000 },
     }));
 
-    mocks.probeData = { occupancy: "occupied", scalar: 1_000, u_m: 2, v_m: 3 };
     const html = renderToStaticMarkup(<FieldMapModule />);
 
     expect(html).toContain('class="fm-field-map__colorbar"');
@@ -566,10 +733,9 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain(
       '<div class="fm-field-map__canvas-stack"><output data-planar-render-layers=',
     );
-    // Since PR 350 the probe reading is retained per pinned point; with no
-    // point pinned (static render) no stale reading is shown. Axis rows are
-    // covered by PlanarPinnedProbe, placement by PlanarSurface.
-    expect(html).not.toContain('class="fm-field-map__pinned-probe"');
+    // With no point pinned (static render) no node readout is shown; its
+    // content is covered by PlanarNodeReadout, placement by PlanarSurface.
+    expect(html).not.toContain("Pinned planar probe");
   });
 
   it("resolves Airbox and object wireframes without changing the field query or sample identity", () => {

@@ -180,8 +180,8 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
       "utf8",
     );
 
-    expect(texturePanel).toContain("buildMagnetizationTransactionRequest(");
-    expect(texturePanel).toContain("api.model.commitTransaction(");
+    expect(texturePanel).toContain("buildMagnetizationApplyTarget(");
+    expect(texturePanel).toContain("commitMagneticTextureApply(");
     expect(texturePanel).not.toContain("patchMagnetizationAsset(");
     expect(texturePanel).not.toContain("patchObjectRegionResource(");
   });

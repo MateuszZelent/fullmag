@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import itertools
 import json
 import os
 from pathlib import Path
@@ -198,7 +199,7 @@ assert docker_build_control.mirror_console(b"progress\\n") is False
             raise AssertionError(args)
 
         with patch.object(volume_dev, "docker_text", side_effect=docker_text), patch.object(
-            volume_dev.time, "monotonic", side_effect=(0.0, 1.0, 46.0, 46.0, 50.0)
+            volume_dev.time, "monotonic", side_effect=itertools.chain((0.0,), itertools.repeat(46.0))
         ), patch.object(volume_dev.time, "sleep"), patch.object(
             build_control.sys, "stdout", _BrokenStream()
         ):

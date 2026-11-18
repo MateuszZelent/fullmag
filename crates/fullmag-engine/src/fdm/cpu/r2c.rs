@@ -297,6 +297,10 @@ fn transform_z_sequential(
     line: &mut [Complex<f64>],
     scratch: &mut [Complex<f64>],
 ) {
+    if pz == 1 {
+        return;
+    }
+
     for y in 0..py {
         for x in 0..sx {
             for z in 0..pz {
@@ -363,6 +367,10 @@ fn transform_z_parallel(
     fft: &dyn Fft<f64>,
     scratch_len: usize,
 ) {
+    if pz == 1 {
+        return;
+    }
+
     use rayon::prelude::*;
     use std::cell::RefCell;
 
@@ -445,7 +453,7 @@ mod tests {
 
     #[test]
     fn half_spectrum_3d_matches_direct_dft_and_normalized_round_trip() {
-        for [px, py, pz] in [[6, 3, 2], [5, 4, 3]] {
+        for [px, py, pz] in [[6, 3, 2], [5, 4, 3], [2, 3, 1], [2, 2, 1]] {
             let mut plan = R2c3dPlan::new(px, py, pz);
             let original: Vec<_> = (0..px * py * pz)
                 .map(|index| {

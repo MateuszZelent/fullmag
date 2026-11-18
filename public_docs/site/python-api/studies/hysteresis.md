@@ -10,35 +10,30 @@ owner: fullmag-public-docs
 # Hysteresis
 
 (python-api-studies-hysteresis-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 This page records the public Python authoring contract and canonical lowering for the field-sweep
 hysteresis study type; magnetization dynamics and settle semantics are owned by the dynamics and
 relaxation pages.
 
 (python-api-studies-hysteresis-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 Hysteresis sweeps an external field and settles the system between field points; it introduces no
 independent governing equation. Field-to-H mapping and settle physics are owned by Zeeman and
 relaxation/dynamics contracts.
 
 (python-api-studies-hysteresis-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 Field values are authored and displayed in millitesla and stored canonically with a
 `field_unit_provenance` record that maps `mu0_h` / mT to canonical `h_ext` in $\mathrm{A\,m^{-1}}$.
 $1$ denotes dimensionless data.
 
 (python-api-studies-hysteresis-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Constructor checks run immediately. Lowering and planning additionally check sweep monotonicity,
 expected-branch scheduling, settle-step consistency, mesh cardinality, capability, and backend
 legality.
 
 (python-api-studies-hysteresis-python-api)=
-<!-- (python-api)= -->
 ## Python API
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
@@ -92,75 +87,73 @@ study.stages.add_hysteresis_sweep(
 ```
 
 (python-api-studies-hysteresis-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 `Hysteresis.to_ir()` emits `{"kind": "hysteresis", ...}` including `field_unit_provenance`,
 `measurement_axis`, `initial_protocol`, `branch_mode`, `sampling`, and the optional sweep/settle
 extensions. The final column above gives each destination.
 
 (python-api-studies-hysteresis-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
-Requested intent (field schedule, protocol, branch mode, storage) is preserved in Python and IR;
+Requested intent (field schedule, protocol, branch mode, storage) is preserved in Python and `ProblemIR`;
 resolved execution and the actual settle algorithm are selected by the planner. Validation errors
 reject zero field steps, non-monotonic schedules, invalid protocols/axes, and inconsistent settle
 pipelines. Unsupported combinations fail capability checks without silent fallback.
 
 (python-api-studies-hysteresis-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 This page owns authoring and lowering only. Settle and dynamics realizations are documented in the
 relaxation and dynamics numerical pages.
 
 (python-api-studies-hysteresis-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
-The adjacent map anchors claims to `packages/fullmag-py/src/fullmag/model/study.py` (`class
-Hysteresis` and its settle/storage helpers) and `packages/fullmag-py/src/fullmag/world.py`
+Anchors: `packages/fullmag-py/src/fullmag/model/study.py` (`class Hysteresis` and its
+settle/storage helpers) and `packages/fullmag-py/src/fullmag/world.py`
 (`StudyStagesBuilder.add_hysteresis_sweep`).
 
 (python-api-studies-hysteresis-validation)=
-<!-- (validation)= -->
 ## Validation
-Ownership tests compare this inventory with live signatures and validate the adjacent source map.
+Ownership tests compare this inventory with live Python signatures.
 
 (python-api-studies-hysteresis-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 Settle and storage policies are authoring contracts; executed qualification is backend-dependent
 and must be reported per lane.
 
 (python-api-studies-hysteresis-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 Physical model references belong to the Zeeman and dynamics pages; no independent model is
 introduced here.
 
-(python-api-studies-hysteresis-source-code-index)=
-<!-- (source-code-index)= -->
+## Control Room support
 
-## Control Room crosswalk
-
-Status: Stage authoring and inspection are partial; the stage editor exposes only its advertised fields.
+Status: Stage authoring, $M(B)$ loop plotting, and snapshot replay are `partial`; the stage editor exposes core sweep bounds and settle controls, while nested `SettleTree` pipelines remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
+| Sweep field bounds, steps, & settle tolerance (`HysteresisStageDraftFields`) | `Model Explorer -> Stages -> Add stage -> Hysteresis` (`HysteresisStageInspector`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Interactive $M(B)$ hysteresis curve & snapshot scrub | `Analysis Plots` (`HysteresisChart`) linked with `PlanarSnapshotNavigator` (2D) & `HysteresisReplayGlyphLayer` (3D) | `inspection-only` | Clicking any point updates `Selection` (`stageId`, `snapshotId`, `field_value_mT`, `branch_id`) for synchronized 2D/3D replay |
+| Arbitrary `SettlePipeline` / `SettleTree` schedules | `Model Explorer -> Stages -> <stage>` | `Python-only` | Stage renders read-only metadata in UI; authored in Python |
 
-not implemented: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+```{image} /_static/images/ui/charts-hysteresis-loop-playback.png
+:alt: Control Room hysteresis loop plot synchronized with field-sweep snapshot playback in 2D and 3D views
+:align: center
+:width: 100%
+```
 
+```{image} /_static/images/ui/inspector-study-stages-and-rerun.png
+:alt: Control Room Study and Stage Inspectors for editing and re-running hysteresis stages
+:align: center
+:width: 100%
+```
+
+Study parameters and nested settle pipelines outside `HysteresisStageDraftFields` remain Python-only.
+See [Control Room capability register](/frontend/capability-register) and [Study Inspectors](/frontend/inspectors/studies-and-stages).
+Frontend source owners: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx`, `apps/control-room/src/modules/inspector/panels/stages/HysteresisStageInspector.tsx`, and `apps/control-room/src/modules/analysis-plots/AnalysisPlotsView.tsx`.
+
+(python-api-studies-hysteresis-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | [`class Hysteresis`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | Canonical Python API behavior | Ownership test and source-map validator |
+| Constructor, validation, lowering | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | [`class Hysteresis`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | Hysteresis study schedule, settle, and storage lowering | Ownership and API contract tests |
 | Settle policy | `packages/fullmag-py/src/fullmag/model/study.py` | `SettlePipeline`, `SettleTree`, `RelaxStep`, `MinimizeStep` | Per-point settle program | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_hysteresis_sweep` | Stage-first authoring entrypoint | Ownership test |
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Hysteresis study schedule, settle, and storage lowering. | [`packages/fullmag-py/src/fullmag/model/study.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | [`class Hysteresis`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/study.py#L1455) | Hysteresis study schedule, settle, and storage lowering. | Source-map validator and focused API tests |

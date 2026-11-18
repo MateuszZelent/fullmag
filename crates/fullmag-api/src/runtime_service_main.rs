@@ -6,6 +6,7 @@ mod compute_operator_env;
 mod failed_worker_recovery;
 mod failed_preclaim_cancellation;
 mod runtime_service_unclaimed_cancellation;
+mod claimed_worker_interruption;
 use anyhow::{bail, Context, Result};
 use fullmag_session::{
     compute_node_snapshot::Reported,
@@ -2283,6 +2284,8 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
+    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
     let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
     if recovered
         .events
@@ -2557,6 +2560,12 @@ fn run() -> Result<()> {
         }
         Some(value) if value == OsString::from("--prepare-orphan-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Prepare, args)
+        }
+        Some(value) if value == OsString::from("--prepare-claimed-interruption") => {
+            claimed_worker_interruption::run(false, args)
+        }
+        Some(value) if value == OsString::from("--complete-claimed-interruption") => {
+            claimed_worker_interruption::run(true, args)
         }
         Some(value) if value == OsString::from("--recover-orphan-after-teardown") => {
             run_orphan_teardown(OrphanTeardownPhase::Recover, args)

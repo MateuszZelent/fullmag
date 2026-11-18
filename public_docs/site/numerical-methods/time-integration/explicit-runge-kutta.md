@@ -13,13 +13,11 @@ source_of_truth: "LLG and AdaptiveTimestep validation, ProblemIR lowering, and e
 # Explicit Runge–Kutta Methods
 
 (numerical-methods-time-integration-explicit-runge-kutta-problem-statement)=
-<!-- (problem-statement)= -->
 ## Scope and purpose
 
-This chapter documents the explicit Runge–Kutta (`heun`, `rk4`, `rk23`, `rk45`) and fixed-step multistep (`abm3`, `coupled_imex_ark2`) time integrators used by Fullmag to advance the semi-discrete Landau–Lifshitz–Gilbert (LLG) equation. It covers the stage equations, embedded error estimators, First-Same-As-Last (FSAL) stage reuse policy, unit-sphere stage normalization, reusable workspace allocation, and cross-lane source mapping across FEM and FDM CPU/GPU realizations.
+This chapter documents the explicit Runge–Kutta (`heun`, `rk4`, `rk23`, `rk45`) and fixed-step multistep (`abm3`, `coupled_imex_ark2`) time integrators used by Fullmag to advance the semi-discrete Landau–Lifshitz–Gilbert (LLG) equation. It covers the stage equations, embedded error estimators, First-Same-As-Last (FSAL) stage reuse policy, unit-sphere stage normalization, reusable workspace allocation, and cross-lane implementation mapping across FEM and FDM CPU/GPU realizations.
 
 (numerical-methods-time-integration-explicit-runge-kutta-governing-equations)=
-<!-- (governing-equations)= -->
 ## Scientific and numerical model
 
 Let $y(t) = \{\mathbf{m}_i(t)\}_{i \in \mathcal{A}}$ denote the assembled semi-discrete magnetization state on active magnetic degrees of freedom $i \in \mathcal{A}$ ($M_{s,i} > 0$). The semi-discrete LLG right-hand side is
@@ -64,7 +62,6 @@ e_{n+1} = \Delta t \sum_{j=1}^{S} \left(b_j - \widetilde{b}_j\right) K_j.
 ```
 
 (numerical-methods-time-integration-explicit-runge-kutta-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ### Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -86,7 +83,6 @@ e_{n+1} = \Delta t \sum_{j=1}^{S} \left(b_j - \widetilde{b}_j\right) K_j.
 | $e_{n+1}$ | embedded local error estimate | $1$ |
 
 (numerical-methods-time-integration-explicit-runge-kutta-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ### Assumptions, FSAL reuse, and multistep checkpointing
 
 - **First-Same-As-Last (FSAL) reuse (`rk23`, `rk45`)**: Both Bogacki–Shampine 3(2) and Dormand–Prince 5(4) satisfy $a_{S,\ell} = b_\ell$, so stage $S$ is evaluated at the candidate state prior to final endpoint normalization. On GPU (`gpu_rk_rhs_allows_fsal_reuse`), FSAL reuse is enabled only when operator signatures match and neither stochastic Brown thermal fields, stage callbacks, frozen-spin projections, nor unqualified periodic projections are active.
@@ -94,9 +90,7 @@ e_{n+1} = \Delta t \sum_{j=1}^{S} \left(b_j - \widetilde{b}_j\right) K_j.
 - **Stability limits (`LLG-TD-STIFF-V1`)**: Explicit Runge–Kutta schemes have bounded absolute stability regions along the imaginary and negative real axes; exchange stiffness scales as $\mathcal{O}(A_{\mathrm{ex}} / (M_s h_{\min}^2))$.
 
 (numerical-methods-time-integration-explicit-runge-kutta-discrete-realization)=
-<!-- (discrete-realization)= -->
 (numerical-methods-time-integration-explicit-runge-kutta-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ### Discrete realization and backend support matrix
 
 | Solver | Device | Status | Realization notes |
@@ -121,7 +115,6 @@ e_{n+1} = \Delta t \sum_{j=1}^{S} \left(b_j - \widetilde{b}_j\right) K_j.
 | `StudyBuilder.solver(adaptive_timestep=...)` | `AdaptiveTimestep \| None` | `None` | $1$ | mutually exclusive with fixed/convenience controls | stage-workflow adaptive policy | RK23/RK45 lanes | `study.dynamics.adaptive_timestep` |
 
 (numerical-methods-time-integration-explicit-runge-kutta-python-api)=
-<!-- (python-api)= -->
 ## Python API
 
 ```python
@@ -167,7 +160,6 @@ study_rk4.stages.add_time(name="fixed_pulse", duration=0.1e-9, By=5e-3, save_m_e
 ```
 
 (numerical-methods-time-integration-explicit-runge-kutta-problem-ir)=
-<!-- (problem-ir)= -->
 ### `ProblemIR` excerpt
 
 ```json
@@ -203,11 +195,8 @@ study_rk4.stages.add_time(name="fixed_pulse", duration=0.1e-9, By=5e-3, save_m_e
 - **Stage Execution Diagnostics**: Displays accepted steps, rejected step attempts, active $\Delta t$, total stage RHS evaluations, and FSAL reuse counters.
 
 (numerical-methods-time-integration-explicit-runge-kutta-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 (numerical-methods-time-integration-explicit-runge-kutta-validation)=
-<!-- (validation)= -->
 (numerical-methods-time-integration-explicit-runge-kutta-limitations)=
-<!-- (limitations)= -->
 ## Diagnostics and failure semantics
 
 - **Requested intent and resolved execution**: `ProblemIR` preserves the user's `requested intent` (`integrator="auto"` or explicit scheme), while the planner and execution receipt record the concrete `resolved execution` method and device lane.
@@ -216,14 +205,12 @@ study_rk4.stages.add_time(name="fixed_pulse", duration=0.1e-9, By=5e-3, save_m_e
 - **Atomic stage failure (`LLG-TD-ATOMIC-V1`)**: Non-finite stage fields or RHS evaluations immediately abort the attempted step and restore the pre-attempt magnetization and effective-field snapshot (`rk_step_transaction.hpp`).
 
 (numerical-methods-time-integration-explicit-runge-kutta-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ### Scientific bibliography
 
 1. J. R. Dormand and P. J. Prince, *A family of embedded Runge–Kutta formulae*, J. Comput. Appl. Math. **6**, 19–26 (1980).
 2. P. Bogacki and L. F. Shampine, *A 3(2) pair of Runge–Kutta formulas*, Appl. Math. Lett. **2**, 321–325 (1989).
 
 (numerical-methods-time-integration-explicit-runge-kutta-source-code-index)=
-<!-- (source-code-index)= -->
 ## Where this is implemented
 
 | Layer | File | Symbol | Responsibility |
