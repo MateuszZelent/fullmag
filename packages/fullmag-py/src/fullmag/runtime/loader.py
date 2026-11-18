@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import math
+from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
@@ -376,8 +378,10 @@ def load_problem_from_script(
     *,
     lightweight_assets: bool = False,
     source_bytes: bytes | None = None,
+    material_catalog: Iterable[Mapping[str, object]] | None = None,
 ) -> LoadedProblem:
     import fullmag.world as world
+    from fullmag._material_versions import _bind_catalog
 
     source_path = Path(path).resolve()
     if source_bytes is None:
@@ -399,9 +403,12 @@ def load_problem_from_script(
         script_source = source_text
         dont_inherit = False
 
-    world.begin_script_capture(source_path.parent)
-    world.set_script_capture_lightweight_assets(lightweight_assets)
-    try:
+    with ExitStack() as stack:
+        if material_catalog is not None:
+            stack.enter_context(_bind_catalog(material_catalog))
+        world.begin_script_capture(source_path.parent)
+        stack.callback(world.finish_script_capture)
+        world.set_script_capture_lightweight_assets(lightweight_assets)
         if source_bytes is None:
             # SourceFileLoader.exec_module may accept timestamp-and-size-valid
             # bytecode after this file is rewritten within one second. Capture
@@ -493,9 +500,6 @@ def load_problem_from_script(
                 workspace_problem=workspace_problem,
                 antenna_inventory=antenna_inventory,
             )
-
-    finally:
-        world.finish_script_capture()
 
 
 def _extract_problem(module: ModuleType) -> tuple[Problem, str]:

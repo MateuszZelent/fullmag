@@ -1471,11 +1471,15 @@ dependencies = [
 name = "fullmag-workspace"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "fullmag-authoring",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]

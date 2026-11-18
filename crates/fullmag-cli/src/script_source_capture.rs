@@ -18,8 +18,15 @@ pub(crate) fn capture_authored_script(script: &Path, args: &ScriptCli) -> Result
     let backend=args.backend.map(|value|value.to_possible_value().unwrap().get_name().to_owned());
     let mode=args.mode.map(|value|value.to_possible_value().unwrap().get_name().to_owned());
     let precision=args.precision.map(|value|value.to_possible_value().unwrap().get_name().to_owned());
+    let catalog = crate::python_bridge::material_catalog_snapshot()?;
     let capture=fullmag_application::script_source_capture::capture_authored_script(script,&fullmag,
-        &fullmag_application::script_source_capture::CaptureOptions {backend:backend.as_deref(),mode:mode.as_deref(),precision:precision.as_deref(),scene_only:false},
+        &fullmag_application::script_source_capture::CaptureOptions {
+            backend: backend.as_deref(),
+            mode: mode.as_deref(),
+            precision: precision.as_deref(),
+            material_catalog: catalog.as_deref(),
+            ..Default::default()
+        },
         crate::python_bridge::run_python_capture_helper)?;
     Ok(CapturedScriptSource {config:capture.config.context("capture returned no raw authored config")?,manifest:capture.manifest,files:capture.files})
 }

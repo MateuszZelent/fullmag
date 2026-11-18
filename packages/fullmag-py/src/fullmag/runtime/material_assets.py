@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import keyword
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -80,9 +81,33 @@ def _references(value: object, context: str, *, catalog_source: bool = False) ->
     return result
 
 
+def _version_key(value: object, context: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", value) or keyword.iskeyword(value):
+        raise ValueError(f"{context} must be a lowercase, non-keyword ASCII Python identifier of at most 48 characters")
+    return value
+
+
+def _version_source(value: object, context: str) -> dict[str, str]:
+    raw = _mapping(value, context)
+    if set(raw) - {"family", "version", "source_project", "copied_from_family"}:
+        raise ValueError(f"{context} has unsupported fields")
+    result = {key: _version_key(raw.get(key), f"{context}.{key}") for key in ("family", "version")}
+    if raw.get("source_project") is not None:
+        project = _text(raw["source_project"], f"{context}.source_project")
+        if len(project.encode("utf-8")) > 4096:
+            raise ValueError(f"{context}.source_project exceeds its size limit")
+        result["source_project"] = project
+    if raw.get("copied_from_family") is not None:
+        copied_from = _version_key(raw["copied_from_family"], f"{context}.copied_from_family")
+        if copied_from == result["family"]:
+            raise ValueError(f"{context}.copied_from_family must differ from family")
+        result["copied_from_family"] = copied_from
+    return result
+
+
 def _source(value: object, context: str) -> dict[str, Any]:
     raw = _mapping(value, context)
-    if set(raw) - {"catalog_id", "catalog_revision", "name", "kind", "properties", "references"}:
+    if set(raw) - {"catalog_id", "catalog_revision", "name", "kind", "properties", "references", "version"}:
         raise ValueError(f"{context} has unsupported fields")
     revision = raw.get("catalog_revision")
     if isinstance(revision, bool) or not isinstance(revision, int) or not 0 < revision <= 2**64 - 1:
@@ -101,7 +126,7 @@ def _source(value: object, context: str) -> dict[str, Any]:
     properties = _properties(raw.get("properties"), f"{context}.properties")
     if properties["Ms"] is not None and properties["Ms"] <= 0:
         raise ValueError(f"{context}.properties.Ms must be positive or null")
-    return {
+    result = {
         "catalog_id": catalog_id,
         "catalog_revision": revision,
         "name": name,
@@ -109,6 +134,15 @@ def _source(value: object, context: str) -> dict[str, Any]:
         "properties": properties,
         "references": _references(raw.get("references", []), f"{context}.references", catalog_source=True),
     }
+    published_prefix = "custom:published:"
+    if raw.get("version") is not None:
+        version = _version_source(raw["version"], f"{context}.version")
+        if catalog_id != f"{published_prefix}{version['family']}:{version['version']}":
+            raise ValueError(f"{context}.catalog_id and version disagree")
+        if properties["Ms"] is None or properties["Aex"] is None:
+            raise ValueError(f"{context}.properties requires Ms and Aex for a published version")
+        result["version"] = version
+    return result
 
 
 _DMI_KINDS = {"Dind": "interfacial_dmi", "Dbulk": "bulk_dmi"}
@@ -356,6 +390,39 @@ def reconcile_material_assets(value: object, geometries: Sequence[Mapping[str, A
     if active_without_coefficient:
         result["active_dmi_without_coefficient"] = active_without_coefficient
     return result
+
+
+def add_published_material_asset(
+    metadata: dict[str, Any],
+    *,
+    name: str,
+    object_id: str,
+    display_name: str,
+    source: dict[str, Any],
+    properties: dict[str, Any],
+    active_dmi: set[str],
+) -> None:
+    """Store a new model copy while keeping the source coefficients immutable."""
+    occupied = {entry["id"]: entry for entry in metadata["materials"]}
+    asset_id = _fork_id(source["catalog_id"], object_id, occupied)
+    metadata["materials"].append({
+        "id": asset_id,
+        "name": display_name,
+        "properties": _properties(properties, f"material_assets object {object_id!r}.properties"),
+        "references": copy.deepcopy(source["references"]),
+        "source": source,
+    })
+    metadata["object_ids"][name] = object_id
+    metadata["assignments"][object_id] = asset_id
+    flags = {
+        "inactive_dmi": [key for key in _DMI_KINDS if key not in active_dmi and properties[key] is not None],
+        "active_dmi_without_coefficient": [key for key in _DMI_KINDS if key in active_dmi and properties[key] is None],
+    }
+    for field, values in flags.items():
+        if values:
+            metadata.setdefault(field, {})[object_id] = values
+        elif field in metadata:
+            metadata[field].pop(object_id, None)
 
 
 def _fork_id(material_id: str, object_id: str, occupied: Mapping[str, Any]) -> str:

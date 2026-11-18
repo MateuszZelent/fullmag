@@ -29,6 +29,7 @@
 
 mod error;
 mod legacy;
+pub mod material_catalog;
 mod paths;
 mod script_meta;
 mod seen;

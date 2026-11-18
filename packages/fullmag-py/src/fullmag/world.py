@@ -42,6 +42,7 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, Callable, Generic, Literal, Mapping, Sequence, TypeVar, cast
 
+from fullmag._material_versions import PublishedMaterialVersion
 from fullmag._progress import emit_progress
 from fullmag._validation import (
     SamplingPeriod,
@@ -567,7 +568,7 @@ class MagnetHandle:
     # Public state consumed by export, plus the dedicated control handles.
     # Unknown attributes must not appear to configure physics and then vanish.
     _PUBLIC_ATTRIBUTES = frozenset({
-        "region_name", "Ms", "Aex", "Dind", "Dbulk", "Ku1", "anisU", "Kc1",
+        "region_name", "Ms", "Aex", "Ku1", "anisU", "Kc1",
         "mesh", "regions",
     })
 
@@ -590,8 +591,10 @@ class MagnetHandle:
         self._alpha_value: float = 0.01
         self._alpha_control = AlphaControl(self)
         self._absorbing_boundary: AbsorbingBoundaryLayer | None = None
-        self.Dind: float | None = None
-        self.Dbulk: float | None = None
+        self._material_version: PublishedMaterialVersion | None = None
+        self._dind_value: float | None = None
+        self._dbulk_value: float | None = None
+        self._active_material_dmi: set[str] = set()
         self.Ku1: float | None = None
         self.anisU: tuple[float, float, float] | None = None
         self.Kc1: float | None = None
@@ -665,6 +668,56 @@ class MagnetHandle:
         self._alpha_value = numeric
 
     @property
+    def material(self) -> PublishedMaterialVersion | None:
+        """Return the published version last copied to this magnet, if any."""
+        self._assert_active_context()
+        return self._material_version
+
+    @material.setter
+    def material(self, value: PublishedMaterialVersion) -> None:
+        self._assert_active_context()
+        if not isinstance(value, PublishedMaterialVersion):
+            raise TypeError("material must be a published version selected through fm.materials")
+        properties = value._source["properties"]
+        self.Ms = properties["Ms"]
+        self.Aex = properties["Aex"]
+        self.alpha = properties["alpha"]
+        # Copy DMI coefficients without changing the explicitly authored activation.
+        self._dind_value = properties["Dind"]
+        self._dbulk_value = properties["Dbulk"]
+        self._material_version = value
+
+    @property
+    def Dind(self) -> float | None:
+        return self._dind_value
+
+    @Dind.setter
+    def Dind(self, value: float | None) -> None:
+        self._dind_value = value
+        if value is None:
+            self._active_material_dmi.discard("Dind")
+        else:
+            self._active_material_dmi.add("Dind")
+
+    @property
+    def Dbulk(self) -> float | None:
+        return self._dbulk_value
+
+    @Dbulk.setter
+    def Dbulk(self, value: float | None) -> None:
+        self._dbulk_value = value
+        if value is None:
+            self._active_material_dmi.discard("Dbulk")
+        else:
+            self._active_material_dmi.add("Dbulk")
+
+    def _dmi_coefficient(self, parameter: str) -> float | None:
+        if parameter not in self._active_material_dmi:
+            return None
+        value = getattr(self, parameter)
+        return value if value is not None else 0.0
+
+    @property
     def dind(self) -> float | None:
         self._assert_active_context()
         return self.Dind
@@ -709,8 +762,8 @@ class MagnetHandle:
             Ku1=self.Ku1,
             anisU=as_vector3(self.anisU, "anisU") if self.anisU is not None else None,
             Kc1=self.Kc1,
-            Dind=self.Dind,
-            Dbulk=self.Dbulk,
+            Dind=self._dmi_coefficient("Dind"),
+            Dbulk=self._dmi_coefficient("Dbulk"),
         )
 
         if self._m_value is None:
@@ -744,7 +797,7 @@ class MagnetHandle:
             name=self._name,
             geometry=resolved_geometry,
             material=mat,
-            object_id=self._object_id,
+            object_id=self._object_id or (self._name if self._material_version is not None else None),
             region=region,
             m0=m0,
             object_regions=object_regions,
@@ -10041,6 +10094,9 @@ def _build_problem(
     if mesh_workflow is not None:
         runtime_metadata["mesh_workflow"] = mesh_workflow
     runtime_metadata.update(copy.deepcopy(s._extra_runtime_metadata))
+    published_assets = _collect_published_material_assets(s._magnets, runtime_metadata.get("material_assets"))
+    if published_assets is not None:
+        runtime_metadata["material_assets"] = published_assets
 
     # Partition outputs by study family.
     _EIGEN_OUTPUT_TYPES = (SaveSpectrum, SaveMode, SaveDispersion, SaveEigenDiagnostics)
@@ -10168,6 +10224,44 @@ def _build_problem(
     )
 
 
+def _collect_published_material_assets(
+    magnets: Sequence[MagnetHandle], current: object,
+) -> dict[str, Any] | None:
+    selected = [(magnet, version) for magnet in magnets if (version := magnet.material) is not None]
+    if not selected:
+        return None
+
+    from fullmag.runtime.material_assets import (
+        MATERIAL_ASSETS_VERSION,
+        add_published_material_asset,
+        canonical_material_assets,
+    )
+
+    metadata = canonical_material_assets(current) if current is not None else {
+        "version": MATERIAL_ASSETS_VERSION,
+        "materials": [],
+        "assignments": {},
+        "object_ids": {},
+    }
+    for magnet, version in selected:
+        add_published_material_asset(
+            metadata,
+            name=magnet._name,
+            object_id=magnet._object_id or magnet._name,
+            display_name=version.display_name,
+            source=version._copy_source(),
+            properties={
+                "Ms": magnet.Ms,
+                "Aex": magnet.Aex,
+                "alpha": magnet._alpha_value,
+                "Dind": magnet.Dind,
+                "Dbulk": magnet.Dbulk,
+            },
+            active_dmi=magnet._active_material_dmi,
+        )
+    return metadata
+
+
 def _uniform_material_dmi_coefficient(
     magnets: Sequence[MagnetHandle],
     parameter: str,
@@ -10175,12 +10269,12 @@ def _uniform_material_dmi_coefficient(
     """Return a legacy global DMI coefficient only when all objects agree."""
     if not magnets:
         return None
-    values = [getattr(magnet, parameter) for magnet in magnets]
+    values = [magnet._dmi_coefficient(parameter) for magnet in magnets]
     effective_values = [0.0 if value is None else value for value in values]
     if any(value != effective_values[0] for value in effective_values[1:]):
         details = ", ".join(
-            f"{magnet._object_id or magnet._name}={getattr(magnet, parameter)!r}"
-            for magnet in magnets
+            f"{magnet._object_id or magnet._name}={value!r}"
+            for magnet, value in zip(magnets, values)
         )
         raise ValueError(
             f"legacy study-level {parameter} lowering requires the same value for every "

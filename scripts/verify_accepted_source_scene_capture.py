@@ -17,14 +17,18 @@ import tempfile
 CAPTURE_TIMEOUT_SECONDS = 90
 
 
-def invoke(python, helper, source, fullmag, phase, expected=None):
+def invoke(python, helper, source, fullmag, phase, expected=None, *, material_catalog=None):
     args = [python, "-B", "-S", "-c",
             "import sys; sys.path[:] = [p for p in sys.path if p]; import runpy; path=sys.argv.pop(1); runpy.run_path(path,run_name='__main__')",
             str(helper), "--phase", phase, "--script", str(source),
             "--fullmag-root", str(fullmag), "--scene-only"]
     if expected:
         args += ["--expected-inventory", expected]
-    result = subprocess.run(args, capture_output=True, timeout=CAPTURE_TIMEOUT_SECONDS, cwd=source.parent,
+    payload = None
+    if material_catalog is not None:
+        args += ["--material-catalog-stdin"]
+        payload = json.dumps(material_catalog).encode("utf-8")
+    result = subprocess.run(args, input=payload, capture_output=True, timeout=CAPTURE_TIMEOUT_SECONDS, cwd=source.parent,
                             env={"PATH": str(Path(python).parent), "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"})
     if len(result.stdout) > 8 * 1024 * 1024 or len(result.stderr) > 8 * 1024 * 1024:
         raise AssertionError("capture output exceeds consumer bound")
@@ -128,6 +132,36 @@ def main():
         result, _ = invoke(sys.executable, helper, source, fullmag, "export", digest)
         assert result.returncode != 0
         cases.append("changed_inventory_rejected")
+        source.write_text(
+            "import fullmag as fm\n"
+            "disc = fm.geometry(fm.Box(20e-9, 10e-9, 5e-9), name='disc')\n"
+            "disc.material = fm.materials.yig.test_fixture\n",
+            encoding="utf-8",
+        )
+        result, inventory = invoke(sys.executable, helper, source, fullmag, "inventory")
+        assert result.returncode == 0, result.stderr.decode()
+        digest = inventory["capture"]["inventory_sha256"]
+        result, _ = invoke(sys.executable, helper, source, fullmag, "export", digest)
+        assert result.returncode == 27 and result.stderr.rstrip().endswith(
+            b"source_capture_missing_material_version: yig.test_fixture"
+        ), result.stderr.decode()
+        version = {"family": "yig", "version": "test_fixture", "source_project": "Fixture project"}
+        properties = {"Ms": 140000, "Aex": 3.5e-12, "alpha": 0.01, "Dind": -0.002, "Dbulk": None}
+        published = {
+            "source": {"catalog_id": "custom:published:yig:test_fixture", "catalog_revision": 3,
+                       "name": "Material test fixture", "kind": "modified",
+                       "properties": properties, "references": [], "version": version},
+            "original": None, "display_name": "Material test fixture", "archived": True, "revision": 7,
+        }
+        result, exported = invoke(
+            sys.executable, helper, source, fullmag, "export", digest, material_catalog=[published],
+        )
+        assert result.returncode == 0, result.stderr.decode()
+        material, = exported["scene"]["materials"]
+        assert material["properties"] == properties and material["source"]["version"] == version
+        assert next(term for term in exported["scene"]["objects"][0]["physics_stack"]
+                    if term["kind"] == "interfacial_dmi")["enabled"] is False
+        cases.append("pinned_helper_resolves_archived_material_via_stdin")
         source.write_text('from pathlib import Path\nPath(__file__).with_name("forbidden.txt").write_text("forbidden")\n', encoding="utf-8")
         result, inventory = invoke(sys.executable, helper, source, fullmag, "inventory")
         assert result.returncode == 0

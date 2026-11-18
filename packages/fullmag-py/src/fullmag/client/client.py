@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Mapping, Optional
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any, Optional
 
 from ._generated.operations import OPERATIONS, Operation
 from ._schema import validate_payload
@@ -121,6 +123,24 @@ class Client:
 
     def health(self) -> Any:
         return self.call_json("platform_get_platform_health")
+
+    @contextmanager
+    def bind_material_catalog(self) -> Iterator[None]:
+        """Bind this instance's material versions to ``fm.materials`` for a block.
+
+        The Client fetches the catalog once when entering the block.
+        Archived versions remain available by their published keys.
+        """
+        from fullmag._material_versions import _bind_catalog
+
+        resource = self.call_json("workspace_get_workspace_material_library")
+        if not isinstance(resource, Mapping):
+            raise ValueError("material library resource must be an object")
+        versions = resource.get("versions", [])
+        if not isinstance(versions, list):
+            raise ValueError("material library versions must be a list")
+        with _bind_catalog(versions):
+            yield
 
 
 def _expand_path(operation: Operation, values: Mapping[str, Any]) -> str:

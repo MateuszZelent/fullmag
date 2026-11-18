@@ -1,8 +1,12 @@
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
+use fullmag_application::script_source_capture::{
+    material_catalog_input, runtime_helper_loads_authored_script,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -1099,14 +1103,37 @@ pub(crate) fn run_python_helper_with_interpreter(
     args: &[String],
     progress_callback: Option<PythonProgressCallback>,
 ) -> Result<std::process::Output> {
-    run_python_helper_with_interpreter_and_bound(root, interpreter, args, progress_callback, None)
+    let mut augmented_args;
+    let (args, input) = if runtime_helper_loads_authored_script(args) {
+        if let Some(snapshot) = material_catalog_snapshot()? {
+            augmented_args = args.to_vec();
+            augmented_args.push("--material-catalog-stdin".into());
+            (augmented_args.as_slice(), Some(material_catalog_input(&snapshot)?))
+        } else {
+            (args, None)
+        }
+    } else {
+        (args, None)
+    };
+    run_python_helper_with_interpreter_and_bound(root, interpreter, args, progress_callback, None, input)
 }
 
-pub(crate) fn run_python_capture_helper(args: &[String], max_bytes: usize) -> Result<std::process::Output> {
+pub(crate) fn material_catalog_snapshot() -> Result<Option<Vec<u8>>> {
+    let versions = fullmag_workspace::material_catalog::read_published_material_versions()
+        .context("read shared material catalog")?;
+    if versions.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_vec(&versions).map(Some).context("encode shared material catalog")
+}
+
+pub(crate) fn run_python_capture_helper(
+    args: &[String], max_bytes: usize, input: Option<File>,
+) -> Result<std::process::Output> {
     let root = repo_root();
     let interpreter = fullmag_runtime_control::python_runtime::resolve_interpreter(&root)
         .map_err(|error| anyhow!("{error}"))?;
-    run_python_helper_with_interpreter_and_bound(&root, &interpreter, args, None, Some(max_bytes))
+    run_python_helper_with_interpreter_and_bound(&root, &interpreter, args, None, Some(max_bytes), input)
 }
 
 fn run_python_helper_with_interpreter_and_bound(
@@ -1115,6 +1142,7 @@ fn run_python_helper_with_interpreter_and_bound(
     args: &[String],
     progress_callback: Option<PythonProgressCallback>,
     capture_bound: Option<usize>,
+    input: Option<File>,
 ) -> Result<std::process::Output> {
     let uses_bundle = interpreter.isolated;
 
@@ -1138,6 +1166,11 @@ fn run_python_helper_with_interpreter_and_bound(
             command.env("PYTHONDONTWRITEBYTECODE", "1");
         }
         command.args(args);
+        if let Some(input) = input {
+            command.stdin(Stdio::from(input));
+        } else if capture_bound.is_some() {
+            command.stdin(Stdio::null());
+        }
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
         command.env("PYTHONUNBUFFERED", "1");

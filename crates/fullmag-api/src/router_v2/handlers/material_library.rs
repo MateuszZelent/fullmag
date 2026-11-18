@@ -10,8 +10,9 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::material_library::{
-    MaterialLibraryError, MaterialLibraryMutationResource, MaterialLibraryResource,
-    MaterialLibraryStore, MaterialLibraryWriteRequest,
+    default_material_library_path, MaterialLibraryError, MaterialLibraryMutationResource,
+    MaterialLibraryResource, MaterialLibraryStore, MaterialLibraryWriteRequest,
+    MaterialVersionMutationResource, MaterialVersionPublishRequest, MaterialVersionUpdateRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -38,7 +39,7 @@ pub struct MaterialLibraryDeleteResource {
 #[utoipa::path(
     get, path = "/v2/workspace/material-library",
     responses(
-        (status = 200, description = "Built-in and user material entries with catalog revision", body = MaterialLibraryResource),
+        (status = 200, description = "Built-in entries, user drafts and published versions with catalog revision", body = MaterialLibraryResource),
         (status = 500, description = "Material catalog storage is unavailable", body = crate::schemas::common::ApiErrorResponse),
     ),
     tag = "workspace"
@@ -108,6 +109,52 @@ pub async fn delete_material(
     run(move |db| delete_at(db, &id, request)).await.map(Json)
 }
 
+#[utoipa::path(
+    post, path = "/v2/workspace/material-library/versions",
+    request_body = MaterialVersionPublishRequest,
+    responses(
+        (status = 201, description = "Immutable material version published", body = MaterialVersionMutationResource),
+        (status = 400, description = "Invalid version key or incomplete material", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Source material does not exist", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source revision or version already exists", body = crate::schemas::common::ApiErrorResponse),
+        (status = 500, description = "Material catalog storage is unavailable", body = crate::schemas::common::ApiErrorResponse),
+    ),
+    tag = "workspace"
+)]
+pub async fn publish_version(
+    request: Result<Json<MaterialVersionPublishRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<MaterialVersionMutationResource>), ApiError> {
+    let request = json_request(request)?;
+    let mutation = run(move |db| publish_at(db, request)).await?;
+    Ok((StatusCode::CREATED, Json(mutation)))
+}
+
+#[utoipa::path(
+    patch, path = "/v2/workspace/material-library/versions/{family}/{version}",
+    params(
+        ("family" = String, Path, description = "Stable material family key"),
+        ("version" = String, Path, description = "Stable published version key"),
+    ),
+    request_body = MaterialVersionUpdateRequest,
+    responses(
+        (status = 200, description = "Published version metadata updated", body = MaterialVersionMutationResource),
+        (status = 400, description = "Invalid version key or metadata", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Published version does not exist", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale version metadata revision", body = crate::schemas::common::ApiErrorResponse),
+        (status = 500, description = "Material catalog storage is unavailable", body = crate::schemas::common::ApiErrorResponse),
+    ),
+    tag = "workspace"
+)]
+pub async fn patch_version(
+    AxumPath((family, version)): AxumPath<(String, String)>,
+    request: Result<Json<MaterialVersionUpdateRequest>, JsonRejection>,
+) -> Result<Json<MaterialVersionMutationResource>, ApiError> {
+    let request = json_request(request)?;
+    run(move |db| patch_at(db, &family, &version, request))
+        .await
+        .map(Json)
+}
+
 fn json_request<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
     request.map(|Json(value)| value).map_err(|error| {
         ApiError::bad_request(format!("invalid material library request: {error}"))
@@ -117,13 +164,11 @@ fn json_request<T>(request: Result<Json<T>, JsonRejection>) -> Result<T, ApiErro
 async fn run<T: Send + 'static>(
     body: impl FnOnce(&Path) -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let db = fullmag_workspace::default_database_path()
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "cannot resolve material library directory: {error}"
-            ))
-        })?
-        .with_file_name("material-library.sqlite3");
+    let db = default_material_library_path().map_err(|error| {
+        ApiError::internal(format!(
+            "cannot resolve material library directory: {error}"
+        ))
+    })?;
     tokio::task::spawn_blocking(move || body(&db))
         .await
         .map_err(|error| ApiError::internal(format!("material library task failed: {error}")))?
@@ -167,6 +212,28 @@ pub(crate) fn delete_at(
         .delete(id, request.base_revision)
         .map_err(map_error)?;
     Ok(MaterialLibraryDeleteResource { revision })
+}
+
+fn publish_at(
+    db: &Path,
+    request: MaterialVersionPublishRequest,
+) -> Result<MaterialVersionMutationResource, ApiError> {
+    MaterialLibraryStore::open(db)
+        .map_err(map_error)?
+        .publish(request)
+        .map_err(map_error)
+}
+
+fn patch_at(
+    db: &Path,
+    family: &str,
+    version: &str,
+    request: MaterialVersionUpdateRequest,
+) -> Result<MaterialVersionMutationResource, ApiError> {
+    MaterialLibraryStore::open(db)
+        .map_err(map_error)?
+        .update_version(family, version, request)
+        .map_err(map_error)
 }
 
 fn map_error(error: MaterialLibraryError) -> ApiError {

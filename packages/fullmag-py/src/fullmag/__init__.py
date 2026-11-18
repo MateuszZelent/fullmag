@@ -288,6 +288,7 @@ from .model.compute_resources import (
 )
 from .shapes import affine, disk, rotate, scale
 from .runtime import BackendTarget, Result, Simulation, load_problem_from_script
+from ._material_versions import materials
 from .meshing import (
     MeshData,
     MeshOptions,
@@ -773,6 +774,7 @@ __all__ = [
     "load_field_state",
     "load_magnetization",
     "load_problem_from_script",
+    "materials",
     "save_field_state",
     "save_magnetization",
     "texture",
