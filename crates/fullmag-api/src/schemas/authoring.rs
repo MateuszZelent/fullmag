@@ -290,8 +290,7 @@ pub struct SceneObjectResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<fullmag_authoring::SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object, nullable)]
-    pub absorbing_boundary: Option<Value>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1655,7 +1654,7 @@ pub struct ObjectPatchRequest {
         deserialize_with = "super::common::deserialize_double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    #[schema(value_type = Option<Object>, nullable)]
+    #[schema(value_type = Option<fullmag_ir::AbsorbingBoundaryIR>, nullable)]
     pub absorbing_boundary: Option<Option<Value>>,
 }
 

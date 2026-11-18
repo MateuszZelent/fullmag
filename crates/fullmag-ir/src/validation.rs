@@ -1368,6 +1368,16 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             &object_region_ids,
             &mut errors,
         );
+        if let Some(config) = &module.absorbing_boundary {
+            let path = format!("magnetization_modules[{index}].absorbing_boundary");
+            crate::validate_absorbing_boundary_config(&path, config, &mut errors);
+            let owner = module.target.object_id.as_str();
+            for region_id in config.referenced_regions() {
+                if !object_region_ids.contains(&(owner, region_id)) {
+                    errors.push(format!("{path} references missing region '{region_id}' on '{owner}'"));
+                }
+            }
+        }
         if !material_ids.contains(module.material_id.as_str()) {
             errors.push(format!(
                 "magnetization_modules[{index}] missing material '{}'",
