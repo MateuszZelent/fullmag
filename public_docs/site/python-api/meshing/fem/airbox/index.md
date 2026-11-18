@@ -102,8 +102,8 @@ Failure behavior: `cell_size` (FDM) cannot be combined with FEM controls and vic
 versa → `ValueError`; non-positive sizes → `ValueError`. Values are **targets**,
 not guaranteed realized extrema.
 
-ProblemIR mapping: universe policy lands in mesh workflow metadata (airbox
-hmin/hmax/growth/grading); realization and any fallbacks are recorded in the build
+`ProblemIR` mapping: universe policy lands in mesh workflow metadata (airbox
+`hmin`/`hmax`/`growth_rate`/`grading`); realization and any fallbacks are recorded in the build
 report.
 
 ## 5. How to set it in Control Room
@@ -113,10 +113,17 @@ Model Explorer
 └── Universe / Airbox      → selection kinds: airbox.* 
 ```
 
-The **Airbox Mesh Parameters** inspector edits air sizing; exterior geometry
-(size/padding/center) lives in the universe geometry panels; the magnetostatic
-realization choice (`study.demag`) is made in the Physics/Demag panel. Full
-description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+The **Airbox Mesh Parameters** inspector (`AirboxMeshParametersPanel`) edits air sizing, growth rate, grading, curvature, and narrow-region resolution, and exposes **Apply Airbox Policy** and **Apply & Build Shared-Domain Mesh** (`mesh.build-shared-domain`) alongside read-only `effective_config`; exterior geometry (size/padding/center) lives in the universe geometry panels; the magnetostatic realization choice (`study.demag`) is made in the Physics/Demag panel. Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
+
+```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
+:alt: Semantic Inspector panel configuring FEM airbox padding, element sizing, and grading
+:width: 92%
+```
+
+```{image} /_static/images/ui/viewport-3d-fem-mesh-airbox.png
+:alt: 3D Viewport rendering FEM object mesh framed by the exterior airbox domain
+:width: 92%
+```
 
 ## 6. Backend support
 
@@ -152,7 +159,3 @@ geometry
 grading
 build
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

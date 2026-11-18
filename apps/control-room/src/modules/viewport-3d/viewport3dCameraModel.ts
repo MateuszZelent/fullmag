@@ -1,4 +1,4 @@
-import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
+export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
 import type { Viewport3DCameraState } from "./viewport3dStore";
 
 export interface Viewport3DCameraOrientation {

@@ -1,6 +1,6 @@
 ---
 title: Choosing a Solver
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
@@ -48,11 +48,13 @@ The canonical FEM pages are
 Both FDM and FEM expose CPU and GPU execution lanes. The device choice is request metadata; the
 runtime records the resolved device and precision in the result.
 
-- The local CPU runtime is the common validation path and is covered by the repository smoke and
-  qualification scripts.
-- FDM CUDA and FEM GPU use managed CUDA runtimes through the repository recipes. Executed GPU
-  evidence requires a recorded device identity in the result; presence of GPU source or a
-  successful host build is not device-parity proof.
+- The local CPU runtime inside the Docker DEV group (`just docker-dev`) is the common
+  interactive and headless workflow and is covered by the repository smoke and qualification
+  scripts.
+- FDM CUDA and FEM GPU run inside the container-backed CUDA runtime (enabled through
+  `just docker-dev` / `just docker-dev-toolchain` with NVIDIA GPU access, or dedicated managed
+  qualification recipes). Executed GPU evidence requires a recorded device identity in the result;
+  presence of GPU source or a successful host build is not device-parity proof.
 
 ## Support and qualification matrix
 
@@ -67,18 +69,4 @@ See {doc}`../numerical-methods/demag-solvers/fdm-convolution`,
 Do not infer a solver is production-ready from its name or from source presence. Requested intent
 and resolved execution are kept separate, and the planner rejects unsupported engine/device/
 interaction combinations instead of silently substituting them.
-## Control Room crosswalk
-
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
-## Source-code index
-
-- No new implementation symbol is introduced by this guide. The exact Python source symbol is owned by the linked terminal API page and the runnable example.
 

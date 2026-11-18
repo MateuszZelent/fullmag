@@ -50,6 +50,8 @@ use crate::writer::Writer;
 
 pub mod worker_orphan_teardown;
 pub use worker_orphan_teardown::*;
+pub mod claimed_worker_interruption;
+pub use claimed_worker_interruption::*;
 
 pub const HOST_RESOURCE_LEDGER_SCHEMA_V1: &str = "host_resource_ledger.v1";
 /// Current durable ledger schema with compute-node producer fencing fields.
@@ -988,6 +990,7 @@ enum HostResourceReleaseProofKind {
     PreparationAdmissionAbsent,
     PreparationNoSpawn,
     WorkerOrphanTeardown,
+    ClaimedWorkerInterruption,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1012,6 +1015,8 @@ struct HostResourceReleaseProof {
     preparation_launch_owner: Option<HostPreparationLaunchOwner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     orphan_teardown: Option<WorkerOrphanTeardownReleaseProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claimed_interruption: Option<ClaimedWorkerInterruptionReceipt>,
 }
 
 /// A validated read of the complete ledger and its pinned policy.
@@ -1294,6 +1299,7 @@ impl HostResourceLedger {
             unadmitted_task: Some(task.clone()),
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -1820,6 +1826,7 @@ impl HostResourceLedger {
             unadmitted_task: Some(task.clone()),
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -2136,6 +2143,7 @@ impl HostResourceLedger {
             unadmitted_task: Some(task.clone()),
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let bytes = bounded_json_bytes(
             &proof,
@@ -3086,16 +3094,26 @@ impl HostResourceLedger {
             .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
                 .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         self.validate_v2_snapshot_locked(&snapshot)?;
-        if snapshot.schema_version
-            != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
-            || snapshot.node_id != self.node_id()
-            || snapshot.runtime_owner_id != self.owner_id()
-            || snapshot.owner_epoch != self.policy.owner_epoch
-            || snapshot.host_owner_id.as_deref() != Some(owner_id)
-            || snapshot.host_owner_epoch != Some(owner_epoch)
-            || !snapshot.is_current_at(chrono::Utc::now())?
+        let evaluated_at = chrono::Utc::now();
+        let schema_matches = snapshot.schema_version
+            == crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2;
+        let node_matches = snapshot.node_id == self.node_id();
+        let runtime_owner_matches = snapshot.runtime_owner_id == self.owner_id();
+        let policy_epoch_matches = snapshot.owner_epoch == self.policy.owner_epoch;
+        let host_owner_matches = snapshot.host_owner_id.as_deref() == Some(owner_id);
+        let host_owner_epoch_matches = snapshot.host_owner_epoch == Some(owner_epoch);
+        if !schema_matches || !node_matches || !runtime_owner_matches
+            || !policy_epoch_matches || !host_owner_matches || !host_owner_epoch_matches
+            || !snapshot.is_current_at(evaluated_at.clone())?
         {
-            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent));
+            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent).context(format!(
+                "compute-node sample is not current for admission: collected_at={}, evaluated_at={}, freshness={:?}, schema_matches={}, node_matches={}, runtime_owner_matches={}, policy_epoch_matches={}, host_owner_matches={}, host_owner_epoch_matches={}",
+                snapshot.sample.collected_at.to_rfc3339(),
+                evaluated_at.to_rfc3339(),
+                snapshot.sample.freshness_at(evaluated_at),
+                schema_matches, node_matches, runtime_owner_matches,
+                policy_epoch_matches, host_owner_matches, host_owner_epoch_matches,
+            )));
         }
         Ok(())
     }
@@ -4337,6 +4355,24 @@ impl HostResourceLedger {
                     }
                     Ok(Some("worker_no_spawn"))
                 }
+                HostResourceReleaseProofKind::ClaimedWorkerInterruption => {
+                    if exit.is_some() || lease.state != FmsResourceLeaseState::Released {
+                        bail!("claimed interruption cannot coexist with a real exit or active lease");
+                    }
+                    let receipt = proof.claimed_interruption.as_ref()
+                        .context("terminal interruption release lacks its operational receipt")?;
+                    let request = &receipt.request;
+                    let mut active = lease.clone();
+                    active.state = FmsResourceLeaseState::Active;
+                    active.released_at = None;
+                    if canonical_json_sha256(&serde_json::to_value(active)?) != request.identity.lease_before_sha256
+                        || store.read_claimed_worker_interruption(run_id, &request.request_id)?.as_ref() != Some(receipt)
+                    {
+                        bail!("terminal interruption local evidence differs from the host proof");
+                    }
+                    store.validate_claimed_interruption_complete_unlocked(receipt)?;
+                    Ok(Some("claimed_worker_interruption"))
+                }
                 _ => bail!("solver lease has an incompatible host release proof"),
             }
         };
@@ -5060,6 +5096,7 @@ impl HostResourceLedger {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: Some(nested_proof.clone()),
+            claimed_interruption: None,
         };
         let proof_bytes = bounded_json_bytes(
             &proof,
@@ -5195,6 +5232,7 @@ impl HostResourceLedger {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let proof_bytes =
             bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker release proof")?;
@@ -5269,6 +5307,7 @@ impl HostResourceLedger {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker no-spawn proof")?;
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -5459,6 +5498,7 @@ impl HostResourceLedger {
                 .preparation_launch_owner
                 .clone(),
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let proof_bytes =
             bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "preparation release proof")?;
@@ -5928,7 +5968,7 @@ fn publish_exact(root: &Path, relative: &str, bytes: &[u8], maximum: usize) -> R
     }
 }
 
-fn publish_immutable_exact(
+pub(crate) fn publish_immutable_exact(
     root: &Path,
     relative: &str,
     bytes: &[u8],
@@ -6896,6 +6936,7 @@ fn orphan_release_proof_sha256(
         unadmitted_task: None,
         preparation_launch_owner: None,
         orphan_teardown: Some(nested_proof.clone()),
+        claimed_interruption: None,
     };
     let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "worker orphan teardown proof")?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
@@ -7335,6 +7376,7 @@ fn replay_released_preparation_reservation(
         unadmitted_task: None,
         preparation_launch_owner: reservation.preparation_launch_owner.clone(),
         orphan_teardown: None,
+        claimed_interruption: None,
     };
     let proof_bytes = bounded_json_bytes(
         &proof,
@@ -7403,12 +7445,20 @@ fn read_validated_release_proof(
     let proof: HostResourceReleaseProof = serde_json::from_slice(&bytes)
         .context("corrupt host release proof; refusing to free host capacity")?;
     if (proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V1
-        && proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2)
+        && proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
+        && proof.schema_version != "host_resource_release_proof.v3")
         || proof.host_id != policy.host_id
         || proof.store_id != reservation.identity.store_id
         || proof.request_sha256 != reservation.request_sha256
     {
         bail!("host release proof differs from the pinned host reservation");
+    }
+    if (proof.schema_version == "host_resource_release_proof.v3")
+        != (proof.kind == HostResourceReleaseProofKind::ClaimedWorkerInterruption)
+        || (proof.kind != HostResourceReleaseProofKind::ClaimedWorkerInterruption
+            && proof.claimed_interruption.is_some())
+    {
+        bail!("claimed interruption requires its separate v3 proof schema");
     }
     if proof.schema_version == HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
         && proof.kind != HostResourceReleaseProofKind::WorkerOrphanTeardown
@@ -7572,6 +7622,24 @@ fn read_validated_release_proof(
                 receipt,
                 lease,
             )
+        }
+        HostResourceReleaseProofKind::ClaimedWorkerInterruption => {
+            if proof.worker_receipt.is_some() || proof.released_worker_lease.is_some()
+                || proof.preparation_receipt.is_some() || proof.released_preparation_lease.is_some()
+                || proof.unadmitted_task.is_some() || proof.preparation_launch_owner.is_some()
+                || proof.orphan_teardown.is_some()
+            {
+                bail!("claimed interruption cannot contain process or no-spawn evidence");
+            }
+            let receipt = proof.claimed_interruption.as_ref()
+                .context("claimed interruption release proof missing")?;
+            receipt.validate()?;
+            claimed_worker_interruption::validate_reservation(receipt.request.clone(), reservation, policy)?;
+            let request_bytes = read_bounded_regular_file(root, &receipt.request.relative_path()?, MAX_RELEASE_PROOF_BYTES)?;
+            if request_bytes != serde_json::to_vec(&receipt.request)? {
+                bail!("claimed interruption immutable request differs");
+            }
+            Ok(())
         }
         HostResourceReleaseProofKind::WorkerOrphanTeardown => {
             if proof.schema_version != HOST_RESOURCE_RELEASE_PROOF_SCHEMA_V2
@@ -8440,6 +8508,51 @@ mod tests {
     }
 
     #[test]
+    fn expired_compute_sample_refusal_retains_typed_cause_and_exact_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let collected_at = chrono::Utc::now() - chrono::Duration::seconds(31);
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), collected_at, 1, 1);
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        ledger.publish_compute_node_snapshot_with_owner(&owner, &sample).unwrap();
+        let error = ledger.current_compute_node_owner_for_admission().unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+        let detail = format!("{error:#}");
+        for expected in ["collected_at=", "evaluated_at=", "freshness=Stale", "schema_matches=true", "node_matches=true", "runtime_owner_matches=true", "policy_epoch_matches=true", "host_owner_matches=true", "host_owner_epoch_matches=true"] {
+            assert!(detail.contains(expected), "missing {expected}: {detail}");
+        }
+    }
+
+    #[test]
+    fn previous_owner_sample_remains_typed_pending_for_the_active_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let first_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), chrono::Utc::now(), 1, 1);
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
+        sample.host_owner_id = Some(first_owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(first_owner.descriptor().host_owner_epoch);
+        ledger.publish_compute_node_snapshot_with_owner(&first_owner, &sample).unwrap();
+        drop(first_owner);
+        let active_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let _writer = ledger.writer.acquire().unwrap();
+        let error = ledger.validate_compute_node_owner_locked(
+            Some(&active_owner.descriptor().host_owner_id),
+            Some(active_owner.descriptor().host_owner_epoch),
+            true,
+        ).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+        assert!(format!("{error:#}").contains("host_owner_epoch_matches=false"));
+    }
+
+    #[test]
     fn host_reservation_cannot_cross_compute_node_owner_epoch() {
         let directory = tempfile::tempdir().unwrap();
         let policy = policy();
@@ -8494,7 +8607,9 @@ mod tests {
             .publish_compute_node_snapshot_with_owner(&second_owner, &second_sample)
             .unwrap();
 
-        assert!(ledger.reserve(&request).is_err());
+        let fenced = ledger.reserve(&request).unwrap_err();
+        assert!(fenced.to_string().contains("fenced by a different compute-node inventory owner"));
+        assert!(!fenced.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
         request.expected_compute_node_owner_epoch =
             Some(second_owner.descriptor().host_owner_epoch);
         assert!(ledger.reserve(&request).is_err());
@@ -9265,6 +9380,306 @@ mod tests {
         }
     }
 
+    fn claimed_interruption_fixture() -> (V4WorkerLaunchFixture, ClaimedWorkerInterruptionReceipt) {
+        let (fixture, old, mut namespace) = worker_orphan_teardown_fixture("claimed-interruption");
+        let mut catalog = fixture.store.read_run_catalog(&old.run_id).unwrap().unwrap();
+        fixture.store.commit_run_intent(&crate::FmsRunIntent::new(&old.run_id, "submit-claimed",
+            serde_json::json!({"run_id":old.run_id}))).unwrap();
+        let mut queued = catalog.tasks[0].clone();
+        queued.lifecycle = crate::FmsTaskLifecycle::Queued;
+        queued.attempt_id = None; queued.ownership_epoch = None; queued.resource_id = None;
+        let admission = crate::FmsTaskAdmissionRecord {
+            schema_version: crate::FMS_TASK_ADMISSION_SCHEMA.into(), expected_catalog_revision: catalog.revision,
+            queued_task: queued, task: catalog.tasks[0].clone(), lease: fixture.lease.clone(), resolved_inputs_snapshot: None,
+        };
+        admission.validate().unwrap();
+        let path = crate::repository_path::create_parent(fixture.store.root(),
+            &format!("runs/{}/task_admissions/{}/{}.json", old.run_id, old.task_id, old.attempt_id)).unwrap();
+        fs::write(path, serde_json::to_vec(&admission).unwrap()).unwrap();
+        catalog.tasks[0].lifecycle = crate::FmsTaskLifecycle::Running;
+        catalog.revision += 2;
+        fixture.store.commit_run_catalog(&catalog).unwrap();
+        let claim = serde_json::json!({"run_id":old.run_id,"task_id":old.task_id,"attempt_id":old.attempt_id,
+            "ownership_epoch":old.ownership_epoch,"lease_token":old.lease_token});
+        let command = serde_json::json!({"schema_version":"worker_protocol.v1", "message_id":"start", "sequence":1,
+            "claim":claim,"command":{"kind":"start"}});
+        let event = serde_json::json!({"schema_version":"worker_protocol.v1", "message_id":"started", "sequence":1,
+            "claim":claim,"event":{"kind":"started"}});
+        for (direction, envelope, event_sequence) in [
+            (crate::FmsCoordinatorJournalDirection::Command, command.clone(), 0),
+            (crate::FmsCoordinatorJournalDirection::Event, event.clone(), 1),
+        ] {
+            let payload = serde_json::json!({"schema_version":"coordinator_transition.v1",
+                "checkpoint":{"command_sequence":1,"event_sequence":event_sequence},
+                "message":{"direction":direction.as_str(),"envelope":envelope}});
+            fixture.store.commit_coordinator_journal_entry(&crate::FmsCoordinatorJournalEntry {
+                schema_version: crate::FMS_COORDINATOR_JOURNAL_SCHEMA.into(), entry_id: format!("initial-{}", direction.as_str()),
+                run_id: old.run_id.clone(), task_id: old.task_id.clone(), attempt_id: old.attempt_id.clone(),
+                ownership_epoch: old.ownership_epoch, lease_token: old.lease_token.clone(), direction, sequence:1, terminal:false,
+                payload_sha256:canonical_json_sha256(&payload), payload, created_at:chrono::Utc::now(),
+            }).unwrap();
+        }
+        let pending_inbox = crate::FmsWorkerInboxRecord::new(serde_json::json!({"schema_version":"worker_inbox.v1",
+            "claim":claim.clone(),"applied":[],"pending":command.clone()})).unwrap();
+        fixture.store.commit_worker_inbox(&pending_inbox).unwrap();
+        let inbox = crate::FmsWorkerInboxRecord::new(serde_json::json!({"schema_version":"worker_inbox.v1",
+            "claim":claim,"applied":[command.clone()],"pending":null})).unwrap();
+        fixture.store.commit_worker_inbox(&inbox).unwrap();
+        let catalog = fixture.store.read_run_catalog(&old.run_id).unwrap().unwrap();
+        let catalog_bytes = fs::read(fixture.store.root().join(format!("runs/{}/run_catalog.json", old.run_id))).unwrap();
+        let started = b"durable Started evidence retained verbatim";
+        let started_relative = worker_started_receipt_relative_path(&old).unwrap();
+        let started_path = crate::repository_path::create_parent(fixture.store.root(), &started_relative).unwrap();
+        fs::write(started_path, started).unwrap();
+        let digest = "a".repeat(64);
+        let mut container = old.containers[0].clone();
+        container.container_id = "c".repeat(64);
+        container.service = "backend".to_string();
+        let request = ClaimedWorkerInterruptionRequest {
+            schema_version: CLAIMED_WORKER_INTERRUPTION_SCHEMA.to_string(),
+            request_id: old.request_id.clone(), identity: old.exact_identity(),
+            consumed_launch_token: match &old.worker_launch_gate { WorkerOrphanLaunchGate::Consumed { token } => token.clone() },
+            catalog_before_sha256: format!("{:x}", Sha256::digest(catalog_bytes)),
+            catalog_revision: catalog.revision, expected_task: catalog.tasks[0].clone(),
+            pins: ClaimedWorkerInterruptionPins {
+                owner_sha256: digest.clone(), config_sha256: digest.clone(), process_receipt_sha256: digest.clone(),
+                launch_sha256: digest.clone(), journal_sha256: canonical_json_sha256(&serde_json::json!({"commands":[command],"events":[event]})),
+                inbox_sha256:canonical_json_sha256(&inbox.payload),
+                execution_started_sha256: format!("{:x}", Sha256::digest(started)),
+                supervisor_slot_sha256: digest.clone(), package_receipt_sha256: digest.clone(),
+                executable_sha256: digest.clone(), source_snapshot_sha256: digest.clone(), mount_attestation_sha256: digest.clone(),
+                preserved_files_manifest_sha256: canonical_json_sha256(&serde_json::json!({
+                    "schema_version": "claimed_worker_preserved_files.v1",
+                    "root_relative": format!("runs/{}/worker-attempts/{}/{}/epoch-{}", old.run_id, old.task_id, old.attempt_id, old.ownership_epoch),
+                    "files": {"worker_execution_started.v1.json": {"bytes": started.len(), "sha256": format!("{:x}", Sha256::digest(started))}}
+                })),
+            }, docker_engine_id_sha256: old.docker_engine_id_sha256.clone(), container,
+            device_release_mapping_sha256: namespace.device_release.mapping_sha256.clone(),
+            gpu_uuid: namespace.device_release.gpu_uuid.clone(),
+            container_started_at: "2026-10-16T00:00:00Z".to_string(),
+        };
+        namespace.request_sha256 = request.sha256().unwrap();
+        namespace.containers[0].container_id = request.container.container_id.clone();
+        let attestation = ClaimedWorkerInterruptionAttestation {
+            namespace, before_started_at: request.container_started_at.clone(),
+            after_started_at: request.container_started_at.clone(), preserved_files_manifest_sha256: request.pins.preserved_files_manifest_sha256.clone(),
+        };
+        let receipt = ClaimedWorkerInterruptionReceipt {
+            schema_version: CLAIMED_WORKER_INTERRUPTION_SCHEMA.to_string(), request, attestation,
+        };
+        receipt.validate().unwrap();
+        (fixture, receipt)
+    }
+
+    #[test]
+    fn claimed_interruption_retains_started_and_requires_engine_incarnation() {
+        let (fixture, receipt) = claimed_interruption_fixture();
+        fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, &receipt.request).unwrap();
+        assert_eq!(fixture.ledger.read().unwrap().reservations[0].state, HostResourceReservationState::Quarantined);
+        let mut changed = receipt.clone();
+        changed.attestation.after_started_at = "reused-container".to_string();
+        assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &changed).is_err());
+        changed = receipt.clone();
+        changed.attestation.namespace.containers[0].after.pid = 42;
+        assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &changed).is_err());
+        changed = receipt.clone();
+        changed.attestation.namespace.device_release.gpu_uuid = Some("foreign-gpu".into());
+        assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &changed).is_err());
+        changed = receipt.clone();
+        changed.attestation.namespace.device_release.mapping_sha256 = "f".repeat(64);
+        assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &changed).is_err());
+        assert_eq!(fixture.store.read_resource_lease(&receipt.request.identity.run_id,
+            &receipt.request.identity.resource_id, &receipt.request.identity.lease_token).unwrap().unwrap().state,
+            FmsResourceLeaseState::Active);
+    }
+
+    #[test]
+    fn claimed_interruption_rereads_journal_and_inbox_inside_effect_transaction() {
+        for phase in ["prepare", "complete"] {
+            for mutation in ["journal", "inbox"] {
+                let (fixture, receipt) = claimed_interruption_fixture();
+                let request = &receipt.request;
+                let id = &request.identity;
+                // Successful semantic/CAS preflight is intentionally separated
+                // from the simulated second writer and final effect section.
+                fixture.ledger.inspect_claimed_worker_interruption(&fixture.store, request, None).unwrap();
+                if phase == "complete" {
+                    fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, request).unwrap();
+                }
+                let key = canonical_json_sha256(&serde_json::json!([id.run_id,id.task_id,id.attempt_id,id.ownership_epoch]));
+                let raw = fixture.store.read_document(&format!("runs/{}/worker_inbox/{key}.json",id.run_id)).unwrap().unwrap();
+                let mut inbox: crate::FmsWorkerInboxRecord = serde_json::from_slice(&raw).unwrap();
+                let heartbeat = serde_json::json!({"schema_version":"worker_protocol.v1", "message_id":"racing-heartbeat",
+                    "sequence":2,"claim":inbox.payload["claim"],"command":{"kind":"heartbeat","lease_heartbeat_sequence":1}});
+                if mutation == "inbox" {
+                    inbox.payload["pending"] = heartbeat;
+                    let changed = crate::FmsWorkerInboxRecord::new(inbox.payload).unwrap();
+                    fixture.store.commit_worker_inbox(&changed).unwrap();
+                } else {
+                    let payload = serde_json::json!({"schema_version":"coordinator_transition.v1",
+                        "checkpoint":{"command_sequence":2,"event_sequence":1},
+                        "message":{"direction":"command","envelope":heartbeat}});
+                    fixture.store.commit_coordinator_journal_entry(&crate::FmsCoordinatorJournalEntry {
+                        schema_version:crate::FMS_COORDINATOR_JOURNAL_SCHEMA.into(),entry_id:"racing-heartbeat".into(),
+                        run_id:id.run_id.clone(),task_id:id.task_id.clone(),attempt_id:id.attempt_id.clone(),
+                        ownership_epoch:id.ownership_epoch,lease_token:id.lease_token.clone(),
+                        direction:crate::FmsCoordinatorJournalDirection::Command,sequence:2,terminal:false,
+                        payload_sha256:canonical_json_sha256(&payload),payload,created_at:chrono::Utc::now(),
+                    }).unwrap();
+                }
+                if phase == "prepare" {
+                    assert!(fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, request).is_err());
+                } else {
+                    assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).is_err());
+                }
+                assert_eq!(fixture.store.read_resource_lease(&id.run_id,&id.resource_id,&id.lease_token).unwrap().unwrap().state,
+                    FmsResourceLeaseState::Active);
+            }
+        }
+    }
+
+    #[test]
+    fn claimed_interruption_replay_preserves_journal_and_never_invents_worker_exit() {
+        let (fixture, receipt) = claimed_interruption_fixture();
+        let request = &receipt.request;
+        fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, request).unwrap();
+        // Crash after terminal catalog/receipt publication, before release.
+        {
+            let _writer = fixture.store.write_transaction().unwrap();
+            fixture.store.complete_claimed_interruption_unlocked(&receipt).unwrap();
+        }
+        fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, request).unwrap();
+        let first = fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).unwrap();
+        let second = fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.state, HostResourceReservationState::Released);
+        let task = &fixture.store.read_run_catalog(&request.identity.run_id).unwrap().unwrap().tasks[0];
+        assert_eq!(task.lifecycle, crate::FmsTaskLifecycle::Interrupted);
+        assert_eq!(task.coordinator_watermark, request.expected_task.coordinator_watermark);
+        assert_eq!(task.artifact_ids, request.expected_task.artifact_ids);
+        assert!(fixture.store.list_worker_process_exit_receipts(&request.identity.run_id).unwrap().is_empty());
+        fixture.ledger.with_terminal_run_evidence_fence(&fixture.store,
+            &request.identity.run_id, |_, digest| { assert_eq!(digest.len(), 64); Ok(()) }).unwrap();
+        assert_eq!(fixture.store.read_claimed_worker_interruption(&request.identity.run_id, &request.request_id).unwrap(), Some(receipt));
+    }
+
+    #[test]
+    fn claimed_interruption_refuses_deleted_truncated_or_changed_private_files() {
+        for mutation in ["delete", "truncate", "drift", "unchanged"] {
+            let (fixture, mut receipt) = claimed_interruption_fixture();
+            let id = &receipt.request.identity;
+            let relative = format!("runs/{}/worker-attempts/{}/{}/epoch-{}/scalars.csv",
+                id.run_id, id.task_id, id.attempt_id, id.ownership_epoch);
+            let path = crate::repository_path::create_parent(fixture.store.root(), &relative).unwrap();
+            let partial = b"step,torque\n2204,178814.6\n2205,";
+            fs::write(&path, partial).unwrap();
+            let started_relative = format!("runs/{}/worker-attempts/{}/{}/epoch-{}/worker_execution_started.v1.json",
+                id.run_id, id.task_id, id.attempt_id, id.ownership_epoch);
+            let started = fs::read(fixture.store.root().join(started_relative)).unwrap();
+            let manifest = serde_json::json!({"schema_version":"claimed_worker_preserved_files.v1",
+                "root_relative": format!("runs/{}/worker-attempts/{}/{}/epoch-{}", id.run_id, id.task_id, id.attempt_id, id.ownership_epoch),
+                "files": {"worker_execution_started.v1.json":{"bytes":started.len(),"sha256":format!("{:x}",Sha256::digest(&started))},
+                    "scalars.csv":{"bytes":partial.len(),"sha256":format!("{:x}",Sha256::digest(partial))}}});
+            receipt.request.pins.preserved_files_manifest_sha256 = canonical_json_sha256(&manifest);
+            receipt.attestation.preserved_files_manifest_sha256 = receipt.request.pins.preserved_files_manifest_sha256.clone();
+            receipt.attestation.namespace.request_sha256 = receipt.request.sha256().unwrap();
+            fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, &receipt.request).unwrap();
+            match mutation {
+                "delete" => fs::remove_file(&path).unwrap(),
+                "truncate" => fs::write(&path, b"step,torque\n").unwrap(),
+                "unchanged" => {},
+                _ => fs::write(&path, b"step,torque\n2204,178814.6\n2205;" ).unwrap(),
+            }
+            if mutation == "unchanged" {
+                fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).unwrap();
+                assert_eq!(fs::read(path).unwrap(), partial);
+                continue;
+            }
+            assert!(fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).is_err());
+            assert_eq!(fixture.ledger.read().unwrap().reservations[0].state, HostResourceReservationState::Quarantined);
+        }
+    }
+
+    #[test]
+    fn claimed_interruption_replays_after_proof_and_local_release_crash() {
+        let (fixture, receipt) = claimed_interruption_fixture();
+        let request = &receipt.request;
+        fixture.ledger.inspect_claimed_worker_interruption(&fixture.store, request, None).unwrap();
+        assert!(!fixture.ledger.root.join(request.relative_path().unwrap()).exists());
+        // Reproduce both prepare publication prefixes without quarantine:
+        // the private catalog/manifest snapshot, then immutable host intent.
+        {
+            let _writer = fixture.store.write_transaction().unwrap();
+            fixture.store.prepare_claimed_interruption_unlocked(request).unwrap();
+        }
+        let request_path = request.relative_path().unwrap();
+        crate::repository_path::create_parent(&fixture.ledger.root, &request_path).unwrap();
+        publish_immutable_exact(&fixture.ledger.root, &request_path,
+            &serde_json::to_vec(request).unwrap(), MAX_RELEASE_PROOF_BYTES).unwrap();
+        fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, request).unwrap();
+        {
+            let _writer = fixture.store.write_transaction().unwrap();
+            fixture.store.complete_claimed_interruption_unlocked(&receipt).unwrap();
+        }
+        let proof = HostResourceReleaseProof {
+            schema_version: "host_resource_release_proof.v3".into(),
+            kind: HostResourceReleaseProofKind::ClaimedWorkerInterruption,
+            host_id: request.identity.host_id.clone(), store_id: request.identity.store_id.clone(),
+            request_sha256: request.identity.reservation_request_sha256.clone(),
+            worker_receipt: None, released_worker_lease: None, preparation_receipt: None,
+            released_preparation_lease: None, unadmitted_task: None, preparation_launch_owner: None,
+            orphan_teardown: None, claimed_interruption: Some(receipt.clone()),
+        };
+        let bytes = serde_json::to_vec(&proof).unwrap();
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let relative = release_proof_relative_path(&digest).unwrap();
+        crate::repository_path::create_parent(&fixture.ledger.root, &relative).unwrap();
+        publish_immutable_exact(&fixture.ledger.root, &relative, &bytes, MAX_RELEASE_PROOF_BYTES).unwrap();
+        fixture.store.release_resource_lease(&fixture.lease).unwrap();
+        let released = fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).unwrap();
+        assert_eq!(released.release_proof_sha256, Some(digest));
+        assert_eq!(released.state, HostResourceReservationState::Released);
+        fixture.ledger.verify_completed_claimed_interruption(&receipt).unwrap();
+    }
+
+    #[test]
+    fn claimed_interruption_acknowledges_only_released_exact_unknown_and_allows_successor() {
+        use crate::runtime_service::{RuntimeServiceOwner, RuntimeServiceOwnerLockGuard, RuntimeServiceState, RuntimeServiceChild};
+        let (fixture, mut receipt) = claimed_interruption_fixture();
+        let mut owner = RuntimeServiceOwner::acquire(&fixture.store, "docker-all").unwrap();
+        owner.publish(RuntimeServiceState::Unknown, Some(1), Some(1), vec![
+            RuntimeServiceChild { role: "compute".into(), pid: 400001, status: "exited_failure".into() },
+            RuntimeServiceChild { role: "preparation".into(), pid: 400002, status: "exited_success".into() },
+        ]).unwrap();
+        let expected = owner.descriptor().clone();
+        assert!(RuntimeServiceOwnerLockGuard::try_acquire_existing(fixture.store.root()).unwrap().is_none());
+        drop(owner);
+        let owner_raw = fs::read(fixture.store.root().join("runtime-services/OWNER.json")).unwrap();
+        receipt.request.pins.owner_sha256 = format!("{:x}", Sha256::digest(&owner_raw));
+        receipt.attestation.namespace.request_sha256 = receipt.request.sha256().unwrap();
+        let lock = RuntimeServiceOwnerLockGuard::try_acquire_existing(fixture.store.root()).unwrap().unwrap();
+        assert!(lock.acknowledge_claimed_interruption(&fixture.store, &expected, &receipt, &fixture.ledger).is_err());
+        fixture.ledger.prepare_claimed_worker_interruption(&fixture.store, &receipt.request).unwrap();
+        fixture.ledger.complete_claimed_worker_interruption(&fixture.store, &receipt).unwrap();
+        lock.acknowledge_claimed_interruption(&fixture.store, &expected, &receipt, &fixture.ledger).unwrap();
+        // Crash after immutable acknowledgement but before owner replacement:
+        // replay the same UUID from the exact preimage; never mint a new owner.
+        fs::write(fixture.store.root().join("runtime-services/OWNER.json"), &owner_raw).unwrap();
+        lock.acknowledge_claimed_interruption(&fixture.store, &expected, &receipt, &fixture.ledger).unwrap();
+        let after: crate::runtime_service::RuntimeServiceOwnerDescriptor = serde_json::from_slice(
+            &fs::read(fixture.store.root().join("runtime-services/OWNER.json")).unwrap()).unwrap();
+        let mut expected_after = expected.clone();
+        expected_after.state = RuntimeServiceState::Failed;
+        assert_eq!(after, expected_after);
+        drop(lock);
+        // This is the existing ordinary service-ensure owner acquisition. The
+        // interrupted task stays terminal; no coordinator event was invented.
+        let successor = RuntimeServiceOwner::acquire(&fixture.store, "docker-all").unwrap();
+        assert_eq!(successor.descriptor().state, RuntimeServiceState::Starting);
+        assert_eq!(fixture.store.read_run_catalog(&receipt.request.identity.run_id).unwrap().unwrap().tasks[0].lifecycle,
+            crate::FmsTaskLifecycle::Interrupted);
+    }
+
     fn worker_orphan_teardown_fixture(
         task_id: &str,
     ) -> (
@@ -9450,6 +9865,7 @@ mod tests {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: Some(nested_proof),
+            claimed_interruption: None,
         };
         let proof_bytes = bounded_json_bytes(
             &proof,
@@ -10252,6 +10668,7 @@ mod tests {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -10353,6 +10770,7 @@ mod tests {
             unadmitted_task: None,
             preparation_launch_owner: None,
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let proof_bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let proof_sha256 = format!("{:x}", Sha256::digest(&proof_bytes));
@@ -11312,6 +11730,7 @@ mod tests {
             unadmitted_task: None,
             preparation_launch_owner: released.preparation_launch_owner.clone(),
             orphan_teardown: None,
+            claimed_interruption: None,
         };
         let proof_bytes = bounded_json_bytes(&proof, MAX_RELEASE_PROOF_BYTES, "proof").unwrap();
         let proof_sha256 = format!("{:x}", Sha256::digest(&proof_bytes));

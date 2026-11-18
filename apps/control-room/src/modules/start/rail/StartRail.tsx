@@ -110,7 +110,7 @@ export function StartRail({
                   <Icon aria-hidden="true" size={16} />
                   <span>{entry.label}</span>
                   {entry.count !== undefined ? (
-                    <span aria-label={`${entry.count} available`} className="fm-start-rail__count">
+                    <span role="group" aria-label={`${entry.count} available`} className="fm-start-rail__count">
                       {entry.count}
                     </span>
                   ) : null}

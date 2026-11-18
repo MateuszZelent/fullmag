@@ -24,6 +24,8 @@ extern double reduce_cubic_anisotropy_energy_fp64(Context &ctx);
 extern double reduce_cubic_anisotropy_energy_fp32(Context &ctx);
 extern double reduce_dmi_energy_fp64(Context &ctx);
 extern double reduce_dmi_energy_fp32(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp64(Context &ctx);
+extern double reduce_magnetoelastic_energy_fp32(Context &ctx);
 extern double reduce_current_rhs_norm_fp64(Context &ctx);
 extern double reduce_current_rhs_norm_fp32(Context &ctx);
 extern double reduce_max_norm_fp64(
@@ -195,13 +197,17 @@ bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats)
     }
 
     if ((quantity_mask & FULLMAG_FDM_STATS_QUANTITY_E_TOTAL) != 0) {
+        const double mel_energy_joules = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? reduce_magnetoelastic_energy_fp64(ctx)
+            : reduce_magnetoelastic_energy_fp32(ctx);
         out_stats->total_energy_joules =
             out_stats->exchange_energy_joules +
             out_stats->demag_energy_joules +
             out_stats->external_energy_joules +
             out_stats->anisotropy_energy_joules +
             out_stats->cubic_energy_joules +
-            out_stats->dmi_energy_joules;
+            out_stats->dmi_energy_joules +
+            mel_energy_joules;
     }
     context_publish_endpoint_stats(ctx, *out_stats, quantity_mask);
     return true;

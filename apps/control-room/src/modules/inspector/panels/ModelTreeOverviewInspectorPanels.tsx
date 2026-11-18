@@ -7,6 +7,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { ScientificInspectorTemplate } from "../components/ScientificInspectorTemplate";
 import { CrossSectionInspectorPanel } from "./CrossSectionInspectorPanel";
 import { MeshPartVisualizationPanel } from "./MeshPartVisualizationPanel";
+import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { AirboxMeshParametersPanel } from "./airbox/AirboxMeshParametersPanel";
 import {
@@ -49,7 +50,13 @@ function ContextInspector({
       status={{ availability: "context-only", execution: "not_applicable", resource: "child-scoped" }}
       title={title}
     >
-      {children}
+      {children ?? (
+        <InspectorGroup title="Overview" badge="navigator">
+          <FieldRow label="Scope" value={physicalLabel} />
+          <FieldRow label="Role" value={methodLabel} />
+          <FieldRow label="Hierarchy path" mono value={breadcrumbs.join(" / ")} />
+        </InspectorGroup>
+      )}
     </ScientificInspectorTemplate>
   );
 }
@@ -137,7 +144,7 @@ function UniverseMethodActions({
     [kernel],
   );
   return (
-    <div className="fm-inspector-toolbar" aria-label="Universe navigation">
+    <div role="group" className="fm-inspector-toolbar" aria-label="Universe navigation">
       {showStudySettings ? (
         <Button size="sm" type="button" variant="secondary" onClick={() => navigateToStudyRoot(kernel.selection)}>
           {studyLabel}

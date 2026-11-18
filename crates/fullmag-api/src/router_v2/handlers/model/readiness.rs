@@ -52,6 +52,10 @@ pub struct ModelReadinessResource {
     pub checks: Vec<ModelReadinessCheck>,
     pub blockers: Vec<String>,
     pub capabilities: ModelAuthoringCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state_pending: Option<crate::schemas::authoring::MagnetizationApplyReceiptResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_initial_state: Option<crate::schemas::authoring::PreparedInitialStateResource>,
 }
 
 #[utoipa::path(
@@ -236,6 +240,10 @@ fn build_model_readiness(
 
     ModelReadinessResource {
         scene_revision: scene.revision,
+        prepared_initial_state: crate::live_stage_initial_state::describe_prepared_initial_state(snapshot),
+        initial_state_pending: snapshot.magnetization_applies.pending.as_ref()
+            .filter(|pending| pending.receipt.scene_revision == scene.revision)
+            .map(|pending| pending.receipt.clone()),
         ready_to_run,
         ready_to_export: export_checks_complete && validation_error.is_none(),
         checks,
@@ -408,9 +416,8 @@ fn discretization_check(
             )
         }
         "fem" => {
-            let source_revision =
-                crate::router_v2::handlers::meshing::mesh::mesh_source_scene_revision(snapshot);
-            let current = snapshot.fem_mesh.is_some() && source_revision == Some(scene.revision);
+            let current =
+                crate::router_v2::handlers::meshing::mesh::shared_domain_mesh_is_current(snapshot, scene);
             ModelReadinessCheck {
                 id: "discretization".to_string(),
                 state: if current {

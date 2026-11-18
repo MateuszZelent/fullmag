@@ -42,6 +42,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => {
     useFrequencyDomainResponseProgressResource: () => emptyResource(),
     useFrequencyDomainResponseSweepResource: () => emptyResource(),
     useObjectMetricsResource: () => emptyResource(),
+    useRunPerformanceResource: () => emptyResource(),
     useScalarWindowResource: (options: { columns: readonly string[] }) => {
       hooks.scalarColumns.push([...options.columns]);
       return emptyResource();

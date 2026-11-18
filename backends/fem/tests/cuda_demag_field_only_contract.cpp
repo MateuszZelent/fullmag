@@ -75,6 +75,17 @@ int main()
             stage_source.find("unsupported GPU demag evaluation purpose") != std::string::npos,
         "GPU demag requests must fail closed on unknown mode or purpose values");
 
+    const auto successful_solve = stage_source.find("ctx.poisson_demag.solves_current_step += 1");
+    const auto iteration_work = stage_source.find("solve_work.demag_iterations =", successful_solve);
+    const auto solve_work = stage_source.find("solve_work.demag_solves = 1", successful_solve);
+    const auto iteration_note = stage_source.find(
+        "gpu_performance_note(ctx.gpu_state.performance_counters, solve_work)", iteration_work);
+    check(successful_solve != std::string::npos && solve_work != std::string::npos &&
+              iteration_work != std::string::npos &&
+              iteration_note != std::string::npos && successful_solve < iteration_work &&
+              iteration_work < iteration_note,
+          "Krylov iterations must accumulate at the successful field-solve counter boundary");
+
     const std::size_t energy_gate = stage_source.find(
         "if (request.evaluation_mode == GpuDemagEvaluationMode::FieldAndRecoveredEnergy)");
     const std::size_t energy_launch = stage_source.find(

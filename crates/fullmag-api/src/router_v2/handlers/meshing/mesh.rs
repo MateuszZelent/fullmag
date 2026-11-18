@@ -2050,8 +2050,10 @@ fn periodic_pairs_resource_from_artifact(
     let artifact_source_scene_revision = value.get("source_scene_revision").and_then(Value::as_u64);
     let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
     let expected_build_scene_revision = mesh_build_provenance(snapshot).source_scene_revision;
+    let qualified_geometry = snapshot.scene_document.as_ref().is_some_and(|scene|
+        crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene) == Some(true));
     let artifact_stale_reason = match current_scene_revision {
-        Some(current) if artifact_source_scene_revision != Some(current) => Some(format!(
+        Some(current) if !qualified_geometry && artifact_source_scene_revision != Some(current) => Some(format!(
             "periodic pairs artifact source scene revision {:?} does not match current scene revision {}",
             artifact_source_scene_revision, current
         )),
@@ -2181,8 +2183,12 @@ pub async fn get_mesh_shared_domain_manifest(
             let provenance = mesh_build_provenance(&snapshot);
             let topology_hash = mesh.topology_fingerprint().to_owned();
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
+            let validated_for_scene_revision = snapshot.scene_document.as_ref().and_then(|scene| {
+                (crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(&snapshot, scene) == Some(true))
+                    .then_some(scene.revision)
+            });
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}",
+                "mesh-shared-domain-manifest:{generation_id}:{topology_hash}:{}:{}:{}:{validated_for_scene_revision:?}",
                 snapshot.mesh_revision,
                 provenance
                     .source_scene_revision
@@ -2210,6 +2216,7 @@ pub async fn get_mesh_shared_domain_manifest(
                         MeshSharedDomainManifestResource {
                             revision: snapshot.mesh_revision,
                             source_scene_revision: provenance.source_scene_revision,
+                            validated_for_scene_revision,
                             geometry_realization_revision: provenance.geometry_realization_revision,
                             mesh_name: mesh.mesh_name.clone(),
                             mesh_id: mesh.mesh_id.clone(),
@@ -4323,6 +4330,17 @@ pub(crate) fn mesh_source_scene_revision(snapshot: &SessionStateResponse) -> Opt
     mesh_build_provenance(snapshot).source_scene_revision
 }
 
+/// Currentness is an independent fact. A qualified mesh can retain its original
+/// build provenance after a compatible edit.
+pub(crate) fn shared_domain_mesh_is_current(
+    snapshot: &SessionStateResponse,
+    scene: &fullmag_authoring::SceneDocument,
+) -> bool {
+    snapshot.fem_mesh.is_some()
+        && crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+            .unwrap_or_else(|| mesh_source_scene_revision(snapshot) == Some(scene.revision))
+}
+
 
 pub(crate) fn prepared_field_only_source_mesh(snapshot: &SessionStateResponse) -> Option<&Value> {
     let preparation = snapshot.simulation_preparation.as_ref()?;
@@ -4576,9 +4594,8 @@ fn build_periodic_pairs_resource(
         }
     };
     let provenance = mesh_build_provenance(snapshot);
-    let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
-    let provenance_is_current = provenance.source_scene_revision.is_some()
-        && provenance.source_scene_revision == current_scene_revision;
+    let provenance_is_current = snapshot.scene_document.as_ref()
+        .is_some_and(|scene| shared_domain_mesh_is_current(snapshot, scene));
     if status == PeriodicValidationStatus::Valid && !provenance_is_current {
         status = PeriodicValidationStatus::Stale;
         status_reasons.push(

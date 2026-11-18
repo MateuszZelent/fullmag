@@ -2,7 +2,7 @@
   "document": {
     "path": "public_docs/site/numerical-methods/frequency-domain/floquet-response.md",
     "reviewed_revision": "5e99782acbb7fb3f65d0cad872e102bf67733103",
-    "source_of_truth": "docs/physics/0828-fem-frequency-domain-floquet-demag.md"
+    "source_of_truth": "/physics/interactions/demagnetization/periodic-demag, /physics/foundations/llg-equation"
   },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Projected Floquet response is source-visible; dynamic demag at nonzero k is capability-gated."},

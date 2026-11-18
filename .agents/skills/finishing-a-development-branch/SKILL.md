@@ -169,6 +169,23 @@ Step 2, from before that directory change.
 **If `WORKTREE_PATH` is under `.worktrees/` or `worktrees/`:** Superpowers
 created this worktree — we own cleanup:
 
+For a Fullmag Docker development group, first run its qualified
+`worktree-finish ... completed` operation from a retained checkout after the
+merge, drain, and consumer checks. Before removing the Git worktree, perform an
+independent post-cleanup Docker inventory using both the registered
+source/storage identity and historical/current Compose project IDs and volume
+labels. A retained group must have only its verified current package and one
+direct rollback, with no older eligible backup generations; a completed unused
+group must have no private backend build/package or frontend namespace. An
+empty cleanup receipt is insufficient if the independent inventory still finds
+owned bytes. Record physical Docker-backing-filesystem and C: measurements
+before/after separately. Preserve shared dependencies, user results/sessions,
+control/provenance, and active pins. Follow the
+[Fullmag Docker retention contract](../../../docs/guides/shared-build-storage.md);
+if a foreign consumer, marker, or unsupported identity blocks the cleanup,
+leave it intact and mark the closeout `blocked` with exact targets and next
+step.
+
 ```bash
 git worktree remove "$WORKTREE_PATH"
 git worktree prune  # Self-healing: clean up any stale registrations

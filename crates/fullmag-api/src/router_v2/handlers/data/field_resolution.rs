@@ -364,12 +364,6 @@ pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
         })
 }
 
-pub(crate) fn live_magnetization_values(
-    snapshot: &SessionStateResponse,
-) -> Option<(Vec<f64>, [u32; 3])> {
-    live_magnetization_values_ref(snapshot).map(|(values, grid)| (values.to_vec(), grid))
-}
-
 pub(crate) fn live_magnetization_values_ref(
     snapshot: &SessionStateResponse,
 ) -> Option<(&[f64], [u32; 3])> {

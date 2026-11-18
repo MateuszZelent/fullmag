@@ -21,6 +21,24 @@ from fullmag._validation import parse_bool, parse_finite_float, parse_integer
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
 
 
+def _canonical_marker_array(values: object, name: str) -> NDArray[np.uint32]:
+    """Validate before conversion; legacy nonnegative int32 buffers remain valid."""
+    if isinstance(values, (list, tuple)) and any(isinstance(value, (bool, np.bool_)) for value in values):
+        raise ValueError(f"{name} must contain integers in canonical u32 range")
+    raw = np.asarray(values)
+    if raw.ndim != 1:
+        raise ValueError(f"{name} must be a one-dimensional canonical u32 marker array")
+    if raw.size:
+        if raw.dtype.kind not in "iu":
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+        # Canonical arrays need no extra scan or temporary N-sized boolean mask.
+        if raw.dtype.kind == "u" and raw.dtype.itemsize <= 4:
+            return raw.astype(np.uint32, copy=False)
+        if raw.min() < 0 or raw.max() > np.iinfo(np.uint32).max:
+            raise ValueError(f"{name} must contain integers in canonical u32 range")
+    return raw.astype(np.uint32, copy=False)
+
+
 FEM_TOPOLOGY_VOLUME_EPS = 1.0e-30 / 6.0
 FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS = 64.0 * np.finfo(np.float64).eps
 FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M = 1.0e-15
@@ -2137,12 +2155,12 @@ class MeshData:
     cell_types: NDArray[np.str_]
     cell_offsets: NDArray[np.int64]
     cell_nodes: NDArray[np.int32]
-    element_markers: NDArray[np.int32]
+    element_markers: NDArray[np.uint32]
     facet_types: NDArray[np.str_]
     facet_roles: NDArray[np.str_]
     facet_offsets: NDArray[np.int64]
     facet_nodes: NDArray[np.int32]
-    boundary_markers: NDArray[np.int32]
+    boundary_markers: NDArray[np.uint32]
     cell_global_ordinals: NDArray[np.int64]
     facet_global_ordinals: NDArray[np.int64]
     cell_mesh_parts: NDArray[np.str_] = field(
@@ -2166,12 +2184,12 @@ class MeshData:
         object.__setattr__(self, "cell_types", np.asarray(self.cell_types, dtype=np.str_))
         object.__setattr__(self, "cell_offsets", np.asarray(self.cell_offsets, dtype=np.int64))
         object.__setattr__(self, "cell_nodes", np.asarray(self.cell_nodes, dtype=np.int32))
-        object.__setattr__(self, "element_markers", np.asarray(self.element_markers, dtype=np.int32))
+        object.__setattr__(self, "element_markers", _canonical_marker_array(self.element_markers, "element_markers"))
         object.__setattr__(self, "facet_types", np.asarray(self.facet_types, dtype=np.str_))
         object.__setattr__(self, "facet_roles", np.asarray(self.facet_roles, dtype=np.str_))
         object.__setattr__(self, "facet_offsets", np.asarray(self.facet_offsets, dtype=np.int64))
         object.__setattr__(self, "facet_nodes", np.asarray(self.facet_nodes, dtype=np.int32))
-        object.__setattr__(self, "boundary_markers", np.asarray(self.boundary_markers, dtype=np.int32))
+        object.__setattr__(self, "boundary_markers", _canonical_marker_array(self.boundary_markers, "boundary_markers"))
         object.__setattr__(self, "cell_global_ordinals", np.asarray(self.cell_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "facet_global_ordinals", np.asarray(self.facet_global_ordinals, dtype=np.int64))
         object.__setattr__(self, "cell_mesh_parts", np.asarray(self.cell_mesh_parts, dtype=np.str_))
@@ -3012,9 +3030,9 @@ class MeshData:
         *,
         nodes: NDArray[np.float64] | list[list[float]],
         elements: NDArray[np.int32] | list[list[int]],
-        element_markers: NDArray[np.int32] | list[int],
+        element_markers: NDArray[np.uint32] | list[int],
         boundary_faces: NDArray[np.int32] | list[list[int]],
-        boundary_markers: NDArray[np.int32] | list[int],
+        boundary_markers: NDArray[np.uint32] | list[int],
         periodic_boundary_pairs: list[dict[str, object]] | None = None,
         periodic_node_pairs: list[dict[str, object]] | None = None,
         periodic_mesh_certificate: dict[str, object] | None = None,

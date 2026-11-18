@@ -9,16 +9,24 @@ import threading
 import time
 import uuid
 from types import SimpleNamespace
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Optional
+from urllib.parse import quote
 
 from fullmag.client import ApiError, Client, CommandHandle, NotFoundError, Target
 from fullmag.client.events import EventStream, LiveEvent, Subscription
 from fullmag.client.fmtb import TableRows
 from fullmag.client.fmvp import FieldVector
+from fullmag.model.structure import MagnetizationAssignment
 
-from ._scene import SceneNotReady, build_world_scene, plan_transactions
+from ._scene import (
+    SceneNotReady, build_world_scene, magnetization_scope_texture, plan_transactions,
+    reconcile_scene_changes,
+)
+
+if TYPE_CHECKING:
+    from fullmag.world import CapturedStage
 
 __all__ = ["LiveCommandResult", "LiveSession"]
 
@@ -68,6 +76,11 @@ class LiveSession:
         self.pending = False
         self.closed = False
         self._batch_depth = 0
+        self._stage_magnetization_assignments: list[MagnetizationAssignment] = []
+        self._magnetization_apply_scopes: dict[tuple[str, str | None], None] = {}
+        self._pending_magnetization_apply: tuple[dict[str, Any], dict[str, Any]] | None = None
+        self._reconcile_required = False
+        self._reconciled_scene: Mapping[str, Any] | None = None
         self.transactions_committed = 0
         self.events: Optional[EventStream] = None
         self.client_id = f"python-{uuid.uuid4().hex[:12]}"
@@ -91,6 +104,18 @@ class LiveSession:
                 backend=backend,
                 replace_current=new_session or terminal,
                 **_SESSION_DEFAULTS,
+            )
+        status = self.client.sessions.status()
+        identity = status.get("session", {})
+        keys = (
+            ("session", "session_id"),
+            ("epoch", "session_epoch"),
+            ("request_scope_epoch", "request_scope_epoch"),
+        )
+        if all(isinstance(identity.get(field), str) and identity[field] for _, field in keys):
+            self.client.session_scope = "&".join(
+                f"{key}=" + quote(identity[field], safe="-_.!~*'()")
+                for key, field in keys
             )
         scene = self.client.model.scene()
         self.revision = _revision_of(scene)
@@ -158,12 +183,17 @@ class LiveSession:
             return
         self.sync(strict=False)
 
-    def sync(self, *, strict: bool = True) -> int:
+    def sync(self, *, strict: bool = True, reconcile: bool = False) -> int:
         """Commit the difference between the world and the session; return transactions sent.
 
         With ``strict=False`` an incomplete world (e.g. a magnet without ``Ms``)
         is kept pending and sent by a later call; actions use ``strict=True``.
         """
+        sent = self._commit_pending_magnetization_apply()
+        if self._reconcile_required and not reconcile:
+            if strict:
+                raise self._magnetization_apply_conflict()
+            return sent
         try:
             scene = build_world_scene(self.source_path)
         except SceneNotReady as error:
@@ -171,17 +201,111 @@ class LiveSession:
             if strict:
                 raise RuntimeError(f"the live scene is incomplete: {error}") from error
             _LOG.debug("live sync deferred: %s", error)
-            return 0
-        transactions = plan_transactions(self.baseline, scene, self.revision)
+            return sent
+        previous = self._reconciled_scene
+        candidate = scene
+        revision = self.revision
+        if reconcile:
+            if not self._reconcile_required and previous is None:
+                raise ValueError("scene reconciliation requires a magnetization apply conflict")
+            previous = self.client.model.scene()
+            revision = _revision_of(previous)
+            if revision is None or self.revision is None or revision < self.revision:
+                raise RuntimeError("scene reconciliation requires a current scene revision")
+            if self._reconcile_required and revision == self.revision:
+                raise RuntimeError("scene reconciliation requires the newer scene revision")
+        if previous is not None:
+            if self.baseline is None:
+                raise RuntimeError("scene reconciliation requires a local committed baseline")
+            candidate = reconcile_scene_changes(self.baseline, scene, previous)
+            scopes = self._magnetization_apply_scopes.keys() | {
+                (assignment.object_id, assignment.region_id)
+                for assignment in self._stage_magnetization_assignments
+            }
+            for object_id, region_id in scopes:
+                if (magnetization_scope_texture(scene, object_id, region_id)
+                        != magnetization_scope_texture(candidate, object_id, region_id)):
+                    raise ValueError("magnetization apply texture changed in the current scene; align the local draft")
+            self._reconciled_scene = previous
+            self.revision = revision
+            self._reconcile_required = False
+        if self._magnetization_apply_scopes and self.baseline is not None:
+            if not self.client.session_scope:
+                raise RuntimeError("applying magnetization requires a current workspace identity")
+            request = {
+                "operation_id": uuid.uuid4().hex,
+                "scopes": [
+                    {"object_id": object_id, "region_id": region_id}
+                    for object_id, region_id in self._magnetization_apply_scopes
+                ],
+            }
+            transaction, = plan_transactions(
+                previous if previous is not None else self.baseline,
+                candidate, revision, magnetization_apply=request,
+            )
+            self._pending_magnetization_apply = (transaction, scene)
+            self._magnetization_apply_scopes.clear()
+            return sent + self._commit_pending_magnetization_apply()
+
+        transactions = plan_transactions(
+            previous if previous is not None else self.baseline, candidate, revision,
+        )
         for index, transaction in enumerate(transactions):
             if index and self.revision is not None:
                 transaction["base_revision"] = self.revision
             response = self.client.model.commit(transaction)
             self.revision = int(response["scene_revision"])
+            if previous is not None:
+                self._reconciled_scene = response["committed_scene"]
             self.transactions_committed += 1
         self.baseline = scene
         self.pending = False
-        return len(transactions)
+        return sent + len(transactions)
+
+    def _commit_pending_magnetization_apply(self) -> int:
+        pending = self._pending_magnetization_apply
+        if pending is None:
+            return 0
+        transaction, local_scene = pending
+        self.pending = True
+        operation_id = transaction["magnetization_apply"]["operation_id"]
+        try:
+            response = self.client.model.commit(transaction, idempotency_key=operation_id)
+        except ApiError as error:
+            if error.status != 409 or error.code != "magnetization_apply_scene_advanced":
+                raise
+            # The server recognizes this exact operation as committed at base + 1.
+            self._record_magnetization_apply(local_scene, transaction["base_revision"] + 1)
+            self._reconcile_required = self.pending = True
+            raise self._magnetization_apply_conflict() from error
+        revision = response.get("scene_revision")
+        receipt = response.get("magnetization_apply")
+        if (response.get("transaction_kind") != "apply_magnetization"
+                or not isinstance(receipt, Mapping)
+                or receipt.get("operation_id") != operation_id
+                or type(revision) is not int
+                or revision != transaction["base_revision"] + 1):
+            raise RuntimeError("server did not acknowledge the exact magnetization apply")
+        if self._reconciled_scene is not None:
+            self._reconciled_scene = response["committed_scene"]
+        self._record_magnetization_apply(local_scene, revision)
+        return 1
+
+    def _record_magnetization_apply(self, local_scene: dict[str, Any], revision: int) -> None:
+        self.revision = revision
+        if self.baseline is not None:
+            self.baseline = local_scene
+        self._pending_magnetization_apply = None
+        self.transactions_committed += 1
+        self.pending = False
+
+    @staticmethod
+    def _magnetization_apply_conflict() -> ApiError:
+        return ApiError(
+            409, "magnetization_apply_scene_advanced",
+            "The magnetization apply committed before another client changed the scene. "
+            "Review the current scene and call fm.sync(reconcile=True).",
+        )
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator["LiveSession"]:
@@ -195,6 +319,40 @@ class LiveSession:
             self.sync(strict=False)
 
     # ---- runtime commands -----------------------------------------------
+
+    def reset_authored_world(self, state: Any) -> None:
+        self.state = state
+        if not self._reconcile_required and self._pending_magnetization_apply is None:
+            self.baseline = None
+            self._reconciled_scene = None
+        self._stage_magnetization_assignments.clear()
+        self._magnetization_apply_scopes.clear()
+
+    def record_magnetization_assignment(self, assignment: MagnetizationAssignment) -> None:
+        if self.baseline is not None:
+            self._magnetization_apply_scopes[(assignment.object_id, assignment.region_id)] = None
+        if self.state._live_stages:
+            self._stage_magnetization_assignments.append(assignment)
+
+    def author_physical_stage(self, stage: CapturedStage) -> int:
+        self._commit_pending_magnetization_apply()
+        if self._reconcile_required:
+            raise self._magnetization_apply_conflict()
+        stages = self.state._live_stages
+        assignments = self._stage_magnetization_assignments
+        if not stages:
+            # Pin the initial conditions of the first physical stage. Later
+            # workspace edits can then change the preview without altering it.
+            for magnet in stage.problem.magnets:
+                object_id = magnet.object_id or magnet.name
+                assignments.append(MagnetizationAssignment(object_id, None, magnet.m0))
+                for region in magnet.object_regions:
+                    assignments.append(
+                        MagnetizationAssignment(object_id, region.region_id, region.texture)
+                    )
+        stages.append(replace(stage, magnetization_assignments=tuple(assignments)))
+        assignments.clear()
+        return len(stages) - 1
 
     def submit(self, kind: str, *, wait: bool = True, target: Optional[Mapping[str, Any]] = None, **fields: Any) -> LiveCommandResult | CommandHandle:
         if kind in {"run", "relax", "solve", "compute_fields", "compute_energies"}:

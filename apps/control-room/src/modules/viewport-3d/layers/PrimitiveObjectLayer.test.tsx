@@ -18,6 +18,7 @@ vi.mock("../viewport3dBatchedInvalidate", () => ({
 }));
 
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
+import { resolvePrimitiveObjectSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import { createAntennaPrimitiveTextures } from "./antennaPrimitiveTextures";
 import { primitiveMonoColorForRole } from "@/kernel/visualization/primitiveSurfaceColor";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
@@ -122,14 +123,85 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     });
     expect(overlay!.meshState).toBe("primitive-only");
   });
-  it("keeps ordinary primitives unlit and gives antennas a light-independent metallic finish", () => {
+  it("selects PBR only for uniform presentation primitives and preserves antenna matcap", () => {
+    const profile = {
+      primitivePreview: { toneMapped: false },
+      uniformGeometry: {
+        lit: true,
+        pbr: true,
+        roughness: 0.22,
+        metalness: 0.73,
+        shadows: true,
+        toneMapped: true,
+      },
+    } as const;
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: true,
+      kind: "standard",
+      metalness: 0.73,
+      receiveShadow: true,
+      roughness: 0.22,
+      toneMapped: true,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, pbr: false },
+      },
+    })).toMatchObject({ kind: "lambert", castShadow: false, receiveShadow: false });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: { ...profile.uniformGeometry, shadows: false },
+      },
+    })).toMatchObject({
+      kind: "standard",
+      castShadow: false,
+      receiveShadow: false,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: false,
+      materialProfile: {
+        ...profile,
+        uniformGeometry: {
+          ...profile.uniformGeometry,
+          lit: false,
+          pbr: false,
+        },
+      },
+    })).toMatchObject({
+      kind: "basic",
+      castShadow: false,
+      receiveShadow: false,
+      toneMapped: false,
+    });
+
+    expect(resolvePrimitiveObjectSurfaceMaterialPlan({
+      hasAntennaMatcap: true,
+      materialProfile: profile,
+    })).toEqual({
+      castShadow: false,
+      kind: "matcap",
+      receiveShadow: false,
+    });
+
     const source = readFileSync(
       fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
       "utf8",
     );
     expect(source).toContain("<meshBasicMaterial");
-    expect(source).not.toContain("<meshStandardMaterial");
+    expect(source).toContain("<meshStandardMaterial");
     expect(source).toContain("<meshMatcapMaterial");
+    expect(source).toContain("castShadow={surfaceMaterialPlan.castShadow}");
   });
 
   it("keeps Primitive field-free and routes its presentation through the color resolver", () => {
@@ -202,6 +274,87 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       surfaceColorSource: "orientation",
       primitiveMonoColor: "#654321",
     }, colors)).toBe("#654321");
+  });
+
+  it("keeps imported source geometry until matching realized geometry commits", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const tracker = new Viewport3DResourceTracker();
+    const importedObject: Viewport3DPrimitiveObject = {
+      ...primitiveObject("box"),
+      geometryKey: "object:imported:surface-a",
+      importedSurface: {
+        bounds: { center: [0, 0, 0], radius: 1, size: [2, 2, 0] },
+        positions: new Float64Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]),
+        triangles: new Uint32Array([0, 1, 2]),
+        surfaceId: "surface-a",
+      },
+      kind: "imported-surface",
+      meshState: "mesh-ready",
+      objectId: "object-imported",
+    };
+    const ordinaryMeshReadyObject: Viewport3DPrimitiveObject = {
+      ...primitiveObject("box"),
+      meshState: "mesh-ready",
+    };
+    const colors: Viewport3DColors = {
+      accent: "#89b4fa",
+      background: "#11111b",
+      field: "#a6e3a1",
+      mesh: "#313244",
+      textPrimary: "#cdd6f4",
+      textSecondary: "#bac2de",
+      wire: "#6c7086",
+    };
+    const materialProfile = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+    );
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      primitiveVisible: false,
+      shaderVisible: true,
+    };
+    const render = (
+      object: Viewport3DPrimitiveObject,
+      realizedObjectIds?: ReadonlySet<string>,
+      objectSettings = settings,
+    ) => (
+      <PrimitiveObjectLayer
+        colors={colors}
+        getObjectSettings={() => objectSettings}
+        materialProfile={materialProfile}
+        onSelectObject={() => undefined}
+        primitiveModel={{ objects: [object], sceneRevision: 1 }}
+        realizedObjectIds={realizedObjectIds}
+        tracker={tracker}
+      />
+    );
+
+    try {
+      await act(async () => root.render(render(importedObject)));
+      expect(tracker.getSnapshot().geometries).toBeGreaterThan(0);
+      expect(settings.primitiveVisible).toBe(false);
+
+      await act(async () => root.render(render(
+        importedObject,
+        undefined,
+        { ...settings, visible: false },
+      )));
+      expect(tracker.getSnapshot().geometries).toBe(0);
+
+      await act(async () => root.render(render(ordinaryMeshReadyObject)));
+      expect(tracker.getSnapshot().geometries).toBe(0);
+
+      await act(async () => root.render(render(
+        importedObject,
+        new Set([importedObject.objectId]),
+      )));
+      expect(tracker.getSnapshot().geometries).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("creates primitive geometry variants from object bounds", () => {

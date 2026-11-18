@@ -9,6 +9,9 @@ const testState = vi.hoisted(() => ({
   authoringMethod: null as "fdm" | "fem" | null,
   publishedTopology: false,
   topologyResourceGenerationId: "generation-1",
+  multilayerLayoutStatus: "ready" as "idle" | "loading" | "ready" | "stale" | "error",
+  multilayerLayoutData: null as unknown,
+  multilayerLayoutError: null as Error | null,
   fdmMembershipGenerationId: "generation-1",
   fdmMembershipStatus: "ready" as "ready" | "loading" | "stale" | "error",
   resolvedDiscretization: null as "fdm" | "fem" | null,
@@ -57,6 +60,12 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  useFdmMultilayerLayoutResource: ({ enabled }: { enabled: boolean }) => ({
+    data: enabled ? testState.multilayerLayoutData : null,
+    error: enabled ? testState.multilayerLayoutError : null,
+    refreshError: null,
+    status: enabled ? testState.multilayerLayoutStatus : "idle",
+  }),
   useDomainMetaResource: ({ enabled }: { enabled: boolean }) => {
     testState.calls.push(enabled);
     return {
@@ -134,6 +143,7 @@ vi.mock("./AirboxMeshStatisticsPanel", () => ({ AirboxMeshStatisticsPanel: () =>
 vi.mock("./AirboxMeshTopologyPanel", () => ({ AirboxMeshTopologyPanel: () => <div>FEM Airbox child</div> }));
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import type { FdmMultilayerLayoutResource } from "@/kernel/api/apiTypes";
 import {
   AirboxMeshBuildLanePanel,
   AirboxMeshParametersLanePanel,
@@ -150,6 +160,65 @@ const selection = {
   nodeId: "model:airbox",
   objectId: null,
   ref: null,
+} satisfies Selection;
+
+const singleGridLayout = {
+  airbox: {
+    carrier_available: false,
+    h_demag_available: false,
+    h_eff_available: false,
+    unavailable_reason: "not_fdm_multilayer",
+  },
+  available: false,
+  backend: "fdm",
+  domain_generation_id: "generation-1",
+  execution_revision: 1,
+  layers: [],
+  layout_revision: 1,
+  observation_revision: 1,
+  schema_version: "fdm-multilayer-layout.v1",
+  unavailable_reason: "not_fdm_multilayer",
+} satisfies FdmMultilayerLayoutResource;
+
+const targetOnlyLayout = {
+  airbox: {
+    carrier_available: true,
+    carrier_fingerprint:
+      "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    carrier_revision: 7,
+    cell_size_m: [2.5e-9, 2.5e-9, 2.5e-9],
+    cells: [240, 240, 26],
+    h_demag_available: true,
+    h_eff_available: false,
+    h_eff_unavailable_reason: "airbox_heff_not_available_v1",
+    origin_m: [-300e-9, -300e-9, -5e-9],
+    sample_count: 1_497_600,
+    source_grid_fingerprints: ["sha256:native-grid"],
+    source_policy: "target_only",
+    source_runtime_identity: { backend: "fdm_multilayer_cpu_reference" },
+    target_only: true,
+    value_count: 4_492_800,
+  },
+  available: true,
+  backend: "fdm_multilayer",
+  domain_generation_id: "generation-1",
+  execution_revision: 1,
+  layers: [],
+  layout_fingerprint: "sha256:layout",
+  layout_revision: 8,
+  observation_revision: 9,
+  resolved_mode: "three_d",
+  schema_version: "fdm-multilayer-layout.v1",
+} satisfies FdmMultilayerLayoutResource;
+
+const canonicalAirboxSelection = {
+  ...selection,
+  ref: {
+    kind: "airbox.root",
+    nodeId: "model:airbox",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
 } satisfies Selection;
 
 const explicitFdmSelection = {
@@ -186,6 +255,9 @@ describe("AirboxInspectorLanePanel", () => {
     testState.authoringMethod = null;
     testState.publishedTopology = false;
     testState.topologyResourceGenerationId = "generation-1";
+    testState.multilayerLayoutStatus = "ready";
+    testState.multilayerLayoutData = singleGridLayout;
+    testState.multilayerLayoutError = null;
     testState.fdmMembershipGenerationId = "generation-1";
     testState.fdmMembershipStatus = "ready";
     testState.resolvedDiscretization = null;
@@ -223,7 +295,7 @@ describe("AirboxInspectorLanePanel", () => {
     expect(html).toContain("Airbox manifest is older than the authored policy.");
   });
 
-  it("loads only DomainMeta and never mounts the FEM child in FDM", () => {
+  it("keeps the SingleGrid FDM DomainMeta fallback when the layout reports no multilayer", () => {
     testState.discretization = "fdm";
     testState.calls.length = 0;
     const html = renderToStaticMarkup(<AirboxOverviewLanePanel selection={selection} />);
@@ -235,6 +307,65 @@ describe("AirboxInspectorLanePanel", () => {
     expect(html).not.toContain("FEM Airbox child");
     expect(html).not.toContain("shared-domain");
     expect(html).toContain("Published structured-grid artifact");
+  });
+
+  it.each([
+    [AirboxOverviewLanePanel, "overview"],
+    [AirboxMeshStatisticsLanePanel, "statistics"],
+    [AirboxMeshTopologyLanePanel, "topology"],
+    [AirboxMeshBuildLanePanel, "build"],
+    [AirboxMeshQualityGatesLanePanel, "quality"],
+  ] as const)("uses the validated target-only layout carrier for %s", (Panel, view) => {
+    testState.discretization = "fdm";
+    testState.multilayerLayoutData = targetOnlyLayout;
+
+    const html = renderToStaticMarkup(<Panel selection={canonicalAirboxSelection} />);
+
+    expect(html).toContain('data-fdm-airbox-grid-source="layout.airbox"');
+    expect(html).toContain(`data-fdm-airbox-mesh-view="${view}"`);
+    expect(html).toContain("Certified target-only observation grid");
+    expect(html).toContain("Target-only");
+    expect(html).toContain("[240, 240, 26]");
+    expect(html).toContain("1,497,600");
+    expect(html).toContain("[-3e-7, -3e-7, -5e-9]");
+    expect(html).toContain("[3e-7, 3e-7, 6e-8]");
+    expect(html).toContain("[2.5e-9, 2.5e-9, 2.5e-9]");
+    expect(html).not.toContain("Airbox · FDM structured universe");
+    expect(html).not.toContain("Airbox cells");
+    expect(html).not.toContain("Magnetic cells");
+    expect(html).not.toContain("[2, 1, 1]");
+  });
+
+  it("does not confuse a missing ready response with a SingleGrid layout", () => {
+    testState.discretization = "fdm";
+    testState.multilayerLayoutData = null;
+    const html = renderToStaticMarkup(
+      <AirboxOverviewLanePanel selection={canonicalAirboxSelection} />,
+    );
+    expect(html).toContain("The Airbox layout response is missing.");
+    expect(html).not.toContain("Airbox · FDM structured universe");
+    expect(html).not.toContain("[2, 1, 1]");
+  });
+
+  it.each([
+    ["loading", "loading"],
+    ["stale", "stale"],
+    ["error", "layout read failed"],
+  ] as const)("withholds DomainMeta Airbox facts while the target layout is %s", (status, expectedMessage) => {
+    testState.discretization = "fdm";
+    testState.multilayerLayoutStatus = status;
+    testState.multilayerLayoutData = targetOnlyLayout;
+    testState.multilayerLayoutError = status === "error" ? new Error("layout read failed") : null;
+
+    const html = renderToStaticMarkup(
+      <AirboxOverviewLanePanel selection={canonicalAirboxSelection} />,
+    );
+
+    expect(html).toContain("data-fdm-airbox-grid-source=\"layout.airbox\"");
+    expect(html).toContain(expectedMessage);
+    expect(html).not.toContain("Airbox · FDM structured universe");
+    expect(html).not.toContain("[2, 1, 1]");
+    expect(html).not.toContain("[240, 240, 26]");
   });
 
   it("delegates to the existing FEM panel and does not load DomainMeta in FEM", () => {

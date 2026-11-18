@@ -165,6 +165,16 @@ def _v2_cache_fixture(root: Path) -> dict[str, object]:
 
 
 class OrphanRecoveryContractTests(unittest.TestCase):
+    def test_engine_nanoseconds_validate_without_changing_pinned_text(self):
+        value = "2026-11-05T07:05:49.926584394Z"
+        parsed = recovery._finished_timestamp(value)
+        self.assertEqual(parsed.microsecond, 926584)
+        self.assertEqual(value, "2026-11-05T07:05:49.926584394Z")
+        for invalid in ("2026-11-05T07:05:49.1234567890Z", "2026-02-30T07:05:49Z",
+                        "2026-11-05T07:05:49", "2026-11-05 07:05:49Z"):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                recovery._finished_timestamp(invalid)
+
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="fullmag-orphan-contract-"))
         self.package = self.root / "package"

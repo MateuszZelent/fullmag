@@ -115,6 +115,22 @@
     }
   ],
   "sources": [
+    {"id": "cuda_centered_xy_admission", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "centered_periodic_xy_images", "responsibility": "Check the expanded and compact host memory bounds and preserve explicit XY image counts."},
+    {"id": "centered_xy_tensor", "path": "crates/fullmag-fdm-demag/src/shifted_kernel.rs", "symbol": "try_compute_periodic_xy_kernel", "responsibility": "Build centered Newell tensor spectra for XY image truncation and open Z."},
+    {
+      "id": "cudaExchangeUniformLutLaunch",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
+      "symbol": "exchange_field_fp64_kernel",
+      "responsibility": "fp64 exchange field kernel; its standard launch selects the uniform-Laplacian branch when the region-pair table is uniform",
+      "evidence_status": "runtime: CUDA-event microbenchmark scripts/benchmarks/cuda_exchange_region_bench.cu, relative field difference 4e-16"
+    },
+    {
+      "id": "cudaExchangeUniformLutFlag",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_backend_create_impl",
+      "responsibility": "Set Context::exchange_lut_uniform when every built region-pair table entry equals A",
+      "evidence_status": "source-visible; exercised by the FDM GPU hot-loop benchmark runs"
+    },
     {
       "id": "terminalBinarySpool",
       "path": "crates/fullmag-api/src/accepted_observation_spool.rs",
@@ -163,7 +179,7 @@
       "id": "cuda_energy_density_materialization",
       "path": "backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu",
       "symbol": "launch_energy_density_observable",
-      "responsibility": "CUDA per-cell energy-density materialization aligned with external-field sources and the current partial-cell volume contract"
+      "responsibility": "CUDA per-cell energy-density materialization aligned with external-field sources and the current partial-cell volume contract; on T0/T1 the exchange density is weighted by phi_eff like the scalar exchange energy"
     },
     {
       "id": "state_observables",
@@ -218,6 +234,18 @@
       "path": "crates/fullmag-runner/src/accepted_materialization.rs",
       "symbol": "capture_solver_observables",
       "responsibility": "preserves complete same-clock fields from the original solver without reconstructing dynamic primary inputs"
+    },
+    {
+      "id": "cpu-single-layer-transform",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "new_open_single_layer",
+      "responsibility": "Select unchanged zero-z-displacement Newell planes for the internal open single-layer CPU transform. Managed numerical qualification pending."
+    },
+    {
+      "id": "cpu-single-layer-oracle",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "open_single_layer_workspace_matches_legacy_aos_and_soa_oracle",
+      "responsibility": "Compare AoS and SoA fields and energy against the explicit legacy padded transform. Execution pending."
     },
     {
       "id": "accepted_terminal_capture_binding",

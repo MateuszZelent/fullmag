@@ -30,6 +30,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
+import { DisabledReason } from "@/shared/ui/DisabledReason";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
@@ -39,6 +40,7 @@ import { DraftQuantityUnitSelect, type DraftUnitUpdater } from "../primitives/Dr
 import type { QuantityDraftField } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { useInspectorActiveTab } from "../InspectorTabState";
 import { ObjectPlacementPanel } from "./ObjectPlacementPanel";
 import { Vector3Field } from "../primitives/Vector3Field";
@@ -785,7 +787,19 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Geometry summary" collapsible defaultOpen>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Shape", value: draft.geometryKind || object.shape },
+          { label: "Dimensions", value: object.dimensions },
+          { label: "Mode", value: draft.mode },
+          {
+            label: "State",
+            value: inspectorDirty ? "modified" : "clean",
+            tone: inspectorDirty ? "warning" : "neutral",
+          },
+        ]}
+      />
+      <InspectorGroup title="Geometry summary" collapsible defaultOpen={draft.mode !== "committed" || (selection.kind !== "object.geometry" && selection.kind !== "object.antenna.geometry")}>
         {sourceNotice ? <FieldRow label="Source" value={sourceNotice} /> : null}
         {draft.mode === "committed" && (
           <FieldRow label="Object ID" value={object.objectId} />
@@ -830,7 +844,15 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         Object.values(draft.quantityFields).some((field) => field && field.lastValidSI !== null) ? (
         <FeedbackBanner kind="warning" message="Preview retains the last valid values. Complete or revert invalid fields before applying." />
       ) : null}
-      <DraftIdentitySection draft={draft} onFieldChange={updateField} showCommitted={draft.mode === "committed"} />
+      <DraftIdentitySection
+        draft={draft}
+        onFieldChange={updateField}
+        showCommitted={
+          draft.mode === "committed" &&
+          selection.kind !== "object.geometry" &&
+          selection.kind !== "object.antenna.geometry"
+        }
+      />
       <ActionsSection
         draft={draft}
         valid={inspectorValid}
@@ -1068,25 +1090,31 @@ function ActionsSection({
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
-        {draft.mode === "draft-new" ? (
-          <Button
-            disabled={
-              pending ||
-              !valid ||
-              Boolean(sceneMutationLockReason) ||
-              typeof draft.baseRevision !== "number" ||
-              !Number.isFinite(draft.baseRevision) ||
-              revisionConflictPhase !== null
-            }
-            size="sm"
-            type="button"
-            variant="primary"
-            title={sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined)}
-            onClick={() => void onApplyCreateDraft()}
-          >
-            Apply Draft
-          </Button>
-        ) : null}
+        {draft.mode === "draft-new" ? (() => {
+          const applyDisabledReason =
+            sceneMutationLockReason ?? (!valid ? "Resolve validation errors before applying." : undefined);
+          const applyButton = (
+            <Button
+              disabled={
+                pending ||
+                !valid ||
+                Boolean(sceneMutationLockReason) ||
+                typeof draft.baseRevision !== "number" ||
+                !Number.isFinite(draft.baseRevision) ||
+                revisionConflictPhase !== null
+              }
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void onApplyCreateDraft()}
+            >
+              Apply Draft
+            </Button>
+          );
+          return applyDisabledReason ? (
+            <DisabledReason reason={applyDisabledReason}>{applyButton}</DisabledReason>
+          ) : applyButton;
+        })() : null}
       </div>
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
@@ -1143,7 +1171,7 @@ function ValidationSection({
       <FieldRow label="Fetch state" value={status} />
       {messages.length > 0 ? (
         <ul className="fm-inspector-validation-list">
-          {messages.map((message) => (
+          {[...new Set(messages)].map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>

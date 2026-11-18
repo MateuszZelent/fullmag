@@ -929,7 +929,7 @@ priority. Equal highest priorities fail closed. The writable selection is
 
 The texture transform is evaluated only as a coordinate map inside this selection. Translation,
 rotation, pivot, and scale can move or reshape the visible analytic profile, but they cannot move
-the region boundary and cannot write outside `\Omega_{\mathrm{write}}`. A profile translated partly
+the region boundary and cannot write outside $\Omega_{\mathrm{write}}$. A profile translated partly
 or completely beyond its region is therefore clipped at the region boundary; cells or nodes outside
 the region retain the object-level initial state or the winning texture of another region.
 
@@ -1025,21 +1025,25 @@ The papers establish physical texture classes and topology. The exact radial reg
 fallback thresholds, mapping behavior, and version semantics documented here are Fullmag
 implementation contracts and are sourced from the repository.
 
-(python-api-magnets-and-textures-preset-textures-source-code-index)=
+## Control Room support
 
-## Control Room crosswalk
-
-Status: The exposed texture families are partial; unlisted presets remain Python-only.
+Status: The `16` built-in `MAGNETIZATION_TEXTURE_PRESETS` exposed by `ObjectMagneticTexturePanel` are `partial`; custom spatial callbacks and unlisted options remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `not implemented` | Python-only until implemented |
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft via `commitMagneticTextureApply`; authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `Python-only` | Authored in Python |
 
-frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+Texture presets, `TextureTransform3D` chaining options, and arguments outside `ObjectMagneticTexturePanel` remain Python-only.
+See {doc}`/frontend/inspectors/objects-and-materials` and [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx` (`ObjectMagneticTexturePanel`).
 
+```{image} /_static/images/ui/inspector-magnetic-texture.png
+:alt: Semantic Inspector Magnetic Texture panel showing preset family selector and parameter controls
+:width: 92%
+```
+
+(python-api-magnets-and-textures-preset-textures-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence / lane |
@@ -1048,7 +1052,12 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMag
 | descriptor and ProblemIR lowering | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L189) | [`class PresetTexture`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L189) | versioned preset descriptor, immutable transform chaining, and ProblemIR serialization | Python authoring / IR |
 | mapping descriptor | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L175) | [`class TextureMapping`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L175) | public object/world, projection, and clamp descriptor | Python authoring / IR |
 | transform authoring | [`packages/fullmag-py/src/fullmag/init/textures.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L126) | [`class TextureTransform3D`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/init/textures.py#L126) | public translation, quaternion rotation, component scale, and pivot descriptor | Python authoring / IR |
-| v1/v2 dispatch | `crates/fullmag-plan/src/magnetization_textures.rs` | `sample_preset_texture_versioned` | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
+| v1/v2 dispatch | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `sample_preset_texture_versioned` | canonical v1/v2 dispatch used by planners | FDM/FEM planner |
+| Mumax3 vortex wall factory | `packages/fullmag-py/src/fullmag/init/textures.py` | `vortex_wall` | Mumax3-compatible asymmetric vortex wall factory | Python authoring |
+| Mumax3 compact hopfion factory | `packages/fullmag-py/src/fullmag/init/textures.py` | `hopfion_compact_support` | Mumax3-compatible compact-support hopfion factory | Python authoring |
+| skyrmionium profile | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `skyrmionium` | axisymmetric $2\pi$ skyrmionium radial evaluation | FDM/FEM planner |
+| hopfion profile | `crates/fullmag-plan/src/magnetization_textures_v2.rs` | `hopfion` | 3D hopfion vector field evaluation | FDM/FEM planner |
+| object-space sample points | `crates/fullmag-plan/src/mesh.rs` | `object_space_sample_points` | FEM object-space coordinate transforms for sampling | FEM planner |
 | canonical v2 sampling pipeline | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L831) | [`sample_v2`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L831) | v2 mapping, active-point handling, local evaluation, frame embedding, and output-vector rotation | FDM/FEM planner |
 | coordinate transform | [`crates/fullmag-plan/src/magnetization_textures_v2.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L295) | [`prepare`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-plan/src/magnetization_textures_v2.rs#L295) | one-time validation plus shared forward/inverse texture transform | FDM/FEM planner |
 | region ownership and clipping | `crates/fullmag-plan/src/region_textures.rs` | `sample_region_initial_on_mask` | priority-resolved owner masks and strict clipping of regional textures | FDM/FEM planner |

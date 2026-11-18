@@ -1386,7 +1386,7 @@ fn optional_layer_array3_f64(
     })
 }
 
-fn parse_planned_native_active_mask(
+pub(super) fn parse_planned_native_active_mask(
     plan_layer: Option<&Value>,
     layer_id: &str,
     total_cells: u64,
@@ -1412,7 +1412,7 @@ fn parse_planned_native_active_mask(
     Ok(Some(mask))
 }
 
-fn validate_declared_mask_presence(
+pub(super) fn validate_declared_mask_presence(
     artifact_layer: Option<&Value>,
     plan_layer: Option<&Value>,
     layer_id: &str,
@@ -1436,7 +1436,7 @@ fn validate_declared_mask_presence(
     Ok(())
 }
 
-fn validate_declared_layer_counts(
+pub(super) fn validate_declared_layer_counts(
     artifact_layer: Option<&Value>,
     plan_layer: Option<&Value>,
     layer_id: &str,

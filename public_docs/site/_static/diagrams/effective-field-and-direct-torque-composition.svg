@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 640" width="100%" role="img" aria-labelledby="title desc">
+  <title id="title">Variational effective-field derivation vs additive direct spin-torque composition on the LLG RHS</title>
+  <desc id="desc">Three-panel diagram illustrating how conservative micromagnetic energy functionals E_k[m] produce field-form contributions H_k via delta E_k = -mu0 int M_s H_k . eta dV and sum into H_eff, while non-conservative current-driven torques enter separately via a single Gilbert-to-explicit conversion into tau_direct on the tangent plane T_m S^2 of the LLG right-hand side.</desc>
+  <defs>
+    <style>
+      .fig-title { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .fig-subtitle { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #4b5568; }
+      .panel-title { font: 700 14.5px 'Segoe UI', Arial, sans-serif; fill: #172030; }
+      .badge { font: 700 12.5px 'Segoe UI', Arial, sans-serif; fill: #ffffff; }
+      .sec-hdr { font: 700 13px 'Segoe UI', Arial, sans-serif; fill: #1d3557; }
+      .label-bold { font: 600 12.5px 'Segoe UI', Arial, sans-serif; fill: #1e2433; }
+      .body { font: 400 12px 'Segoe UI', Arial, sans-serif; fill: #2b3344; }
+      .small { font: 400 11px 'Segoe UI', Arial, sans-serif; fill: #4f586b; }
+      .tiny { font: 400 10px 'Segoe UI', Arial, sans-serif; fill: #5c657a; }
+      .code { font: 600 11px 'Consolas', 'Courier New', monospace; fill: #283147; }
+      .code-sm { font: 500 10.2px 'Consolas', 'Courier New', monospace; fill: #354059; }
+      .math { font: italic 13px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-bold { font: italic 700 13.5px 'Cambria Math', 'Times New Roman', serif; fill: #1e2433; }
+      .math-sm { font: italic 11.5px 'Cambria Math', 'Times New Roman', serif; fill: #2b3344; }
+      .pill-text { font: 600 11px 'Segoe UI', Arial, sans-serif; }
+    </style>
+    <marker id="arr-ink" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-ink-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1e2433"/></marker>
+    <marker id="arr-muted" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-muted-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#5c657a"/></marker>
+    <marker id="arr-m" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-m-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arr-H" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-H-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arr-T_DL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_DL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arr-T_FL" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-T_FL-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arr-DMI" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-DMI-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arr-J_c" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-J_c-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arr-air" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-air-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arr-err" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-err-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#ba092f"/></marker>
+    <marker id="arr-ok" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <marker id="arr-ok-sm" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#256b15"/></marker>
+    <pattern id="hatch-amber" width="8" height="8" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#b86b11" stroke-width="1.4" stroke-opacity="0.32"/></pattern>
+    <pattern id="hatch-slate" width="8" height="8" patternTransform="rotate(-45 0 0)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="8" stroke="#6e7b91" stroke-width="1.2" stroke-opacity="0.28"/></pattern>
+    <filter id="soft-shadow" x="-3%" y="-3%" width="106%" height="108%"><feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1e2433" flood-opacity="0.06"/></filter>
+  </defs>
+  <rect x="2.00" y="2.00" width="1356.00" height="636.00" fill="#fbfcfe" rx="10.0" stroke="#ccd0da" stroke-width="1.50"/>
+  <text x="28.00" y="36.00" class="fig-title">Effective-Field Variational Composition vs. Direct Spin-Torque RHS</text>
+  <text x="28.00" y="57.00" class="fig-subtitle">Strict separation of conservative energy variation (H<tspan baseline-shift="sub" font-size="72%">eff</tspan> in A/m) and non-conservative direct torques (τ<tspan baseline-shift="sub" font-size="72%">direct</tspan> in s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <line x1="24.00" y1="68.00" x2="1336.00" y2="68.00" stroke="#e1e5ee" stroke-width="1.20" stroke-linecap="round"/>
+  <rect x="24.00" y="82.00" width="510.00" height="536.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="38.00" y="95.00" width="30.00" height="22.00" fill="#1d5fa7" rx="5.0"/>
+  <text x="53.00" y="110.50" class="badge" text-anchor="middle">(a)</text>
+  <text x="78.00" y="110.50" class="panel-title">Conservative Variational Path → H<tspan baseline-shift="sub" font-size="72%">eff</tspan></text>
+  <text x="38.00" y="130.00" class="small">Energy functional E[m] → directional derivative → H<tspan baseline-shift="sub" font-size="72%">k</tspan> (A/m)</text>
+  <rect x="42.00" y="148.00" width="474.00" height="76.00" fill="#f5f7fb" rx="6.0" stroke="#b6cde8" stroke-width="1.10"/>
+  <text x="54.00" y="169.00" class="label-bold" style="fill:#1d5fa7">1. Total Energy Functional  E[m] = ∑<tspan baseline-shift="sub" font-size="72%">k ∈ K</tspan> E<tspan baseline-shift="sub" font-size="72%">k</tspan>[m]  (J)</text>
+  <text x="54.00" y="191.00" class="small">Exchange · Demag · Zeeman · Uniaxial/Cubic · DMI · Magnetoelastic</text>
+  <text x="54.00" y="210.00" class="tiny" style="fill:#5c657a">Each term owns its SI density w<tspan baseline-shift="sub" font-size="72%">k</tspan>, sign, and natural surface boundary law</text>
+  <line x1="279.00" y1="226.00" x2="279.00" y2="250.00" stroke="#1d5fa7" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <rect x="42.00" y="254.00" width="474.00" height="114.00" fill="#eaf1fb" rx="6.0" stroke="#1d5fa7" stroke-width="1.20"/>
+  <text x="54.00" y="276.00" class="label-bold" style="fill:#1d5fa7">2. First Variation on Admissible Tangent  η  (m · η = 0)</text>
+  <text x="279.00" y="306.00" class="math-bold" text-anchor="middle" style="fill:#1e2433;font-size:14.5px">δE<tspan baseline-shift="sub" font-size="72%">k</tspan>[m; η] = −μ<tspan baseline-shift="sub" font-size="72%">0</tspan> ∫<tspan baseline-shift="sub" font-size="72%">Ω<tspan baseline-shift="sub" font-size="72%">m</tspan></tspan> M<tspan baseline-shift="sub" font-size="72%">s</tspan> H<tspan baseline-shift="sub" font-size="72%">k</tspan> · η dV</text>
+  <line x1="56.00" y1="322.00" x2="502.00" y2="322.00" stroke="#c0d4ed" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="54.00" y="340.00" class="small">• FDM: finite-difference / convolution stencil evaluated at cell centers</text>
+  <text x="54.00" y="357.00" class="small">• FEM: weak residual r<tspan baseline-shift="sub" font-size="72%">k</tspan> projected via lumped mass  H<tspan baseline-shift="sub" font-size="72%">k</tspan> = −(μ<tspan baseline-shift="sub" font-size="72%">0</tspan>M<tspan baseline-shift="sub" font-size="72%">s</tspan>)<tspan baseline-shift="super" font-size="72%">-1</tspan> M<tspan baseline-shift="sub" font-size="72%">lump</tspan><tspan baseline-shift="super" font-size="72%">-1</tspan> r<tspan baseline-shift="sub" font-size="72%">k</tspan></text>
+  <line x1="279.00" y1="370.00" x2="279.00" y2="394.00" stroke="#1d5fa7" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-H)"/>
+  <rect x="42.00" y="398.00" width="474.00" height="112.00" fill="#ffffff" rx="6.0" stroke="#1d5fa7" stroke-width="1.40"/>
+  <text x="54.00" y="420.00" class="label-bold" style="fill:#1d5fa7">3. Effective-Field Accumulator  (plus non-energy fields H<tspan baseline-shift="sub" font-size="72%">oe</tspan>, H<tspan baseline-shift="sub" font-size="72%">th</tspan>)</text>
+  <text x="279.00" y="447.00" class="math-bold" text-anchor="middle" style="fill:#1d5fa7;font-size:14.0px">H<tspan baseline-shift="sub" font-size="72%">eff</tspan>(x, t) = ∑<tspan baseline-shift="sub" font-size="72%">k ∈ K<tspan baseline-shift="sub" font-size="72%">field</tspan></tspan> H<tspan baseline-shift="sub" font-size="72%">k</tspan>(x, t)   [A m<tspan baseline-shift="super" font-size="72%">-1</tspan>]</text>
+  <text x="54.00" y="474.00" class="code-sm" style="fill:#3e4659">FEM CPU: compute_effective_fields_for_magnetization</text>
+  <text x="54.00" y="493.00" class="code-sm" style="fill:#3e4659">FEM GPU: gpu_rk_accumulate_effective_field (device AoS/SoA)</text>
+  <line x1="279.00" y1="512.00" x2="279.00" y2="536.00" stroke="#147d75" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-T_FL)"/>
+  <rect x="42.00" y="540.00" width="474.00" height="62.00" fill="#e6f5f3" rx="6.0" stroke="#147d75" stroke-width="1.20"/>
+  <text x="54.00" y="562.00" class="label-bold" style="fill:#147d75">4. Field-Driven LLG Rate  (s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <text x="279.00" y="585.00" class="math-sm" text-anchor="middle">(∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">LLG(H<tspan baseline-shift="sub" font-size="72%">eff</tspan>)</tspan> = −γ<tspan baseline-shift="sub" font-size="72%">0</tspan>/(1+α<tspan baseline-shift="super" font-size="72%">2</tspan>) [ s<tspan baseline-shift="sub" font-size="72%">prec</tspan> m×H<tspan baseline-shift="sub" font-size="72%">eff</tspan> + α m×(m×H<tspan baseline-shift="sub" font-size="72%">eff</tspan>) ]</text>
+  <rect x="552.00" y="82.00" width="358.00" height="536.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="566.00" y="95.00" width="30.00" height="22.00" fill="#b86b11" rx="5.0"/>
+  <text x="581.00" y="110.50" class="badge" text-anchor="middle">(b)</text>
+  <text x="606.00" y="110.50" class="panel-title">Direct Torque Path → τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <text x="566.00" y="130.00" class="small">Current-driven RHS rates; never pseudo-fields</text>
+  <rect x="568.00" y="148.00" width="326.00" height="134.00" fill="#fdf3e6" rx="6.0" stroke="#e6c08a" stroke-width="1.10"/>
+  <text x="580.00" y="169.00" class="label-bold" style="fill:#b86b11">1. Authored Gilbert-Form Rates  T<tspan baseline-shift="sub" font-size="72%">G</tspan> (s<tspan baseline-shift="super" font-size="72%">-1</tspan>)</text>
+  <text x="580.00" y="193.00" class="small">• SlonczewskiSTT: Ω<tspan baseline-shift="sub" font-size="72%">DL</tspan> m×(p̂×m) + Ω<tspan baseline-shift="sub" font-size="72%">FL</tspan> m×p̂</text>
+  <text x="580.00" y="213.00" class="small">• ZhangLiSTT: −(u·∇)m + β m×[(u·∇)m]</text>
+  <text x="580.00" y="233.00" class="small">• PrescribedSOT: Ω<tspan baseline-shift="sub" font-size="72%">DL</tspan> m×(σ̂×m) + Ω<tspan baseline-shift="sub" font-size="72%">FL</tspan> m×σ̂</text>
+  <text x="580.00" y="253.00" class="small">• DriftDiffusionTorque: −(γ<tspan baseline-shift="sub" font-size="72%">e</tspan>/M<tspan baseline-shift="sub" font-size="72%">s</tspan>)(ħ/2e)(R<tspan baseline-shift="sub" font-size="72%">J</tspan>+R<tspan baseline-shift="sub" font-size="72%">φ</tspan>)</text>
+  <text x="580.00" y="272.00" class="tiny" style="fill:#b86b11">Non-conservative: no scalar potential E<tspan baseline-shift="sub" font-size="72%">torque</tspan></text>
+  <line x1="731.00" y1="284.00" x2="731.00" y2="310.00" stroke="#b86b11" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-T_DL)"/>
+  <rect x="568.00" y="314.00" width="326.00" height="118.00" fill="#ffffff" rx="6.0" stroke="#b86b11" stroke-width="1.40"/>
+  <text x="580.00" y="336.00" class="label-bold" style="fill:#b86b11">2. Exact Single Gilbert → Explicit Transform</text>
+  <text x="731.00" y="368.00" class="math-bold" text-anchor="middle" style="font-size:13.5px">τ<tspan baseline-shift="sub" font-size="72%">direct</tspan> = ( T<tspan baseline-shift="sub" font-size="72%">G</tspan> + α (m × T<tspan baseline-shift="sub" font-size="72%">G</tspan>) ) / (1 + α<tspan baseline-shift="super" font-size="72%">2</tspan>)</text>
+  <text x="580.00" y="396.00" class="tiny" style="fill:#5c657a">Equivalent explicit coefficients (example SOT):</text>
+  <text x="580.00" y="414.00" class="math-sm" style="font-size:10.5px">C<tspan baseline-shift="sub" font-size="72%">DL</tspan> = Ω<tspan baseline-shift="sub" font-size="72%">0</tspan>(ξ<tspan baseline-shift="sub" font-size="72%">DL</tspan> − αξ<tspan baseline-shift="sub" font-size="72%">FL</tspan>)/(1+α<tspan baseline-shift="super" font-size="72%">2</tspan>),  C<tspan baseline-shift="sub" font-size="72%">FL</tspan> = Ω<tspan baseline-shift="sub" font-size="72%">0</tspan>(ξ<tspan baseline-shift="sub" font-size="72%">FL</tspan> + αξ<tspan baseline-shift="sub" font-size="72%">DL</tspan>)/(1+α<tspan baseline-shift="super" font-size="72%">2</tspan>)</text>
+  <rect x="568.00" y="450.00" width="326.00" height="74.00" fill="#fdecef" rx="6.0" stroke="#ba092f" stroke-width="1.20"/>
+  <text x="731.00" y="472.00" class="label-bold" text-anchor="middle" style="fill:#ba092f;font-size:11.5px">Anti-Double-Conversion &amp; Anti-Field Guard</text>
+  <text x="731.00" y="492.00" class="small" text-anchor="middle" style="fill:#ba092f">• Never convert T<tspan baseline-shift="sub" font-size="72%">G</tspan> twice (module + integrator)</text>
+  <text x="731.00" y="510.00" class="small" text-anchor="middle" style="fill:#ba092f">• Never inject τ<tspan baseline-shift="sub" font-size="72%">direct</tspan> as an effective field in H<tspan baseline-shift="sub" font-size="72%">eff</tspan></text>
+  <rect x="568.00" y="540.00" width="326.00" height="62.00" fill="#f5f7fb" rx="6.0" stroke="#d6dbe6" stroke-width="1.00"/>
+  <text x="580.00" y="562.00" class="label-bold">Stage-Active Direct Source  τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <text x="580.00" y="584.00" class="small" style="fill:#5c657a">Bypassed in pure relaxation / minimization stages</text>
+  <rect x="928.00" y="82.00" width="408.00" height="536.00" fill="#ffffff" rx="8.0" stroke="#d6dbe6" stroke-width="1.30" filter="url(#soft-shadow)"/>
+  <rect x="942.00" y="95.00" width="30.00" height="22.00" fill="#b8392b" rx="5.0"/>
+  <text x="957.00" y="110.50" class="badge" text-anchor="middle">(c)</text>
+  <text x="982.00" y="110.50" class="panel-title">Tangent-Plane RHS Composition</text>
+  <text x="942.00" y="130.00" class="small">Total ∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m ∈ T<tspan baseline-shift="sub" font-size="72%">m</tspan>S<tspan baseline-shift="super" font-size="72%">2</tspan> (m · ∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m = 0)</text>
+  <polygon points="1049.7,374.8 1226.7,344.8 1153.9,258.8 976.9,288.8" fill="#f2f5fa" stroke="#9aa6b8" stroke-width="1.2" stroke-dasharray="4,3"/>
+  <text x="984.90" y="306.80" class="small" style="fill:#5c657a">T<tspan baseline-shift="sub" font-size="72%">m</tspan>S<tspan baseline-shift="super" font-size="72%">2</tspan> tangent plane</text>
+  <path d="M 984.0 367.0 Q 1076.0 310.0 1188.0 360.0" fill="none" stroke="#b9c3d4" stroke-width="1.60" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,3"/>
+  <text x="1178.00" y="374.00" class="math-sm" style="fill:#5c657a">S<tspan baseline-shift="super" font-size="72%">2</tspan></text>
+  <line x1="1036.00" y1="407.00" x2="1086.00" y2="322.00" stroke="#b8392b" stroke-width="3.20" stroke-linecap="round" marker-end="url(#arr-m)"/>
+  <circle cx="1036.00" cy="407.00" r="3.00" fill="#1e2433"/>
+  <text x="1072.00" y="391.00" class="math-bold" style="fill:#b8392b">m (‖m‖<tspan baseline-shift="sub" font-size="72%">2</tspan> = 1)</text>
+  <line x1="1086.00" y1="322.00" x2="1168.00" y2="308.00" stroke="#147d75" stroke-width="2.60" stroke-linecap="round" marker-end="url(#arr-T_FL)"/>
+  <text x="1174.00" y="320.00" class="math-sm" style="fill:#147d75">(∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">LLG(H<tspan baseline-shift="sub" font-size="72%">eff</tspan>)</tspan></text>
+  <line x1="1086.00" y1="322.00" x2="1052.00" y2="254.00" stroke="#b86b11" stroke-width="2.60" stroke-linecap="round" marker-end="url(#arr-T_DL)"/>
+  <text x="1040.00" y="244.00" class="math-bold" text-anchor="end" style="fill:#b86b11">τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <line x1="1168.00" y1="308.00" x2="1134.00" y2="240.00" stroke="#94a0b5" stroke-width="1.20" stroke-linecap="round" stroke-dasharray="3,3"/>
+  <line x1="1052.00" y1="254.00" x2="1134.00" y2="240.00" stroke="#94a0b5" stroke-width="1.20" stroke-linecap="round" stroke-dasharray="3,3"/>
+  <line x1="1086.00" y1="322.00" x2="1134.00" y2="240.00" stroke="#1e2433" stroke-width="3.00" stroke-linecap="round" marker-end="url(#arr-ink)"/>
+  <text x="1142.00" y="236.00" class="math-bold" style="fill:#1e2433">(∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">total</tspan></text>
+  <rect x="944.00" y="426.00" width="376.00" height="176.00" fill="#f5f7fb" rx="6.0" stroke="#d6dbe6" stroke-width="1.10"/>
+  <text x="956.00" y="448.00" class="label-bold">Additive Composition on S<tspan baseline-shift="super" font-size="72%">2</tspan></text>
+  <text x="1132.00" y="476.00" class="math-bold" text-anchor="middle" style="font-size:13.5px">(∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">total</tspan> = (∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">LLG(H<tspan baseline-shift="sub" font-size="72%">eff</tspan>)</tspan> + τ<tspan baseline-shift="sub" font-size="72%">direct</tspan></text>
+  <line x1="956.00" y1="492.00" x2="1308.00" y2="492.00" stroke="#dce0e8" stroke-width="1.00" stroke-linecap="round"/>
+  <text x="956.00" y="513.00" class="label-bold" style="font-size:11.5px">Orthogonality invariant:</text>
+  <text x="956.00" y="531.00" class="math-sm">m · (∂<tspan baseline-shift="sub" font-size="72%">t</tspan>m)|<tspan baseline-shift="sub" font-size="72%">total</tspan> = 0  (preserved continuously)</text>
+  <text x="956.00" y="555.00" class="label-bold" style="font-size:11.5px">Native Consumers:</text>
+  <text x="956.00" y="574.00" class="code-sm">• FEM CPU: llg_rhs_aos</text>
+  <text x="956.00" y="591.00" class="code-sm">• FEM GPU: fullmag_cuda_llg_rhs_fused</text>
+  <path d="M 516 571 L 542 571 L 542 612 L 924 612" fill="none" stroke="#147d75" stroke-width="1.60" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="4,3" opacity="0.75"/>
+  <line x1="894.00" y1="571.00" x2="942.00" y2="571.00" stroke="#b86b11" stroke-width="1.80" stroke-linecap="round" marker-end="url(#arr-T_DL)"/>
+</svg>

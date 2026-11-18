@@ -71,7 +71,7 @@ export function CrossSectionQualityChart({
   }));
 
   return (
-    <div className="fm-mesh-quality-chart" aria-label={`Quality histogram with ${bins.length} bins`}>
+    <div role="group" className="fm-mesh-quality-chart" aria-label={`Quality histogram with ${bins.length} bins`}>
       <ResponsiveContainer width="100%" height={80}>
         <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
           <defs>

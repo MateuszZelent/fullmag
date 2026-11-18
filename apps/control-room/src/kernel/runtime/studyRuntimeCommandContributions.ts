@@ -53,6 +53,7 @@ import type {
   RegionDiagnosticsResource,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
+  RuntimeStageInitialStateRequest,
   SimulationPreparationResource,
   SolverProfileResource,
   SolverStatusResource,
@@ -66,6 +67,7 @@ import {
   obsoleteSessionResult,
 } from "../commands/commandSessionScope";
 import { runAuthoringMutationWithHistory } from "../authoring/authoringHistoryMutation";
+import { studyComputeDraftBlockedReason } from "../authoring/studyComputeDraftGuard";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -93,17 +95,34 @@ import {
   type ActiveLaneOperationId,
 } from "../resources/useActiveLaneCapabilities";
 
+import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
+import { isStudyComputeKind as isStudyCompute } from "../commands/studyComputeObservations";
+
 import {
+  buildAuthoredStudyStageCommand,
   buildStudyRuntimeCommand,
   type SimpleStudyRuntimeCommandKind,
+  type StudyPhysicalStageCommandKind,
 } from "./studyRuntimeCommandAdapters";
 import {
   materializeCurrentLivePreparation,
   requiresSharedDomainMeshForLivePreparation,
 } from "./livePreparationMaterialization";
 import { addAntennaFieldSolveStudyCommand } from "./antennaFieldSolveStudyCommand";
+import {
+  getStageInitialStateChoice,
+  matchesPreparedStageInitialState,
+  preparedStageInitialStateChoice,
+  stageInitialStateRequest,
+} from "./studyStageInitialState";
+import {
+  captureStudyComputeInput,
+  changedStudyComputeInput,
+  regionRevisionPrecondition,
+} from "./studyComputeInput";
 
 type JsonRecord = Record<string, unknown>;
+type RuntimeControlCommandKind = SimpleStudyRuntimeCommandKind | StudyPhysicalStageCommandKind;
 
 function sessionRequestOptions(
   context: CommandContext,
@@ -311,7 +330,7 @@ function isApiAvailable(context: CommandContext): boolean {
   return Boolean(context.api);
 }
 
-function isStageControlCommandKind(kind: SimpleStudyRuntimeCommandKind): boolean {
+function isStageControlCommandKind(kind: RuntimeControlCommandKind): boolean {
   return (
     kind === "pause" ||
     kind === "resume" ||
@@ -323,10 +342,15 @@ function isStageControlCommandKind(kind: SimpleStudyRuntimeCommandKind): boolean
 
 function runtimeCommandDisabledReason(
   context: CommandContext,
-  kind: SimpleStudyRuntimeCommandKind,
+  kind: RuntimeControlCommandKind,
 ): string | null {
   const apiReason = disabledWithoutApi(context);
   if (apiReason) return apiReason;
+
+  if (isStudyCompute(kind)) {
+    const draftReason = studyComputeDraftBlockedReason(context);
+    if (draftReason) return draftReason;
+  }
 
   const queue = resourceData<CommandQueueStatusResource>(
     context,
@@ -338,7 +362,7 @@ function runtimeCommandDisabledReason(
   if (!state) return "Runtime state is unavailable.";
   const staleQueue = runtimeCommandQueueIsStale(context, queue, state);
   if (
-    kind === "solve" &&
+    (kind === "solve" || kind === "run" || kind === "relax") &&
     !staleQueue &&
     queue?.commands.some((command) =>
       ACTIVE_RUNTIME_COMMAND_STATUSES.has(command.status),
@@ -364,16 +388,20 @@ function runtimeCommandDisabledReason(
   // accepting commands. Honor only a fresh, explicit backend readiness entry;
   // this does not enable Solve or any other mutation. Keep the field-data
   // capability check because it describes whether the browser can consume it.
+  const sessionStatus = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY);
+  const execution = resourceData<StageExecutionResource>(context, SIMULATION_STAGES_EXECUTION_PATH);
+  const finishedRun = Boolean(execution?.run_id
+    && execution.run_id === sessionStatus?.run?.run_id
+    && TERMINAL_RUNTIME_STATES.has(execution.runtime_state));
   if (
     (kind === "compute_fields" || kind === "compute_energies") &&
-    TERMINAL_RUNTIME_STATES.has(state) &&
+    (TERMINAL_RUNTIME_STATES.has(state) ||
+      (finishedRun && (state === "awaiting_command" || state === "idle"))) &&
     state !== "closed" &&
     state !== "closing" &&
     backendControl?.enabled === true &&
     !staleQueue &&
-    (kind !== "compute_fields" ||
-      resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY)
-        ?.capabilities.binary_fields === true)
+    (kind !== "compute_fields" || sessionStatus?.capabilities.binary_fields === true)
   ) {
     return null;
   }
@@ -396,7 +424,7 @@ function runtimeCommandDisabledReason(
 
 function runtimeCommandStateDisabledReason(
   context: CommandContext,
-  kind: SimpleStudyRuntimeCommandKind,
+  kind: RuntimeControlCommandKind,
   state: string,
 ): string | null {
   switch (kind) {
@@ -420,6 +448,12 @@ function runtimeCommandStateDisabledReason(
       if (stage?.active_stage_index == null) {
         return "No active stage is available to skip.";
       }
+      if (hasStageCommandInput(context.input)) {
+        const target = commandInputStageId(context.input);
+        if (!target || activeStageId(stage) !== target) {
+          return "Only the clicked active stage can be skipped.";
+        }
+      }
       return state === "running" || state === "paused"
         ? null
         : "Runtime is not in an active stage.";
@@ -427,6 +461,8 @@ function runtimeCommandStateDisabledReason(
     case "compute_energies":
     case "compute_fields":
     case "solve":
+    case "run":
+    case "relax":
       if (state === "running" || state === "paused") {
         return "Runtime is already active.";
       }
@@ -435,7 +471,7 @@ function runtimeCommandStateDisabledReason(
 }
 
 function backendRuntimeControlReasonIsStateDerived(
-  kind: SimpleStudyRuntimeCommandKind,
+  kind: RuntimeControlCommandKind,
   reason: string,
 ): boolean {
   switch (kind) {
@@ -453,6 +489,8 @@ function backendRuntimeControlReasonIsStateDerived(
     case "compute_energies":
     case "compute_fields":
     case "solve":
+    case "run":
+    case "relax":
       return false;
     case "save_vtk":
       return reason === "Runtime is already active.";
@@ -516,7 +554,7 @@ function runtimeLifecycleRevision(context: CommandContext): number | null {
 
 function backendRuntimeControl(
   queue: CommandQueueStatusResource | null | undefined,
-  kind: SimpleStudyRuntimeCommandKind,
+  kind: RuntimeControlCommandKind,
 ): CommandQueueStatusResource["runtime_controls"][number] | null {
   return queue?.runtime_controls?.find((entry) => entry.kind === kind) ?? null;
 }
@@ -526,7 +564,7 @@ function runtimeReadinessDisabledReason(
   kind: Extract<
     SimpleStudyRuntimeCommandKind,
     "compute_energies" | "compute_fields" | "solve"
-  >,
+  > | StudyPhysicalStageCommandKind,
 ): string | null {
   const status = resourceData<LiveStatusResource>(
     context,
@@ -534,7 +572,8 @@ function runtimeReadinessDisabledReason(
   );
   if (!status) return "Session status is unavailable.";
 
-  if (kind === "solve") {
+  if (isStudyCompute(kind)) {
+    if (isMeshBuildRunning(context)) return "A mesh build is still running.";
     const readiness = resourceData<ModelReadinessResource>(
       context,
       MODEL_READINESS_PATH,
@@ -544,6 +583,10 @@ function runtimeReadinessDisabledReason(
     if (sceneRevision == null) return "No scene model is loaded.";
     if (readiness.scene_revision !== sceneRevision) {
       return "Model readiness is stale for the current scene.";
+    }
+    const displayedSceneRevision = sceneBaseRevision(resourceData<SceneResource>(context, MODEL_SCENE_PATH));
+    if (displayedSceneRevision !== null && displayedSceneRevision !== sceneRevision) {
+      return "The displayed Study changed. Wait for the current scene to refresh.";
     }
     return readiness.ready_to_run
       ? null
@@ -580,12 +623,29 @@ function runtimeReadinessDisabledReason(
     MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   );
   if (!manifest) return "Shared-domain mesh manifest is unavailable.";
-  if (manifest.source_scene_revision == null) {
+
+  const readiness = resourceData<ModelReadinessResource>(context, MODEL_READINESS_PATH);
+  if (
+    readiness?.scene_revision === sceneRevision &&
+    manifest.revision === status.resources.mesh_revision
+  ) {
+    const meshCheck = readiness.checks.find((check) => check.id === "discretization");
+    if (meshCheck) {
+      return meshCheck.state === "complete"
+        ? null
+        : meshCheck.reason ?? "Build a current shared-domain mesh before running.";
+    }
+  }
+
+  if (
+    manifest.source_scene_revision == null &&
+    manifest.validated_for_scene_revision == null
+  ) {
     return sharedDomainMeshReadyWithoutSceneProvenance(context)
       ? null
       : "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.";
   }
-  if (manifest.source_scene_revision !== sceneRevision) {
+  if (!resolveArtifactAssessment({ manifest, sceneRevision }).runAllowed) {
     return "Build a current shared-domain mesh before running. Open Mesh Jobs or Build Shared-Domain Mesh.";
   }
 
@@ -917,44 +977,11 @@ function commandRevisionPrecondition(
   return queue ? queue.commands.length : undefined;
 }
 
-function regionRevisionPrecondition(
-  context: CommandContext,
-): Pick<
-  RuntimeCommandPrecondition,
-  | "region_coefficients_revision"
-  | "region_initial_state_revision"
-  | "region_membership_revision"
-  | "region_topology_revision"
-> {
-  const status = resourceData<LiveStatusResource>(
-    context,
-    SESSION_STATUS_RESOURCE_KEY,
-  );
-  if (!status) return {};
-
-  const resources = status.resources;
-  const precondition: Pick<
-    RuntimeCommandPrecondition,
-    | "region_coefficients_revision"
-    | "region_initial_state_revision"
-    | "region_membership_revision"
-    | "region_topology_revision"
-  > = {};
-  if (typeof resources.region_coefficients_revision === "number") {
-    precondition.region_coefficients_revision =
-      resources.region_coefficients_revision;
-  }
-  if (typeof resources.region_initial_state_revision === "number") {
-    precondition.region_initial_state_revision =
-      resources.region_initial_state_revision;
-  }
-  if (typeof resources.region_membership_revision === "number") {
-    precondition.region_membership_revision = resources.region_membership_revision;
-  }
-  if (typeof resources.region_topology_revision === "number") {
-    precondition.region_topology_revision = resources.region_topology_revision;
-  }
-  return precondition;
+function activeStageId(stage: StageExecutionResource | null | undefined): string | null {
+  const index = stage?.active_stage_index;
+  if (index == null) return null;
+  return stage?.stages?.find((entry) => entry.index === index)?.stage_id
+    ?? stage?.stages?.[index]?.stage_id ?? null;
 }
 
 function activeStageTarget(
@@ -965,10 +992,9 @@ function activeStageTarget(
     SIMULATION_STAGES_EXECUTION_PATH,
   );
   const activeIndex = stage?.active_stage_index;
-  const activeStage =
-    activeIndex == null ? null : stage?.stages?.[activeIndex] ?? null;
-  if (activeStage?.stage_id) {
-    return { kind: "stage_id", stage_id: activeStage.stage_id };
+  const stageId = activeStageId(stage);
+  if (stageId) {
+    return { kind: "stage_id", stage_id: stageId };
   }
   if (activeIndex != null) {
     return { kind: "stage_index", stage_index: activeIndex };
@@ -978,7 +1004,7 @@ function activeStageTarget(
 
 function runtimeCommandPrecondition(
   context: CommandContext,
-  kind: SimpleStudyRuntimeCommandKind,
+  kind: RuntimeControlCommandKind,
   overrides: RuntimeCommandPrecondition = {},
 ): RuntimeCommandPrecondition | undefined {
   const stage = resourceData<StageExecutionResource>(
@@ -987,8 +1013,12 @@ function runtimeCommandPrecondition(
   );
   const state = runtimeState(context);
   const commandRevision = commandRevisionPrecondition(context);
+  const status = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY);
+  const computeInput = isStudyCompute(kind) && status
+    ? captureStudyComputeInput(status)
+    : regionRevisionPrecondition(status);
   const precondition: RuntimeCommandPrecondition = {
-    ...regionRevisionPrecondition(context),
+    ...computeInput,
     ...(state ? { runtime_state: state } : {}),
     ...(stage && isStageControlCommandKind(kind)
       ? { stage_execution_revision: stage.revision }
@@ -1579,23 +1609,36 @@ async function submitRuntimeCommand(
   }
 
   assertCurrentSessionScope(context);
-  const refreshedCommand = await refreshRuntimeCommandPrecondition(
-    context,
-    command,
-  );
+  const refresh = await refreshRuntimeCommandPrecondition(context, command);
   const obsoleteAfterRefresh = obsoleteSessionResult(context);
   if (obsoleteAfterRefresh) return obsoleteAfterRefresh;
+  if ("result" in refresh) return refresh.result;
+  const refreshedCommand = refresh.command;
+  if (isStudyCompute(refreshedCommand.kind)) {
+    const draftReason = studyComputeDraftBlockedReason(context);
+    if (draftReason) return { message: draftReason, status: "failed" };
+  }
   const requestOptions = sessionRequestOptions(context);
   const clientIntentId = nonEmptyString(refreshedCommand.client_intent_id);
+  const submission = clientIntentId && requestOptions?.sessionScopeKey && isStudyCompute(refreshedCommand.kind)
+    ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey }
+    : null;
+  if (submission) context.bus?.emit("study:compute-observation", { ...submission, state: "started" });
+
   let response: CommandResponse;
   try {
     response = await (requestOptions
       ? context.api.commands.submit(refreshedCommand, requestOptions)
       : context.api.commands.submit(refreshedCommand));
   } catch (error) {
+    const ambiguous = isAmbiguousRuntimeCommandSubmitError(error, refreshedCommand.kind);
+    const apiChanged = error instanceof ControlRoomApiError && error.code === "API_INSTANCE_MISMATCH";
     const obsoleteAfterSubmit = obsoleteSessionResult(context);
+    if (submission && !ambiguous && !apiChanged && !obsoleteAfterSubmit) {
+      context.bus?.emit("study:compute-observation", { ...submission, state: "rejected" });
+    }
     if (obsoleteAfterSubmit) return obsoleteAfterSubmit;
-    if (!isAmbiguousRuntimeCommandSubmitError(error)) throw error;
+    if (!ambiguous) throw error;
 
     const reconciliation = await reconcileRuntimeCommandSubmission(
       context,
@@ -1628,6 +1671,9 @@ async function submitRuntimeCommand(
       observation,
       status: "pending",
     };
+  }
+  if (submission && !response.accepted) {
+    context.bus?.emit("study:compute-observation", { ...submission, state: "rejected" });
   }
   const obsoleteAfterSubmit = obsoleteSessionResult(context);
   if (obsoleteAfterSubmit) return obsoleteAfterSubmit;
@@ -1717,9 +1763,16 @@ async function reconcileRuntimeCommandSubmission(
   return { commandId: detail.command_id, kind: "matched" };
 }
 
-function isAmbiguousRuntimeCommandSubmitError(error: unknown): boolean {
-  return error instanceof ControlRoomApiError &&
-    (error.code === "API_UNAVAILABLE" || error.status === 0);
+function isAmbiguousRuntimeCommandSubmitError(error: unknown, kind: string): boolean {
+  if (error instanceof Error && error.name === "AbortError") return isStudyCompute(kind);
+  if (!(error instanceof ControlRoomApiError)) return false;
+  if (error.code === "API_UNAVAILABLE" || error.status === 0) return true;
+  // Compute can be durable even when the API fails to publish its response.
+  // Preserve explicit pre-admission errors so the user can resolve them.
+  return isStudyCompute(kind) && error.status >= 500 && error.status < 600 &&
+    error.code !== "accepted_preparation_pending" &&
+    error.code !== "accepted_execution_store_unavailable" &&
+    error.code !== "accepted_held_supersession_pending";
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -1729,25 +1782,47 @@ function nonEmptyString(value: unknown): string | null {
 async function refreshRuntimeCommandPrecondition(
   context: CommandContext,
   command: StructuredCommandRequest,
-): Promise<StructuredCommandRequest> {
-  const commandWithPrecondition = command as RuntimeCommandWithPrecondition;
-  const original = commandWithPrecondition.precondition;
-  if (!original || !context.api) return command;
+): Promise<{ command: StructuredCommandRequest } | { result: CommandResult }> {
+  const original = (command as RuntimeCommandWithPrecondition).precondition;
+  if (!original || !context.api) return { command };
 
   const api = context.api as RuntimePreconditionRefreshApi;
   const requestOptions = sessionRequestOptions(context);
+  const pinsComputeInput = isStudyCompute(command.kind);
+  const readsStatus = pinsComputeInput ||
+    original.region_topology_revision !== undefined ||
+    original.region_membership_revision !== undefined ||
+    original.region_coefficients_revision !== undefined ||
+    original.region_initial_state_revision !== undefined;
   const [solverResult, stageResult, queueResult, sessionStatusResult] =
     await Promise.allSettled([
-    api.simulation?.solver?.status?.(requestOptions),
-    api.simulation?.stages?.execution?.(requestOptions),
-    api.commands?.list?.(requestOptions),
-    original.region_topology_revision === undefined &&
-    original.region_membership_revision === undefined &&
-    original.region_coefficients_revision === undefined &&
-    original.region_initial_state_revision === undefined
-      ? undefined
-      : api.sessions?.current?.status?.(requestOptions),
-  ]);
+      api.simulation?.solver?.status?.(requestOptions),
+      api.simulation?.stages?.execution?.(requestOptions),
+      api.commands?.list?.(requestOptions),
+      readsStatus ? api.sessions?.current?.status?.(requestOptions) : undefined,
+    ]);
+  const status = sessionStatusResult.status === "fulfilled" ? sessionStatusResult.value : undefined;
+  if (pinsComputeInput && context.sourceDetail === "build-and-study") {
+    const builtDomain = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY)
+      ?.resources.domain_generation_id;
+    if (!builtDomain || !status || status.resources.domain_generation_id !== builtDomain) {
+      return { result: {
+        message: "The built domain could not be confirmed immediately before Compute.",
+        status: "failed",
+      } };
+    }
+  }
+  // A fresh status can reject the requested model, but only availability can be refreshed.
+  if (pinsComputeInput && status) {
+    const changed = changedStudyComputeInput(original, status);
+    if (changed) {
+      return { result: {
+        message: `The ${changed} changed after you requested Compute. Review the current model and run again.`,
+        status: "failed",
+      } };
+    }
+  }
+
   const precondition: RuntimeCommandPrecondition = { ...original };
 
   if (solverResult.status === "fulfilled") {
@@ -1774,11 +1849,8 @@ async function refreshRuntimeCommandPrecondition(
       precondition.command_revision = commandRevision;
     }
   }
-  if (
-    sessionStatusResult.status === "fulfilled" &&
-    sessionStatusResult.value
-  ) {
-    const resources = sessionStatusResult.value.resources;
+  if (!pinsComputeInput && status) {
+    const resources = status.resources;
     if (typeof resources.region_topology_revision === "number") {
       precondition.region_topology_revision =
         resources.region_topology_revision;
@@ -1797,10 +1869,7 @@ async function refreshRuntimeCommandPrecondition(
     }
   }
 
-  return {
-    ...command,
-    precondition,
-  } as StructuredCommandRequest;
+  return { command: { ...command, precondition } };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -1906,11 +1975,15 @@ function selectedStageId(context: CommandContext): string | null {
   return typeof stageId === "string" && stageId.trim() ? stageId : null;
 }
 
+function hasStageCommandInput(input: unknown): input is { stageId: unknown } {
+  return Boolean(input && typeof input === "object" && "stageId" in input);
+}
+
 function commandInputStageId(input: unknown): string | null {
-  if (!input || typeof input !== "object" || !("stageId" in input)) {
+  if (!hasStageCommandInput(input)) {
     return null;
   }
-  const stageId = (input as { stageId?: unknown }).stageId;
+  const stageId = input.stageId;
   return typeof stageId === "string" && stageId.trim() ? stageId : null;
 }
 
@@ -2131,6 +2204,22 @@ function continueHysteresisToNextStageCommand(): CommandContribution {
   };
 }
 
+function stageRemovalDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control Room API is not available.";
+  const scene = resourceData<SceneResource>(context, MODEL_SCENE_PATH);
+  const editingReason = flatStageEditingReason(scene);
+  if (editingReason) return editingReason;
+  if (!hasStageCommandInput(context.input)) {
+    return selectedStageIndex(context) === null ? "Select a study stage to remove it." : null;
+  }
+  const stageId = commandInputStageId(context.input);
+  if (!stageId) return "The clicked stage has no stable authored ID.";
+  if (!scene) return "The committed Study is unavailable.";
+  return studyStages(scene).filter((stage) => stage.stage_id === stageId).length === 1
+    ? null
+    : "The clicked stage is missing or ambiguous in the committed Study.";
+}
+
 function removeSelectedStageCommand(): CommandContribution {
   return {
     id: "study.remove-selected-stage",
@@ -2138,33 +2227,21 @@ function removeSelectedStageCommand(): CommandContribution {
     category: "Study",
     group: "study-authoring",
     scope: "selection",
-    isEnabled: (context) =>
-      Boolean(context.api) && selectedStageIndex(context) !== null
-      && flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH)) === null,
-    disabledReason: (context) => {
-      if (!context.api) return "Control Room API is not available.";
-      const editingReason = flatStageEditingReason(resourceData<SceneResource>(context, MODEL_SCENE_PATH));
-      if (editingReason) return editingReason;
-      return selectedStageIndex(context) === null
-        ? "Select a study stage to remove it."
-        : null;
-    },
+    isEnabled: (context) => stageRemovalDisabledReason(context) === null,
+    disabledReason: stageRemovalDisabledReason,
     run: async (context) => {
-      if (!context.api) {
-        return { message: "Control-room API is unavailable.", status: "failed" };
-      }
-      const index = selectedStageIndex(context);
-      if (index === null) {
-        return { message: "Select a study stage to remove it.", status: "failed" };
-      }
-      const selectedId = selectedStageId(context);
+      const disabled = stageRemovalDisabledReason(context);
+      if (disabled) return { message: disabled, status: "failed" };
+      const hasClickedTarget = hasStageCommandInput(context.input);
+      const index = hasClickedTarget ? null : selectedStageIndex(context);
+      const selectedId = hasClickedTarget ? commandInputStageId(context.input) : selectedStageId(context);
       const obsoleteBeforeWrite = obsoleteSessionResult(context);
       if (obsoleteBeforeWrite) return obsoleteBeforeWrite;
       let selectionClearedByMutation = false;
 
       return runAuthoringMutationWithHistory<CommandResult>(
         context,
-        `Remove study stage ${selectedId ?? index + 1}`,
+        `Remove study stage ${selectedId ?? (index ?? 0) + 1}`,
         async (preparation) => {
           const scene =
             preparation.before ??
@@ -2181,9 +2258,12 @@ function removeSelectedStageCommand(): CommandContribution {
           const stages = studyStages(scene);
           const editingReason = flatStageEditingReason(scene);
           if (editingReason) return { message: editingReason, status: "failed" };
+          const matchingIndexes = selectedId
+            ? stages.flatMap((stage, stageIndex) => stage.stage_id === selectedId ? [stageIndex] : [])
+            : [];
           const targetIndex = selectedId
-            ? stages.findIndex((stage) => stage.stage_id === selectedId)
-            : index;
+            ? matchingIndexes.length === 1 ? matchingIndexes[0] : -1
+            : index ?? -1;
           const removedStage = stages[targetIndex];
           if (!removedStage) {
             return { message: "Selected study stage is no longer present.", status: "failed" };
@@ -2226,6 +2306,96 @@ function removeSelectedStageCommand(): CommandContribution {
   };
 }
 
+type AuthoredStageExecution =
+  | { reason: string }
+  | {
+      kind: StudyPhysicalStageCommandKind;
+      stageId: string;
+      sceneRevision: number;
+      meshRevision: number;
+      initialState: RuntimeStageInitialStateRequest;
+    };
+
+function resolveAuthoredStageExecution(context: CommandContext): AuthoredStageExecution {
+  const stageId = commandInputStageId(context.input);
+  if (!stageId) return { reason: "The clicked stage has no stable authored ID." };
+
+  const scene = resourceData<SceneResource>(context, MODEL_SCENE_PATH);
+  const status = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY);
+  const sceneRevision = sceneBaseRevision(scene);
+  const meshRevision = numericRevision(status?.resources.mesh_revision);
+  if (!scene || !status || sceneRevision === null || meshRevision === null) {
+    return { reason: "The committed Study and its mesh revision must be available." };
+  }
+  if (status.resources.scene_revision !== sceneRevision) {
+    return { reason: "The committed Study changed. Wait for the Explorer to refresh." };
+  }
+
+  const source = readStudyStageSource(record(scene).study);
+  if (source.error) return { reason: source.error };
+  const matches = source.entries.filter((entry) =>
+    (entry.queueId ?? entry.payload.stage_id) === stageId,
+  );
+  const entry = matches.length === 1 ? matches[0] : undefined;
+  if (!entry) return { reason: "The clicked stage is missing or ambiguous in the committed Study." };
+  if (!entry.enabled || entry.payload.enabled === false) {
+    return { reason: "Enable the authored stage before running it." };
+  }
+
+  const kind = entry.stageKind ?? entry.payload.kind;
+  if (kind !== "run" && kind !== "relax") {
+    return { reason: "Only authored Run and Relax stages can be executed individually." };
+  }
+  const reason = runtimeCommandDisabledReason(context, kind);
+  if (reason) return { reason };
+
+  const explicitChoice = record(context.input).initialState;
+  const pinned = explicitChoice === undefined && context.api
+    ? getStageInitialStateChoice(context.api, context.sessionScopeKey, stageId)
+    : undefined;
+  if (pinned && pinned.sceneRevision !== sceneRevision) {
+    return { reason: "The initial state choice belongs to an older scene. Review it in the stage Inspector." };
+  }
+  const initialState = stageInitialStateRequest(explicitChoice === undefined ? pinned?.choice : explicitChoice, stageId, sceneRevision);
+  if (!initialState) return { reason: "The stage initial state choice is invalid." };
+  if (initialState.kind === "authored_initial_state" && initialState.source.kind === "prepared") {
+    const current = preparedStageInitialStateChoice(
+      resourceData<ModelReadinessResource>(context, MODEL_READINESS_PATH), sceneRevision,
+    );
+    if (!matchesPreparedStageInitialState(initialState.source, current)) {
+      return { reason: "The prepared magnetization changed. Choose the current preview in the stage Inspector." };
+    }
+  }
+  return { kind, stageId, sceneRevision, meshRevision, initialState };
+}
+
+function executeAuthoredStageCommand(): CommandContribution {
+  return {
+    id: "study.execute-stage",
+    title: "Run This Stage",
+    category: "Study",
+    group: "study-runtime",
+    scope: "runtime",
+    isEnabled: (context) => !("reason" in resolveAuthoredStageExecution(context)),
+    disabledReason: (context) => {
+      const execution = resolveAuthoredStageExecution(context);
+      return "reason" in execution ? execution.reason : null;
+    },
+    run: async (context) => {
+      const execution = resolveAuthoredStageExecution(context);
+      if ("reason" in execution) return { message: execution.reason, status: "failed" };
+      const command = buildAuthoredStudyStageCommand(execution.kind, execution.stageId, {
+        initialState: execution.initialState,
+        precondition: runtimeCommandPrecondition(context, execution.kind, {
+          scene_revision: execution.sceneRevision,
+          mesh_revision: execution.meshRevision,
+        }),
+      });
+      return submitRuntimeCommand(context, command, "Stage compute command accepted.");
+    },
+  };
+}
+
 function runtimeCommand(
   id: string,
   title: string,
@@ -2243,10 +2413,24 @@ function runtimeCommand(
     isActive: (context) => isRuntimeCommandActive(context, kind),
     activeResource: (context) => activeRuntimeCommandResource(context, kind),
     run: async (context) => {
+      if (isStudyCompute(kind)) {
+        const draftReason = studyComputeDraftBlockedReason(context);
+        if (draftReason) return { message: draftReason, status: "failed" };
+      }
+      const stageId = kind === "skip" && hasStageCommandInput(context.input)
+        ? commandInputStageId(context.input)
+        : null;
+      if (kind === "skip" && hasStageCommandInput(context.input)) {
+        const reason = runtimeCommandDisabledReason(context, "skip");
+        if (reason) return { message: reason, status: "failed" };
+      }
       const status = resourceData<LiveStatusResource>(
         context,
         SESSION_STATUS_RESOURCE_KEY,
       );
+      const command = buildRuntimeCommandFromContext(context, kind, {
+        target: stageId ? { kind: "stage_id", stage_id: stageId } : undefined,
+      });
       if (
         status &&
         requiresExplicitMesh(status) &&
@@ -2261,11 +2445,7 @@ function runtimeCommand(
         if (preparation.kind === "rejected") return preparation.result;
       }
 
-      return submitRuntimeCommand(
-        context,
-        buildRuntimeCommandFromContext(context, kind),
-        successMessage,
-      );
+      return submitRuntimeCommand(context, command, successMessage);
     },
   };
 }
@@ -2501,6 +2681,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       };
     },
   },
+  executeAuthoredStageCommand(),
   runtimeCommand(
     "study.run",
     "Compute Study",

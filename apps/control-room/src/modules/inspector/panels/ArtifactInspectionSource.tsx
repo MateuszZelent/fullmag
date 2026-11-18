@@ -83,7 +83,7 @@ export function ArtifactInspectionSource({ source, universe = false }: {
     <p id={guidanceId} className="fm-inspection-source-guidance" role="status">{guidance}</p>
     {selected ? <InspectorGroup title="Result identity" collapsible defaultOpen={false}><FieldRow label="Source ID" value={selected.sourceObjectId} mono /><FieldRow label="Run ID" value={selected.runId} mono /><FieldRow label="Authored solve" value={selected.authoredStageId} mono /><FieldRow label="Runtime stage" value={selected.runtimeStageId} mono /><FieldRow label="Carrier scope" value={pin?.carrierScopeKind ? `${pin.carrierScopeKind}: ${pin.carrierScopeId ?? "full"}` : "Awaiting immutable carrier metadata"} mono /></InspectorGroup> : null}
     <Button size="sm" variant="secondary" onClick={() => layout.openSavedResults()}>Browse saved results</Button>
-    {universe ? <p role="status">Oersted H (A/m) uses the selected result’s saved sampling domain. Opening Universe does not establish full-volume coverage. Current density J belongs to the conductors. The saved mesh may differ from the current editable Universe.</p> : null}
+    {universe ? <p>Oersted H (A/m) uses the selected result’s saved sampling domain. Opening Universe does not establish full-volume coverage. Current density J belongs to the conductors. The saved mesh may differ from the current editable Universe.</p> : null}
     {failureReason ? <FeedbackBanner kind="error" message={failureReason} /> : null}
     {error ? <FeedbackBanner kind="warning" message={error} /> : null}
   </InspectorGroup>;

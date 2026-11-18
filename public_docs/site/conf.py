@@ -49,11 +49,33 @@ myst_enable_extensions = [
 myst_fence_as_directive = ["math"]
 myst_heading_anchors = 3
 
+numfig = True
+numfig_format = {
+    "figure": "Fig. %s",
+    "table": "Table %s",
+    "code-block": "Listing %s",
+    "section": "Section %s",
+}
+
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
 copybutton_prompt_is_regexp = True
 
 html_theme = "sphinx_clarity_theme"
 html_title = "FullMag public documentation"
+html_theme_options = {
+    "header_menu": [
+        {"content": "Getting started", "url": "getting-started/index"},
+        {"content": "Live Python", "url": "getting-started/interactive-python"},
+        {"content": "Control Room", "url": "frontend/index"},
+        {"content": "Python API", "url": "python-api/index"},
+        {
+            "content": "Acknowledgements",
+            "url": "acknowledgements/index",
+            "tooltip": "EU Horizon Europe MSCA Grant 101208951 (CNMA) & Scientific Heritage",
+        },
+        {"content": "Changelog", "url": "changelog/index"},
+    ],
+}
 html_static_path = ["_static"]
 html_extra_path = ["CNAME"]
 html_css_files = [

@@ -13,13 +13,11 @@ source_of_truth: "AdaptiveTimestep and LLG validation, ProblemIR lowering, and l
 # Adaptive Time-Stepping and History PI Controller
 
 (numerical-methods-time-integration-adaptive-stepping-problem-statement)=
-<!-- (problem-statement)= -->
 ## Scope and purpose
 
-This chapter specifies the canonical adaptive time-stepping contract (`0960`: `LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`) used by Fullmag's embedded Runge–Kutta integrators (`rk23` and `rk45`). It defines the active-node mixed error norm, the order-aware proportional–integral (PI) step-size controller with memory of the previous accepted error ratio, optional spin-rotation and norm-drift guards, first-step selection, stiffness diagnostics, and atomic rollback on step rejection across FEM and FDM CPU/GPU realizations.
+This chapter specifies the canonical adaptive time-stepping contract (`LLG-TD-POLICY-V1` through `LLG-TD-ATOMIC-V1`) used by Fullmag's embedded Runge–Kutta integrators (`rk23` and `rk45`). It defines the active-node mixed error norm, the order-aware proportional–integral (PI) step-size controller with memory of the previous accepted error ratio, optional spin-rotation and norm-drift guards, first-step selection, stiffness diagnostics, and atomic rollback on step rejection across FEM and FDM CPU/GPU realizations.
 
 (numerical-methods-time-integration-adaptive-stepping-governing-equations)=
-<!-- (governing-equations)= -->
 ## Scientific and numerical model
 
 For an embedded Runge–Kutta pair of error order $p$ ($p=2$ for Bogacki–Shampine `rk23`, $p=4$ for Dormand–Prince `rk45`), let $\mathbf{m}_i^{\mathrm{old}}$ denote the accepted state at the beginning of attempted step $k$, $\mathbf{m}_i^{\mathrm{high}}$ the high-order candidate state before final renormalization, and $e_i = \Delta t_k \sum_{s=1}^{S}(b_s^{\mathrm{hi}} - b_s^{\mathrm{lo}})\mathbf{k}_{s,i}$ the local embedded 3-vector error at active magnetic cell or node $i \in \mathcal{A}$ ($M_{s,i} > 0$).
@@ -60,7 +58,6 @@ s\,\eta_k^{-0.7/q}\,\eta_{k-1}^{0.4/q}, & \text{accepted step with prior accepte
 ```
 
 (numerical-methods-time-integration-adaptive-stepping-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ### Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -78,8 +75,7 @@ s\,\eta_k^{-0.7/q}\,\eta_{k-1}^{0.4/q}, & \text{accepted step with prior accepte
 | $\rho_{\mathrm{growth}}$ | upper step-ratio limit | $1$ |
 
 (numerical-methods-time-integration-adaptive-stepping-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
-### Canonical adaptive solver invariants (`0960`)
+### Canonical adaptive solver invariants
 
 - **First-step selection (`LLG-TD-FIRST-DT-V1`)**: When `dt_initial` is explicitly supplied, it must lie within $[\Delta t_{\min}, \Delta t_{\max}]$ and seeds attempt $k=0$ directly; otherwise the runtime derives a conservative initial step from the initial torque scale $\|\mathbf{f}(\mathbf{m}_0, t_0)\|_{\infty}$ clamped to $[\Delta t_{\min}, \Delta t_{\max}]$.
 - **Geometric and norm guards (`LLG-TD-MAX-ERR-V1`)**: When `max_spin_rotation` ($\theta_{\max}$, in radians) or `norm_tolerance` ($\varepsilon_{\mathrm{norm}}$) is set, the step is rejected if $\max_{i\in\mathcal{A}} \arccos(\mathbf{m}_i^{\mathrm{old}}\cdot\mathbf{m}_i^{\mathrm{new}}) > \theta_{\max}$ or $\max_{i\in\mathcal{A}} |\|\mathbf{m}_i^{\mathrm{high}}\|_2 - 1| > \varepsilon_{\mathrm{norm}}$, even if $\eta \le 1$.
@@ -87,9 +83,7 @@ s\,\eta_k^{-0.7/q}\,\eta_{k-1}^{0.4/q}, & \text{accepted step with prior accepte
 - **Underflow and stiffness diagnostics (`LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`)**: If $\eta > 1$ at $\Delta t = \Delta t_{\min}$, the solver fails closed with a typed `dt_min` underflow diagnostic rather than accepting an inaccurate step. Persistent step rejections near the exchange stability ceiling are tracked in step statistics.
 
 (numerical-methods-time-integration-adaptive-stepping-discrete-realization)=
-<!-- (discrete-realization)= -->
 (numerical-methods-time-integration-adaptive-stepping-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ### Discrete realization and backend support matrix
 
 | Solver | Device | Status | Realization notes |
@@ -115,7 +109,6 @@ s\,\eta_k^{-0.7/q}\,\eta_{k-1}^{0.4/q}, & \text{accepted step with prior accepte
 | `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | $1$ | positive when set | pre-normalization unit-length drift guard | RK23/RK45 lanes | `adaptive_timestep.norm_tolerance` |
 
 (numerical-methods-time-integration-adaptive-stepping-python-api)=
-<!-- (python-api)= -->
 ## Python API
 
 ```python
@@ -159,7 +152,6 @@ study.stages.add_time(name="adaptive_pulse", duration=0.2e-9, By=8e-3, save_m_ev
 ```
 
 (numerical-methods-time-integration-adaptive-stepping-problem-ir)=
-<!-- (problem-ir)= -->
 ### `ProblemIR` excerpt
 
 ```json
@@ -185,11 +177,8 @@ study.stages.add_time(name="adaptive_pulse", duration=0.2e-9, By=8e-3, save_m_ev
 - **Diagnostics Panel**: Displays real-time $\Delta t_k$, normalized error $\eta_k$, accepted/rejected step counts, and stiffness indicators.
 
 (numerical-methods-time-integration-adaptive-stepping-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 (numerical-methods-time-integration-adaptive-stepping-validation)=
-<!-- (validation)= -->
 (numerical-methods-time-integration-adaptive-stepping-limitations)=
-<!-- (limitations)= -->
 ## Diagnostics and failure semantics
 
 - **Requested intent and resolved execution**: `ProblemIR` records the full `AdaptiveTimestep` policy (`requested intent`), while runtime receipts record the resolved integrator, accepted/rejected attempt counts, and terminal $\Delta t$ (`resolved execution`).
@@ -197,14 +186,12 @@ study.stages.add_time(name="adaptive_pulse", duration=0.2e-9, By=8e-3, save_m_ev
 - **Unsupported combinations**: Attaching `AdaptiveTimestep` to fixed-step integrators (`heun`, `rk4`, `abm3`, `coupled_imex_ark2`) is rejected as an unsupported combination at both Python construction and Rust planning boundaries.
 
 (numerical-methods-time-integration-adaptive-stepping-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ### Scientific bibliography
 
 1. G. Söderlind, *Automatic control and adaptive time-stepping*, Numer. Algorithms **31**, 281–310 (2002).
 2. E. Hairer, S. P. Nørsett, and G. Wanner, *Solving Ordinary Differential Equations I: Nonstiff Problems*, 2nd ed., Springer (1993).
 
 (numerical-methods-time-integration-adaptive-stepping-source-code-index)=
-<!-- (source-code-index)= -->
 ## Where this is implemented
 
 | Layer | File | Symbol | Responsibility |

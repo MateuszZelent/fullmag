@@ -452,6 +452,7 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
         [1, 1, 1],
         [0.0, 0.0, 0.0],
         [1.0, 1.0, 1.0],
+        vec![true],
         "airbox-carrier".to_string(),
         17,
         19,
@@ -476,6 +477,50 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
     )
     .unwrap_err();
     assert!(error.message.contains("airbox"));
+}
+
+#[test]
+fn multilayer_airbox_planar_sampler_excludes_magnetic_cells() {
+    let field = ResolvedSpatialField::from_airbox(
+        "H_demag",
+        "H_demag",
+        "A/m",
+        3,
+        vec![100.0, 0.0, 0.0, 0.0, 3.0, 4.0],
+        [2, 1, 1],
+        [0.0; 3],
+        [1.0; 3],
+        vec![false, true],
+        "airbox-carrier".to_string(),
+        17,
+        19,
+        23,
+        SpatialFieldSourceKind::Persisted,
+    )
+    .unwrap();
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Airbox { scope_id: None },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    let mut request = request(
+        explicit_frame(
+            [0.0, 0.0, 0.5],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 2.0, 0.0, 1.0],
+        ),
+        PlanarOperatorIR::PlaneSample,
+        [2, 1],
+    );
+    request.component = PlanarComponent::Magnitude;
+    let sample = sample_resolved_target(&target, &request).unwrap();
+    assert!(sample.scalar_values[0].is_nan());
+    assert_eq!(sample.scalar_values[1], 5.0);
 }
 
 #[test]
@@ -507,6 +552,7 @@ fn fdm_airbox_carrier_has_no_implicit_magnetic_extent() {
         [1, 1, 1],
         [0.0, 0.0, 0.0],
         [1.0, 1.0, 1.0],
+        vec![true],
         "airbox-carrier".to_string(),
         17,
         19,
@@ -702,6 +748,7 @@ fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity
                     [0.0, 0.0, 1.0],
                     [0.0, 1.0, 0.0, 1.0],
                 ),
+                window_uv_m: None,
                 operator: PlanarOperatorIR::SlabAverage { thickness_m },
                 resolution,
                 quality: quality.to_string(),
@@ -930,4 +977,87 @@ fn fem_region_scope_selects_region_elements_and_rejects_unknown_regions() {
         &PlanarOperatorIR::PlaneSample,
     );
     assert!(missing.is_err());
+}
+
+#[test]
+fn fdm_object_scope_intersects_source_and_excludes_neighbour_objects() {
+    let field = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
+    let target = resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample).unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    let disjoint = resolve_spatial_target(&field, &MonitorTargetIR::Object { object_id: "left".into() },
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample);
+    assert!(disjoint.is_err());
+}
+
+#[test]
+fn fem_object_scope_selects_only_the_canonical_object() {
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, vec![1.0; 24]);
+    let target = resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample).unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    assert!(resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "absent".into() }, &PlanarOperatorIR::PlaneSample).is_err());
+}
+
+/// Node `i` carries `[i, 10 i, 100 i]`, so nodal and interpolated values differ.
+fn distinct_nodal_fem_target() -> super::ResolvedSpatialTarget {
+    let values = (0..8)
+        .flat_map(|node| {
+            let node = f64::from(node);
+            [node, 10.0 * node, 100.0 * node]
+        })
+        .collect::<Vec<_>>();
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, values);
+    resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap()
+}
+
+#[test]
+fn fem_nearest_node_picks_closest_vertex_of_containing_element() {
+    let target = distinct_nodal_fem_target();
+    // Inside element 0 (nodes 0..=3), closest to node 2 at (0, 1, 0).
+    let point = [0.1, 0.6, 0.1];
+    let (element, interpolated) = target.evaluate_point(point).expect("point is inside");
+    assert_eq!(element, 0);
+    let node = target.nearest_node(point, element).expect("nearest node");
+    assert_eq!(node.kind, "fem_node");
+    assert_eq!(node.node_id, 2);
+    assert_eq!(node.world_m, [0.0, 1.0, 0.0]);
+    assert_eq!(node.values, vec![2.0, 20.0, 200.0]);
+    assert_ne!(node.values, interpolated, "nodal value is not interpolated");
+}
+
+#[test]
+fn fem_nearest_node_tie_prefers_lower_index() {
+    let target = distinct_nodal_fem_target();
+    // Midpoint of the edge between nodes 0 and 1: equidistant from both.
+    let node = target.nearest_node([0.5, 0.0, 0.0], 0).expect("nearest node");
+    assert_eq!(node.node_id, 0);
+    assert_eq!(node.values, vec![0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn fdm_nearest_node_is_cell_centre() {
+    let field = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    let point = [1.3, 0.2, 0.7];
+    let (cell, _) = target.evaluate_point(point).expect("point is inside");
+    assert_eq!(cell, 1);
+    let node = target.nearest_node(point, cell).expect("cell centre");
+    assert_eq!(node.kind, "fdm_cell_center");
+    assert_eq!(node.node_id, 1);
+    assert_eq!(node.world_m, [1.5, 0.5, 0.5]);
+    assert_eq!(node.values, vec![9.0]);
 }

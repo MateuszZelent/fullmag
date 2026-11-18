@@ -78,6 +78,7 @@ stage-autosave-hdf5 = ["fullmag-runner/stage-autosave-hdf5"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 
 [dependencies]
+rusqlite = "0.37"
 anyhow.workspace = true
 async-stream = "0.3"
 axum.workspace = true
@@ -120,5 +121,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-rusqlite = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }

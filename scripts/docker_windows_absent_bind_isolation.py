@@ -226,20 +226,23 @@ def validate_absent_stopped_windows_bind_proof(proof, *, source, container_id):
     return proof
 
 
-def prove_absent_stopped_windows_bind(control, backend, container, source, reference_root):
+def prove_absent_stopped_windows_bind(control, backend, container, source, reference_root, *, prepared_reference=None):
+    from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+
     windows._windows_source_path(source)
-    first_backend, first_foreign = windows._inspect(backend["Id"]), windows._inspect(container["Id"])
+    inspect_backend = _recovery_backend_inspector(control, windows._inspect, prepared_reference)
+    first_backend, first_foreign = inspect_backend(backend["Id"]), windows._inspect(container["Id"])
     windows.require(windows._container_pin(first_backend) == windows._container_pin(backend)
                     and windows._container_pin(first_foreign) == windows._container_pin(container),
                     "Consumer changed before absent-bind proof")
     context = windows._context(control, first_backend, first_foreign, source, reference_root)
     before = _observe(context, first_backend, first_foreign, source)
-    next_backend, next_foreign = windows._inspect(backend["Id"]), windows._inspect(container["Id"])
+    next_backend, next_foreign = inspect_backend(backend["Id"]), windows._inspect(container["Id"])
     windows.require(windows._context(control, next_backend, next_foreign, source, reference_root) == context,
                     "Absent-bind registered context changed")
     after = _observe(context, next_backend, next_foreign, source)
     windows.require(before == after, "Absent bind/container/topology changed during observation")
-    final_backend, final_foreign = windows._inspect(backend["Id"]), windows._inspect(container["Id"])
+    final_backend, final_foreign = inspect_backend(backend["Id"]), windows._inspect(container["Id"])
     windows.require(windows._container_pin(final_backend) == after["backend"]
                     and windows._container_pin(final_foreign) == after["foreign"]
                     and windows._engine() == after["engine"], "Consumer/engine changed after absence observation")
@@ -247,6 +250,5 @@ def prove_absent_stopped_windows_bind(control, backend, container, source, refer
              "source_sha256": windows._sha(source.encode("utf-8")), "context": context,
              "provider_sha256": windows._sha(PROVIDER.encode("utf-8")), "before": before, "after": after}
     validate_absent_stopped_windows_bind_proof(proof, source=source, container_id=container["Id"])
-    from docker_bind_overlap_probe import _archive_foreign_proof
-    _archive_foreign_proof(control, proof)
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
     return proof

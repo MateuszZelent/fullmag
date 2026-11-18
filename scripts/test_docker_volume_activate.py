@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import docker_volume_activate as activate
+import docker_volume_dev
 from docker_build_control import BuildControlError
 
 
@@ -90,6 +91,87 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(main_helper.prepare(), "main-helper")
         self.assertEqual(helper.prepare(), "selected-helper")
         self.assertEqual(hashes["docker_startup_script.py"], startup_digest)
+
+    def test_legacy_startup_helper_prepare_keeps_its_original_call_signature(self) -> None:
+        calls = []
+
+        def prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script, request_id, source_commit))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=prepare)
+        result = activate._prepare_startup_authorization(
+            helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-1", source_commit="a" * 40, solver_profile=False,
+        )
+        self.assertEqual(result, "legacy-authorization")
+        self.assertEqual(calls, [(Path("/checkout"), Path("examples/model.py"), "request-1", "a" * 40)])
+
+    def test_profile_opt_in_rejects_old_pinned_helper_before_retirement(self) -> None:
+        calls = []
+
+        def old_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=old_prepare, solver_profile_sha256=lambda _value: "b" * 64)
+        with self.assertRaisesRegex(BuildControlError, "cannot accept solver profile"):
+            activate._require_solver_profile_support(helper)
+        self.assertEqual(calls, [])
+
+        source = Path(__file__).with_name("docker_volume_activate.py").read_text(encoding="utf-8")
+        support_check = source.index(
+            "profile_digest = _require_solver_profile_support(startup_helper) if solver_profile else None"
+        )
+        retirement = source.index("retained_retirement = _retained_retirement_context(")
+        self.assertLess(support_check, retirement)
+
+    def test_cuda_trace_opt_in_requires_a_pinned_helper_before_retirement(self) -> None:
+        calls = []
+
+        def old_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=old_prepare, cuda_trace_sha256=lambda _value: "b" * 64)
+        with self.assertRaisesRegex(BuildControlError, "cannot accept cuda trace"):
+            activate._require_cuda_trace_support(helper)
+        self.assertEqual(calls, [])
+
+    def test_cuda_trace_startup_prepare_is_optional_and_keeps_legacy_call_shape(self) -> None:
+        calls = []
+
+        def legacy_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script, request_id, source_commit))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=legacy_prepare)
+        result = activate._prepare_startup_authorization(
+            helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-1", source_commit="a" * 40,
+            solver_profile=False, cuda_trace=False,
+        )
+        self.assertEqual(result, "legacy-authorization")
+        self.assertEqual(calls, [(
+            Path("/checkout"), Path("examples/model.py"), "request-1", "a" * 40,
+        )])
+
+        def trace_prepare(source, script, *, request_id, source_commit, cuda_trace=False):
+            calls.append((source, script, request_id, source_commit, cuda_trace))
+            return "traced-authorization"
+
+        digest = lambda value: "c" * 64
+        traced_helper = SimpleNamespace(prepare=trace_prepare, cuda_trace_sha256=digest)
+        self.assertIs(activate._require_cuda_trace_support(traced_helper), digest)
+        traced = activate._prepare_startup_authorization(
+            traced_helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-2", source_commit="a" * 40,
+            solver_profile=False, cuda_trace=True,
+        )
+        self.assertEqual(traced, "traced-authorization")
+        self.assertEqual(calls[-1], (
+            Path("/checkout"), Path("examples/model.py"), "request-2", "a" * 40, True,
+        ))
 
     def test_activation_contract_comes_from_selected_helper(self) -> None:
         helper = SimpleNamespace(
@@ -182,6 +264,80 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(inputs["development_attempt"], "d" * 32)
         self.assertNotIn("attempt", inputs)
 
+    def test_activation_inputs_bind_the_optional_solver_profile_digest(self) -> None:
+        base = {
+            "development_attempt": "d" * 32,
+            "config_sha256": "c" * 64,
+            "source_root": "C:/git/fullmag",
+            "image": "sha256:" + "a" * 64,
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": "request-1",
+            "provenance_sha256": "e" * 64,
+            "backend_container": "f" * 64,
+            "activation_receipt_key": "1" * 64,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-"
+                + "1" * 64
+                + "/activation.json"
+            ),
+        }
+        legacy = activate._activation_operation_inputs(**base)
+        profiled = activate._activation_operation_inputs(
+            **base, solver_profile_sha256="2" * 64
+        )
+        self.assertNotIn("solver_profile_sha256", legacy)
+        self.assertEqual(profiled["solver_profile_sha256"], "2" * 64)
+        self.assertNotEqual(legacy, profiled)
+
+    def test_activation_inputs_bind_optional_cuda_trace_digest_without_changing_disabled_shape(self) -> None:
+        base = {
+            "development_attempt": "d" * 32,
+            "config_sha256": "c" * 64,
+            "source_root": "C:/git/fullmag",
+            "image": "sha256:" + "a" * 64,
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": "request-1",
+            "provenance_sha256": "e" * 64,
+            "backend_container": "f" * 64,
+            "activation_receipt_key": "1" * 64,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-" + "1" * 64 + "/activation.json"
+            ),
+        }
+        legacy = activate._activation_operation_inputs(**base)
+        traced = activate._activation_operation_inputs(**base, cuda_trace_sha256="2" * 64)
+        self.assertNotIn("cuda_trace_sha256", legacy)
+        self.assertEqual(traced["cuda_trace_sha256"], "2" * 64)
+        self.assertNotEqual(legacy, traced)
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._activation_operation_inputs(**base, cuda_trace_sha256="invalid")
+
+    def test_retained_activation_input_bindings_keep_the_cuda_trace_request_pin(self) -> None:
+        operation_id = "a" * 32
+        request_id = "request-trace"
+        receipt_key = hashlib.sha256(request_id.encode()).hexdigest()
+        inputs = {
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": request_id,
+            "provenance_sha256": "c" * 64,
+            "activation_receipt_key": receipt_key,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-" + receipt_key + "/activation.json"
+            ),
+            "cuda_trace_sha256": "d" * 64,
+        }
+        bindings = activate._validate_activation_input_bindings(
+            inputs, operation_id=operation_id,
+        )
+        self.assertEqual(bindings["cuda_trace_sha256"], "d" * 64)
+
+        inputs["cuda_trace_sha256"] = "invalid"
+        with self.assertRaisesRegex(BuildControlError, "cuda trace"):
+            activate._validate_activation_input_bindings(inputs, operation_id=operation_id)
+
     def test_rejected_activation_is_terminal_failure_with_own_attempt(self) -> None:
         operation = {
             "daemon_pending": True,
@@ -220,6 +376,90 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(operation["receipt"]["state"], "succeeded")
         self.assertEqual(operation["receipt"]["activation_state"], "activated")
         self.assertEqual(operation["receipt"]["session_id"], "session-1")
+
+    def test_profiled_activation_requires_the_accepted_profile_digest(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {
+                "attempt": "a" * 32,
+                "inputs": {"solver_profile_sha256": "2" * 64},
+            },
+        }
+        with self.assertRaisesRegex(BuildControlError, "solver profile digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {"session_id": "session-1", "run_id": "run-1"}},
+            )
+        self.assertTrue(operation["daemon_pending"])
+        self.assertNotIn("state", operation["receipt"])
+
+        activate._record_activation_result(
+            operation,
+            {"state": "activated", "response": {
+                "session_id": "session-1", "run_id": "run-1",
+                "solver_profile_sha256": "2" * 64,
+            }},
+        )
+        self.assertFalse(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["state"], "succeeded")
+
+    def test_cuda_traced_activation_requires_exact_response_digest_and_disabled_absence(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {"attempt": "a" * 32, "inputs": {"cuda_trace_sha256": "2" * 64}},
+        }
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {"session_id": "s", "run_id": "r"}},
+            )
+        self.assertTrue(operation["daemon_pending"])
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {
+                    "session_id": "s", "run_id": "r", "cuda_trace_sha256": "3" * 64,
+                }},
+            )
+        self.assertTrue(operation["daemon_pending"])
+
+        disabled = {"daemon_pending": True, "receipt": {"attempt": "b" * 32, "inputs": {}}}
+        with self.assertRaisesRegex(BuildControlError, "unsolicited cuda trace digest"):
+            activate._record_activation_result(
+                disabled,
+                {"state": "activated", "response": {
+                    "session_id": "s", "run_id": "r", "cuda_trace_sha256": "2" * 64,
+                }},
+            )
+        self.assertTrue(disabled["daemon_pending"])
+
+        activate._record_activation_result(
+            operation,
+            {"state": "activated", "response": {
+                "session_id": "s", "run_id": "r", "cuda_trace_sha256": "2" * 64,
+            }},
+        )
+        self.assertEqual(operation["receipt"]["state"], "succeeded")
+
+    def test_profiled_rejection_is_retained_without_acceptance_digest(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {
+                "attempt": "a" * 32,
+                "inputs": {"solver_profile_sha256": "2" * 64},
+            },
+        }
+        with self.assertRaisesRegex(BuildControlError, "activation was rejected"):
+            activate._record_activation_result(
+                operation,
+                {"state": "rejected", "rejection": {
+                    "http_status": 422,
+                    "code": "accepted_solver_profile_unsupported",
+                    "message": "profile unsupported for this study",
+                }},
+            )
+        self.assertFalse(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["state"], "failed-confirmed")
 
     def _linked_receipt_fixture(self, phase: str = "resume"):
         original_attempt = "a" * 32
@@ -286,7 +526,13 @@ class DockerVolumeActivationTests(unittest.TestCase):
 
         return Control(), original_attempt, original, linked, config_sha256, backend_image, documents
 
-    def _retained_group_fixture(self, frontend_image: str | None = None):
+    def _retained_group_fixture(
+        self,
+        frontend_image: str | None = None,
+        *,
+        frontend_running: bool = True,
+        ui_mode: str | None = None,
+    ):
         backend_image = "sha256:" + "a" * 64
         frontend_image = frontend_image or "sha256:" + "b" * 64
         backend_id = "c" * 64
@@ -309,6 +555,7 @@ class DockerVolumeActivationTests(unittest.TestCase):
                     "image": frontend_image,
                     "environment": {},
                     "volumes": [],
+                    "ports": ["127.0.0.1:3197:8080"],
                 },
             },
         }
@@ -316,6 +563,14 @@ class DockerVolumeActivationTests(unittest.TestCase):
             "backend_container": backend_id,
             "frontend_container": frontend_id,
         }
+        if ui_mode is not None:
+            terminal.update(
+                ui_mode=ui_mode,
+                finished_at=1.0,
+                backend_started_at="2026-11-04T00:00:00Z",
+                frontend_started_at=("2026-11-04T00:00:00Z" if frontend_running
+                                     else "0001-01-01T00:00:00Z"),
+            )
         control = SimpleNamespace(project=document["name"])
         identity = {"worktree_id": "demo-worktree"}
         actual_images = {"backend": backend_image, "frontend": frontend_image}
@@ -343,10 +598,16 @@ class DockerVolumeActivationTests(unittest.TestCase):
                             "org.fullmag.source.worktree-id": identity["worktree_id"],
                         },
                     },
-                    "State": {
+                    "State": ({
                         "Running": True,
+                        "StartedAt": ("2026-11-04T00:00:00Z" if service == "backend"
+                                       else "2026-11-04T00:00:00Z"),
                         "Health": {"Status": "healthy"},
-                    },
+                    } if service == "backend" or frontend_running else {
+                        "Running": False,
+                        "Status": "created",
+                        "StartedAt": "0001-01-01T00:00:00Z",
+                    }),
                 }])
             raise AssertionError(arguments)
 
@@ -457,6 +718,182 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(validator.call_args_list[0].args[3]["Cmd"], ["backend-image"])
         self.assertEqual(validator.call_args_list[1].args[2], "frontend")
         self.assertEqual(validator.call_args_list[1].args[3]["Cmd"], ["frontend-image"])
+
+    def test_headless_retained_group_requires_explicit_mode_and_stopped_frontend(self) -> None:
+        fixture = self._retained_group_fixture(frontend_running=False, ui_mode="headless")
+        control, identity, document, terminal, backend_image, compose, docker_text = fixture
+        with patch.object(activate, "compose_capture", side_effect=compose), \
+                patch.object(activate, "_docker_text", side_effect=docker_text), \
+                patch("docker_volume_dev._validate_retained_service"), \
+                patch("docker_dev_defaults._validate_live_network") as network:
+            result = activate._validate_running_group(
+                control, identity, document, terminal, backend_image,
+                frontend_required=False,
+            )
+        self.assertEqual(result, ("c" * 64, "d" * 64))
+        self.assertFalse(network.call_args.kwargs["frontend_required"])
+
+    def test_finish_readiness_accepts_stopped_frontend_only_for_headless(self) -> None:
+        document = {"services": {
+            "backend": {"image": "backend-image"},
+            "frontend": {"image": "frontend-image"},
+        }}
+        backend = {"Image": "backend-image", "State": {
+            "Running": True, "StartedAt": "backend-start",
+            "Health": {"Status": "healthy"},
+        }}
+        frontend = {"Image": "frontend-image", "State": {
+            "Running": False, "Status": "created", "StartedAt": "frontend-not-started",
+        }}
+        with patch.object(docker_volume_dev, "_validate_retained_service"):
+            self.assertTrue(docker_volume_dev._service_readiness_satisfied(
+                document, backend, "backend", {}, expected_image="backend-image",
+                expected_started_at="backend-start", headless=True,
+            ))
+            self.assertTrue(docker_volume_dev._service_readiness_satisfied(
+                document, frontend, "frontend", {}, expected_image="frontend-image",
+                expected_started_at="frontend-not-started", headless=True,
+            ))
+            with self.assertRaisesRegex(BuildControlError, "exited before readiness"):
+                docker_volume_dev._service_readiness_satisfied(
+                    document, frontend, "frontend", {}, expected_image="frontend-image",
+                    expected_started_at="frontend-not-started", headless=False,
+                )
+            backend["State"]["Health"]["Status"] = "starting"
+            self.assertFalse(docker_volume_dev._service_readiness_satisfied(
+                document, backend, "backend", {}, expected_image="backend-image",
+                expected_started_at="backend-start", headless=True,
+            ))
+
+    def test_headless_retained_group_rejects_a_gui_receipt_or_running_frontend(self) -> None:
+        fixtures = (
+            ("GUI receipt", self._retained_group_fixture(frontend_running=False, ui_mode="gui")),
+            ("running frontend", self._retained_group_fixture(frontend_running=True, ui_mode="headless")),
+            ("legacy receipt", self._retained_group_fixture(frontend_running=False)),
+        )
+        for label, fixture in fixtures:
+            with self.subTest(case=label):
+                control, identity, document, terminal, backend_image, compose, docker_text = fixture
+                with patch.object(activate, "compose_capture", side_effect=compose), \
+                        patch.object(activate, "_docker_text", side_effect=docker_text), \
+                        patch("docker_volume_dev._validate_retained_service"), \
+                        patch("docker_dev_defaults._validate_live_network"):
+                    with self.assertRaises(BuildControlError):
+                        activate._validate_running_group(
+                            control, identity, document, terminal, backend_image,
+                            frontend_required=False,
+                        )
+
+    def test_headless_group_rejects_failed_or_restarted_frontend(self) -> None:
+        base = self._retained_group_fixture(frontend_running=False, ui_mode="headless")
+        control, identity, document, terminal, backend_image, compose, original_text = base
+        frontend_id = terminal["frontend_container"]
+        bad_states = (
+            {"Running": False, "Status": "exited", "ExitCode": 137, "OOMKilled": False,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0, "OOMKilled": True,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0,
+             "StartedAt": terminal["frontend_started_at"]},
+            {"Running": False, "Status": "exited", "ExitCode": 0, "OOMKilled": False,
+             "StartedAt": "2026-11-04T00:00:01Z"},
+        )
+        for bad_state in bad_states:
+            with self.subTest(state=bad_state):
+                def docker_text(*arguments, **kwargs):
+                    records = json.loads(original_text(*arguments, **kwargs))
+                    if arguments[:2] == ("inspect", frontend_id):
+                        records[0]["State"].update(bad_state)
+                    return json.dumps(records)
+
+                with patch.object(activate, "compose_capture", side_effect=compose), \
+                        patch.object(activate, "_docker_text", side_effect=docker_text), \
+                        patch("docker_volume_dev._validate_retained_service"), \
+                        patch("docker_dev_defaults._validate_live_network"):
+                    with self.assertRaises(BuildControlError):
+                        activate._validate_running_group(
+                            control, identity, document, terminal, backend_image,
+                            frontend_required=False,
+                        )
+
+    def test_mode_aware_runtime_selection_uses_latest_mode_and_current_source(self) -> None:
+        control, original_attempt, original, headless, config_sha256, image, documents = (
+            self._linked_receipt_fixture("resume")
+        )
+        original.update(state="succeeded", ui_mode="gui", finished_at=10.0)
+        headless.update(
+            ui_mode="headless", finished_at=20.0,
+            backend_started_at="backend-start-2", frontend_started_at="frontend-start-1",
+        )
+        headless["inputs"].update(
+            source_root=original["inputs"]["source_root"], image_id=image,
+        )
+        headless.update(
+            source_commit="3" * 40, source_digest="4" * 64,
+            source_snapshot_sha256="5" * 64, backend_build_receipt_sha256="6" * 64,
+        )
+        documents["resume/verified.json"] = copy.deepcopy(headless)
+        documents["resume/attempts/" + headless["attempt"] + "/terminal.json"] = copy.deepcopy(headless)
+        self.assertEqual(
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            ),
+            [headless],
+        )
+
+        gui = copy.deepcopy(headless)
+        gui.update(phase="iteration", attempt="7" * 32, ui_mode="gui", finished_at=30.0)
+        gui["inputs"].update(attempt=original_attempt, config_sha256=config_sha256)
+        gui.update(
+            source_commit="8" * 40, source_digest="9" * 64,
+            source_snapshot_sha256="a" * 64, backend_build_receipt_sha256="b" * 64,
+        )
+        documents["iteration/verified.json"] = copy.deepcopy(gui)
+        documents["iteration/attempts/" + gui["attempt"] + "/terminal.json"] = copy.deepcopy(gui)
+        self.assertEqual(
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            ),
+            [gui],
+        )
+
+    def test_mode_aware_runtime_selection_rejects_nonfinite_or_ambiguous_time(self) -> None:
+        control, original_attempt, original, linked, config_sha256, image, documents = (
+            self._linked_receipt_fixture("resume")
+        )
+        original.update(state="succeeded", ui_mode="gui", finished_at=10.0)
+        linked.update(
+            ui_mode="headless", finished_at=float("nan"),
+            backend_started_at="backend-start-2", frontend_started_at="frontend-start-1",
+        )
+        linked["inputs"].update(source_root=original["inputs"]["source_root"], image_id=image)
+        documents["resume/verified.json"] = copy.deepcopy(linked)
+        documents["resume/attempts/" + linked["attempt"] + "/terminal.json"] = copy.deepcopy(linked)
+        with self.assertRaises(BuildControlError):
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            )
+
+        linked["finished_at"] = 20.0
+        documents["resume/verified.json"] = copy.deepcopy(linked)
+        documents["resume/attempts/" + linked["attempt"] + "/terminal.json"] = copy.deepcopy(linked)
+        gui = copy.deepcopy(linked)
+        gui.update(phase="iteration", attempt="7" * 32, ui_mode="gui")
+        gui["inputs"].update(attempt=original_attempt, config_sha256=config_sha256)
+        documents["iteration/verified.json"] = copy.deepcopy(gui)
+        documents["iteration/attempts/" + gui["attempt"] + "/terminal.json"] = copy.deepcopy(gui)
+        with self.assertRaisesRegex(BuildControlError, "Conflicting"):
+            activate._linked_runtime_terminals(
+                control, original_attempt, original,
+                source_root=original["inputs"]["source_root"], image=image,
+                config_sha256=config_sha256,
+            )
 
     def test_retained_group_accepts_docker_desktop_host_mount_spelling(self) -> None:
         fixture = self._retained_group_fixture()

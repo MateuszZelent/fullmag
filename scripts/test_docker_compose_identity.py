@@ -45,6 +45,30 @@ class ComposeProjectIdentityTests(unittest.TestCase):
         self.assertEqual(identity.source_labels(result)["org.fullmag.source.worktree-id"],
                          "worktree-abc.def-1234")
 
+    def test_generated_leading_underscore_worktree_is_preserved_in_source_labels(self):
+        source_root = "/checkout/worktrees/_codex_ci_fix"
+        worktree_id = storage.identifier(source_root)
+        self.assertRegex(worktree_id, r"^_codex_ci_fix-[0-9a-f]{16}$")
+        layout = self._layout(source_root, worktree_id)
+        with patch.object(storage, "worktree_records",
+                          return_value=[{"worktree": "/checkout/fullmag"},
+                                        {"worktree": source_root}]):
+            result = identity.compose_project_identity(layout)
+
+        labels = identity.source_labels(result)
+        self.assertEqual(result["worktree_id"], worktree_id)
+        self.assertEqual(labels["org.fullmag.source.worktree-id"], worktree_id)
+        self.assertEqual(result["project_name"], "fullmag-worktree-" + worktree_id)
+
+    def test_project_id_and_compose_project_names_still_reject_leading_underscore(self):
+        with self.assertRaisesRegex(ValueError, "resolver project id"):
+            identity.compose_project_identity({
+                **self._layout("/checkout/worktrees/feature-a"),
+                "env": {"FULLMAG_PROJECT_ID": "_fullmag-project"},
+            })
+        with self.assertRaisesRegex(ValueError, "Compose project name"):
+            identity.compose_network_name("_codex_ci_fix")
+
     def test_long_worktree_identity_keeps_readable_project_and_safe_network(self):
         worktree_id = "docker-all-windows-20261014-" + "a" * 16
         layout = self._layout("/checkout/worktrees/feature-a", worktree_id)
@@ -419,6 +443,75 @@ class ComposeProjectIdentityTests(unittest.TestCase):
             # Managed cache volumes are external; the isolated bridge is not.
             networks = text.split("\nnetworks:\n", 1)[1].split("\nvolumes:\n", 1)[0]
             self.assertNotIn("external: true", networks)
+
+
+class SourceOnlyComposeIdentityTests(unittest.TestCase):
+    def _git_checkout_fixture(self, root: Path):
+        main = root / "main-checkout"
+        worktree = root / "worktrees" / "feature"
+        (worktree / "scripts").mkdir(parents=True)
+        main.mkdir()
+        records = [{"worktree": str(main)}, {"worktree": str(worktree)}]
+
+        def git(cwd, *args):
+            if args == ("rev-parse", "--show-toplevel"):
+                return str(worktree)
+            if args == ("rev-parse", "--show-superproject-working-tree"):
+                return ""
+            raise AssertionError((cwd, args))
+
+        return main, worktree, records, git
+
+    def test_source_identity_matches_existing_identity_without_host_storage(self):
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temporary:
+            main, worktree, records, git = self._git_checkout_fixture(Path(temporary))
+            with patch.object(storage, "git", side_effect=git), \
+                    patch.object(storage, "worktree_records", return_value=records), \
+                    patch.object(storage, "resolve_layout",
+                                 side_effect=AssertionError("host storage resolver used")) as resolver:
+                result = identity.compose_source_identity(worktree / "scripts")
+                expected = identity.compose_project_identity({
+                    "repo_root": str(worktree.resolve()),
+                    "worktree_id": storage.identifier(worktree.resolve()),
+                    "env": {"FULLMAG_PROJECT_ID": storage.identifier(main.resolve())},
+                })
+
+            self.assertEqual(result, expected)
+            resolver.assert_not_called()
+
+    def test_source_identity_rejects_checkout_missing_from_git_worktree_registry(self):
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temporary:
+            main, worktree, _records, git = self._git_checkout_fixture(Path(temporary))
+            with patch.object(storage, "git", side_effect=git), \
+                    patch.object(storage, "worktree_records",
+                                 return_value=[{"worktree": str(main)}]), \
+                    patch.object(storage, "resolve_layout",
+                                 side_effect=AssertionError("host storage resolver used")):
+                with self.assertRaisesRegex(ValueError, "registered Git worktree"):
+                    identity.compose_source_identity(worktree)
+
+    def test_source_identity_rejects_git_submodule(self):
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temporary:
+            main, worktree, records, git = self._git_checkout_fixture(Path(temporary))
+
+            def submodule_git(cwd, *args):
+                if args == ("rev-parse", "--show-toplevel"):
+                    return str(worktree)
+                if args == ("rev-parse", "--show-superproject-working-tree"):
+                    return str(main)
+                raise AssertionError((cwd, args))
+
+            with patch.object(storage, "git", side_effect=submodule_git), \
+                    patch.object(storage, "worktree_records", return_value=records) as registry:
+                with self.assertRaisesRegex(ValueError, "Git submodule"):
+                    identity.compose_source_identity(worktree)
+            registry.assert_not_called()
 
 
 if __name__ == "__main__":

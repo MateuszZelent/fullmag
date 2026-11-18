@@ -143,7 +143,7 @@ export function MeshBuildLogConsoleView({
 }) {
   return (
     <div className="fm-mesh-build-log-console">
-      <div className="fm-footer__filters" aria-label="Mesh build log filters">
+      <div role="group" className="fm-footer__filters" aria-label="Mesh build log filters">
         <label className="fm-footer__filter">
           <span>Source</span>
           <select

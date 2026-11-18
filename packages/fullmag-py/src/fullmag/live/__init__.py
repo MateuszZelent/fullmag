@@ -142,9 +142,14 @@ def disconnect() -> None:
         session.close()
 
 
-def sync() -> int:
-    """Commit pending DSL changes now; raise if the world is still incomplete."""
-    return require_session("sync").sync(strict=True)
+def sync(*, reconcile: bool = False) -> int:
+    """Commit pending DSL changes.
+
+    After a confirmed magnetization apply followed by a newer scene revision,
+    use `reconcile=True` to keep other clients' edits and apply disjoint Python
+    changes. Overlapping changes must be resolved in the local draft first.
+    """
+    return require_session("sync").sync(strict=True, reconcile=reconcile)
 
 
 @contextlib.contextmanager

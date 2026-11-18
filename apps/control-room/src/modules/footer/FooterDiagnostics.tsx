@@ -24,6 +24,8 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
 
+import { AutomaticPerformancePanel } from "./AutomaticPerformancePanel";
+
 interface SolverProfilePhaseBar {
   id: string;
   label: string;
@@ -206,6 +208,8 @@ export function FooterDiagnostics() {
           </div>
         )}
       </section>
+
+      <AutomaticPerformancePanel />
 
       <section
         className="fm-footer-diagnostics__panel"
@@ -847,7 +851,7 @@ function SolverTracePanel({ model }: { model: SolverTracePanelModel }) {
     );
 
   return (
-    <div
+    <div role="group"
       className="fm-footer-diagnostics__trace"
       data-completeness={model.completeness}
       aria-label="Solver to render trace"

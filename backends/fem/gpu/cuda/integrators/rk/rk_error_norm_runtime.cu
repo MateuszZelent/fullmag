@@ -51,10 +51,15 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         return false;
     }
 
+    const uint8_t *active_node_mask =
+        (ctx.frozen_spins.enabled() && gpu.mesh_regions.free_node_mask != nullptr)
+            ? gpu.mesh_regions.free_node_mask
+            : gpu.mesh_regions.magnetic_node_mask;
+
     fullmag_cuda_adaptive_error_norm_blocks(
         gpu.rk.m_backup.x, gpu.rk.m_backup.y, gpu.rk.m_backup.z,
         gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
-        gpu.mesh_regions.magnetic_node_mask,
+        active_node_mask,
         gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
         gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
         gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,

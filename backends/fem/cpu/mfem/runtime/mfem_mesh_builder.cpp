@@ -11,6 +11,7 @@
 #if FULLMAG_HAS_MFEM_STACK
 
 #include "core/fem_mesh.hpp"
+#include "core/fem_marker_map.hpp"
 
 #include <mfem.hpp>
 
@@ -54,6 +55,7 @@ struct FaceRecord {
 struct BoundaryRecord {
     uint32_t type = 0;
     std::array<uint32_t, 4> nodes{{0, 0, 0, 0}};
+    uint32_t canonical_marker = 1u;
     int attribute = 1;
 };
 
@@ -260,14 +262,10 @@ bool collect_boundaries(
             return false;
         }
         const uint32_t marker = source.facet_markers.empty() ? 1u : source.facet_markers[facet];
-        if (marker > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-            error = "MFEM boundary marker exceeds positive MFEM attribute range";
-            return false;
-        }
         boundaries.push_back({
             source.facet_types[facet],
             owner->second.oriented_nodes,
-            marker == 0u ? 1 : static_cast<int>(marker),
+            marker,
         });
     }
 
@@ -280,35 +278,16 @@ bool collect_boundaries(
     return true;
 }
 
-bool volume_attributes(
+void volume_attributes(
     const FemMeshRuntimeState &source,
-    std::vector<int> &attributes,
-    std::string &error)
+    const CompactMarkerMap &markers,
+    std::vector<int> &attributes)
 {
-    uint32_t maximum_marker = 0u;
-    bool has_air = source.cell_markers.empty();
-    for (uint32_t marker : source.cell_markers) {
-        if (marker > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-            error = "MFEM cell marker exceeds positive MFEM attribute range";
-            return false;
-        }
-        maximum_marker = std::max(maximum_marker, marker);
-        has_air = has_air || marker == 0u;
-    }
-    int air_attribute = 1;
-    if (has_air) {
-        if (maximum_marker == static_cast<uint32_t>(std::numeric_limits<int>::max())) {
-            error = "MFEM mesh builder cannot allocate an unoccupied positive air attribute";
-            return false;
-        }
-        air_attribute = static_cast<int>(maximum_marker + 1u);
-    }
     attributes.reserve(source.n_elements);
     for (uint32_t element = 0; element < source.n_elements; ++element) {
         const uint32_t marker = source.cell_markers.empty() ? 1u : source.cell_markers[element];
-        attributes.push_back(marker == 0u ? air_attribute : static_cast<int>(marker));
+        attributes.push_back(markers.attribute(marker));
     }
-    return true;
 }
 
 template <size_t N>
@@ -338,6 +317,7 @@ mfem::Geometry::Type expected_geometry(uint32_t type)
 bool verify_finalized_mesh(
     const FemMeshRuntimeState &source,
     const std::vector<BoundaryRecord> &boundaries,
+    const CompactMarkerMap &domain_markers,
     mfem::Mesh &mesh,
     std::string &error)
 {
@@ -362,6 +342,11 @@ bool verify_finalized_mesh(
         }
     }
     for (uint32_t element = 0; element < source.n_elements; ++element) {
+        const uint32_t canonical = source.cell_markers.empty() ? 1u : source.cell_markers[element];
+        if (mesh.GetAttribute(static_cast<int>(element)) != domain_markers.attribute(canonical)) {
+            error = "finalized MFEM domain attribute differs from canonical marker map";
+            return false;
+        }
         if (mesh.GetElementGeometry(static_cast<int>(element)) !=
             expected_geometry(source.cell_types[element])) {
             error = "finalized MFEM mesh element geometry differs from canonical type";
@@ -465,9 +450,13 @@ bool verify_mfem_local_node_ordering(
 bool build_mfem_mesh(
     const FemMeshRuntimeState &source,
     std::unique_ptr<mfem::Mesh> &mesh,
-    std::string &error)
+    std::string &error,
+    FemMarkerMaps *marker_maps)
 {
     mesh.reset();
+    if (marker_maps != nullptr) {
+        *marker_maps = {};
+    }
     error.clear();
     try {
         if (!validate_source_shape(source, error)) {
@@ -481,10 +470,18 @@ bool build_mfem_mesh(
         if (!collect_boundaries(source, faces, boundaries, error)) {
             return false;
         }
-        std::vector<int> attributes;
-        if (!volume_attributes(source, attributes, error)) {
+        FemMarkerMaps maps;
+        const std::vector<uint32_t> default_markers{1u};
+        if (!maps.domain.assign(source.cell_markers.empty() ? default_markers : source.cell_markers, error) ||
+            !maps.boundary.assign(boundaries.begin(), boundaries.end(),
+                [](const BoundaryRecord &boundary) { return boundary.canonical_marker; }, error)) {
             return false;
         }
+        for (auto &boundary : boundaries) {
+            boundary.attribute = maps.boundary.attribute(boundary.canonical_marker);
+        }
+        std::vector<int> attributes;
+        volume_attributes(source, maps.domain, attributes);
         if (boundaries.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
             error = "MFEM boundary element count exceeds signed int range";
             return false;
@@ -537,10 +534,13 @@ bool build_mfem_mesh(
 
         candidate->FinalizeTopology(false);
         candidate->Finalize(false, false);
-        if (!verify_finalized_mesh(source, boundaries, *candidate, error)) {
+        if (!verify_finalized_mesh(source, boundaries, maps.domain, *candidate, error)) {
             return false;
         }
         mesh = std::move(candidate);
+        if (marker_maps != nullptr) {
+            *marker_maps = std::move(maps);
+        }
         return true;
     } catch (const std::exception &exception) {
         error = std::string("MFEM mesh builder failed: ") + exception.what();

@@ -67,6 +67,31 @@ outer boundary. The default smootherstep profile is
 p(t)=6t^5-15t^4+10t^3.
 ```
 
+For the `logarithmic` and `tanh` choices the normalized taper is
+
+```{math}
+:label: eq-abl-normalized-profiles
+
+p_{\mathrm{log}}(t)=\frac{\ln(1+9t)}{\ln 10},\qquad
+p_{\mathrm{tanh}}(t)=\frac{1+\tanh(4t-2)/\tanh 2}{2}.
+```
+
+The constants 9 and 4 are dimensionless and fixed for these presets. The
+`custom` choice evaluates the authored scalar `expression`, with `u` equal to
+the dimensionless ramp coordinate $t_f$. For example, `u**3` is a cubic taper.
+The accepted operators are `+ - * / **` and parentheses. Available single-argument
+functions are `abs`, `sqrt`, `exp`, `log` (natural logarithm), `log1p`, `tanh`,
+`sin`, and `cos`. Numeric literals use decimal or scientific notation. The
+expression is limited to 256 ASCII characters.
+
+The expression must give $p(0)=0$ and $p(1)=1$ within $10^{-12}$ and output
+finite values in $[0,1]$ within the same tolerance. Validation probes 257 evenly
+spaced values including the endpoints. Planning additionally checks every
+evaluated ramp sample and rejects invalid values. The probe is a finite
+validation check. Continuity and monotonicity between samples are properties
+of the user's formula. The adjoining plateau has width $W-R$ and exact weight
+one. Points outside the layer receive zero weight.
+
 At corners the face contributions are combined by `max`, so the requested
 maximum damping is not multiplied by the number of faces.
 
@@ -75,14 +100,15 @@ maximum damping is not multiplied by the number of faces.
 
 | Symbol | Python parameter | Type/default | Unit | Validation | Meaning | Backend support | `ProblemIR` destination |
 |---|---|---|---:|---|---|---|---|
-| $\alpha(\mathbf r)$ | resolved field | derived | 1 | finite, non-negative | local Gilbert damping supplied to LLG | FDM CPU/FEM CPU/GPU; CUDA FDM rejects cellwise fields | `FdmMaterialIR.material.alpha_field` / FEM material alpha field |
-| $\alpha_0$ | `film.alpha` | `float`, required base assignment | 1 | finite, non-negative | base Gilbert damping | FDM CPU/FEM CPU/GPU | material damping |
-| $W$ | `total_width` | `float`, required | $\mathrm{m}$ | finite, $W>0$ | full inward extent of the layer | FDM CPU/FEM CPU/GPU | `magnets[].absorbing_boundary.total_width_m` |
-| $R$ | `ramp_width` | `float`, required | $\mathrm{m}$ | finite, $0<R\le W$ | taper extent | FDM CPU/FEM CPU/GPU | `magnets[].absorbing_boundary.ramp_width_m` |
-| $\alpha_{\max}$ | `max_damping` | `float`, required | 1 | finite, $\alpha_{\max}\ge0$ | additive damping at the selected face | FDM CPU/FEM CPU/GPU | `magnets[].absorbing_boundary.max_damping` |
-| $F$ | `faces` | `tuple[str, ...]`, `("x+",)` | 1 | non-empty, unique `x±/y±/z±` | selected boundary faces | FDM CPU/FEM CPU/GPU; CUDA FDM rejects cellwise fields | `magnets[].absorbing_boundary.faces` |
-| $p$ | `profile` | `str`, `"smootherstep"` | 1 | `linear`, `quadratic`, or `smootherstep` | taper profile | FDM CPU/FEM CPU/GPU; CUDA FDM rejects cellwise fields | `magnets[].absorbing_boundary.profile` |
-| — | `frame` | `str`, `"object"` | 1 | `object` or `universe` | coordinate frame for bounds | FDM CPU/FEM CPU/GPU; CUDA FDM rejects cellwise fields | `magnets[].absorbing_boundary.frame` |
+| $\alpha(\mathbf r)$ | resolved field | derived | 1 | finite, non-negative | local Gilbert damping supplied to LLG | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `FdmMaterialIR.material.alpha_field` / FEM material alpha field |
+| $\alpha_0$ | `film.alpha` | `float`, required base assignment | 1 | finite, non-negative | base Gilbert damping | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | material damping |
+| $W$ | `total_width` | `float`, required | $\mathrm{m}$ | finite, $W>0$ | full inward extent of the layer | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary.total_width_m` |
+| $R$ | `ramp_width` | `float`, required | $\mathrm{m}$ | finite, $0<R\le W$ | taper extent | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary.ramp_width_m` |
+| $\alpha_{\max}$ | `max_damping` | `float`, required | 1 | finite, $\alpha_{\max}\ge0$ | additive damping at the selected face | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary.max_damping` |
+| $F$ | `faces` | `tuple[str, ...]`, `("x+",)` | 1 | non-empty, unique `x±/y±/z±` | selected boundary faces | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary.faces` |
+| $p$ | `profile` | `str`, `"smootherstep"` | 1 | `linear`, `quadratic`, `smootherstep`, `logarithmic`, `tanh`, or `custom` | taper profile | common material-field planner | `magnets[].absorbing_boundary.profile` |
+| $u$ | `expression` | optional `str`, `None` | 1 | required for `custom`, using the normalized coordinate and rules above | user-authored taper | common material-field planner | `magnets[].absorbing_boundary.expression` |
+| — | `frame` | `str`, `"object"` | 1 | `object` or `universe` | coordinate frame for bounds | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary.frame` |
 | $d_f$ | internal | derived | $\mathrm{m}$ | finite sampled point and bounds | inward distance from face $f$ | planner only | not serialized |
 | $t_f$ | internal | derived | 1 | clamped to $[0,1]$ | profile coordinate | planner only | not serialized |
 | $w_f(\mathbf r)$ | internal | derived | 1 | profile output in $[0,1]$ | selected-face profile weight | planner only | not serialized |
@@ -118,9 +144,9 @@ the ramp to be resolved by the selected mesh.
 
 The planner evaluates the same closed profile at cell sample points and writes
 the resulting values to `FdmMaterialIR.material.alpha_field`. FDM CPU consumes
-the field. Native FDM CUDA currently rejects all cellwise `Ms/Aex/alpha`
-fields, therefore strict FDM GPU planning fails closed with a capability error
-rather than silently dropping the layer.
+the field. Single-grid FDM CUDA plans cellwise damping and its LLG kernels
+read local alpha. This records source support. Managed GPU execution and parity
+for the new profiles require evidence.
 
 ### 3.2 FEM
 
@@ -179,14 +205,19 @@ study.stages.add_run(stage_id="run", until=1e-12)
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` mapping |
 |---|---|---|---|---|---|---|---|
-| `film.alpha` | `float` | required | 1 | finite and >= 0 | Base Gilbert damping | FDM CPU/FEM CPU/FEM GPU; FDM CUDA only when no cellwise field is produced | `magnets[].material.damping` |
-| `film.alpha.absorbing_boundary(total_width=...)` | module | disabled | m and 1 by parameter | positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame | Per-object additive damping layer | FDM CPU/FEM CPU/FEM GPU; FDM CUDA rejects cellwise alpha | `magnets[].absorbing_boundary` |
+| `film.alpha` | `float` | required | 1 | finite and >= 0 | Base Gilbert damping | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].material.damping` |
+| `film.alpha.absorbing_boundary(total_width=...)` | module | disabled | m and 1 by parameter | positive widths; ramp <= total; non-negative max_damping; valid unique faces/profile/frame | Per-object additive damping layer | FDM CPU, single-grid FDM CUDA, FEM CPU/GPU | `magnets[].absorbing_boundary` |
+| `film.alpha.absorbing_boundary(expression=...)` | `str or None` | None | 1 | Required for custom; finite normalized scalar ramp with endpoints 0 and 1 | Formula in dimensionless ramp position u | Common material-field planner | `magnets[].absorbing_boundary.expression` |
 
 (problem-ir)=
 ### 4.2 ProblemIR representation
 
 `MagnetIR.absorbing_boundary` is optional and contains
 `total_width_m`, `ramp_width_m`, `max_damping`, `faces`, `profile`, and `frame`.
+The optional `expression` string is present only for `profile="custom"`. Older
+profiles retain their existing representation. The inspector shows an expression
+field for `Custom`, and canonical script export writes the same expression as a
+string keyword to `.alpha.absorbing_boundary(...)`.
 IR validation rejects non-finite values, non-positive widths, `ramp_width_m`
 greater than `total_width_m`, negative damping, duplicate/unknown faces, and
 unknown profile/frame names.
@@ -198,12 +229,13 @@ The requested intent is preserved as `MagnetIR.absorbing_boundary` and is also
 retained in the scene resource and canonical script export. The resolved execution
 is the planner-produced `alpha_field` at FDM cells or FEM nodes; it is not
 inferred from the base material after planning. Invalid values fail at Python or
-IR validation with structured validation errors. Unsupported combinations are
-reported before execution: a request for FDM CUDA with this cellwise module fails
-before native launch with `fdm_cuda_absorbing_boundary_unsupported`; no hidden CPU
-fallback is selected.
-The UI sends an omitted field for no change, `null` to clear the module, and a
-typed object to set it, so scene/script round-trip does not collapse intent.
+IR validation with structured validation errors. The v2 authoring mutation
+also validates a profile before saving the object. The UI writes a typed
+configuration via the same optional scene field used for existing profiles.
+An explicit `null` is currently interpreted as omission by the object patch
+deserializer. The profile extension leaves that limitation open. Unsupported combinations,
+including forced CUDA multilayer with unqualified cellwise material fields, are
+still rejected by the execution planner.
 
 (implementation-mapping)=
 ### 4.4 Implementation mapping
@@ -214,6 +246,7 @@ typed object to set it, so scene/script round-trip does not collapse intent.
 | Object API | `packages/fullmag-py/src/fullmag/world.py:AlphaControl.absorbing_boundary` | per-object attachment |
 | Canonical IR | `crates/fullmag-ir/src/model.rs:MagnetIR` | typed optional module |
 | IR validation | `crates/fullmag-ir/src/lib.rs:validate_absorbing_boundary` | fail-closed schema validation |
+| Shared ramp evaluator | `crates/fullmag-ir/src/absorbing_boundary.rs:ResolvedAbsorbingBoundaryProfile` | normalized presets and checked scalar expression sampling |
 | FDM/FEM lowering | `crates/fullmag-plan/src/material.rs:apply_absorbing_boundary_layer` | cell/node alpha-field materialization |
 | UI authoring | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx:ObjectAbsorbingBoundaryPanel` | v2 scene-resource editing |
 
@@ -221,11 +254,10 @@ typed object to set it, so scene/script round-trip does not collapse intent.
 
 The planner applies the layer after region-owned alpha resolution. This keeps
 the module additive to the object's base/region material semantics. The
-capability matrix marks FEM CPU/GPU as planner-supported and FDM CPU as
-supported; FDM CUDA is explicitly unsupported while cellwise material fields
-remain rejected by the native path. The UI and script builder carry the same
-optional object field and round-trip it without moving the module to global
-study state.
+existing single-grid FDM CUDA and FEM/CPU routes receive the resolved alpha
+samples through their existing material field. The UI and script builder carry
+the same optional object field. The new profiles add no device selection, native
+ABI or capability field.
 
 (validation)=
 ## 5. Validation strategy
@@ -246,8 +278,10 @@ and record the actual device/runtime provenance.
 ### 5.3 Regression tests
 
 Python tests cover proxy compatibility, validation, IR lowering, and script
-round-trip. Rust tests cover IR validation, planner profiles, region ordering,
-and FDM CUDA fail-closed capability. Authoring tests cover scene and script
+round-trip. The new profile tests check analytic midpoint values, exact plateau,
+invalid custom expressions, and Python export. Rust tests cover IR validation,
+planner profiles, region ordering,
+and single-grid FDM CUDA planner materialization. Authoring tests cover scene and script
 builder round-trip. The `tests/vlad/4.5GHz_fem.py` loader test verifies the
 flat top-level `study` style and the per-object layer parameters.
 
@@ -268,7 +302,7 @@ flat top-level `study` style and the per-object layer parameters.
 ## 7. Known limits and deferred work
 
 Rotation-aware object frames, FEM boundary-integral/PML absorption, native FDM
-CUDA cellwise damping, and quantitative spin-wave reflection qualification are
+new-profile GPU/CPU parity, and quantitative spin-wave reflection qualification are
 deferred. The module must remain visible as unsupported where those limits
 apply.
 
@@ -290,8 +324,11 @@ parameter, backend lane, and implementation symbol cited here:
 | `packages/fullmag-py/src/fullmag/world.py` | `absorbing_boundary` | Per-object alpha attachment |
 | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Python-to-IR lowering |
 | `crates/fullmag-ir/src/lib.rs` | `validate_absorbing_boundary` | IR validation |
+| `crates/fullmag-ir/src/absorbing_boundary.rs` | `ResolvedAbsorbingBoundaryProfile` | Shared preset and expression evaluator |
+| `packages/fullmag-py/src/fullmag/model/_absorbing_boundary_expression.py` | `compile_expression` | Python expression validation and analytic sampling |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_absorbing_boundary` | Canonical editable profile export |
 | `crates/fullmag-plan/src/material.rs` | `apply_absorbing_boundary_layer` | FDM/FEM alpha-field materialization |
 | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | FEM material-field handoff |
-| `crates/fullmag-plan/src/validate.rs` | `validate_region_owned_planning` | FDM CUDA fail-closed gate |
+| `crates/fullmag-plan/src/tests.rs` | `fdm_cuda_absorbing_boundary_plans_cellwise_damping` | Single-grid FDM CUDA planner regression |
 | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx` | `ObjectAbsorbingBoundaryPanel` | UI authoring and persistence |
 | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_absorber_uses_the_union_of_conformal_owner_segments` | Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności. |

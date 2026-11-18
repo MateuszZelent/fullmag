@@ -11,6 +11,7 @@ class FiniteElementSpace;
 namespace fullmag::fem {
 
 struct FemMeshRuntimeState;
+struct FemMarkerMaps;
 
 /*
  * Translate canonical Fullmag topology into an MFEM mesh.
@@ -24,7 +25,8 @@ struct FemMeshRuntimeState;
 bool build_mfem_mesh(
     const FemMeshRuntimeState &source,
     std::unique_ptr<mfem::Mesh> &mesh,
-    std::string &error);
+    std::string &error,
+    FemMarkerMaps *marker_maps = nullptr);
 
 // Check the actual scalar local DOF indices before any node-indexed field is
 // uploaded. This does not certify MFEM true DOF or periodic-class numbering.

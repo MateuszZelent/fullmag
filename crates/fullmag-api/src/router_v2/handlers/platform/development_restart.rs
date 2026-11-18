@@ -204,7 +204,17 @@ async fn acquire_workspace_for_restart_inner(
                 validate_runtime_status(snapshot)?
             };
             validate_preparation(snapshot)?;
-            validate_current_mesh_workspace(snapshot)?;
+            let failed_commandable_retirement =
+                allow_restored_terminal_without_display_timestamp
+                    && snapshot.session.status == "awaiting_command"
+                    && snapshot.run.as_ref().is_some_and(|run| {
+                        matches!(run.status.as_str(), "failed" | "cancelled")
+                    });
+            if failed_commandable_retirement {
+                validate_retirement_current_mesh_workspace(snapshot)?;
+            } else {
+                validate_current_mesh_workspace(snapshot)?;
+            }
             let scene_document = snapshot
                 .scene_document
                 .as_ref()
@@ -252,6 +262,11 @@ async fn acquire_workspace_for_restart_inner(
                     });
             let run_id = if is_scratch {
                 None
+            } else if allow_restored_terminal_without_display_timestamp
+                && kind == RuntimeStatus::AwaitingCommand
+            {
+                validate_commandable_terminal_run(snapshot)?;
+                Some(snapshot.session.run_id.clone())
             } else {
                 Some(validate_terminal_run(
                     snapshot,
@@ -442,6 +457,101 @@ fn validate_terminal_run(
     Ok(run.run_id.clone())
 }
 
+/// Retirement-only validation for an accepted terminal run whose editable
+/// workspace has already returned to its commandable projection. Ordinary
+/// restart capture continues to require the strict terminal runtime shape.
+pub(crate) fn validate_commandable_terminal_run(
+    snapshot: &SessionStateResponse,
+) -> Result<&'static str, ApiError> {
+    let run = snapshot
+        .run
+        .as_ref()
+        .ok_or_else(|| not_restartable("a commandable workspace has no matching run manifest"))?;
+    let outcome = match run.status.as_str() {
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => {
+            return Err(not_restartable(
+                "a commandable workspace run has no terminal outcome",
+            ));
+        }
+    };
+    let session_id = snapshot.session.session_id.as_str();
+    let run_id = snapshot.session.run_id.as_str();
+    if session_id.trim().is_empty()
+        || session_id != session_id.trim()
+        || run_id.trim().is_empty()
+        || run_id != run_id.trim()
+        || run_id != run.run_id
+        || run.session_id != session_id
+        || snapshot.session.status != "awaiting_command"
+        || snapshot.session.finished_at_unix_ms != 0
+        || crate::session::effective_runtime_status_code(snapshot) != "awaiting_command"
+        || snapshot.runtime_status.code != "awaiting_command"
+        || snapshot.runtime_status.kind != RuntimeStatus::AwaitingCommand
+        || snapshot.runtime_status.is_busy
+        || !snapshot.runtime_status.can_accept_commands
+        || snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|live| live.status != "awaiting_command")
+    {
+        return Err(not_restartable(
+            "the commandable workspace and terminal run identities or statuses do not agree",
+        ));
+    }
+
+    let stage_execution = snapshot.stage_execution.as_ref().ok_or_else(|| {
+        not_restartable("a commandable terminal run has no stage execution projection")
+    })?;
+    let is_active_or_unknown_stage = |status| {
+        matches!(
+            status,
+            StageLifecycleState::Running | StageLifecycleState::Paused | StageLifecycleState::Unknown
+        )
+    };
+    let completed_stage_indexes = stage_execution
+        .stage_statuses
+        .iter()
+        .enumerate()
+        .filter_map(|(index, status)| {
+            matches!(
+                *status,
+                StageLifecycleState::Completed | StageLifecycleState::Skipped
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    // A commandable workspace retains unselected authored stages as pending;
+    // retirement checks the accepted task scope against the native run catalog.
+    if stage_execution.runtime_state.as_str() != outcome
+        || stage_execution.active_stage_index.is_some()
+        || stage_execution.active_stage_kind.is_some()
+        || stage_execution.total_stages != stage_execution.stage_statuses.len()
+        || stage_execution.total_stages != stage_execution.stages.len()
+        || stage_execution.completed_stage_indexes != completed_stage_indexes
+        || stage_execution
+            .stage_statuses
+            .iter()
+            .zip(&stage_execution.stages)
+            .any(|(status, stage)| status != &stage.status)
+        || stage_execution
+            .stage_statuses
+            .iter()
+            .any(|status| is_active_or_unknown_stage(*status))
+        || stage_execution
+            .stages
+            .iter()
+            .any(|stage| is_active_or_unknown_stage(stage.status))
+    {
+        return Err(not_restartable(
+            "the commandable workspace still reports an active, held, unknown, or inconsistent stage",
+        ));
+    }
+    Ok(outcome)
+}
+
 fn validate_preparation(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
     let Some(preparation) = snapshot.simulation_preparation.as_ref() else {
         return Ok(());
@@ -488,12 +598,46 @@ fn validate_preparation(snapshot: &SessionStateResponse) -> Result<(), ApiError>
 }
 
 fn validate_current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
+    validate_current_mesh_workspace_with_owner(snapshot, false)
+}
+
+/// Retirement may archive a complete preparation owned by a prior run when
+/// the current commandable run failed or was cancelled before preparation.
+/// This receipt remains archival metadata; it is never accepted as authority
+/// for the current run's execution or native retirement evidence.
+fn validate_retirement_current_mesh_workspace(
+    snapshot: &SessionStateResponse,
+) -> Result<(), ApiError> {
+    let outcome = validate_commandable_terminal_run(snapshot)?;
+    match validate_current_mesh_workspace(snapshot) {
+        Ok(()) => Ok(()),
+        Err(_) if matches!(outcome, "failed" | "cancelled") => {
+            validate_current_mesh_workspace_with_owner(snapshot, true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_current_mesh_workspace_with_owner(
+    snapshot: &SessionStateResponse,
+    allow_historical_owner: bool,
+) -> Result<(), ApiError> {
     let Some(workspace) = snapshot.mesh_workspace.as_deref().and_then(Value::as_object) else {
+        if allow_historical_owner {
+            return Err(not_restartable(
+                "accepted preparation workspace has no complete run-bound receipt",
+            ));
+        }
         return validate_mesh_workspace(snapshot.mesh_workspace.as_deref());
     };
     if workspace.get("schema_version").and_then(Value::as_str)
         != Some(crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA)
     {
+        if allow_historical_owner {
+            return Err(not_restartable(
+                "accepted preparation workspace has no complete run-bound receipt",
+            ));
+        }
         return validate_mesh_workspace(snapshot.mesh_workspace.as_deref());
     }
     // Accepted workers publish one completed receipt, rather than the legacy
@@ -512,11 +656,24 @@ fn validate_current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<()
     let has_identity = ["preparation_id", "accepted_step_id"].iter().all(|key| {
         workspace.get(*key).and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())
     });
+    let accepted_run_id = workspace.get("accepted_run_id").and_then(Value::as_str);
+    let current_run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str());
+    let owner_matches = if allow_historical_owner {
+        accepted_run_id.is_some_and(|run_id| {
+            fullmag_session::repository_path::validate_store_id(run_id).is_ok()
+        }) && current_run_id.is_some_and(|run_id| {
+            fullmag_session::repository_path::validate_store_id(run_id).is_ok()
+        }) && (accepted_run_id == current_run_id
+            || (snapshot.run.as_ref().is_some_and(|run| {
+                matches!(run.status.as_str(), "failed" | "cancelled")
+            }) && accepted_run_id != current_run_id))
+    } else {
+        accepted_run_id == current_run_id
+    };
     if workspace.get("status").and_then(Value::as_str) != Some("completed")
         || workspace.get("active_build").is_none_or(|value| !value.is_null())
         || workspace.get("last_build_error").is_none_or(|value| !value.is_null())
-        || workspace.get("accepted_run_id").and_then(Value::as_str)
-            != snapshot.run.as_ref().map(|run| run.run_id.as_str())
+        || !owner_matches
         || snapshot.run.is_none()
         || workspace.get("source_scene_revision").and_then(Value::as_u64).is_none()
         || !fingerprint.is_some_and(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -970,6 +1127,123 @@ mod tests {
         state
     }
 
+    fn populate_commandable_terminal_run(snapshot: &mut SessionStateResponse, run_id: &str) {
+        snapshot.session.run_id = run_id.to_string();
+        snapshot.session.status = "awaiting_command".to_string();
+        snapshot.session.finished_at_unix_ms = 0;
+        snapshot.run = Some(RunManifest {
+            run_id: run_id.to_string(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "completed".to_string(),
+            total_steps: 3,
+            final_time: Some(1.0),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: String::new(),
+        });
+        snapshot.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 3,
+                "completed_stage_indexes": [0],
+                "stage_statuses": ["completed", "pending", "pending"],
+                "active_stage_index": null,
+                "active_stage_kind": null,
+                "runtime_state": "completed",
+                "stages": [
+                    {"stage_id": "stage-a", "status": "completed", "converged": false, "artifact_refs": []},
+                    {"stage_id": "stage-b", "status": "pending", "converged": false, "artifact_refs": []},
+                    {"stage_id": "stage-c", "status": "pending", "converged": false, "artifact_refs": []}
+                ]
+            }))
+            .expect("completed stage projection should deserialize"),
+        );
+        snapshot.runtime_status = crate::session::build_runtime_status_view("awaiting_command");
+    }
+
+    fn commandable_terminal_snapshot() -> SessionStateResponse {
+        let request: crate::types::CurrentLiveSnapshotRequest =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session-commandable",
+                "session_status": "awaiting_command"
+            }))
+            .expect("minimal commandable snapshot request should deserialize");
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        populate_commandable_terminal_run(&mut snapshot, "run-commandable");
+        snapshot
+    }
+
+    fn accepted_mesh_workspace(owner_run_id: &str) -> Value {
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: "test".into(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fdm(fullmag_ir::FdmPlanIR::default()),
+            output_plan: fullmag_ir::OutputPlanIR { outputs: Vec::new() },
+            provenance: fullmag_ir::ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
+                physics_graph: None,
+            },
+        };
+        serde_json::json!({
+            "schema_version": crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
+            "preparation_id": "prep-historical",
+            "source_scene_revision": 1,
+            "plan_fingerprint": format!("sha256:{}", "a".repeat(64)),
+            "status": "completed",
+            "active_build": null,
+            "last_build_error": null,
+            "execution_plan": serde_json::to_value(plan).unwrap(),
+            "accepted_run_id": owner_run_id,
+            "accepted_step_id": "step-a",
+            "mesh_pipeline_status": [{"id": "run", "status": "completed"}]
+        })
+    }
+
+    fn commandable_terminal_snapshot_with_mesh_owner(
+        outcome: &str,
+        mesh_owner_run_id: &str,
+    ) -> SessionStateResponse {
+        let mut snapshot = commandable_terminal_snapshot();
+        let current_run_id = format!("run-commandable-{outcome}");
+        snapshot.session.run_id = current_run_id.clone();
+        let run = snapshot.run.as_mut().unwrap();
+        run.run_id = current_run_id;
+        run.status = outcome.into();
+        let execution = snapshot.stage_execution.as_mut().unwrap();
+        execution.runtime_state = serde_json::from_value(serde_json::json!(outcome)).unwrap();
+        let first_stage = match outcome {
+            "failed" => StageLifecycleState::Failed,
+            "completed" => StageLifecycleState::Completed,
+            _ => StageLifecycleState::Pending,
+        };
+        execution.stage_statuses = vec![
+            first_stage,
+            StageLifecycleState::Pending,
+            StageLifecycleState::Pending,
+        ];
+        execution.stages[0].status = execution.stage_statuses[0].clone();
+        execution.stages[1].status = StageLifecycleState::Pending;
+        execution.stages[2].status = StageLifecycleState::Pending;
+        execution.completed_stage_indexes = if outcome == "completed" {
+            vec![0]
+        } else {
+            Vec::new()
+        };
+        snapshot.mesh_workspace = Some(accepted_mesh_workspace(mesh_owner_run_id).into());
+        snapshot
+    }
+
     fn session_command() -> SessionCommand {
         serde_json::from_value(serde_json::json!({
             "seq": 1,
@@ -1250,6 +1524,215 @@ mod tests {
             scene_document.editor.selected_entity_id.as_deref(),
             Some("entity-42")
         );
+    }
+
+    #[tokio::test]
+    async fn live_retirement_accepts_only_the_consistent_commandable_terminal_projection() {
+        let state = scratch_state().await;
+        {
+            let mut current = state.current_live_state.write().await;
+            populate_commandable_terminal_run(
+                current.as_mut().expect("fixture session should exist"),
+                "run-retirement-commandable",
+            );
+        }
+
+        // The normal restart gate continues to require the strict terminal
+        // runtime projection even when the run manifest itself is complete.
+        assert!(acquire_workspace_for_restart(&state).await.is_err());
+
+        let acquisition = acquire_workspace_for_live_retirement(&state)
+            .await
+            .expect("retirement may capture a validated commandable terminal run");
+        let RestartableWorkspace::Session { identity, .. } = &acquisition.workspace else {
+            panic!("commandable terminal run should be a session workspace");
+        };
+        assert_eq!(identity.run_id.as_deref(), Some("run-retirement-commandable"));
+        drop(acquisition);
+        assert!(state.development_admission.admit().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn live_retirement_accepts_complete_prior_mesh_receipt_for_failed_commandable_run() {
+        let state = scratch_state().await;
+        {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("fixture session should exist");
+            populate_commandable_terminal_run(snapshot, "run-failed-before-preparation");
+            snapshot.run.as_mut().unwrap().status = "failed".into();
+            let execution = snapshot.stage_execution.as_mut().unwrap();
+            execution.runtime_state = crate::types::RuntimeLifecycleState::Failed;
+            execution.stage_statuses[0] = StageLifecycleState::Failed;
+            execution.stages[0].status = StageLifecycleState::Failed;
+            execution.completed_stage_indexes.clear();
+            snapshot.mesh_workspace = Some(accepted_mesh_workspace("run-previous").into());
+        }
+
+        assert!(acquire_workspace_for_restart(&state).await.is_err());
+        let acquisition = acquire_workspace_for_live_retirement(&state)
+            .await
+            .expect("retirement may archive a complete historical mesh receipt");
+        let RestartableWorkspace::Session { identity, .. } = &acquisition.workspace else {
+            panic!("failed commandable run should return a session workspace");
+        };
+        assert_eq!(identity.run_id.as_deref(), Some("run-failed-before-preparation"));
+        drop(acquisition);
+        assert!(state.development_admission.admit().await.is_ok());
+    }
+
+    #[test]
+    fn commandable_terminal_retirement_rejects_active_unknown_held_nonterminal_and_mismatched_runs() {
+        let base = commandable_terminal_snapshot();
+        assert_eq!(validate_commandable_terminal_run(&base).unwrap(), "completed");
+
+        let mut active = base.clone();
+        active.session.status = "running".to_string();
+        let active_execution = active.stage_execution.as_mut().unwrap();
+        active_execution.runtime_state = crate::types::RuntimeLifecycleState::Running;
+        active_execution.active_stage_index = Some(0);
+        active_execution.active_stage_kind = Some("solve".to_string());
+        active_execution.stage_statuses[0] = StageLifecycleState::Running;
+        active_execution.stages[0].status = StageLifecycleState::Running;
+        active_execution.completed_stage_indexes.clear();
+        active.runtime_status = crate::session::build_runtime_status_view("running");
+        assert!(validate_commandable_terminal_run(&active).is_err());
+
+        let mut unknown = base.clone();
+        let unknown_execution = unknown.stage_execution.as_mut().unwrap();
+        unknown_execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+        unknown_execution.stage_statuses[0] = StageLifecycleState::Unknown;
+        unknown_execution.stages[0].status = StageLifecycleState::Unknown;
+        unknown_execution.completed_stage_indexes.clear();
+        assert!(validate_commandable_terminal_run(&unknown).is_err());
+
+        let mut held = base.clone();
+        let stage_execution = held.stage_execution.as_mut().unwrap();
+        stage_execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+        stage_execution.active_stage_index = None;
+        stage_execution.active_stage_kind = None;
+        stage_execution.stage_statuses[0] = StageLifecycleState::Paused;
+        stage_execution.stages[0].status = StageLifecycleState::Paused;
+        stage_execution.completed_stage_indexes.clear();
+        assert!(validate_commandable_terminal_run(&held).is_err());
+
+        let mut nonterminal = base.clone();
+        nonterminal.run.as_mut().unwrap().status = "waiting_for_solve".to_string();
+        assert!(validate_commandable_terminal_run(&nonterminal).is_err());
+
+        let mut mismatched = base;
+        mismatched.run.as_mut().unwrap().session_id = "another-session".to_string();
+        assert!(validate_commandable_terminal_run(&mismatched).is_err());
+    }
+
+    #[test]
+    fn retirement_allows_complete_historical_mesh_receipt_only_for_failed_or_cancelled_run() {
+        for outcome in ["failed", "cancelled"] {
+            let snapshot = commandable_terminal_snapshot_with_mesh_owner(outcome, "run-previous");
+            assert_eq!(validate_commandable_terminal_run(&snapshot).unwrap(), outcome);
+            assert!(validate_current_mesh_workspace(&snapshot).is_err());
+            assert!(validate_retirement_current_mesh_workspace(&snapshot).is_ok());
+        }
+
+        let completed_historical =
+            commandable_terminal_snapshot_with_mesh_owner("completed", "run-previous");
+        assert!(validate_current_mesh_workspace(&completed_historical).is_err());
+        assert!(validate_retirement_current_mesh_workspace(&completed_historical).is_err());
+
+        let completed_current = commandable_terminal_snapshot_with_mesh_owner(
+            "completed",
+            "run-commandable-completed",
+        );
+        assert!(validate_current_mesh_workspace(&completed_current).is_ok());
+        assert!(validate_retirement_current_mesh_workspace(&completed_current).is_ok());
+    }
+
+    #[test]
+    fn historical_mesh_receipt_still_requires_complete_known_quiescent_workspace() {
+        let base = commandable_terminal_snapshot_with_mesh_owner("failed", "run-previous");
+        assert!(validate_retirement_current_mesh_workspace(&base).is_ok());
+
+        let mut missing_owner = base.clone();
+        missing_owner.mesh_workspace.as_mut().unwrap()["accepted_run_id"] =
+            serde_json::Value::Null;
+        assert!(validate_current_mesh_workspace(&missing_owner).is_err());
+        assert!(validate_retirement_current_mesh_workspace(&missing_owner).is_err());
+
+        // These are pre-existing strict-path forms, not the historical-owner
+        // exception. Keep them admissible when the generic validator already
+        // proves that no build is active and the known legacy mesh is quiescent.
+        let mut no_mesh_workspace = base.clone();
+        no_mesh_workspace.mesh_workspace = None;
+        assert!(validate_current_mesh_workspace(&no_mesh_workspace).is_ok());
+        assert!(validate_retirement_current_mesh_workspace(&no_mesh_workspace).is_ok());
+
+        let mut supported_legacy_mesh = base.clone();
+        supported_legacy_mesh.mesh_workspace = Some(serde_json::json!({
+            "active_build": null,
+            "last_build_error": null,
+            "mesh_summary": {"total_cells": 0, "active_cells": 0},
+            "mesh_cost_report": {"total_cells": 0, "status": "awaiting_command"},
+            "mesh_pipeline_status": [
+                {"id": "grid", "status": "warning"},
+                {"id": "membership", "status": "warning"},
+                {"id": "runtime", "status": "done"},
+                {"id": "readiness", "status": "warning"}
+            ]
+        }).into());
+        assert!(validate_current_mesh_workspace(&supported_legacy_mesh).is_ok());
+        assert!(validate_retirement_current_mesh_workspace(&supported_legacy_mesh).is_ok());
+
+        let mut unknown_schema = base.clone();
+        unknown_schema.mesh_workspace.as_mut().unwrap()["schema_version"] =
+            serde_json::json!("future_schema");
+        unknown_schema.mesh_workspace.as_mut().unwrap()["mesh_pipeline_status"] =
+            serde_json::json!([{"id": "future_stage", "status": "unknown"}]);
+        assert!(validate_current_mesh_workspace(&unknown_schema).is_err());
+        assert!(validate_retirement_current_mesh_workspace(&unknown_schema).is_err());
+
+        let mut missing_fingerprint = base.clone();
+        missing_fingerprint.mesh_workspace.as_mut().unwrap()["plan_fingerprint"] =
+            serde_json::Value::Null;
+        assert!(validate_retirement_current_mesh_workspace(&missing_fingerprint).is_err());
+
+        let mut invalid_owner = base.clone();
+        invalid_owner.mesh_workspace.as_mut().unwrap()["accepted_run_id"] =
+            serde_json::json!("../foreign");
+        assert!(validate_retirement_current_mesh_workspace(&invalid_owner).is_err());
+
+        let mut invalid_current_run = base.clone();
+        invalid_current_run.session.run_id = "../current".into();
+        invalid_current_run.run.as_mut().unwrap().run_id = "../current".into();
+        assert!(validate_retirement_current_mesh_workspace(&invalid_current_run).is_err());
+
+        let mut missing_step = base.clone();
+        missing_step.mesh_workspace.as_mut().unwrap()["accepted_step_id"] =
+            serde_json::Value::Null;
+        assert!(validate_retirement_current_mesh_workspace(&missing_step).is_err());
+
+        let mut missing_plan = base.clone();
+        missing_plan.mesh_workspace.as_mut().unwrap()["execution_plan"] =
+            serde_json::Value::Null;
+        assert!(validate_retirement_current_mesh_workspace(&missing_plan).is_err());
+
+        let mut active_build = base.clone();
+        active_build.mesh_workspace.as_mut().unwrap()["active_build"] =
+            serde_json::json!({"build_id": "mesh:active"});
+        assert!(validate_retirement_current_mesh_workspace(&active_build).is_err());
+
+        let mut unknown_pipeline = base.clone();
+        unknown_pipeline.mesh_workspace.as_mut().unwrap()["mesh_pipeline_status"] =
+            serde_json::json!([{"id": "future_stage", "status": "completed"}]);
+        assert!(validate_retirement_current_mesh_workspace(&unknown_pipeline).is_err());
+
+        let mut active_pipeline = base.clone();
+        active_pipeline.mesh_workspace.as_mut().unwrap()["mesh_pipeline_status"] =
+            serde_json::json!([{"id": "run", "status": "active"}]);
+        assert!(validate_retirement_current_mesh_workspace(&active_pipeline).is_err());
+
+        let mut incomplete_pipeline = base;
+        incomplete_pipeline.mesh_workspace.as_mut().unwrap()["mesh_pipeline_status"] =
+            serde_json::json!([{"id": "run", "status": "pending"}]);
+        assert!(validate_retirement_current_mesh_workspace(&incomplete_pipeline).is_err());
     }
 
     #[tokio::test]

@@ -30,19 +30,9 @@ its requirements are unavailable.
 | Observable | scalar, vector or derived quantity exposed for inspection |
 | Artifact | reproducible output with provenance |
 
-Detailed API pages are published only after the corresponding contract and validation scope are
-stable enough to publish.
-## Control Room crosswalk
+Detailed authoring constructors and validation contracts are documented under
+{doc}`../python-api/problem/index`.
 
-This architecture page has no direct authoring screen. Use the object, material, physics, mesh, or stage editor named by the relevant terminal API page; architecture concepts are currently `inspection-only` unless a concrete UI owner is listed. `TODO: frontend support` applies to architecture capabilities without a corresponding control. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-This page documents architecture rather than a standalone Python callable. Exact constructors, arguments, validation, and examples belong to the linked Python API pages; do not infer a public function from an internal architecture term.
-
-## Physics and bibliography scope
-
-No independent physical model is introduced here. Scientific equations are owned by the applicable physics or numerical-methods page. Bibliography: not applicable to this architecture overview; implementation ownership is recorded in the source-code references on the terminal page.
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

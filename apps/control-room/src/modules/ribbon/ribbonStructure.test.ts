@@ -16,6 +16,7 @@ import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_COMMANDS,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,
@@ -2010,6 +2011,7 @@ describe("ribbon structure", () => {
       "physics-global:zeeman",
       "physics-global:rotated_interfacial_dmi",
       "physics-global:add-field-drive",
+      "physics-global:add-mask-antenna",
     ]);
     expect(items.slice(0, 4).every(
       (node) => node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
@@ -2023,6 +2025,10 @@ describe("ribbon structure", () => {
     expect(items[4]).toMatchObject({
       commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
       label: "Field Drive",
+    });
+    expect(items[5]).toMatchObject({
+      commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
+      label: "Mask Antenna",
     });
     expect(items.some((node) => node.id.includes("current_transport"))).toBe(false);
   });
@@ -3898,10 +3904,31 @@ describe("ribbon structure", () => {
       subtitle: "planar monitor",
       title: "2D View",
     });
+    // The 2D view toolbar renders exactly these command ids (spec 12 §5.1).
+    const toolbarCommandIds = [
+      "field-map.tool.navigate",
+      "field-map.tool.zoom-box",
+      "field-map.tool.crop",
+      "field-map.tool.inspect",
+      "field-map.tool.profile",
+      "field-map.tool.measure",
+      "field-map.zoom-in",
+      "field-map.zoom-out",
+      "field-map.fit",
+      "field-map.toggle-vectors",
+      "field-map.toggle-points",
+      "field-map.toggle-mesh",
+      "field-map.toggle-streamlines",
+      "field-map.toggle-contours",
+      "field-map.toggle-multislice",
+      "field-map.toggle-legend",
+      "field-map.export-png",
+      "field-map.export-data",
+    ];
     expect(actionIds).toEqual([
       RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
       "field-map.open",
-      "field-map.export-png",
+      ...toolbarCommandIds,
     ]);
     expect(menuNodeIds).not.toEqual(
       expect.arrayContaining([
@@ -3999,7 +4026,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-interactive",
-      title: "Interactive 3D Profile",
+      title: "Use Standard quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4007,7 +4034,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-figure",
-      title: "Figure 3D Profile",
+      title: "Use Figure quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => true,
@@ -4023,7 +4050,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-balanced",
-      title: "Balanced 3D Profile",
+      title: "Use Detailed quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4031,7 +4058,7 @@ describe("ribbon structure", () => {
     });
     commands.register({
       id: "viewport-3d.profile-interactive-lite",
-      title: "Interactive Lite 3D Profile",
+      title: "Use Fast quality profile",
       group: "viewport-3d",
       scope: "viewport",
       isActive: () => false,
@@ -4168,18 +4195,22 @@ describe("ribbon structure", () => {
       items: [
         expect.objectContaining({
           commandId: "viewport-3d.profile-interactive-lite",
+          label: "Fast",
           value: "interactive-lite",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-interactive",
+          label: "Standard",
           value: "interactive",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-balanced",
+          label: "Detailed",
           value: "balanced",
         }),
         expect.objectContaining({
           commandId: "viewport-3d.profile-figure",
+          label: "Figure",
           value: "figure",
         }),
         expect.objectContaining({

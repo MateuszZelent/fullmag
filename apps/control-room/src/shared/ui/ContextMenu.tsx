@@ -8,6 +8,9 @@ import {
 
 import { cn } from "@/shared/utils/className";
 
+/** Keep menus clear of viewport edges when Radix flips/shifts them. */
+const MENU_COLLISION_PADDING = 8;
+
 const ContextMenu = ContextMenuPrimitive.Root;
 const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
 const ContextMenuGroup = ContextMenuPrimitive.Group;
@@ -43,12 +46,14 @@ ContextMenuSubTrigger.displayName = ContextMenuPrimitive.SubTrigger.displayName;
 
 function ContextMenuSubContent({
   className,
+  collisionPadding = MENU_COLLISION_PADDING,
   ref,
   ...props
 }: ComponentPropsWithRef<typeof ContextMenuPrimitive.SubContent>) {
   return (
     <ContextMenuPrimitive.SubContent
       ref={ref}
+      collisionPadding={collisionPadding}
       className={cn("fm-context-menu-content", className)}
       {...props}
     />
@@ -58,6 +63,7 @@ ContextMenuSubContent.displayName = ContextMenuPrimitive.SubContent.displayName;
 
 function ContextMenuContent({
   className,
+  collisionPadding = MENU_COLLISION_PADDING,
   ref,
   ...props
 }: ComponentPropsWithRef<typeof ContextMenuPrimitive.Content>) {
@@ -65,6 +71,7 @@ function ContextMenuContent({
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         ref={ref}
+        collisionPadding={collisionPadding}
         className={cn("fm-context-menu-content", className)}
         {...props}
       />

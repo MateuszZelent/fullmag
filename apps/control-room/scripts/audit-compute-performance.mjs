@@ -438,7 +438,7 @@ function checkStudyRunCommandInvalidationScope() {
   const submitHelper = blockBetween(
     source,
     "async function submitRuntimeCommand",
-    "function record",
+    "type RuntimeCommandSubmissionReconciliation",
   );
   const studyRun = blockBetween(
     source,

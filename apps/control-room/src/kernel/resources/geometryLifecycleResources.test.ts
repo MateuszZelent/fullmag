@@ -403,15 +403,16 @@ describe("geometry lifecycle resources", () => {
         revision: 4,
         source_scene_revision: 12,
         geometry_realization_revision: 11,
+        validated_for_scene_revision: 14,
       } as never),
-    ).toBe("4:12:11");
+    ).toBe("4:12:11:14");
     expect(
       resolveMeshSharedDomainManifestRevision({
         revision: 4,
         source_scene_revision: null,
         geometry_realization_revision: null,
       } as never),
-    ).toBe("4:unknown:unknown");
+    ).toBe("4:unknown:unknown:unknown");
   });
 
   it("keeps FDM membership revisions tied to grid and legend identity", () => {
@@ -550,7 +551,7 @@ describe("geometry lifecycle resources", () => {
           } as never,
         },
       ),
-    ).toBe("generation-5:4:12:11");
+    ).toBe("generation-5:4:12:11:unknown");
   });
 
   it("uses a deterministic batch resource key and revision for mesh region memberships", () => {

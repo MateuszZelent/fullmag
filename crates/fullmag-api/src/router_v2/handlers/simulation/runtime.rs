@@ -16,7 +16,7 @@ use crate::router_v2::handlers::analysis::hysteresis::{
     read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
     read_hysteresis_settle_trace_if_available,
 };
-use crate::schemas::commands::CommandFailureRequest;
+use crate::schemas::commands::{CommandFailureRequest, RuntimeCommandTarget};
 use crate::schemas::hysteresis::{
     HysteresisBookmarkSchema, HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
@@ -1770,6 +1770,10 @@ pub async fn get_solver_status(
         &request_context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
     )?;
+    let accepted_live_scalar = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        &request_context.request_scope_epoch,
+    );
     let latest = snapshot.live_state.as_ref().map(|value| &value.latest_step)
         .filter(|step| step.is_physical_observation());
     let latest_scalar_row = (!crate::session::has_nonphysical_latest_step(snapshot))
@@ -1833,14 +1837,18 @@ pub async fn get_solver_status(
         max_error: latest_scalar_row.and_then(|value| value.max_error),
         dt_suggested_seconds: latest_scalar_row.and_then(|value| value.dt_suggested),
         rejected_attempts: latest_scalar_row.map(|value| value.rejected_attempts),
-        sim_time_seconds: latest.map(|value| value.time),
+        sim_time_seconds: accepted_live_scalar
+            .map(|row| row.time)
+            .or_else(|| latest.map(|value| value.time)),
         pseudo_time_seconds: latest_scalar_row
             .and_then(|value| value.pseudo_time_s)
             .or_else(|| latest.and_then(|value| value.pseudo_time_s)),
         active_runtime_seconds: latest_scalar_row
             .and_then(|value| value.active_runtime_s)
             .or_else(|| latest.map(|value| value.wall_time_ns as f64 * 1.0e-9)),
-        step_index: latest.map(|value| value.step),
+        step_index: accepted_live_scalar
+            .map(|row| row.step)
+            .or_else(|| latest.map(|value| value.step)),
         last_step_updated_at_unix_ms: snapshot
             .live_state
             .as_ref()
@@ -1866,13 +1874,14 @@ pub async fn get_solver_status(
     path = "/v2/sessions/current/simulation/solver/energies/current",
     responses(
         (status = 200, description = "Current solver energy sample", body = SolverEnergyCurrentResource),
-        (status = 404, description = "No solver energy data"),
+        (status = 204, description = "No current solver energy sample is available"),
+        (status = 404, description = "No active workspace"),
     ),
     tag = "simulation"
 )]
 pub async fn get_solver_energies_current(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<SolverEnergyCurrentResource>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -1885,23 +1894,52 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    if let Some(observation) = crate::accepted_field_materialization::current_energy_observation(snapshot) {
-        return Ok(Json(observation));
-    }
-    let latest_row =
-        latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
+    let Some(selected) = current_solver_energy_resource_for_snapshot(
+        snapshot,
+        &request_context.request_scope_epoch,
+    ) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
 
-    Ok(Json(SolverEnergyCurrentResource {
-        revision: snapshot.scalar_revision.saturating_add(crate::router_v2::handlers::sessions::status::field_revision(snapshot)),
-        step: latest_row.step,
-        time_seconds: latest_row.time,
-        exchange: latest_row.e_ex,
-        demag: latest_row.e_demag,
-        zeeman: latest_row.e_ext,
-        anisotropy: latest_row.e_ani,
-        dmi: latest_row.e_dmi,
-        total: latest_row.e_total,
-    }))
+    Ok(Json(selected).into_response())
+}
+
+/// Resolve readiness and value from the same source-qualified selection used
+/// by the current-energy endpoint. Status surfaces use this to avoid probing a
+/// resource before the current active run has published its accepted scalar pin.
+pub(crate) fn current_solver_energy_resource_for_snapshot(
+    snapshot: &SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Option<SolverEnergyCurrentResource> {
+    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        request_scope_epoch,
+    );
+    let active_docker_run = active_docker_accepted_run(snapshot);
+    // Accepted field materialization validates the durable accepted state and
+    // scene domain, but it does not carry the live worker's task/attempt/owner
+    // epoch. It therefore cannot prove which active attempt produced it. The
+    // materialization and scalar tail can both describe a prior stage or
+    // attempt even when their physical clocks are identical. The accepted-live
+    // pin above is the only source bound to the current active worker identity,
+    // so an active Docker run fails closed until that pin is available.
+    // Prestart and terminal reads retain their existing sources.
+    let materialized = (!active_docker_run)
+        .then(|| crate::accepted_field_materialization::current_energy_observation(snapshot))
+        .flatten();
+    let historical_row = (!active_docker_run)
+        .then(|| latest_energy_row(snapshot))
+        .flatten();
+    let revision = snapshot.scalar_revision.saturating_add(
+        crate::router_v2::handlers::sessions::status::field_revision(snapshot),
+    );
+    select_current_energy_resource(
+        accepted_live_row,
+        materialized,
+        historical_row,
+        active_docker_run,
+        revision,
+    )
 }
 
 #[utoipa::path(
@@ -2170,6 +2208,8 @@ fn runtime_command_readiness_resources(
 ) -> Vec<RuntimeCommandReadinessResource> {
     [
         "solve",
+        "run",
+        "relax",
         "compute_fields",
         "compute_energies",
         "mesh_build",
@@ -2219,6 +2259,7 @@ fn runtime_command_disabled_reason(
                 return Some("Accepted preparation is pending; Compute remains held.".into());
             }
             "pause" => return Some(ACCEPTED_PAUSE_UNSUPPORTED_REASON.into()),
+            "skip" => return Some(ACCEPTED_SKIP_UNSUPPORTED_REASON.into()),
             "close" => return Some(DOCKER_CLOSE_UNSUPPORTED_REASON.into()),
             "stop" => return accepted_stop_disabled_reason(snapshot),
             "compute_fields" | "compute_energies" => {
@@ -2250,7 +2291,7 @@ fn runtime_command_disabled_reason(
         "stop" => (!matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused))
             .then(|| "Runtime is not active.".into()),
         "skip" => runtime_skip_disabled_reason(snapshot, state),
-        "solve" | "compute_fields" | "compute_energies" => {
+        "solve" | "run" | "relax" | "compute_fields" | "compute_energies" => {
             runtime_compute_disabled_reason(ledger, state)
         }
         _ => Some("Unsupported runtime command.".into()),
@@ -2260,6 +2301,7 @@ fn runtime_command_disabled_reason(
 /// Reason prefix matches the rejection code published by the accepted Pause
 /// route so UI readiness and command admission stay one contract.
 const ACCEPTED_PAUSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.";
+pub(crate) const ACCEPTED_SKIP_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published.";
 /// Close is drained only by a CLI session host, which the Docker API-only
 /// runtime does not have; admission rejects it instead of queueing it forever.
 pub(crate) const DOCKER_CLOSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: the Docker API-only runtime has no session host to close; use Stop for a run, or create a new simulation to replace the session.";
@@ -2337,10 +2379,7 @@ fn runtime_skip_disabled_reason(
 
 fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommandRecord>) -> bool {
     ledger.iter().any(|record| {
-        matches!(
-            record.command.kind.as_str(),
-            "solve" | "compute_fields" | "compute_energies"
-        ) && matches!(
+        super::remesh_admission::is_compute_command(record.command.kind.as_str()) && matches!(
             record.status,
             CommandLifecycleState::Queued
                 | CommandLifecycleState::Accepted
@@ -2348,6 +2387,20 @@ fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommand
                 | CommandLifecycleState::Running
         )
     })
+}
+
+#[cfg(test)]
+#[test]
+fn runtime_stage_compute_counts_run_and_relax_as_active() {
+    for kind in ["run", "relax"] {
+        let mut record: TrackedCommandRecord = serde_json::from_value(serde_json::json!({
+            "command": {"seq":1, "command_id":"stage-command", "kind":kind, "created_at_unix_ms":1},
+            "status": "running",
+        })).unwrap();
+        assert!(has_active_compute_command(&[record.clone()].into()));
+        record.status = CommandLifecycleState::Completed;
+        assert!(!has_active_compute_command(&[record].into()));
+    }
 }
 
 #[utoipa::path(
@@ -2465,6 +2518,9 @@ pub async fn get_command_detail(
             .cloned()
             .ok_or_else(|| ApiError::not_found("command not found"))?
     };
+    let execution_binding = crate::live_compute_request::retained_command_binding(
+        &state, &request_context, &record.command,
+    ).await?;
     let (
         stage_linkage,
         run_id,
@@ -2474,35 +2530,36 @@ pub async fn get_command_detail(
         diagnostics,
     ) = {
         let guard = state.current_live_state.read().await;
-        if let Some(snapshot) = guard.as_ref() {
-            crate::ensure_current_live_request_context(
-                snapshot,
-                &request_context,
-                state
-                    .current_live_session_epoch
-                    .load(std::sync::atomic::Ordering::Acquire),
-            )?;
-        }
-        let stage_linkage = guard.as_ref().and_then(|snapshot| {
+        let snapshot = guard.as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &request_context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let bound_run_id = execution_binding.as_ref().map(|binding| binding.run_id.as_str())
+            .or_else(|| match &record.command.target {
+                Some(RuntimeCommandTarget::Run { run_id: Some(run_id) }) => Some(run_id.as_str()),
+                _ => None,
+            });
+        let current_run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str())
+            .unwrap_or(snapshot.session.run_id.as_str());
+        let command_snapshot = bound_run_id.is_none_or(|run_id| run_id == current_run_id)
+            .then_some(snapshot);
+        let stage_linkage = command_snapshot.and_then(|snapshot| {
             command_stage_linkage(
                 snapshot.stage_execution.as_ref(),
                 record.command.command_id.as_str(),
                 &record.command.target,
             )
         });
-        let run_id = guard.as_ref().map(|snapshot| {
-            snapshot
-                .run
-                .as_ref()
-                .map(|run| run.run_id.clone())
-                .unwrap_or_else(|| snapshot.session.run_id.clone())
-        });
-        let requested_execution = guard.as_ref().map(requested_execution_readback);
-        let resolved_execution = guard.as_ref().and_then(resolved_execution_readback);
+        let run_id = Some(bound_run_id.unwrap_or(current_run_id).to_owned());
+        let requested_execution = command_snapshot.map(requested_execution_readback);
+        let resolved_execution = command_snapshot.and_then(resolved_execution_readback);
         let resource_invalidations =
-            command_resource_invalidations(&record, guard.as_ref(), stage_linkage.as_ref());
+            command_resource_invalidations(&record, command_snapshot, stage_linkage.as_ref());
         let diagnostics =
-            command_diagnostic_references(&record, guard.as_ref(), stage_linkage.as_ref());
+            command_diagnostic_references(&record, command_snapshot, stage_linkage.as_ref());
         (
             stage_linkage,
             run_id,
@@ -2534,15 +2591,17 @@ pub async fn get_command_detail(
         precondition: record.command.precondition.clone(),
         client_intent_id: record.command.client_intent_id.clone(),
         requested_at_unix_ms: record.command.requested_at_unix_ms,
-        stage_id: stage_linkage
-            .as_ref()
-            .and_then(|linkage| linkage.stage_id.clone())
+        stage_id: execution_binding.as_ref().and_then(|binding| binding.step_id.clone())
+            .or_else(|| stage_linkage.as_ref().and_then(|linkage| linkage.stage_id.clone()))
             .or_else(|| command_stage_id(&record.command.target)),
         stage_index: stage_linkage
             .as_ref()
             .and_then(|linkage| linkage.stage_index)
+            .or_else(|| execution_binding.as_ref()
+                .and_then(|binding| command_stage_index(&binding.requested_target)))
             .or_else(|| command_stage_index(&record.command.target)),
         run_id,
+        execution_binding,
         requested_execution,
         resolved_execution,
         resource_invalidations,
@@ -2612,8 +2671,211 @@ pub async fn get_command_detail(
     }))
 }
 
+fn solver_energy_current_from_scalar_row(
+    row: &ScalarRow,
+    revision: u64,
+) -> SolverEnergyCurrentResource {
+    SolverEnergyCurrentResource {
+        revision,
+        step: row.step,
+        time_seconds: row.time,
+        exchange: row.e_ex,
+        demag: row.e_demag,
+        zeeman: row.e_ext,
+        anisotropy: row.e_ani,
+        dmi: row.e_dmi,
+        total: row.e_total,
+    }
+}
+
+fn active_docker_accepted_run(snapshot: &SessionStateResponse) -> bool {
+    let run = snapshot.run.as_ref();
+    active_docker_accepted_run_for_context(
+        crate::live_accepted_execution::docker_api_only_runtime(),
+        &snapshot.session.session_id,
+        run.map(|run| run.session_id.as_str()),
+        run.map(|run| run.status.as_str()),
+        &effective_runtime_status_code(snapshot),
+    )
+}
+
+fn active_docker_accepted_run_for_context(
+    docker_api_only: bool,
+    current_session_id: &str,
+    run_session_id: Option<&str>,
+    run_status: Option<&str>,
+    effective_runtime_status: &str,
+) -> bool {
+    docker_api_only
+        && run_session_id == Some(current_session_id)
+        && run_status == Some("running")
+        && effective_runtime_status == "running"
+}
+
+fn select_current_energy_resource(
+    accepted_live_row: Option<&ScalarRow>,
+    materialized: Option<SolverEnergyCurrentResource>,
+    historical_row: Option<ScalarRow>,
+    active_docker_run: bool,
+    revision: u64,
+) -> Option<SolverEnergyCurrentResource> {
+    if let Some(row) = accepted_live_row {
+        return Some(solver_energy_current_from_scalar_row(row, revision));
+    }
+    if active_docker_run {
+        return None;
+    }
+    materialized.or_else(|| {
+        historical_row.map(|row| solver_energy_current_from_scalar_row(&row, revision))
+    })
+}
+
+#[cfg(test)]
+mod accepted_live_energy_clock_tests {
+    use super::{
+        active_docker_accepted_run_for_context, select_current_energy_resource,
+        solver_energy_current_from_scalar_row,
+    };
+
+    fn scalar_row(step: u64, time: f64, total: f64) -> crate::types::ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": step,
+            "time": time,
+            "solver_dt": 1.0e-15,
+            "mx": 0.1,
+            "my": 0.0,
+            "mz": 0.9,
+            "e_ex": total * 0.1,
+            "e_demag": total * 0.2,
+            "e_ext": total * 0.3,
+            "e_ani": total * 0.1,
+            "e_dmi": total * 0.3,
+            "e_total": total,
+            "max_dm_dt": 7.0,
+            "max_h_eff": 8.0,
+            "max_h_demag": 9.0
+        }))
+        .expect("physical scalar row fixture")
+    }
+
+    fn materialized_energy(step: u64, time: f64, total: f64) -> crate::schemas::runtime::SolverEnergyCurrentResource {
+        crate::schemas::runtime::SolverEnergyCurrentResource {
+            revision: 90,
+            step,
+            time_seconds: time,
+            exchange: total * 0.1,
+            demag: total * 0.2,
+            zeeman: total * 0.3,
+            anisotropy: total * 0.1,
+            dmi: total * 0.3,
+            total,
+        }
+    }
+
+    #[test]
+    fn current_energy_projects_exact_pinned_physical_row_without_t_zero_aliasing() {
+        let row = scalar_row(1_567, 0.0, 75.0);
+
+        let response = solver_energy_current_from_scalar_row(&row, 24);
+        assert_eq!(response.step, 1_567);
+        assert_eq!(response.time_seconds, 0.0);
+        assert_eq!(response.revision, 24);
+        assert_eq!(response.exchange, 7.5);
+        assert_eq!(response.demag, 15.0);
+        assert_eq!(response.zeeman, 22.5);
+        assert_eq!(response.anisotropy, 7.5);
+        assert_eq!(response.dmi, 22.5);
+        assert_eq!(response.total, 75.0);
+    }
+
+    #[test]
+    fn zero_total_is_still_a_ready_current_energy_sample() {
+        let current = scalar_row(0, 0.0, 0.0);
+        let selected = select_current_energy_resource(Some(&current), None, None, true, 1)
+            .expect("a qualified zero-energy row is a real sample");
+
+        assert_eq!(selected.total, 0.0);
+    }
+
+    #[test]
+    fn active_docker_energy_selection_uses_exact_pin_and_rejects_same_clock_stale_sources() {
+        // Stage A's cached materialization and scalar tail can have the exact
+        // same step/time as stage B's current observation. The pinned accepted
+        // row must win by identity; without it, the active endpoint has no
+        // qualified current sample and must not expose either stale candidate.
+        let current = scalar_row(1_567, 0.0, 75.0);
+        let stale_tail = scalar_row(1_567, 0.0, 750.0);
+        let stale_materialization = materialized_energy(1_567, 0.0, 7_500.0);
+
+        let selected = select_current_energy_resource(
+            Some(&current),
+            Some(materialized_energy(1_567, 0.0, 7_500.0)),
+            Some(stale_tail.clone()),
+            true,
+            24,
+        )
+        .expect("exact accepted pin is current during the active run");
+        assert_eq!(selected.step, 1_567);
+        assert_eq!(selected.time_seconds, 0.0);
+        assert_eq!(selected.total, 75.0);
+
+        assert!(select_current_energy_resource(
+            None,
+            Some(stale_materialization),
+            Some(stale_tail),
+            true,
+            24,
+        )
+        .is_none(), "active run returns no sample instead of same-clock prior-stage data");
+    }
+
+    #[test]
+    fn inactive_energy_reads_keep_materialization_then_historical_fallback() {
+        let old_row = scalar_row(0, 0.0, 75.0);
+        let materialized = materialized_energy(0, 0.0, 100.0);
+        let selected = select_current_energy_resource(
+            None,
+            Some(materialized),
+            Some(old_row.clone()),
+            false,
+            24,
+        )
+        .expect("non-active read keeps current materialization precedence");
+        assert_eq!(selected.total, 100.0);
+
+        let historical = select_current_energy_resource(None, None, Some(old_row), false, 24)
+            .expect("non-active read keeps scalar history tail fallback");
+        assert_eq!(historical.total, 75.0);
+    }
+
+    #[test]
+    fn active_docker_guard_requires_matching_run_owner_and_running_runtime_states() {
+        assert!(active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            false, "session", Some("session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("other-session"), Some("running"), "running",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("waiting_for_compute"), "waiting_for_compute",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("completed"), "completed",
+        ));
+        assert!(!active_docker_accepted_run_for_context(
+            true, "session", Some("session"), Some("running"), "completed",
+        ));
+    }
+}
+
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    if crate::session::has_nonphysical_latest_step(snapshot) {
+    if crate::live_authored_initial_state::current_publication(snapshot).is_some()
+        || crate::session::has_nonphysical_latest_step(snapshot)
+    {
         return None;
     }
     snapshot

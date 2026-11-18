@@ -25,13 +25,24 @@ The free exchange surface law, periodic identification, and airbox closure are r
 
 ```{math}
 :label: eq-boundary-conditions-contract
-A\,\partial_n\mathbf m + D\,\mathbf n\times\mathbf m=\mathbf 0,
+2A\,\partial_{\boldsymbol{\nu}}\mathbf m + D\left[(\hat{\mathbf n}\times\boldsymbol{\nu})\times\mathbf m\right]=\mathbf 0,
 \qquad \mathbf m(\mathbf r+L_d\hat{\mathbf e}_d)=\mathbf m(\mathbf r),
 \qquad \partial_n u+\beta u=0\;\text{on }\partial\Omega_{\mathrm{air}}.
 ```
 
-The DMI term is present only for the corresponding interfacial realization and $\beta$ is the
+The DMI term is present only for the corresponding interfacial realization (with unit
+interface-symmetry normal $\hat{\mathbf{n}}$ and outward boundary normal $\boldsymbol{\nu}$;
+for bulk DMI the chiral term is $D\,\mathbf{m}\times\boldsymbol{\nu}$) and $\beta$ is the
 resolved Robin coefficient. A Dirichlet airbox closure $u=0$ is a different discrete problem.
+
+```{figure} /_static/diagrams/micromagnetic-boundary-conditions-overview.svg
+:alt: Four-panel boundary-condition overview showing (a) free-surface Neumann A d_n m = 0 via FEM natural weak integral and FDM clamped ghost cells, (b) chiral DMI boundary condition 2A d_nu m + D[(n_hat x nu) x m] = 0 with numerically computed edge canting profile, (c) periodic boundary conditions via FDM wrapped neighbor indices vs FEM reduced P^T A P system, and (d) FEM Dirichlet vs Robin airbox demagnetization closures and mechanical boundary conditions.
+:width: 100%
+:name: fig-micromagnetic-boundary-conditions-overview
+:figclass: fm-physics-figure
+
+Summary of Fullmag boundary-condition contracts: **(a)** free-surface Neumann ($A\partial_n\mathbf{m}=\mathbf{0}$) in FEM natural weak form and FDM ghost clamping; **(b)** Rohart–Thiaville chiral DMI boundary canting with inverse boundary slope $\ell_{\mathrm{DMI}} = 2A/|D|$ and edge-canting decay length $\Delta = \sqrt{A/K_{\mathrm{eff}}}$ ([arXiv:1310.0666](https://arxiv.org/abs/1310.0666)); **(c)** periodic BCs via wrapped `neighbor_index` (FDM) vs. reduced $P^T A P$ DOF elimination (FEM); **(d)** outer airbox $\Gamma_a$ closures (Dirichlet $u=0$ vs. asymptotic Robin $\partial_n u + \beta u = 0$, cf. Fredkin & Koehler 1990) and mechanical displacement constraints.
+```
 
 Boundary conditions define how the magnetization and auxiliary fields (scalar potential,
 displacement) behave at the edges of the computational domain. FullMag implements
@@ -66,13 +77,15 @@ $\partial\Omega_m$ is modified. The exchange-plus-DMI surface term becomes
 
 ```{math}
 :label: eq-dmi-modified-bc
-A\,\partial_n\mathbf{m} + D\,\mathbf{n}\times\mathbf{m} = \mathbf{0}
+2A\,\partial_{\boldsymbol{\nu}}\mathbf{m} + D\left[(\hat{\mathbf{n}}\times\boldsymbol{\nu})\times\mathbf{m}\right] = \mathbf{0}
 \qquad\text{(interfacial DMI)},
 ```
 
-or the corresponding bulk DMI form. This boundary condition arises naturally from the
-variational principle when the DMI weak form is included. FullMag enforces it through the
-FEM weak formulation; FDM implementations handle it through stencil-boundary modifications.
+or $2A\,\partial_{\boldsymbol{\nu}}\mathbf{m} + D\,(\mathbf{m}\times\boldsymbol{\nu}) = \mathbf{0}$ for
+isotropic bulk DMI. This boundary condition arises naturally from the variational principle when the
+DMI weak form is included (see {doc}`../interactions/dmi/boundary-conditions`). FullMag enforces it
+through the FEM weak formulation; FDM implementations handle it through stencil-boundary
+modifications (bulk DMI requires periodic BCs in the non-periodic FDM planner).
 
 See {doc}`../interactions/dmi/index` for the full DMI boundary-condition documentation.
 
@@ -170,16 +183,15 @@ See {doc}`../interactions/magnetoelastic/index` for details.
 | $\boldsymbol{\sigma}$ | stress tensor | $\mathrm{Pa}$ |
 | $\mathbf{m}$ | reduced magnetization | $1$ |
 | $\beta$ | Robin boundary coefficient | $\mathrm{m^{-1}}$ |
+| $\hat{\mathbf{n}}$ | unit interface-symmetry normal (interfacial DMI) | $1$ |
+| $\boldsymbol{\nu}$ | outward boundary unit normal in chiral DMI law | $1$ |
 
 (boundary-conditions-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
-2. S. Rohart and A. Thiaville, "Skyrmion confinement in ultrathin film nanostructures in
-   the presence of Dzyaloshinskii-Moriya interaction," *Physical Review B* **88**, 184422
-   (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422).
-3. D. R. Fredkin and T. R. Koehler, "Hybrid method for computing demagnetizing fields,"
-   *IEEE Trans. Magn.* **26**(2), 415 (1990).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963. [WorldCat record](https://search.worldcat.org/title/536451).
+2. D. R. Fredkin and T. R. Koehler, "Hybrid method for computing demagnetizing fields," *IEEE Transactions on Magnetics* **26**(2), 415–417 (1990). [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+3. S. Rohart and A. Thiaville, "Skyrmion confinement in ultrathin film nanostructures in the presence of Dzyaloshinskii-Moriya interaction," *Physical Review B* **88**(18), 184422 (2013). [doi:10.1103/PhysRevB.88.184422](https://doi.org/10.1103/PhysRevB.88.184422) · [arXiv:1310.0666 (OA)](https://arxiv.org/abs/1310.0666).
 
 (boundary-conditions-assumptions-and-validity)=
 ## Assumptions and validity
@@ -256,7 +268,9 @@ device transfer provenance. Host assembly is not itself GPU qualification.
 
 Python owns the requested policy, the planner resolves legality and pairs, FDM owns wrapped
 neighbors, and FEM owns weak-form/constraint realization. Demagnetization-specific closures remain
-under the demagnetization subtree.
+under the demagnetization subtree. No dedicated Control Room equation editor exists for boundary
+laws; use the applicable Geometry, Physics, or Study panel where exposed in
+{doc}`/frontend/capability-register`.
 
 (boundary-conditions-validation)=
 ## Validation
@@ -274,19 +288,6 @@ The planner status is authoritative for a concrete request; this shared page doe
 planned combination to implemented status.
 
 (boundary-conditions-source-code-index)=
-
-## Control Room crosswalk
-
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Responsibility | Repository path | Stable symbol |

@@ -2,6 +2,7 @@ import { act, useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { MESHING_SHARED_DOMAIN_MANIFEST_PATH } from "@/kernel/api/apiPaths";
 import { AUTHORING_MUTATION_DEPENDENTS } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   geometryObjectEditSessionTargetKey,
@@ -221,7 +222,8 @@ describe("GeometryObjectPanel primitive transaction", () => {
         label: "Create New box",
       });
       expect(mocks.select).toHaveBeenCalledOnce();
-      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length + 1);
+      expect(mocks.invalidate.mock.calls.filter(([key]) => key === MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toHaveLength(1);
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -459,7 +461,8 @@ describe("GeometryObjectPanel primitive transaction", () => {
         "session=A&epoch=1",
         undefined,
       );
-      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length);
+      expect(mocks.invalidate).toHaveBeenCalledTimes(AUTHORING_MUTATION_DEPENDENTS.geometry.length + 1);
+      expect(mocks.invalidate.mock.calls.filter(([key]) => key === MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toHaveLength(1);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

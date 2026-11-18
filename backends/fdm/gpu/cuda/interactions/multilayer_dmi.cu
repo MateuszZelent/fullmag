@@ -227,12 +227,14 @@ __global__ void rotated_interfacial_dmi_field_kernel(
     double inv_2dx,
     double inv_2dy,
     double inv_2dz,
-    double ms,
+    double ms_scalar,
+    const double *__restrict__ ms_field,
     int has_rotated_interfacial_dmi,
     double dmi_d_rotated_interfacial)
 {
     const uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double ms = ms_field ? ms_field[idx] : ms_scalar;
 
     if ((active_mask && active_mask[idx] == 0) ||
         ms <= 0.0 ||
@@ -332,6 +334,15 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         ctx.last_error = std::string(operation) + " requires a staged v2 multilayer plan";
         return false;
     }
+    const bool active_dmi = ctx.has_interfacial_dmi ||
+        ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi;
+    if (!active_dmi && ctx.multilayer_dmi_zero_fields_valid) {
+        ctx.last_error.clear();
+        return true;
+    }
+    // Clear the marker before any launch, including failed refreshes. On an
+    // enabled -> disabled transition, run once to erase the previous field.
+    ctx.multilayer_dmi_zero_fields_valid = false;
     if (!context_begin_compute_stream_work(ctx, operation)) {
         return false;
     }
@@ -359,17 +370,17 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
-            ctx.periodic_x ? 1 : 0,
-            ctx.periodic_y ? 1 : 0,
-            ctx.periodic_z ? 1 : 0,
+            layer.periodic_x ? 1 : 0,
+            layer.periodic_y ? 1 : 0,
+            0,
             0.5 / layer.native_grid.dx,
             0.5 / layer.native_grid.dy,
             0.5 / layer.native_grid.dz,
             layer.material.saturation_magnetisation,
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.D_interfacial,
-            ctx.has_rotated_interfacial_dmi ? 1 : 0,
-            ctx.D_rotated_interfacial,
+            layer.has_rotated_interfacial_dmi ? 1 : 0,
+            layer.D_rotated_interfacial,
             ctx.has_bulk_dmi ? 1 : 0,
             ctx.D_bulk);
     }
@@ -381,7 +392,8 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         return false;
     }
     if (!context_end_compute_stream_work(ctx, operation)) return false;
-    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
+    ctx.multilayer_dmi_zero_fields_valid = !active_dmi;
+    if (active_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
     return true;
@@ -422,6 +434,7 @@ bool launch_rotated_interfacial_dmi_field_impl(Context &ctx, const char *operati
         ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.Ms,
+        ctx.ms_field,
         ctx.has_rotated_interfacial_dmi ? 1 : 0,
         ctx.D_rotated_interfacial);
     const cudaError_t err = cudaGetLastError();

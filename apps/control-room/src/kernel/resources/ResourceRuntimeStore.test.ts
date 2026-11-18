@@ -8,6 +8,7 @@ import {
 import {
   createResourcePartialLoadError,
   ResourceRuntimeStore,
+  resolveResourceRetryDecision,
 } from "./ResourceRuntimeStore";
 import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
@@ -176,6 +177,99 @@ describe("ResourceRuntimeStore", () => {
       revision: 1,
       status: "ready",
     });
+  });
+
+  it("coalesces repeated stale in-flight revisions without duplicate snapshot notifications", async () => {
+    type Sample = { label: string; revision: number };
+    const store = new ResourceRuntimeStore<Sample>();
+    const resourceKey = "simulation/solver/energies/current";
+    const inflight = deferred<Sample>();
+    const latest = deferred<Sample>();
+    const firstLoad = vi.fn(() => inflight.promise);
+    const supersededLoad = vi.fn(async () => ({ label: "superseded", revision: 2 }));
+    const latestLoad = vi.fn(() => latest.promise);
+    const snapshots: unknown[] = [];
+    const unsubscribe = store.subscribe(resourceKey, () => {
+      snapshots.push(store.getSnapshot<Sample>(resourceKey));
+    });
+
+    const firstResult = store.ensureLoad({
+      externalRevision: 1,
+      load: firstLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    expect(snapshots).toHaveLength(1);
+
+    store.ensureLoad({
+      externalRevision: 2,
+      load: supersededLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    const queuedSnapshot = store.getSnapshot<Sample>(resourceKey);
+    expect(queuedSnapshot).toMatchObject({ status: "loading", revision: 2 });
+    expect(snapshots).toHaveLength(2);
+
+    const duplicateQueuedResult = store.ensureLoad({
+      externalRevision: 2,
+      load: latestLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    expect(duplicateQueuedResult).toBe(firstResult);
+    expect(store.getSnapshot<Sample>(resourceKey)).toBe(queuedSnapshot);
+    expect(snapshots).toHaveLength(2);
+
+    inflight.resolve({ label: "old", revision: 1 });
+    await firstResult;
+    await vi.waitFor(() => expect(latestLoad).toHaveBeenCalledTimes(1));
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+    expect(supersededLoad).not.toHaveBeenCalled();
+
+    latest.resolve({ label: "latest", revision: 2 });
+    await vi.waitFor(() => {
+      expect(store.getSnapshot<Sample>(resourceKey)).toMatchObject({
+        data: { label: "latest", revision: 2 },
+        revision: 2,
+        status: "ready",
+      });
+    });
+    unsubscribe();
+  });
+
+  it("appends the resource key to a subscriber error and rethrows the same error", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const resourceKey = "session=abc@1|simulation/solver/energies/current";
+    const subscriberError = new Error("resource subscriber failed");
+    store.subscribe(resourceKey, () => {
+      throw subscriberError;
+    });
+
+    let caught: unknown;
+    try {
+      store.updateData(resourceKey, "ready", 1);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(subscriberError);
+    expect(subscriberError.stack).toContain(`resourceKey=${resourceKey}`);
+  });
+
+  it("keeps the resource name in bounded diagnostics for a long session scope", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const resourceKey = `session=${"scope".repeat(80)}|simulation/preparation`;
+    const subscriberError = new Error("subscriber failed");
+    store.subscribe(resourceKey, () => {
+      throw subscriberError;
+    });
+
+    expect(() => store.updateData(resourceKey, "ready", 1)).toThrow(subscriberError);
+    const detail = subscriberError.stack?.split("ResourceRuntimeStore resourceKey=")[1];
+    expect(detail).toContain("session=");
+    expect(detail).toContain("|simulation/preparation");
+    expect(detail?.length).toBeLessThanOrEqual(160);
   });
 
   it("keeps warm quantity resources without refetching when switching back", async () => {
@@ -598,6 +692,126 @@ describe("ResourceRuntimeStore", () => {
       pendingRequestCount: 0,
       readyCount: 0,
     });
+  });
+
+  it("retries only an explicitly allowed transient performance conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error("observation busy"), {
+          code: "performance_observation_busy", status: 409,
+        }))
+        .mockResolvedValue("current performance");
+      const request = {
+        externalRevision: "attempt-1", load,
+        resourceKey: "diagnostics/performance|session-1",
+        retryPolicy: {
+          deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      };
+      await store.ensureLoad(request as never);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(store.getSnapshot(request.resourceKey)).toMatchObject({
+        data: "current performance", status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the extended retry cap only for allowlisted conflicts", () => {
+    const policy = {
+      maxAttempts: 3,
+      maxConflictAttempts: 41,
+      retryableConflictReasonCodes: ["performance_observation_busy"],
+    };
+    const busyConflict = Object.assign(new Error("busy"), {
+      code: "performance_observation_busy",
+      status: 409,
+    });
+
+    expect(resolveResourceRetryDecision(busyConflict, policy, 3).retry).toBe(true);
+    expect(resolveResourceRetryDecision(
+      busyConflict,
+      { maxAttempts: 3, maxConflictAttempts: 41 },
+      1,
+    ).retry).toBe(false);
+
+    const serverFailure = Object.assign(new Error("server failure"), { status: 503 });
+    expect(resolveResourceRetryDecision(serverFailure, policy, 2).retry).toBe(true);
+    expect(resolveResourceRetryDecision(serverFailure, policy, 3).retry).toBe(false);
+  });
+
+  it("keeps deadline retries capped by maxAttempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+      const pending = store.ensureLoad({
+        externalRevision: "attempt-1",
+        load,
+        resourceKey: "diagnostics/performance|timeout-budget",
+        retryPolicy: {
+          deadlineMs: 10,
+          maxAttempts: 3,
+          maxConflictAttempts: 41,
+          retryAfterMs: 1,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry other conflict codes or statuses under the performance opt-in", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const error of [
+        { code: "stale_authored_initial_state_replacement", status: 409 },
+        { code: "permission_denied", status: 409 },
+        { status: 409 },
+        { code: "performance_observation_busy", status: 403 },
+      ]) {
+        const store = new ResourceRuntimeStore<string>();
+        const load = vi.fn().mockRejectedValue(Object.assign(new Error("conflict"), error));
+        const request = {
+          externalRevision: "attempt-1", load,
+          resourceKey: "diagnostics/performance|session-1",
+          retryPolicy: {
+            deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+            retryableConflictReasonCodes: ["performance_observation_busy"],
+          },
+        };
+        await store.ensureLoad(request as never);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot(request.resourceKey).status).toBe("error");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("autonomously retries an allowlisted transient 404 using retry_after_ms", async () => {

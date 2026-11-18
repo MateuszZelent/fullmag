@@ -1054,6 +1054,7 @@ try {
   assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
 
   await qualifyVisualizationMutationStability(page, inspector, fixture);
+  await qualifyPlanarLayerListStability(page, inspector, fixture);
 
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
@@ -1545,6 +1546,188 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
   } finally {
     fixture.visualizationPatchDelayMs = 0;
     fixture.visualizationPatchRejectOnce = false;
+  }
+}
+
+function inspectorPlanarFieldLayer(id, viewScope, quantityId, colormap) {
+  return {
+    id,
+    view_scope: viewScope,
+    quantity_id: quantityId,
+    component: "magnitude",
+    colormap,
+    range: { mode: "auto", min: null, max: null },
+    raster_opacity: 1,
+    visible: true,
+    raster_visible: true,
+    vectors_visible: false,
+    points_visible: false,
+    mesh_visible: false,
+    contours_visible: false,
+    streamlines_visible: false,
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
+  };
+}
+
+/** Planar state of the layer-list regression: field-layer model with Object and Airbox rows. */
+function inspectorPlanarLayerState() {
+  return {
+    visible: true,
+    layer_model: "layers",
+    colormap: "hsl_direction",
+    component: "magnitude",
+    display_unit: null,
+    crop: null,
+    layers: {
+      boundaries: false,
+      bounds: false,
+      contours: false,
+      mesh: false,
+      points: false,
+      probes: true,
+      raster: true,
+      streamlines: false,
+      vectors: false,
+    },
+    quantity_id: "m",
+    source: { kind: "default" },
+    default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+    range: { mode: "auto", min: null, max: null },
+    raster_opacity: 1,
+    viewport_colorbar_visible: true,
+    wireframe_style: { color: "#94a3b8", opacity: 1 },
+    target_overrides: [],
+    point_style: { color: "#89b4fa", opacity: 1, size: 3 },
+    interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+    quality: "interactive",
+    resolution: { height: 256, vector_budget: 0, width: 256 },
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
+    field_overlays: [
+      inspectorPlanarFieldLayer("object:film", { kind: "object", scope_id: "film" }, "m", "hsl_direction"),
+      inspectorPlanarFieldLayer("airbox", { kind: "airbox" }, "H_demag", "viridis"),
+      inspectorPlanarFieldLayer("all", { kind: "monitor_target" }, "m", "hsl_direction"),
+    ],
+    multislice: { enabled: false, position_fractions: [0.25, 0.5, 0.75] },
+    view_scope: { kind: "monitor_target" },
+  };
+}
+
+/**
+ * Plan 2026-11-12 Task 12 Step 2: the 2D field-layer list of the Object and
+ * Airbox visualization Inspectors keeps its panel mounted and its scroll
+ * position while a layer mutation is pending and after its ACK. The 2D stage
+ * has no planar samples in this fixture; its planar data reads are answered
+ * with 409 and kept out of the Inspector request budget and error evidence.
+ */
+async function qualifyPlanarLayerListStability(page, inspector, fixture) {
+  const consoleStart = consoleErrorEvents.length;
+  const previousVisualization = structuredClone(fixture.visualization);
+  fixture.visualization = { ...fixture.visualization, planar: inspectorPlanarLayerState() };
+  fixture.planarLayerListEnabled = true;
+  fixture.visualizationPatchDelayMs = 180;
+  const targets = [
+    { label: "Object", layerId: "object:film", name: "Film", nodeId: "model:object:film:visualization", owner: "object-visualization" },
+    { label: "Airbox", layerId: "airbox", name: "Airbox", nodeId: "model:airbox:visualization", owner: "airbox-visualization" },
+  ];
+  const observations = [];
+  try {
+    await reloadInspectorDocument(page, fixture, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    }, "planar-layer-list");
+    await inspector.waitFor({ state: "visible" });
+    for (const target of targets) {
+      await waitForInspectorRequestQuiet(page, fixture);
+      await selectInspectorNode(page, inspector, target.nodeId, { owner: target.owner, label: target.name });
+      const planarContext = inspector
+        .getByRole("radiogroup", { name: "Visualization context" })
+        .getByRole("radio", { name: "2D", exact: true });
+      if ((await planarContext.getAttribute("aria-checked")) !== "true") await planarContext.click();
+      await openPlanarViewGroup(inspector);
+      const list = inspector.locator('[data-slot="planar-field-layer-list"]');
+      await list.waitFor({ state: "visible", timeout: 30_000 });
+      const row = list.locator(`li[data-layer-id="${target.layerId}"]`);
+      await row.waitFor({ state: "visible" });
+      const panel = inspector.locator(".fm-inspector-panel").first();
+      const eye = row.getByRole("button", { name: /^(Show|Hide) / });
+      await eye.scrollIntoViewIfNeeded();
+      const identity = `${target.label.toLowerCase()}-planar-layer-list-stability`;
+      const baseline = await captureInspectorMutationSnapshot(panel, { marker: identity, scrollTop: 80 });
+      assert(baseline.scrollTop > 0, `${target.label}: 2D Inspector fixture was not scrollable.`);
+      const requestStart = fixture.requests.length;
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        await eye.evaluate((control) => control.click());
+        await page.waitForTimeout(40);
+        const duringMutation = await captureInspectorMutationSnapshot(panel);
+        assert(
+          duringMutation.connected && duringMutation.marker === identity,
+          `${target.label}: 2D layer list Inspector remounted during mutation.`,
+        );
+        assert(
+          duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
+          `${target.label}: 2D layer mutation changed Inspector opacity or started an opacity animation.`,
+        );
+        assert(
+          Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
+          `${target.label}: 2D layer mutation reset Inspector scroll: baseline=${baseline.scrollTop}, during=${duringMutation.scrollTop}.`,
+        );
+        await page.waitForTimeout(fixture.visualizationPatchDelayMs + 80);
+        const afterAck = await captureInspectorMutationSnapshot(panel);
+        assert(
+          afterAck.connected && afterAck.marker === identity,
+          `${target.label}: 2D layer list Inspector remounted after mutation ACK.`,
+        );
+        assert(
+          Math.abs(afterAck.scrollTop - baseline.scrollTop) <= 1,
+          `${target.label}: 2D layer mutation ACK reset Inspector scroll: baseline=${baseline.scrollTop}, after=${afterAck.scrollTop}.`,
+        );
+      }
+      await waitForInspectorRequestQuiet(page, fixture);
+      const visible = fixture.visualization.planar.field_overlays
+        .find((layer) => layer.id === target.layerId)?.visible;
+      assert(visible === true, `${target.label}: four visibility toggles did not return the layer to visible.`);
+      observations.push({
+        target: target.label,
+        interactions: 4,
+        patchCount: fixture.requests
+          .slice(requestStart)
+          .filter((request) => request === "PATCH /v2/sessions/current/visualization/state")
+          .length,
+        scrollTop: baseline.scrollTop,
+      });
+    }
+    return observations;
+  } finally {
+    const threeD = inspector
+      .getByRole("radiogroup", { name: "Visualization context" })
+      .getByRole("radio", { name: "3D", exact: true });
+    if (await threeD.count() === 1 && (await threeD.getAttribute("aria-checked")) !== "true") {
+      await threeD.click().catch(() => {});
+    }
+    fixture.visualizationPatchDelayMs = 0;
+    fixture.planarLayerListEnabled = false;
+    fixture.visualization = { ...previousVisualization, revision: fixture.visualization.revision };
+    // The 2D stage's planar reads are answered with 409 on purpose; their
+    // console echoes belong to this scenario, not to the Inspector.
+    for (let index = consoleErrorEvents.length - 1; index >= consoleStart; index -= 1) {
+      if (consoleErrorEvents[index].text.includes("the server responded with a status of 409 (Conflict)")) {
+        consoleErrorEvents.splice(index, 1);
+      }
+    }
   }
 }
 
@@ -2156,7 +2339,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 
   try {
     await page.waitForFunction(
-      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes("Magnetic texture saved."),
+      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes(
+        "Magnetic texture applied. Initial magnetization is pending.",
+      ),
       undefined,
       { timeout: 5_000 },
     );
@@ -2207,8 +2392,15 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   assert(evidence.renderCount <= 3,
     `Magnetic Texture render count exceeded budget: ${evidence.renderCount}.`);
   const mutationRequests = fixture.requests.slice(requestStart);
+  assert(
+    fixture.manifest.source_scene_revision === fixtureSnapshot.manifest.source_scene_revision &&
+      fixture.manifest.validated_for_scene_revision === fixture.revision,
+    "Magnetic texture Apply must retain the mesh build and advance its scene validation.",
+  );
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  assert(!mutationRequests.some((entry) => entry.includes("/data/fields/m/samples/vector")),
+    "Viewport requested magnetization vectors while the applied initial state was pending.");
   const transactionMutationCount = mutationRequests.filter(
     (entry) => entry === "POST /v2/sessions/current/model/transactions",
   ).length;
@@ -2220,6 +2412,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     `Magnetic texture request budget did not contain exactly one model transaction and sync: ${JSON.stringify(mutationRequests)}.`,
   );
   fixture.texturePatchDelayMs = 0;
+  fixture.textureInitialStatePending = false;
   fixture.manifest = fixtureSnapshot.manifest;
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
@@ -2252,6 +2445,20 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   notFoundResponses.length = 0;
   notFoundResponseEvidence.length = 0;
   notFoundResponseEvidenceTasks.length = 0;
+}
+
+async function expandPhysicsInteractionChecklist(inspector) {
+  const interactionSection = inspector.getByRole("button", {
+    name: "Physics Interaction",
+    exact: true,
+  });
+  assert(
+    await interactionSection.count() === 1,
+    "Physics Interaction checklist section is missing from the interaction inspector.",
+  );
+  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
+    await interactionSection.click();
+  }
 }
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
@@ -2295,6 +2502,8 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   await globalNodeMetadata
     .locator(`dd[title="${globalRotatedNodeId}"]`)
     .waitFor({ state: "attached", timeout: 60_000 });
+
+  await expandPhysicsInteractionChecklist(inspector);
 
   const rotatedToggle = inspector.getByRole("checkbox", {
     name: /^Rotated interfacial DMI(?:\s|$)/,
@@ -2349,6 +2558,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     owner: "physics-interaction",
     label: "Object interfacial DMI recovery",
   });
+  await expandPhysicsInteractionChecklist(inspector);
   const interfacialToggle = inspector.getByRole("checkbox", {
     name: /^Interfacial DMI(?:\s|$)/,
   });
@@ -4258,6 +4468,7 @@ function createInspectorFixture() {
     scene,
     topology,
     texturePatchDelayMs: 0,
+    textureInitialStatePending: false,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
     geometryMutationBodies: [],
@@ -4266,6 +4477,8 @@ function createInspectorFixture() {
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
+    planarLayerListEnabled: false,
+    planarDataRequests: [],
   };
 }
 
@@ -4387,6 +4600,21 @@ async function installInspectorFixtureApi(page, fixture) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    // The mounted 2D stage also reads the geometry realization for its object
+    // section list; this fixture has none, so it is unavailable like the samples.
+    if (
+      fixture.planarLayerListEnabled &&
+      request.method() === "GET" &&
+      (/\/planar-(default|monitors)\//.test(path) ||
+        path === "/v2/sessions/current/model/geometry/realizations/current")
+    ) {
+      fixture.planarDataRequests.push(`${request.method()} ${path}`);
+      return fulfillJson(
+        route,
+        { code: "inspector_fixture_planar_unavailable", message: "The Inspector fixture has no planar samples." },
+        409,
+      );
+    }
     fixture.requests.push(`${request.method()} ${path}${url.search}`);
     const requestKey = `${request.method()} ${path}`;
     const requestLimit =
@@ -4477,6 +4705,21 @@ async function installInspectorFixtureApi(page, fixture) {
         sample_time_unix_ms: 1,
         status: "unavailable",
         utilization_cpu_percent: 0,
+      });
+    }
+    if (path === "/v2/sessions/current/diagnostics/performance" && request.method() === "GET") {
+      // The fixture has no native worker or performance samples. Keep the
+      // resource explicit while the catch-all continues to reject route drift.
+      return fulfillJson(route, {
+        elapsed_monotonic_ns: 0,
+        gpu_scope: "unavailable",
+        points: [],
+        reason: "Inspector fixture does not run a native worker.",
+        revision: `inspector-performance-${fixture.revision}`,
+        rows_dropped: 0,
+        sample_sequence: 0,
+        state: "unavailable",
+        unique_step_callback_records: 0,
       });
     }
     if (path === "/v2/sessions/current/diagnostics/gpu" && request.method() === "GET") {
@@ -4655,7 +4898,17 @@ async function installInspectorFixtureApi(page, fixture) {
           transaction_kind: body.kind,
         });
       }
-      if (body.kind !== "patch_magnetization" || body.object_id !== "film") {
+      const target = body.target;
+      const operationId = body.operation_id;
+      const headers = request.headers();
+      if (
+        body.kind !== "apply_magnetization" ||
+        target?.kind !== "object" || target.object_id !== "film" ||
+        body.base_revision !== fixture.revision ||
+        !/^[a-f0-9]{32}$/.test(operationId) ||
+        headers["idempotency-key"] !== operationId ||
+        !headers["x-fullmag-session-scope"]
+      ) {
         fixture.unknownMutationPaths.push(request.method() + " " + path + url.search);
         return fulfillJson(
           route,
@@ -4667,20 +4920,30 @@ async function installInspectorFixtureApi(page, fixture) {
       if (fixture.texturePatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
       }
-      const asset = body.asset ?? null;
+      const asset = target.asset;
+      const object = fixture.scene.objects.find((candidate) => candidate.id === target.object_id);
+      if (!object) return fulfillJson(route, { error: { code: "inspector_fixture_object_missing" } }, 404);
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
-      fixture.scene.magnetization_assets = asset ? [asset] : [];
-      fixture.scene.objects[0] = {
-        ...fixture.scene.objects[0],
-        magnetization_ref: body.magnetization_ref ?? null,
-      };
+      fixture.manifest.validated_for_scene_revision = fixture.revision;
+      fixture.textureInitialStatePending = true;
+      if (asset) {
+        fixture.scene.magnetization_assets = [
+          ...(fixture.scene.magnetization_assets ?? []).filter((existing) => existing.id !== asset.id),
+          asset,
+        ];
+      }
+      object.magnetization_ref = asset?.id ?? null;
       return fulfillJson(route, {
         committed_scene: fixture.scene,
         scene_revision: fixture.revision,
         transaction_kind: body.kind,
+        magnetization_apply: {
+          operation_id: operationId,
+          scene_revision: fixture.revision,
+          scopes: [{ object_id: target.object_id }],
+          status: "initial_state_pending",
+        },
       });
     }
     if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
@@ -5017,6 +5280,17 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
+    if (path === "/v2/sessions/current/simulation/stages/results") {
+      return fulfillJson(route, {
+        revision: "study-results:" + fixture.revision,
+        project_id: "inspector-routing-smoke",
+        scene_revision: fixture.revision,
+        authored_input_sha256: null,
+        authored_stage_ids: [],
+        results: [],
+        next_cursor: null,
+      });
+    }
     if (path === "/v2/sessions/current/simulation/stages/execution") {
       const modal = fixture.analysisProduct === "modal_eigen";
       const stageId = modal ? "eigen-dispersion" : "frequency-response";
@@ -5224,6 +5498,7 @@ async function installInspectorFixtureApi(page, fixture) {
     }
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path, fixture));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
+      if (fixture.textureInitialStatePending) return fulfillEmpty(route, 204);
       const fieldVector = inspectorFieldVector(path, fixture);
       return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
     }
@@ -5262,6 +5537,15 @@ function mergeInspectorVisualizationState(state, patch) {
     ...state,
     ...patch,
     layers: { ...state.layers, ...(patch.layers ?? {}) },
+    ...(patch.planar && state.planar
+      ? {
+          planar: {
+            ...state.planar,
+            ...patch.planar,
+            layers: { ...state.planar.layers, ...(patch.planar.layers ?? {}) },
+          },
+        }
+      : {}),
     quantity: { ...state.quantity, ...(patch.quantity ?? {}) },
     revision: state.revision,
   };
@@ -5473,6 +5757,9 @@ function inspectorDomainMeta(fixture) {
 }
 
 function inspectorFieldCatalog(fixture) {
+  if (fixture.textureInitialStatePending) {
+    return { domain_generation_id: 1, quantities: [], revision: fixture.revision };
+  }
   return {
     domain_generation_id: 1,
     quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({
@@ -6533,4 +6820,11 @@ async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fix
   await guide.getByRole("button", { name: "Hide steps", exact: true }).click();
   assert(!(await guide.getByRole("list", { name: "Model readiness checklist" }).count()), "Hide steps must release workspace space for expert navigation.");
   await assertHealthyViewportCanvas(page, "Collapsed first-run guide");
+}
+
+/** Opens the collapsible "2D view" Inspector group that holds the field layer list (spec 23 §5). */
+async function openPlanarViewGroup(scope) {
+  const trigger = scope.locator('[data-slot="inspector-group-trigger"]').filter({ hasText: /^2D view/ }).first();
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
 }

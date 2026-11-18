@@ -10,29 +10,24 @@ owner: fullmag-public-docs
 # Provenance
 
 (python-api-runtime-provenance-problem-statement)=
-<!-- (problem-statement)= -->
 ## Contract
 Provenance keeps requested intent separate from resolved execution. A result records the requested
 backend/mode/precision together with the actual run status and artifact directory.
 
 (python-api-runtime-provenance-governing-equations)=
-<!-- (governing-equations)= -->
 ## Governing equations
 No physical equation is owned here.
 
 (python-api-runtime-provenance-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
-All fields are identifiers or status strings.
+All fields are dimensionless policy identifiers or status strings ($1$).
 
 (python-api-runtime-provenance-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Requested and resolved values are normalized but never conflated; a `planned` result is distinct
 from a `completed` one.
 
 (python-api-runtime-provenance-python-api)=
-<!-- (python-api)= -->
 ## Python API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -71,72 +66,56 @@ Provenance is attached to the study the script authored; the resolved record is 
 executed `Result` (see {doc}`../runtime/results`).
 
 (python-api-runtime-provenance-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 Lowering preserves the requested descriptors (`requested_backend`, `execution_mode`,
 `execution_precision`); resolved execution is runtime output.
 
 (python-api-runtime-provenance-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 
-Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
 
 A capability failure must state the unsatisfied combination; it never silently substitutes another
 backend, device, precision, or physics term.
 
 (python-api-runtime-provenance-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 Planner resolution and runner status are the authoritative provenance sources.
 
 (python-api-runtime-provenance-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## Implementation mapping
 Anchors: `packages/fullmag-py/src/fullmag/model/problem.py` (`RuntimeSelection`) and
 `packages/fullmag-py/src/fullmag/runtime/simulation.py` (`class Result`).
 
 (python-api-runtime-provenance-validation)=
-<!-- (validation)= -->
 ## Validation
 Capability and round-trip tests require requested/resolved separation to remain observable.
 
 (python-api-runtime-provenance-limitations)=
-<!-- (limitations)= -->
 ## Limitations
 Provenance records resolution; it does not by itself prove that a GPU lane executed on a current
 device.
 
 (python-api-runtime-provenance-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## Scientific bibliography
 No physical model is introduced.
 
-(python-api-runtime-provenance-source-code-index)=
-<!-- (source-code-index)= -->
-
-## Control Room crosswalk
+## Control Room support
 
 Status: Runtime and provenance data are inspection-only; they are not standalone authoring controls.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `Python-only` | Authored in Python |
 
-not implemented: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
+Runtime-selection and provenance parameters outside the workspace runtime panel remain Python-only.
+See [Control Room capability register](/frontend/capability-register) for the UI support matrix.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx` (`RuntimeExplorerInspectorPanels`).
 
+(python-api-runtime-provenance-source-code-index)=
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Requested selection | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested descriptors | Ownership test |
-| Resolved result | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved status | Ownership test |
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Requested runtime descriptors and provenance metadata. | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested runtime descriptors and provenance metadata. | Source-map validator and focused API tests |
-| Resolved execution result and status. | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved execution result and status. | Source-map validator and focused API tests |
+| Requested selection | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | [`class RuntimeSelection`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/model/problem.py#L1764) | Requested descriptors and provenance metadata | Ownership and API contract tests |
+| Resolved result | [`packages/fullmag-py/src/fullmag/runtime/simulation.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | [`class Result`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/runtime/simulation.py#L77) | Resolved execution result and status | Ownership and API contract tests |

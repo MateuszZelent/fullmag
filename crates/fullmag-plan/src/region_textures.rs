@@ -1,4 +1,10 @@
-use fullmag_ir::{InitialMagnetizationIR, RegionConflictPolicyIR};
+use fullmag_ir::{
+    BackendPlanIR, ExecutionPlanIR, FdmRegionLegendEntryIR, InitialMagnetizationIR, ProblemIR,
+    RegionConflictPolicyIR, RegionRefIR,
+};
+use std::collections::BTreeSet;
+
+use crate::PlanError;
 
 use crate::magnetization_textures::TextureSamplePoint;
 use crate::magnetization_textures_v2::sample_preset_texture_versioned;
@@ -93,6 +99,122 @@ pub(crate) fn resolve_region_texture_ownership(
         matched_counts,
         winner_counts,
     })
+}
+
+/// Select the native degrees of freedom replaced by authored magnetization.
+/// Layout identity and artifact validation belong to the caller.
+pub fn study_magnetization_overlay_mask(
+    problem: &ProblemIR,
+    plan: &ExecutionPlanIR,
+    scopes: &[RegionRefIR],
+) -> Result<Vec<bool>, PlanError> {
+    if scopes.is_empty() {
+        return Err(overlay_error("initial-state overlay has no scopes"));
+    }
+    if let BackendPlanIR::Fem(fem) = &plan.backend_plan {
+        if fem.fe_order != 1 {
+            return Err(overlay_error("FEM magnetization overlay requires a P1 layout"));
+        }
+        return crate::fem::fem_study_magnetization_overlay_mask(problem, fem, scopes);
+    }
+
+    let mut enabled_scopes = Vec::new();
+    for scope in scopes {
+        if !problem.magnets.iter().any(|magnet| {
+            magnet.object_id.as_deref().unwrap_or(&magnet.name) == scope.object_id
+        }) {
+            return Err(overlay_error(format!("unknown overlay object '{}'", scope.object_id)));
+        }
+        if let Some(region_id) = &scope.region_id {
+            let region = problem.object_regions.iter().find(|region| {
+                region.owner_object == scope.object_id && region.region_id == *region_id
+            }).ok_or_else(|| overlay_error(format!(
+                "unknown overlay region '{region_id}' on '{}'", scope.object_id
+            )))?;
+            if !region.enabled {
+                continue;
+            }
+        }
+        enabled_scopes.push(scope);
+    }
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            if problem.magnets.len() != 1 {
+                return Err(overlay_error("single-grid FDM overlay requires exactly one object"));
+            }
+            fdm_overlay_mask(
+                &enabled_scopes,
+                fdm.initial_magnetization.len(),
+                fdm.active_mask.as_deref(),
+                Some(&fdm.region_mask),
+                fdm.grid_certificate.as_ref().map(|certificate| certificate.region_legend.as_slice()),
+            )
+        }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            for scope in &enabled_scopes {
+                if fdm.layers.iter().filter(|layer| layer.object_id == scope.object_id).count() != 1 {
+                    return Err(overlay_error(format!(
+                        "overlay object '{}' has no unique native FDM layer", scope.object_id
+                    )));
+                }
+            }
+            let mut mask = Vec::new();
+            for layer in &fdm.layers {
+                let layer_scopes = enabled_scopes.iter().copied()
+                    .filter(|scope| scope.object_id == layer.object_id)
+                    .collect::<Vec<_>>();
+                mask.extend(fdm_overlay_mask(
+                    &layer_scopes,
+                    layer.initial_magnetization.len(),
+                    layer.native_active_mask.as_deref(),
+                    layer.native_region_mask.as_deref(),
+                    layer.native_region_legend.as_deref(),
+                )?);
+            }
+            Ok(mask)
+        }
+        _ => Err(overlay_error("accepted backend does not support a magnetization overlay")),
+    }
+}
+
+fn overlay_error(reason: impl Into<String>) -> PlanError {
+    PlanError { reasons: vec![reason.into()] }
+}
+
+fn fdm_overlay_mask(
+    scopes: &[&RegionRefIR],
+    samples: usize,
+    active_mask: Option<&[bool]>,
+    region_mask: Option<&[u32]>,
+    legend: Option<&[FdmRegionLegendEntryIR]>,
+) -> Result<Vec<bool>, PlanError> {
+    if scopes.is_empty() {
+        return Ok(vec![false; samples]);
+    }
+    if active_mask.is_some_and(|mask| mask.len() != samples) {
+        return Err(overlay_error("FDM overlay active mask differs from the native grid"));
+    }
+    let is_active = |index: usize| active_mask.map_or(true, |mask| mask[index]);
+    if scopes.iter().any(|scope| scope.region_id.is_none()) {
+        return Ok((0..samples).map(is_active).collect());
+    }
+
+    let region_mask = region_mask.filter(|mask| mask.len() == samples)
+        .ok_or_else(|| overlay_error("FDM overlay has no matching native region mask"))?;
+    let legend = legend.ok_or_else(|| overlay_error("FDM overlay has no native region legend"))?;
+    let mut numeric_ids = BTreeSet::new();
+    for scope in scopes {
+        let mut matching = legend.iter().filter(|entry| {
+            entry.object_id == scope.object_id && scope.region_id.as_deref() == Some(entry.region_id.as_str())
+        });
+        let entry = matching.next().filter(|_| matching.next().is_none()).ok_or_else(|| {
+            overlay_error(format!("FDM overlay scope {scope:?} has no unique native region ID"))
+        })?;
+        numeric_ids.insert(entry.numeric_id);
+    }
+    Ok(region_mask.iter().enumerate().map(|(index, id)| {
+        is_active(index) && numeric_ids.contains(id)
+    }).collect())
 }
 
 /// Materialize an initial-magnetization descriptor on a strict selection mask.

@@ -482,13 +482,23 @@ fn energy_terms(scene: &SceneDocument) -> Vec<Value> {
     if scene.study.demag_enabled {
         terms.push(json!({ "kind": "demag", "scope": "study" }));
     }
+    if let Some(Some(thermal)) = &scene.study.thermal_noise {
+        terms.push(json!({
+            "kind": "thermal_noise", "scope": "study",
+            "temperature": thermal.temperature, "seed": thermal.seed,
+        }));
+    }
     if let Some(value) = scene.study.rotated_interfacial_dmi {
-        if value != 0.0 {
-            terms.push(json!({
+        if value != 0.0 || scene.study.rotated_interfacial_dmi_object_ids.is_some() {
+            let mut term = json!({
                 "kind": "rotated_interfacial_dmi",
                 "scope": "study",
                 "value": value
-            }));
+            });
+            if let Some(ids) = &scene.study.rotated_interfacial_dmi_object_ids {
+                term["object_ids"] = json!(ids);
+            }
+            terms.push(term);
         }
     }
     terms
@@ -527,6 +537,15 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
     let object = payload
         .as_object_mut()
         .expect("discretization payload is a JSON object");
+    if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
+        object.insert("fem_domain_mesh".to_string(), json!(reference));
+    }
+    if let Some(resources) = scene.study.compute_resources.as_ref() {
+        object.insert(
+            "compute_resources".to_string(),
+            serde_json::to_value(resources).expect("compute resources are serializable"),
+        );
+    }
     if let Some(profile) = scene.study.execution_profile.as_ref() {
         object.insert(
             "execution_profile".to_string(),
@@ -601,5 +620,23 @@ mod canonical_compatibility_tests {
             model.canonical_sha256().expect("canonical digest"),
             EXPECTED_SHA256.trim(),
         );
+    }
+}
+
+#[cfg(test)]
+mod rotated_dmi_scope_tests {
+    use super::*;
+
+    #[test]
+    fn projection_keeps_scoped_targets_and_legacy_global_shape() {
+        let mut scene = SceneDocument::default();
+        scene.study.rotated_interfacial_dmi = Some(0.004);
+        let global = energy_terms(&scene).into_iter().find(|t| t["kind"] == "rotated_interfacial_dmi").unwrap();
+        assert!(global.get("object_ids").is_none());
+        scene.study.rotated_interfacial_dmi = Some(0.0);
+        scene.study.rotated_interfacial_dmi_object_ids = Some(vec!["film".into()]);
+        let scoped = energy_terms(&scene).into_iter().find(|t| t["kind"] == "rotated_interfacial_dmi").unwrap();
+        assert_eq!(scoped["object_ids"], json!(["film"]));
+        assert_eq!(scoped["value"], 0.0);
     }
 }

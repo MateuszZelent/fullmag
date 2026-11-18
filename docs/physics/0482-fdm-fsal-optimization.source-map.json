@@ -8,7 +8,7 @@
   ],
   "equations": [
     {"id": "fsal-llg-rhs", "symbols": ["m", "t", "f", "xi", "gamma", "alpha", "H_eff"], "sources": ["rk23_fp64", "rk23_fp32", "dp45_fp64", "dp45_fp32"], "publication_anchor": "Gilbert-form LLG RHS"},
-    {"id": "fsal-reuse", "symbols": ["K", "f", "projection", "m", "t", "h", "xi"], "sources": ["fsal_policy", "rk23_fp64", "rk23_fp32", "dp45_fp64", "dp45_fp32"], "publication_anchor": "accepted endpoint FSAL candidate"},
+    {"id": "fsal-reuse", "symbols": ["K", "f", "projection", "m", "t", "h", "xi"], "sources": ["fsal_policy", "rk23_fp64", "rk23_fp32", "dp45_fp64", "dp45_fp32", "orchestration_stream", "stream_order_contract", "runner_per_step", "macrospin_gate"], "publication_anchor": "accepted endpoint FSAL candidate"},
     {"id": "fsal-identity", "symbols": ["identity", "state_revision", "t", "h", "source_revision", "field_revision", "transport_revision", "transport_state", "projection_revision", "integrator_revision", "precision_revision", "T", "waveform"], "sources": ["fsal_policy"], "publication_anchor": "exact endpoint identity and invalidation guards"},
     {"id": "fsal-brown-amplitude", "symbols": ["sigma_H", "alpha", "k_B", "T", "gamma", "mu0", "M_s", "V", "h"], "sources": ["thermal_fp64", "thermal_fp32"], "publication_anchor": "Brown thermal field amplitude"}
   ],
@@ -75,7 +75,12 @@
     {"id": "multilayer_allocation_cap_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "void excessive_multilayer_allocation_count_is_rejected_before_allocation", "responsibility": "Prove that the bounded device-allocation count policy rejects excessive layer counts before setup."},
     {"id": "multilayer_cufft_bound_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "void cufft_upper_bound_is_rejected_before_any_allocation", "responsibility": "Prove that the documented conservative cuFFT work-area upper bound participates in atomic preflight."},
     {"id": "multilayer_map_budget_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "void push_pull_maps_are_rejected_as_part_of_the_aggregate", "responsibility": "Prove that exact push and pull map storage participates in atomic preflight."},
-    {"id": "multilayer_d07_budget_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "void d07_batch_workspace_is_rejected_as_part_of_the_aggregate", "responsibility": "Prove that both batched D-07 buffers participate in atomic preflight."}
+    {"id": "multilayer_d07_budget_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "void d07_batch_workspace_is_rejected_as_part_of_the_aggregate", "responsibility": "Prove that both batched D-07 buffers participate in atomic preflight."},
+    {"id": "runner_per_step", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs", "symbol": "adaptive_batch_execution_eligible", "responsibility": "Route adaptive runs outside the batched graph to the per-step loop, which carries dt_suggested into the next attempt."},
+    {"id": "orchestration_stream", "path": "backends/fdm/include/context.hpp", "symbol": "context_orchestration_stream", "responsibility": "Name the stream that orders per-step stage kernels and their backup, FSAL and restore copies."},
+    {"id": "stream_order_contract", "path": "backends/fdm/tests/adaptive_error_reduction_contract.cpp", "symbol": "void adaptive_d2d_copies_use_orchestration_stream", "responsibility": "Require per-step RK23/DP45 copies on the orchestration stream, not the nonblocking compute stream."},
+    {"id": "macrospin_case", "path": "scripts/fdm_adaptive_macrospin_case.py", "symbol": "INTEGRATOR", "responsibility": "Define the adaptive RK macrospin case for the per-step lane gate."},
+    {"id": "macrospin_gate", "path": "scripts/fdm_adaptive_macrospin_check.py", "symbol": "exact_m", "responsibility": "Compare table rows with the exact macrospin solution, step count and run-to-run determinism."}
   ],
   "public_api": {
     "parameters": [

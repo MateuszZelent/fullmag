@@ -830,6 +830,9 @@ export function buildStudyInteractionPatchFromDraft(
         patch: {
           study: {
             rotated_interfacial_dmi: null,
+            ...((scene?.study as Record<string, unknown> | undefined)?.rotated_interfacial_dmi_object_ids != null
+              ? { rotated_interfacial_dmi_object_ids: null }
+              : {}),
           },
         },
       };

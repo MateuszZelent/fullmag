@@ -13,8 +13,8 @@ use crate::router_v2::handlers::data::fields::{
     load_fdm_multilayer_airbox_carrier_for_quantity,
 };
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    full_field_publication_carrier_identity, resolve_current_spatial_field_metadata,
-    ResolvedSpatialField,
+    authored_multilayer_publication_carrier_identity, full_field_publication_carrier_identity,
+    multilayer_native_carrier_fingerprint, resolve_current_spatial_field_metadata, ResolvedSpatialField,
 };
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
@@ -225,12 +225,22 @@ pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> 
                 matches!(live.status.as_str(), "bootstrapping" | "materializing_script"))) {
         return "failed".to_string();
     }
-    if snapshot.session.status == "waiting_for_compute" {
+    if matches!(snapshot.session.status.as_str(), "waiting_for_compute" | "closing" | "closed") {
         return snapshot.session.status.clone();
     }
 
     if let Some(stage_execution) = snapshot.stage_execution.as_ref() {
-        return stage_execution.runtime_state.as_str().to_string();
+        let stage_status = stage_execution.runtime_state.as_str();
+        if snapshot.session.status == "awaiting_command"
+            && matches!(stage_status, "completed" | "failed" | "cancelled")
+            && snapshot.run.as_ref().is_some_and(|run| {
+                matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+            })
+        {
+            // The completed stage remains visible with its original status.
+            return snapshot.session.status.clone();
+        }
+        return stage_status.to_string();
     }
 
     snapshot
@@ -1171,6 +1181,7 @@ struct EffectiveFieldSource {
     value_count: usize,
     grid: [u32; 3],
     payload_hash: u64,
+    authored_frame_hash: Option<u64>,
 }
 
 impl EffectiveFieldSource {
@@ -1203,6 +1214,11 @@ pub(crate) fn resolved_current_field_source<'a>(
             latest_field_source_is_qualified(snapshot, quantity, value)
                 && json_field_matches_current_domain(snapshot, quantity, n_comp, value)
         });
+    if crate::live_authored_initial_state::current_publication(snapshot).is_some() {
+        // The prepared carrier is the selected view. A legacy solver clock
+        // or an older cached field must not replace it.
+        return latest.map(ResolvedCurrentFieldSource::Latest);
+    }
     let preview = snapshot.preview_cache.get(quantity).filter(|field| {
         preview_field_source_is_qualified(snapshot, field)
             && field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
@@ -1266,9 +1282,12 @@ fn latest_field_source_step(
         })
 }
 
-fn qualified_live_magnetization(
+pub(crate) fn qualified_live_magnetization(
     snapshot: &SessionStateResponse,
 ) -> Option<(&[f64], [u32; 3], u64)> {
+    if crate::live_authored_initial_state::current_publication(snapshot).is_some() {
+        return None;
+    }
     let state = snapshot.live_state.as_ref()?;
     let step = &state.latest_step;
     if !step.is_physical_observation() || !step.time.is_finite() || step.time < 0.0 {
@@ -1311,6 +1330,17 @@ fn effective_field_source(
         ResolvedCurrentFieldSource::Latest(value) => {
             let (value_count, payload_hash) = json_field_payload_signature(value);
             let point_count = value_count / n_comp;
+            let authored_frame_hash = crate::live_authored_initial_state::current_publication(snapshot)
+                .filter(|publication| {
+                    value.pointer("/observation_frame/observation_frame_id").and_then(Value::as_str)
+                        == Some(publication.frame.observation_frame_id.as_str())
+                })
+                .map(|publication| {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    publication.frame.observation_frame_id.hash(&mut hasher);
+                    hasher.finish()
+                });
             Some(EffectiveFieldSource {
                 kind: EffectiveFieldSourceKind::Latest,
                 source_step: value.get("source_step").and_then(Value::as_u64),
@@ -1328,6 +1358,7 @@ fn effective_field_source(
                 value_count,
                 grid: json_field_grid(value).unwrap_or([point_count as u32, 1, 1]),
                 payload_hash,
+                authored_frame_hash,
             })
         }
         ResolvedCurrentFieldSource::Preview(field) => Some(EffectiveFieldSource {
@@ -1344,6 +1375,7 @@ fn effective_field_source(
             value_count: field.vector_field_values.len(),
             grid: field.preview_grid,
             payload_hash: field_values_hash(&field.vector_field_values),
+            authored_frame_hash: None,
         }),
         ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
             let latest_step = &snapshot.live_state.as_ref()?.latest_step;
@@ -1362,6 +1394,7 @@ fn effective_field_source(
                 value_count: values.len(),
                 grid,
                 payload_hash: field_values_hash(values),
+                authored_frame_hash: None,
             })
         }
     }
@@ -1502,7 +1535,27 @@ fn mesh_build_resource_signature(mesh_workspace: &Value) -> Value {
     })
 }
 
-fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mesh_workspace: Value) {
+fn apply_mesh_workspace_update(current: &mut SessionStateResponse, mut mesh_workspace: Value) {
+    // Accepted solver preparation owns the active carrier. Preserve the
+    // separate manual Build Mesh asset for a later exact-input reuse check.
+    if mesh_workspace["schema_version"].as_str()
+        == Some(crate::live_scene_preparation::LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA)
+    {
+        let key = crate::live_geometry_mesh_build::GEOMETRY_REUSE_KEY;
+        if let Some(reference) = current.mesh_workspace.as_ref().and_then(|workspace| workspace.get(key)) {
+            mesh_workspace[key] = reference.clone();
+        }
+        if mesh_workspace.get("last_build_summary").is_none() {
+            if let Some(previous) = current.mesh_workspace.as_ref().filter(|previous| {
+                ["preparation_id", "accepted_run_id", "source_scene_revision", "plan_fingerprint"]
+                    .iter().all(|key| mesh_workspace.get(*key).is_some_and(|value| previous.get(*key) == Some(value)))
+            }) {
+                if let Some(summary) = previous.get("last_build_summary") {
+                    mesh_workspace["last_build_summary"] = summary.clone();
+                }
+            }
+        }
+    }
     let previous_mesh_signature = current.mesh_workspace.as_deref().map(mesh_resource_signature);
     let previous_build_signature = current
         .mesh_workspace
@@ -1552,7 +1605,7 @@ fn successful_mesh_build_source_scene_revision(mesh_workspace: &Value) -> Option
         })
 }
 
-fn clear_mesh_dirty_tags_for_built_scene(
+pub(crate) fn clear_mesh_dirty_tags_for_built_scene(
     current: &mut SessionStateResponse,
     source_scene_revision: u64,
 ) {
@@ -1713,6 +1766,8 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         fem_mesh: None,
         latest_fields: LatestFields::default(),
         field_publication_bundles: BTreeMap::new(),
+        authored_initial_state: None,
+        magnetization_applies: Default::default(),
         preview_cache: CachedPreviewFields::default(),
         artifacts: Vec::new(),
         display_selection: CurrentDisplaySelection::default(),
@@ -1769,18 +1824,7 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
         // mesh is solver-domain state, not scene authoring geometry; retain it
         // only for a FEM execution plan so a stale FEM topology cannot make a
         // new FDM domain look like FEM to domain/field endpoints.
-        let backend_is_fdm = metadata
-            .get("execution_plan")
-            .and_then(|plan| plan.get("backend_plan"))
-            .and_then(|plan| plan.get("kind"))
-            .and_then(Value::as_str)
-            .is_some_and(|kind| matches!(kind.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"))
-            || metadata
-                .get("artifact_layout")
-                .and_then(|layout| layout.get("backend"))
-                .and_then(Value::as_str)
-                .is_some_and(|backend| matches!(backend.to_ascii_lowercase().as_str(), "fdm" | "fdm_multilayer"));
-        if backend_is_fdm {
+        if is_fdm_snapshot(current) {
             current.fem_mesh = None;
         }
 
@@ -2167,6 +2211,7 @@ fn clear_magnetic_carriers_for_field_only(current: &mut SessionStateResponse) {
     }
     current.live_state = None;
     current.coupled_checkpoint = None;
+    current.authored_initial_state = None;
 }
 
 fn finalize_current_live_apply(
@@ -2209,6 +2254,7 @@ fn finalize_current_live_apply(
         current.latest_fields = LatestFields::default();
         current.preview_cache = CachedPreviewFields::default();
         current.field_publication_bundles.clear();
+        current.authored_initial_state = None;
         current.live_state = None;
         current.coupled_checkpoint = None;
         current.preview = None;
@@ -2413,6 +2459,9 @@ fn validate_terminal_field_replacement(
             "terminal_field_replace_requires_generation",
         ));
     };
+    if crate::live_authored_initial_state::supersedes_run(current, &incoming.run_id) {
+        return Err(ApiError::conflict("stale_terminal_field_generation"));
+    }
     if let Some(accepted) = current.accepted_terminal_field_generation.as_ref() {
         if accepted.run_id == incoming.run_id {
             if incoming.sequence < accepted.sequence {
@@ -2449,12 +2498,102 @@ pub(crate) fn apply_current_live_snapshot_with_options(
     Ok(())
 }
 
+/// The current spatial sources own the previously published domain. A mesh
+/// or plan replacement must retire those sources before binding any incoming
+/// samples, even when old and new carriers have the same cardinality.
+struct LiveDomainPublicationFence {
+    identity: LiveFieldDomainIdentity,
+    latest_fields: LatestFields,
+}
+
+impl LiveDomainPublicationFence {
+    fn capture(current: &SessionStateResponse) -> Self {
+        Self {
+            identity: current_live_field_domain_identity(current),
+            latest_fields: current.latest_fields.clone(),
+        }
+    }
+
+    fn retire_if_replaced(self, current: &mut SessionStateResponse) -> bool {
+        if self.identity == current_live_field_domain_identity(current) {
+            return false;
+        }
+
+        for (quantity, previous) in self.latest_fields.entries() {
+            if previous.get("artifact_field_locator").is_none()
+                && current.latest_fields.get(quantity).is_some_and(|field| std::ptr::eq(previous, field))
+            {
+                current.latest_fields.remove(quantity);
+            }
+        }
+        current.field_publication_bundles.retain(|_, bundle| bundle.field.artifact_field_locator.is_some());
+        current.preview_cache = CachedPreviewFields::default();
+        current.authored_initial_state = None;
+        current.preview = None;
+        current.live_state = None;
+        current.coupled_checkpoint = None;
+        if !current.scalar_rows.is_empty() || current.latest_scalar_source.is_some() {
+            current.scalar_rows.clear();
+            current.latest_scalar_source = None;
+            current.scalar_revision = next_revision(current.scalar_revision);
+        }
+        true
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) struct LiveFieldDomainIdentity {
+    generation_id: String,
+    mesh_revision: u64,
+    fem_topology_fingerprint: Option<String>,
+    fdm_grid: Option<[u32; 3]>,
+    multilayer_native_fingerprint: Option<String>,
+}
+
+pub(crate) fn current_live_field_domain_identity(
+    current: &SessionStateResponse,
+) -> LiveFieldDomainIdentity {
+    let is_fdm = is_fdm_snapshot(current);
+    let fdm_grid = is_fdm.then(|| {
+        let declared = crate::router_v2::handlers::sessions::status::fdm_grid_shape(current, None);
+        if declared != [0; 3] {
+            declared
+        } else {
+            current.live_state.as_ref().map_or([0; 3], |live| live.latest_step.grid)
+        }
+    });
+    let multilayer_native_fingerprint = current.metadata.as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .filter(|_| is_fdm)
+        .and_then(multilayer_native_carrier_fingerprint)
+        .map(|(fingerprint, _)| fingerprint);
+    LiveFieldDomainIdentity {
+        generation_id: domain_generation_id(current),
+        mesh_revision: current.mesh_revision,
+        fem_topology_fingerprint: current.fem_mesh.as_ref().filter(|_| !is_fdm)
+            .map(|mesh| mesh.topology_fingerprint().to_owned()),
+        fdm_grid,
+        multilayer_native_fingerprint,
+    }
+}
+
+fn current_domain_quantities(current: &SessionStateResponse) -> impl Iterator<Item = String> + '_ {
+    current.latest_fields.entries().map(|(quantity, _)| quantity)
+        .chain(current.preview_cache.iter().map(|(quantity, _)| quantity))
+        .chain(current.field_publication_bundles.keys())
+        .cloned()
+        .chain(std::iter::once("m".to_owned()))
+}
+
 fn apply_current_live_snapshot_in_place(
     current: &mut SessionStateResponse,
     mut req: CurrentLiveSnapshotRequest,
     drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
+    if req.latest_scalar_row.is_some() {
+        reject_unbound_accepted_scalar_row(current)?;
+    }
     if let Some(live_state) = req.live_state.as_ref() {
         live_state
             .latest_step
@@ -2477,7 +2616,14 @@ fn apply_current_live_snapshot_in_place(
     ) {
         return Ok(());
     }
+    let publishes_domain = req.metadata.is_some()
+        || req.fem_mesh.is_some()
+        || req.live_state.as_ref().is_some_and(|live| live.latest_step.fem_mesh.is_some());
+    let domain_fence = publishes_domain.then(|| LiveDomainPublicationFence::capture(current));
     let mut affected_field_quantities = BTreeSet::new();
+    if publishes_domain {
+        affected_field_quantities.extend(current_domain_quantities(current));
+    }
     if let Some(latest_fields) = req.latest_fields.as_ref() {
         affected_field_quantities.extend(
             latest_fields
@@ -2522,7 +2668,7 @@ fn apply_current_live_snapshot_in_place(
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
     let previous_stage_execution = current.stage_execution.clone();
-    let flags = CurrentLiveApplyFlags {
+    let mut flags = CurrentLiveApplyFlags {
         has_metadata: req.metadata.is_some(),
         has_latest_fields: req.latest_fields.is_some(),
         has_preview_fields: req.preview_fields.is_some(),
@@ -2539,9 +2685,17 @@ fn apply_current_live_snapshot_in_place(
     if let Some(status) = req.session_status {
         current.session.status = status;
     }
+    let embedded_mesh = req.live_state.as_mut().and_then(|live| live.latest_step.fem_mesh.take());
+    if let Some(fem_mesh) = embedded_mesh {
+        apply_fem_mesh_update(current, fem_mesh);
+    }
+    if let Some(fem_mesh) = req.fem_mesh {
+        apply_fem_mesh_update(current, fem_mesh);
+    }
     if let Some(metadata) = req.metadata {
         apply_current_live_metadata(current, metadata);
     }
+    flags.clear_preview_cache |= domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
     if drop_live_magnetization {
         drop_large_live_field_carriers(&mut current.latest_fields);
     }
@@ -2569,9 +2723,6 @@ fn apply_current_live_snapshot_in_place(
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
-            apply_fem_mesh_update(current, fem_mesh);
-        }
         if drop_live_magnetization {
             live_state.latest_step.magnetization = None;
             drop_large_live_field_carriers(&mut current.latest_fields);
@@ -2580,9 +2731,6 @@ fn apply_current_live_snapshot_in_place(
     }
     if let Some(coupled_checkpoint) = req.coupled_checkpoint {
         current.coupled_checkpoint = Some(coupled_checkpoint);
-    }
-    if let Some(fem_mesh) = req.fem_mesh {
-        apply_fem_mesh_update(current, fem_mesh);
     }
     if let Some(row) = req.latest_scalar_row.as_mut() {
         bind_scalar_observation_frame(current, row);
@@ -2675,6 +2823,10 @@ fn apply_current_live_snapshot_in_place(
 
     let result = finalize_current_live_apply(current, flags);
     if result.is_ok() {
+        affected_field_quantities.retain(|quantity| {
+            !current.field_publication_bundles.get(quantity)
+                .is_some_and(|bundle| bundle.field.artifact_field_locator.is_some())
+        });
         refresh_accepted_field_publication_bundles(current, &affected_field_quantities)?;
         annotate_solver_profile_publisher_apply(
             &mut current.solver_profile,
@@ -2689,7 +2841,11 @@ pub(crate) fn apply_current_live_session_frame(
     frame: CurrentLiveSessionFrameRequest,
 ) -> Result<(), ApiError> {
     let previous_stage_execution = current.stage_execution.clone();
-    let flags = CurrentLiveApplyFlags {
+    let domain_fence = frame.metadata.is_some().then(|| LiveDomainPublicationFence::capture(current));
+    let previous_field_sources = domain_fence.as_ref().map(|_| {
+        capture_effective_field_sources(current, &current_domain_quantities(current).collect())
+    });
+    let mut flags = CurrentLiveApplyFlags {
         has_metadata: frame.metadata.is_some(),
         has_run: frame.run.is_some(),
         ..CurrentLiveApplyFlags::default()
@@ -2726,6 +2882,10 @@ pub(crate) fn apply_current_live_session_frame(
         current.run = Some(run);
     }
 
+    flags.clear_preview_cache = domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
+    if let Some(previous_field_sources) = previous_field_sources {
+        apply_effective_field_source_delta(current, previous_field_sources);
+    }
     finalize_current_live_apply(current, flags)
 }
 
@@ -2871,7 +3031,7 @@ fn preserve_selected_live_magnetization_before_runtime_update(
 
 fn apply_current_live_runtime_frame_in_place(
     current: &mut SessionStateResponse,
-    frame: CurrentLiveRuntimeFrameRequest,
+    mut frame: CurrentLiveRuntimeFrameRequest,
     drop_live_magnetization: bool,
 ) -> Result<(), ApiError> {
     if let Some(live_state) = frame.live_state.as_ref() {
@@ -2882,7 +3042,13 @@ fn apply_current_live_runtime_frame_in_place(
     }
     let apply_start = std::time::Instant::now();
     let standalone_antenna_lead_inspection = is_standalone_antenna_lead_inspection(current);
+    let publishes_domain = frame.fem_mesh.is_some()
+        || frame.live_state.as_ref().is_some_and(|live| live.latest_step.fem_mesh.is_some());
+    let domain_fence = publishes_domain.then(|| LiveDomainPublicationFence::capture(current));
     let mut affected_field_quantities = BTreeSet::new();
+    if publishes_domain {
+        affected_field_quantities.extend(current_domain_quantities(current));
+    }
     if let Some(preview_field) = current
         .live_state
         .as_ref()
@@ -2912,7 +3078,6 @@ fn apply_current_live_runtime_frame_in_place(
                     || current_mesh.generation_id.as_deref() != mesh.generation_id.as_deref()
             })
         });
-    let incoming_live_state_present = frame.live_state.is_some();
     let has_qualified_incoming_m = runtime_frame_has_qualified_live_magnetization(
         current,
         frame.live_state.as_ref(),
@@ -2940,6 +3105,14 @@ fn apply_current_live_runtime_frame_in_place(
                 .remember_accepted_source(&previous_preview, frame);
         }
     }
+    let embedded_mesh = frame.live_state.as_mut().and_then(|live| live.latest_step.fem_mesh.take());
+    if let Some(fem_mesh) = embedded_mesh {
+        apply_fem_mesh_update(current, fem_mesh);
+    }
+    if let Some(fem_mesh) = frame.fem_mesh {
+        apply_fem_mesh_update(current, fem_mesh);
+    }
+    let domain_replaced = domain_fence.is_some_and(|fence| fence.retire_if_replaced(current));
     apply_frozen_spins_runtime_status(current, frame.frozen_spins_runtime_status);
     if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
@@ -2947,9 +3120,6 @@ fn apply_current_live_runtime_frame_in_place(
         }
         if !has_qualified_incoming_m {
             live_state.latest_step.magnetization = None;
-        }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
-            apply_fem_mesh_update(current, fem_mesh);
         }
         // Carry the prior mesh-generation hint only while mesh identity remains
         // stable. The accepted preview source is still preserved independently.
@@ -3009,17 +3179,6 @@ fn apply_current_live_runtime_frame_in_place(
             }
         }
     }
-    if let Some(fem_mesh) = frame.fem_mesh {
-        apply_fem_mesh_update(current, fem_mesh);
-    }
-    if !incoming_live_state_present
-        && (previous_mesh_revision != current.mesh_revision
-            || previous_domain_generation_id != domain_generation_id(current))
-    {
-        if let Some(live_state) = current.live_state.as_mut() {
-            live_state.latest_step.magnetization = None;
-        }
-    }
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;
     }
@@ -3040,7 +3199,13 @@ fn apply_current_live_runtime_frame_in_place(
     }
     apply_effective_field_source_delta(current, previous_field_sources);
 
-    finalize_current_live_apply(current, CurrentLiveApplyFlags::default())?;
+    finalize_current_live_apply(
+        current,
+        CurrentLiveApplyFlags {
+            clear_preview_cache: domain_replaced,
+            ..CurrentLiveApplyFlags::default()
+        },
+    )?;
     annotate_solver_profile_publisher_apply(
         &mut current.solver_profile,
         apply_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
@@ -3054,18 +3219,91 @@ fn apply_current_live_runtime_frame_in_place(
     }
 }
 
+/// Change the Live buffer owner on an authenticated stage/attempt change.
+pub(crate) fn select_current_accepted_scalar_series(
+    current: &mut SessionStateResponse,
+    run_id: &str,
+    identity: Option<&crate::types::AcceptedLiveScalarIdentity>,
+) -> bool {
+    let previous = current.latest_scalar_source.as_ref()
+        .and_then(|source| source.series.as_ref())
+        .map(|series| &series.identity);
+    if previous == identity || (identity.is_none() && previous.is_some_and(|old| old.run_id == run_id)) {
+        return false;
+    }
+    let source = current.latest_scalar_source.get_or_insert_with(Default::default);
+    source.series = identity.map(|identity| crate::types::CurrentScalarSeries {
+        identity: identity.clone(),
+        row_revisions: Vec::new(),
+    });
+    source.public_source = None;
+    source.accepted_live_identity = None;
+    source.active_live_identity = None;
+    current.scalar_rows.clear();
+    current.scalar_revision = next_revision(current.scalar_revision);
+    true
+}
+
+fn reject_unbound_accepted_scalar_row(current: &SessionStateResponse) -> Result<(), ApiError> {
+    if crate::live_authored_initial_state::current_publication(current).is_some() {
+        return Err(ApiError::conflict("stale_authored_initial_state_replacement"));
+    }
+    if current.latest_scalar_source.as_ref().is_some_and(|source| source.series.is_some()) {
+        return Err(ApiError::conflict_with_code(
+            "scalar_series_source_mismatch",
+            "accepted scalar observations require the verified Study series",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_current_live_scalar_frame(
     current: &mut SessionStateResponse,
-    mut frame: CurrentLiveScalarFrameRequest,
+    frame: CurrentLiveScalarFrameRequest,
 ) -> Result<(), ApiError> {
-    if let Some(row) = frame.latest_scalar_row.as_ref() {
+    if frame.latest_scalar_row.is_some() {
+        reject_unbound_accepted_scalar_row(current)?;
+    }
+    apply_current_live_scalar_row(current, frame.latest_scalar_row)
+}
+
+pub(crate) fn apply_current_live_accepted_scalar_row(
+    current: &mut SessionStateResponse,
+    identity: &crate::types::AcceptedLiveScalarIdentity,
+    row: ScalarRow,
+) -> Result<(), ApiError> {
+    let series = current.latest_scalar_source.as_ref().and_then(|source| source.series.as_ref());
+    if !series.is_some_and(|series| {
+        series.identity == *identity && series.row_revisions.len() == current.scalar_rows.len()
+    }) {
+        return Err(ApiError::conflict_with_code(
+            "scalar_series_source_mismatch",
+            "accepted scalar sample differs from the current series",
+        ));
+    }
+    let previous_revision = current.scalar_revision;
+    apply_current_live_scalar_row(current, Some(row))?;
+    if current.scalar_revision != previous_revision {
+        let series = current.latest_scalar_source.as_mut().and_then(|source| source.series.as_mut())
+            .expect("the verified series is retained while applying its scalar sample");
+        series.row_revisions.resize(current.scalar_rows.len(), current.scalar_revision);
+        if let Some(revision) = series.row_revisions.last_mut() {
+            *revision = current.scalar_revision;
+        }
+    }
+    Ok(())
+}
+
+fn apply_current_live_scalar_row(
+    current: &mut SessionStateResponse,
+    mut row: Option<ScalarRow>,
+) -> Result<(), ApiError> {
+    if let Some(row) = row.as_mut() {
         row.validate_record_kind()
             .map_err(|error| ApiError::bad_request(format!("invalid scalar row: {error}")))?;
-    }
-    if let Some(row) = frame.latest_scalar_row.as_mut() {
         bind_scalar_observation_frame(current, row);
     }
-    if let Some(row) = frame.latest_scalar_row {
+    if let Some(row) = row {
         if upsert_scalar_row(&mut current.scalar_rows, row) {
             current.scalar_revision = next_revision(current.scalar_revision);
         }
@@ -3088,7 +3326,7 @@ pub(crate) fn apply_current_live_field_frame(
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_field_frame_in_place(&mut candidate, frame, None)?;
+    apply_current_live_field_frame_in_place(&mut candidate, frame, None, None)?;
     *current = candidate;
     Ok(())
 }
@@ -3105,7 +3343,76 @@ pub(crate) fn apply_current_live_accepted_field_frame(
     accepted_source_frame: crate::schemas::common::AcceptedObservationFrameRef,
 ) -> Result<(), ApiError> {
     let mut candidate = current.clone();
-    apply_current_live_field_frame_in_place(&mut candidate, frame, Some(&accepted_source_frame))?;
+    apply_current_live_field_frame_in_place(&mut candidate, frame, Some(&accepted_source_frame), None)?;
+    *current = candidate;
+    Ok(())
+}
+
+/// A reset awaiting a qualified carrier must not expose the previous
+/// solver's vectors or derived quantities as the new initial state.
+pub(crate) fn invalidate_live_magnetization_preview(current: &mut SessionStateResponse) {
+    let removed: Vec<_> = current.latest_fields.entries()
+        .filter(|(_, value)| value.get("artifact_field_locator").is_none())
+        .map(|(quantity, _)| quantity.clone())
+        .collect();
+    let mut quantities: BTreeSet<_> = removed.iter().cloned().collect();
+    quantities.extend(current.preview_cache.iter().map(|(quantity, _)| quantity.clone()));
+    if current.live_state.as_ref().is_some_and(|state| state.latest_step.magnetization.is_some()) {
+        quantities.insert(fullmag_quantities::QuantityId::M.as_str().to_owned());
+    }
+    for quantity in removed {
+        current.latest_fields.remove(&quantity);
+    }
+    current.preview_cache.clear_fields();
+    current.field_publication_bundles.retain(|quantity, bundle| {
+        if bundle.field.artifact_field_locator.is_some() {
+            true
+        } else {
+            quantities.insert(quantity.clone());
+            false
+        }
+    });
+    for quantity in &quantities {
+        bump_field_sample_revision(current, quantity, None);
+    }
+    if !quantities.is_empty() {
+        bump_field_catalog_revision(current);
+    }
+    if !current.scalar_rows.is_empty() || current.latest_scalar_source.is_some() {
+        current.scalar_rows.clear();
+        current.latest_scalar_source = None;
+        current.scalar_revision = next_revision(current.scalar_revision);
+    }
+    current.live_state = None;
+    current.preview = None;
+    current.authored_initial_state = None;
+    current.coupled_checkpoint = None;
+    current.simulation_preparation = None;
+}
+
+pub(crate) fn apply_current_live_authored_initial_state(
+    current: &mut SessionStateResponse,
+    publication: crate::live_authored_initial_state::AuthoredInitialStatePublication,
+    fields: LatestFields,
+) -> Result<(), ApiError> {
+    if crate::live_authored_initial_state::qualifies_frame(current, &publication.frame)
+        && current.latest_fields.get("m").is_some_and(|field| latest_field_source_is_qualified(current, "m", field))
+    {
+        return Ok(());
+    }
+    let mut candidate = current.clone();
+    let accepted_frame = publication.frame.clone();
+    let request = CurrentLiveFieldFrameRequest {
+        session_id: current.session.session_id.clone(),
+        latest_fields: Some(fields),
+        replace_latest_fields: false,
+        field_generation: None,
+        preview_fields: None,
+        clear_preview_cache: true,
+    };
+    apply_current_live_field_frame_in_place(
+        &mut candidate, request, Some(&accepted_frame), Some(publication),
+    )?;
     *current = candidate;
     Ok(())
 }
@@ -3119,14 +3426,20 @@ pub(crate) fn apply_current_live_field_frame_to_candidate(
     frame: CurrentLiveFieldFrameRequest,
     accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
 ) -> Result<(), ApiError> {
-    apply_current_live_field_frame_in_place(candidate, frame, accepted_source_frame)
+    apply_current_live_field_frame_in_place(candidate, frame, accepted_source_frame, None)
 }
 
 fn apply_current_live_field_frame_in_place(
     current: &mut SessionStateResponse,
     mut frame: CurrentLiveFieldFrameRequest,
     accepted_source_frame: Option<&crate::schemas::common::AcceptedObservationFrameRef>,
+    authored_publication: Option<crate::live_authored_initial_state::AuthoredInitialStatePublication>,
 ) -> Result<(), ApiError> {
+    if accepted_source_frame.is_some_and(|frame| frame.authored_initial_state.is_none())
+        && crate::live_authored_initial_state::supersedes_run(current, &current.session.run_id)
+    {
+        return Err(ApiError::conflict("stale_authored_initial_state_replacement"));
+    }
     if matches!(
         validate_terminal_field_replacement(
             current,
@@ -3139,6 +3452,9 @@ fn apply_current_live_field_frame_in_place(
     ) {
         return Ok(());
     }
+    let solver_replaces_prepared_m = current.authored_initial_state.is_some()
+        && accepted_source_frame.is_some_and(|frame| frame.authored_initial_state.is_none())
+        && frame.latest_fields.as_ref().is_some_and(|fields| fields.get("m").is_some());
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = frame.latest_fields.as_ref() {
         affected_field_quantities.extend(
@@ -3147,7 +3463,7 @@ fn apply_current_live_field_frame_in_place(
                 .map(|(quantity, _)| quantity.clone()),
         );
     }
-    if frame.replace_latest_fields {
+    if frame.replace_latest_fields || authored_publication.is_some() || solver_replaces_prepared_m {
         affected_field_quantities.extend(
             current
                 .latest_fields
@@ -3168,6 +3484,40 @@ fn apply_current_live_field_frame_in_place(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    if let Some(publication) = authored_publication {
+        let stale_quantities = current.latest_fields.entries()
+            .filter(|(quantity, value)| {
+                value.get("artifact_field_locator").is_none()
+                    && !authored_material_field_matches(current, quantity, value)
+            })
+            .map(|(quantity, _)| quantity.clone())
+            .collect::<Vec<_>>();
+        for quantity in stale_quantities {
+            current.latest_fields.remove(&quantity);
+        }
+        current.field_publication_bundles.retain(|_, bundle| bundle.field.artifact_field_locator.is_some());
+        affected_field_quantities.retain(|quantity| {
+            !current.field_publication_bundles.contains_key(quantity)
+                || frame.latest_fields.as_ref().is_some_and(|fields| fields.get(quantity).is_some())
+        });
+        current.authored_initial_state = Some(publication);
+        current.magnetization_applies.pending = None;
+        if !current.scalar_rows.is_empty() || current.latest_scalar_source.is_some() {
+            current.scalar_rows.clear();
+            current.latest_scalar_source = None;
+            current.scalar_revision = next_revision(current.scalar_revision);
+        }
+        current.preview = None;
+    } else if solver_replaces_prepared_m {
+        current.authored_initial_state = None;
+        current.live_state = None;
+    }
+    if accepted_source_frame.is_some_and(|frame| {
+        frame.authored_initial_state.is_some()
+            && !crate::live_authored_initial_state::qualifies_frame(current, frame)
+    }) {
+        return Err(ApiError::conflict("stale_authored_initial_state_replacement"));
+    }
     if let Some(latest_fields) = frame.latest_fields.as_mut() {
         bind_latest_field_observation_frames_with_candidate(
             current,
@@ -3586,6 +3936,9 @@ pub(crate) fn latest_field_source_is_qualified(
             )
             .ok()
         });
+    if let Some(frame) = frame.as_ref().filter(|frame| frame.authored_initial_state.is_some()) {
+        return crate::live_authored_initial_state::qualifies_frame(current, frame);
+    }
     let replay_frame = if quantity_id == "m" {
         registered_latest_field_replay_frame(current, quantity_id, raw)
     } else {
@@ -3642,10 +3995,13 @@ pub(crate) fn latest_field_source_is_qualified(
     })
 }
 
-fn accepted_m_frame_matches_current_domain(
+pub(crate) fn accepted_m_frame_matches_current_domain(
     current: &SessionStateResponse,
     frame: &crate::schemas::common::AcceptedObservationFrameRef,
 ) -> bool {
+    if frame.authored_initial_state.is_some() {
+        return crate::live_authored_initial_state::qualifies_frame(current, frame);
+    }
     accepted_frame_belongs_to_current_session(current, frame)
         && frame
             == &accepted_observation_frame_ref(
@@ -3718,6 +4074,9 @@ pub(crate) fn relevant_field_materialization_status<'a>(
     snapshot: &'a SessionStateResponse,
     quantity: &str,
 ) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
+    if crate::live_authored_initial_state::current_publication(snapshot).is_some() {
+        return None;
+    }
     let selected_m_source_step = if quantity == "m" {
         resolved_current_field_observation_frame(snapshot, "m", 3)
             .map(|frame| frame.source_step)
@@ -3817,6 +4176,9 @@ pub(crate) fn preview_field_source_is_qualified(
         })
     {
         return true;
+    }
+    if crate::live_authored_initial_state::current_publication(current).is_some() {
+        return false;
     }
     let frame = if field.quantity == "m" {
         current
@@ -3965,7 +4327,18 @@ fn bind_latest_field_observation_frames_with_candidate(
                     .filter(|row| Some(row.step) == source_step)
                     .map(|row| row.time)
             });
-        let accepted_frame = if quantity_id == "m" {
+        let prepared_source = accepted_source_frame.filter(|frame| {
+            crate::live_authored_initial_state::qualifies_frame(current, frame)
+                && accepted_source_frame_matches(frame, source_step, source_time_seconds)
+        });
+        if accepted_source_frame.is_none()
+            && crate::live_authored_initial_state::current_publication(current).is_some()
+        {
+            return Err(ApiError::conflict("stale_authored_initial_state_replacement"));
+        }
+        let accepted_frame = if let Some(prepared) = prepared_source {
+            Some(prepared.clone())
+        } else if quantity_id == "m" {
             replay_frame.clone().or_else(|| {
                 accepted_source_frame
                     .filter(|frame| {
@@ -4126,7 +4499,9 @@ fn refresh_accepted_field_publication_bundles(
                 row.is_physical_observation()
                     && row.observation_frame.as_ref() == Some(&observation_frame)
             });
-        if !scalar_matches_frame {
+        let authored_frame =
+            crate::live_authored_initial_state::qualifies_frame(current, &observation_frame);
+        if !scalar_matches_frame && !authored_frame {
             continue;
         }
         let Some(field) =
@@ -4134,7 +4509,13 @@ fn refresh_accepted_field_publication_bundles(
         else {
             continue;
         };
-        let Some(carrier) = full_field_publication_carrier_identity(&field) else {
+        let carrier = if authored_frame {
+            authored_multilayer_publication_carrier_identity(&field)
+                .or_else(|| full_field_publication_carrier_identity(&field))
+        } else {
+            full_field_publication_carrier_identity(&field)
+        };
+        let Some(carrier) = carrier else {
             continue;
         };
         let topology_revision = observation_frame
@@ -5403,6 +5784,54 @@ mod tests {
     }
 
     #[test]
+    fn accepted_scalar_series_rotates_independently_of_step_clock() {
+        let mut current = test_current_snapshot();
+        let identity = |step: &str, attempt: &str| crate::types::AcceptedLiveScalarIdentity {
+            run_id: "run".into(),
+            task_id: format!("task-{step}"),
+            step_id: step.into(),
+            case_id: "default".into(),
+            attempt_id: attempt.into(),
+            ownership_epoch: 1,
+        };
+        let a = identity("a", "attempt-a");
+        let b = identity("b", "attempt-b");
+        let c = identity("c", "attempt-c");
+
+        assert!(select_current_accepted_scalar_series(&mut current, "run", Some(&a)));
+        apply_current_live_accepted_scalar_row(&mut current, &a, scalar_row(0, 1.0)).unwrap();
+        let revision_a = current.scalar_revision;
+        assert!(select_current_accepted_scalar_series(&mut current, "run", Some(&b)));
+        assert!(current.scalar_rows.is_empty());
+        assert!(apply_current_live_accepted_scalar_row(&mut current, &a, scalar_row(0, 1.0)).is_err());
+        apply_current_live_accepted_scalar_row(&mut current, &b, scalar_row(0, 2.0)).unwrap();
+        assert_eq!(current.scalar_rows.len(), 1);
+        assert_eq!(current.scalar_rows[0].e_total, 2.0);
+        assert!(current.scalar_revision > revision_a);
+
+        apply_current_live_accepted_scalar_row(&mut current, &b, scalar_row(20, 3.0)).unwrap();
+        assert!(!select_current_accepted_scalar_series(&mut current, "run", Some(&b)));
+        assert!(select_current_accepted_scalar_series(&mut current, "run", Some(&c)));
+        apply_current_live_accepted_scalar_row(&mut current, &c, scalar_row(0, 4.0)).unwrap();
+        assert_eq!(current.scalar_rows.len(), 1);
+        assert_eq!(current.scalar_rows[0].e_total, 4.0);
+        let series = current.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap();
+        assert_eq!(series.identity, c);
+        assert_eq!(series.row_revisions, vec![current.scalar_revision]);
+        let revision_c = current.scalar_revision;
+        apply_current_live_accepted_scalar_row(&mut current, &c, scalar_row(0, 5.0)).unwrap();
+        assert!(current.scalar_revision > revision_c);
+        assert_eq!(current.scalar_rows.len(), 1);
+        assert_eq!(current.scalar_rows[0].e_total, 5.0);
+        assert_eq!(
+            current.latest_scalar_source.as_ref().unwrap().series.as_ref().unwrap().row_revisions,
+            vec![current.scalar_revision],
+        );
+        assert!(select_current_accepted_scalar_series(&mut current, "new-run", None));
+        assert!(current.scalar_rows.is_empty());
+    }
+
+    #[test]
     fn scalar_frame_revisions_track_latest_replacements_not_stale_rows() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
             frozen_spins_runtime_status: None,
@@ -5942,6 +6371,32 @@ mod tests {
         );
         assert!(!current.runtime_status.is_busy);
         assert!(current.runtime_status.can_accept_commands);
+    }
+
+    #[test]
+    fn terminal_run_history_does_not_close_a_ready_workspace() {
+        let mut current = test_current_snapshot();
+        current.session.status = "awaiting_command".into();
+        current.run = Some(serde_json::from_value(serde_json::json!({
+            "run_id": "test-run", "session_id": "test-session", "status": "completed",
+            "total_steps": 1, "artifact_dir": "",
+        })).unwrap());
+        current.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::Completed, None, StageLifecycleState::Completed,
+        ));
+
+        refresh_runtime_status(&mut current);
+        assert_eq!(current.runtime_status.code, "awaiting_command");
+        assert_eq!(current.run.as_ref().unwrap().status, "completed");
+        assert_eq!(current.stage_execution.as_ref().unwrap().runtime_state,
+            RuntimeLifecycleState::Completed);
+
+        current.stage_execution.as_mut().unwrap().runtime_state = RuntimeLifecycleState::Running;
+        refresh_runtime_status(&mut current);
+        assert_eq!(current.runtime_status.code, "running");
+
+        current.session.status = "closed".into();
+        assert_eq!(effective_runtime_status_code(&current), "closed");
     }
 
     #[test]
@@ -6666,10 +7121,12 @@ mod tests {
             kind: kind.to_string(),
             created_at_unix_ms: 1_700_000_000_000,
             target: None,
+            execution_binding: None,
             reason: None,
             precondition: None,
             client_intent_id: None,
             requested_at_unix_ms: None,
+            initial_state: None,
             until_seconds: None,
             max_steps: None,
             torque_tolerance: None,
@@ -6835,6 +7292,201 @@ mod tests {
             solver_profile: None,
             fem_mesh: None,
         })
+    }
+
+    fn current_with_run(
+        run_id: &str,
+        status: &str,
+        terminal_generation_run_id: Option<&str>,
+    ) -> SessionStateResponse {
+        let mut current = test_current_snapshot();
+        current.metadata = Some(json!({
+            "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
+        }).into());
+        current.session.run_id = run_id.to_string();
+        current.session.status = status.to_string();
+        current.run = Some(RunManifest {
+            run_id: run_id.to_string(),
+            session_id: current.session.session_id.clone(),
+            status: status.to_string(),
+            total_steps: 1,
+            final_time: (status != "running").then_some(1.0e-12),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: "unused-test-artifact".to_string(),
+        });
+        if let Some(generation_run_id) = terminal_generation_run_id {
+            current.accepted_terminal_field_generation = Some(CurrentLiveFieldGeneration {
+                run_id: generation_run_id.to_string(),
+                sequence: 1,
+            });
+            current
+                .terminal_field_generations
+                .insert(generation_run_id.to_string(), 1);
+        }
+        current
+    }
+
+    fn authored_initial_state_origin() -> crate::schemas::common::AuthoredInitialStateOrigin {
+        crate::schemas::common::AuthoredInitialStateOrigin {
+            preparation_id: "prepare-stage-c".to_string(),
+            plan_fingerprint: "plan-stage-c".to_string(),
+            scene_revision: 7,
+            initial_state_revision: 3,
+            values_sha256: "stage-c-values".to_string(),
+        }
+    }
+
+    fn authored_initial_state_fields() -> LatestFields {
+        serde_json::from_value(json!({
+            "m": {
+                "values": [[0.0, 0.0, 1.0]],
+                "source_step": 0,
+                "source_time_seconds": 0.0,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("prepared stage magnetization")
+    }
+
+    fn install_authored_initial_state(current: &mut SessionStateResponse) {
+        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            current,
+            authored_initial_state_origin(),
+            0.0,
+        );
+        apply_current_live_authored_initial_state(
+            current,
+            publication,
+            authored_initial_state_fields(),
+        )
+        .expect("stage preparation should publish authored initial magnetization");
+    }
+
+    #[test]
+    fn active_run_accepts_next_solver_m_after_same_run_stage_preparation() {
+        let mut current = current_with_run("run-a", "running", Some("run-a"));
+        install_authored_initial_state(&mut current);
+
+        assert!(current.authored_initial_state.is_some());
+        assert!(
+            !crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+            "a terminal field generation from a still-running study must not retire that run"
+        );
+
+        add_physical_observation(&mut current, 1, Some(1.0e-12));
+        let accepted_source_frame = accepted_observation_frame_ref(&current, 1, Some(1.0e-12));
+        let latest_fields: LatestFields = serde_json::from_value(json!({
+            "m": {
+                "values": [[0.0, 1.0, 0.0]],
+                "source_step": 1,
+                "source_time_seconds": 1.0e-12,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("next physical solver magnetization");
+        apply_current_live_accepted_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: true,
+                field_generation: Some(CurrentLiveFieldGeneration {
+                    run_id: "run-a".to_string(),
+                    sequence: 2,
+                }),
+                preview_fields: None,
+                clear_preview_cache: true,
+            },
+            accepted_source_frame,
+        )
+        .expect("the current run's accepted solver field should replace the prepared stage input");
+
+        assert!(current.authored_initial_state.is_none());
+        assert!(current.live_state.is_none());
+        assert_eq!(
+            current.latest_fields.get("m").expect("accepted solver m")["values"],
+            json!([[0.0, 1.0, 0.0]])
+        );
+        assert_eq!(
+            current
+                .accepted_terminal_field_generation
+                .as_ref()
+                .expect("new terminal generation")
+                .sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn authored_initial_state_retires_finished_run_but_not_another_run() {
+        for status in ["completed", "succeeded", "failed", "cancelled", "stopped"] {
+            let mut current = current_with_run("run-a", status, Some("run-a"));
+            install_authored_initial_state(&mut current);
+            assert!(
+                crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+                "a prepared state should retire a genuinely {status} run"
+            );
+        }
+
+        let mut current = current_with_run("run-b", "running", Some("run-a"));
+        install_authored_initial_state(&mut current);
+        assert!(
+            !crate::live_authored_initial_state::supersedes_run(&current, "run-b"),
+            "a previous run's terminal field generation must not retire the current run"
+        );
+        assert!(
+            crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+            "the prior terminal generation remains retired under its own run identity"
+        );
+    }
+
+    #[test]
+    fn pending_user_magnetization_apply_still_supersedes_its_run() {
+        let mut current = current_with_run("run-a", "running", None);
+        let operation_id = "0123456789abcdef0123456789abcdef";
+        let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+            crate::schemas::authoring::MagnetizationApplyRequest {
+                operation_id: operation_id.to_string(),
+                scopes: vec![crate::schemas::authoring::MagnetizationApplyScope {
+                    object_id: "object-a".to_string(),
+                    region_id: None,
+                }],
+            },
+            7,
+            &json!({ "scene": "authored" }),
+            Some(operation_id),
+        )
+        .expect("valid pending reset intent");
+        let context = CurrentLiveRequestContext {
+            session_id: "test-session".to_string(),
+            run_id: Some("run-a".to_string()),
+            session_epoch: 1,
+            request_scope_epoch: "test-session@1".to_string(),
+        };
+        current.magnetization_applies.record(
+            &apply,
+            &context,
+            crate::schemas::authoring::MagnetizationApplyReceiptResource {
+                operation_id: operation_id.to_string(),
+                scene_revision: 8,
+                scopes: apply.request.scopes.clone(),
+                status: crate::schemas::authoring::MagnetizationApplyStatus::InitialStatePending,
+                reason: None,
+                prepared_initial_state: None,
+            },
+            "run-a".to_string(),
+            "run-a".to_string(),
+        );
+
+        assert!(crate::live_authored_initial_state::supersedes_run(
+            &current, "run-a"
+        ));
     }
 
     fn current_with_accepted_fem_m_preview() -> (SessionStateResponse, LivePreviewField) {

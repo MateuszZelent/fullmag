@@ -299,3 +299,10 @@
   border-color: var(--fm-accent);
   box-shadow: 0 0 0 1px var(--fm-accent);
 }
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-dropdown-slider__track::-webkit-slider-thumb {
+    transition-property: background;
+  }
+}

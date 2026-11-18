@@ -47,6 +47,7 @@ export function chartSeriesRenderModel(
       kind: item.kind ?? "line",
       label: item.label || item.quantity,
       points: item.points,
+      selectable: item.selectable,
       unit: item.unit,
       yAxis: Math.max(0, units.indexOf(item.unit)),
     })),

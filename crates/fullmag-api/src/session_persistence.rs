@@ -159,6 +159,9 @@ fn restore_display_presentation(
         )),
     }?;
 
+    if let Some(planar) = restored.visualization_planar.as_mut() {
+        crate::schemas::visualization_state::migrate_planar_layer_model(planar);
+    }
     if let Some(overrides) = restored.visualization_overrides.take() {
         let canonicalized = canonicalize_visualization_overrides_with_diagnostics(&overrides);
         restored.visualization_overrides = Some(canonicalized.overrides);
@@ -376,6 +379,8 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             fem_mesh: value.fem_mesh,
             latest_fields: value.latest_fields,
             field_publication_bundles: value.field_publication_bundles,
+            authored_initial_state: None,
+            magnetization_applies: Default::default(),
             preview_cache: crate::types::CachedPreviewFields::default(),
             artifacts: value.artifacts,
             display_selection: value.display_selection,

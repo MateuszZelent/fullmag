@@ -206,7 +206,23 @@ impl GeometryPredicate {
         object_transform: AffineTransform3,
         boundary: BoundaryMembership,
     ) -> Result<Self, SelectionError> {
-        let geometry = match &region.shape {
+        Self::from_region_shape(
+            &region.shape,
+            match region.frame {
+                RegionFrameIR::Object => object_transform,
+                RegionFrameIR::World => AffineTransform3::identity(),
+            },
+            boundary,
+        )
+    }
+
+    /// A region shape placed by `transform` (shape coordinates -> world).
+    pub fn from_region_shape(
+        shape: &RegionShapeIR,
+        transform: AffineTransform3,
+        boundary: BoundaryMembership,
+    ) -> Result<Self, SelectionError> {
+        let geometry = match shape {
             RegionShapeIR::Box { size, center } => GeometryNode::Box {
                 size_m: *size,
                 center_m: *center,
@@ -231,10 +247,7 @@ impl GeometryPredicate {
         validate_node(&geometry)?;
         Ok(Self {
             geometry,
-            transform: match region.frame {
-                RegionFrameIR::Object => object_transform,
-                RegionFrameIR::World => AffineTransform3::identity(),
-            },
+            transform,
             boundary,
         })
     }
@@ -304,6 +317,10 @@ fn node_from_geometry_entry(entry: &GeometryEntryIR) -> Result<GeometryNode, Sel
         },
         GeometryEntryIR::Sphere { radius, .. } => GeometryNode::Sphere {
             radius_m: *radius,
+            center_m: [0.0; 3],
+        },
+        GeometryEntryIR::Ellipsoid { radii, .. } => GeometryNode::Ellipsoid {
+            radii_m: *radii,
             center_m: [0.0; 3],
         },
         GeometryEntryIR::Union { a, b, .. } => GeometryNode::Union(

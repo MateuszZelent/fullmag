@@ -18,7 +18,7 @@ pub fn scene_document_to_study_plan(
     validate_execution_profile_binding(scene, defaults)?;
 
     if let Some(pipeline) = scene.study.study_pipeline.as_ref() {
-        if pipeline.version != "study_pipeline.v1" {
+        if !matches!(pipeline.version.as_str(), "study_pipeline.v1" | "study_pipeline.v2") {
             return Err(StudyContractError::Invalid(format!(
                 "unsupported study pipeline version '{}'",
                 pipeline.version
@@ -105,6 +105,7 @@ pub fn scene_document_to_study_plan(
             execution_profile: defaults.execution_profile.clone(),
             until_seconds,
             inputs: Vec::new(),
+            initial_state_overlay: None,
             outputs,
             acceptance: StudyAcceptancePolicy::Any,
             acquisition: StudyAcquisitionPolicy::Exclusive,

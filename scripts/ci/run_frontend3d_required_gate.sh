@@ -32,6 +32,7 @@ run_gate() {
       # these do not claim managed FEM or CUDA physics qualification.
       cargo test -p fullmag-plan -p fullmag-engine -p fullmag-runner -p fullmag-api -p fullmag-authoring rotated --no-fail-fast
       cargo test -p fullmag-authoring manual_universe --no-fail-fast
+      cargo test -p fullmag-authoring region_revisions::tests --lib --no-fail-fast
       cargo test -p fullmag-runner capabilities::tests --no-fail-fast
       # Debug-build router tests hold very large async futures on the stack;
       # the default 2 MiB test-thread stack overflows.

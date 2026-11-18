@@ -484,6 +484,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 .fm-mesh-size-distribution__bins li {
   display: flex;
   flex-direction: column;
+  min-inline-size: 0;
   gap: var(--fm-space-1);
   padding: var(--fm-space-1) var(--fm-space-2);
   border: 1px solid var(--fm-border-subtle);

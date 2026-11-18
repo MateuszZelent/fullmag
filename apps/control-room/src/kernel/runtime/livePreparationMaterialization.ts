@@ -1,3 +1,5 @@
+import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
+
 import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
@@ -110,7 +112,7 @@ export async function materializeCurrentLivePreparation(
       if (obsoleteAfterManifest) {
         return rejectedSessionResult(obsoleteAfterManifest);
       }
-      if (finiteRevision(manifest?.source_scene_revision) !== sceneRevision) {
+      if (!resolveArtifactAssessment({ manifest, sceneRevision }).runAllowed) {
         return reject(
           "A shared-domain mesh for the current scene revision is required before preparation.",
         );

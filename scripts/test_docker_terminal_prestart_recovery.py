@@ -38,10 +38,13 @@ def observation():
 class TerminalContracts(unittest.TestCase):
     def test_exact_terminal_preflight_and_held_queue(self):
         self.assertEqual(recovery.validate_preflight(preflight()), ("run-terminal", {"run-held": "a" * 64}))
+        self.assertEqual(recovery.validate_preflight(dict(preflight(), scene_revision=7)),
+                         ("run-terminal", {"run-held": "a" * 64}))
 
     def test_prepared_running_foreign_session_and_unpinned_queue_rejected(self):
         for change in (
             lambda p: p.update(schema="fullmag.docker-prepared-session-drain-preflight.v1"),
+            lambda p: p.update(scene_revision=True),
             lambda p: p["run"].update(status="running"),
             lambda p: p["run"].update(session_id="other"),
             lambda p: p["compute_queue"]["items"][0].update(state="running"),

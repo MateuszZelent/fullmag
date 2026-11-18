@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fullmag_fem.h"
+#include "core/fem_marker_map.hpp"
 
 #include <string>
 #include <vector>
@@ -47,6 +48,7 @@ struct MfemContextRuntimeState {
     mfem::GridFunction *gf_ms = nullptr;
     mfem::Coefficient *a_coeff = nullptr;
     mfem::Coefficient *ms_coeff = nullptr;
+    FemMarkerMaps marker_maps;
     bool ready = false;
 };
 
