@@ -1642,14 +1642,14 @@
       "path": "backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp",
       "symbol": "create_augmented_shift_solver",
       "responsibility": "Assemble and factor the real-split augmented (q, phi) shift matrix with MUMPS/METIS and apply its q-block inverse as the exact shift-invert action.",
-      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     },
     {
       "id": "source-cpu-schur-augmented-shift",
       "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
       "symbol": "solve_poisson_airbox_modal_eigen_cpu_schur",
       "responsibility": "Select the augmented exact shift preconditioner for K0 STSINVERT and fall back to the magnetic-only preconditioner.",
-      "evidence_status": "source_visible; managed_build_and_runtime_NOT_VERIFIED"
+      "evidence_status": "source_visible; docker_dev_headless_runtime_measured; qualification_NOT_VERIFIED"
     }
   ],
   "public_api": {

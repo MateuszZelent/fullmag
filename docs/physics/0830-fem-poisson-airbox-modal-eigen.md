@@ -2183,8 +2183,9 @@ kontraktu.
 
 Status: zmiana realizacji kroku shift-invert FEM CPU K0 (audyt
 `2026-11-18-eigensolve-performance-and-gpu-readiness-audit.md`, pozycja A1).
-Build i runtime **NOT VERIFIED** do czasu pomiaru A/B na identycznym modelu.
-Pencil własny, cel, wymiary Krylova, tolerancje, residual oryginalnego
+Build Docker DEV i runtime headless CPU zmierzone A/B na jednym modelu
+(tabela niżej); qualification, GPU, Floquet $k\neq0$ i run zaakceptowany
+**NOT VERIFIED**. Pencil własny, cel, wymiary Krylova, tolerancje, residual oryginalnego
 deskryptora i bramki certyfikacji nie zmieniają się. Zmienia się wyłącznie
 preconditioner KSP wewnątrz `STSINVERT`.
 
@@ -2252,7 +2253,7 @@ magnetyczny.
 
 | Solver | Urządzenie | Stan | Uzasadnienie |
 | --- | --- | --- | --- |
-| FEM | CPU | zmieniona realizacja, NOT VERIFIED | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
+| FEM | CPU | zmieniona realizacja, zmierzona w Docker DEV (headless) | K0 Schur: preconditioner `augmented_exact_shift_mumps`, gdy MUMPS jest dostępny; `shifted_preconditioner_kind` w diagnostyce |
 | FEM | GPU | bez zmian | lane GPU zachowuje AMG na bloku magnetycznym |
 | FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
 | FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
@@ -2261,10 +2262,29 @@ Provenance: `shifted_preconditioner_kind` przyjmuje
 `augmented_exact_shift_mumps`, `exact_shifted_schur_action` albo
 `magnetic_shift_preconditioner`; `shifted_preconditioner_setup_seconds`
 obejmuje faktoryzację $K_{\hat\tau}$, a `shift_linear_iteration_count` pokazuje
-liczbę iteracji GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
+liczbę iteracji FGMRES/GMRES. Floquet $k\neq0$ zachowuje dotychczasowy
 preconditioner do osobnej zmiany.
+
+Pomiar A/B (2026-11-18): `examples/fem_eigen_k0_poisson_airbox_production.py`
+z gałęzi PR #452 (relaksacja, potem jeden mod najbliższy 2 GHz). Uruchomiono
+`fullmag-bin <skrypt> --backend fem --headless` bez live API, w kontenerze
+backend grupy Docker DEV z limitem 16 CPU. „Bez $K_{\hat\tau}$” oznacza
+`FULLMAG_K0_AUGMENTED_SHIFT=0` na tym samym buildzie albo build sprzed
+zmiany. Częstotliwość we wszystkich przypadkach wynosi 6,0100362431 GHz,
+a residuum deskryptora jest certyfikowane.
+
+| Wymiar real-split ($\phi$) | Wariant | Rozwiązania Poissona | EPS [s] | Restarty EPS | Czas całkowity [s] |
+| --- | --- | --- | --- | --- | --- |
+| 344 (386) | gęsta dokładna (bez zmian) | 790 | 0,02 | 13 | 7,1 |
+| 1288 (1510) | bez $K_{\hat\tau}$: gęsta dokładna | 2748 | 0,68 | 16 | 11,8 |
+| 1288 (1510) | $K_{\hat\tau}$ + FGMRES | 186 | 0,28 | 16 | 9,8 |
+| 4824 (5244) | bez $K_{\hat\tau}$: gęsta dokładna (budowa 58,6 s) | 9886 | 28,7 | 21 | 132 |
+| 4824 (5244) | $K_{\hat\tau}$ + GMRES | 28 928 operatorów | 471 | 2412, bez zbieżności | — |
+| 4824 (5244) | $K_{\hat\tau}$ + FGMRES | 228 | 2,7 | 20 | 21,7 |
+| 10816 (11352) | bez $K_{\hat\tau}$: preconditioner magnetyczny | — | > 3300 | brak zbieżności w czasie pomiaru | > 3300 |
+| 10816 (11352) | $K_{\hat\tau}$ + FGMRES | 328 | 14,2 | 30 | 54,7 |
 
 | Source ID | Path + symbol | Odpowiedzialność i dowód |
 | --- | --- | --- |
-| source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; NOT VERIFIED runtime |
+| source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; runtime zmierzony w Docker DEV (headless) |
 | source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |
