@@ -102,7 +102,7 @@ pub(crate) fn execute_direct_minimizer(
                         last_cached_preview_revision,
                         &display_selection,
                         current_stats.step,
-                        live.field_every_n,
+                        live.field_cadence.every_n(),
                     );
                     let cached_start = std::time::Instant::now();
                     let cached_preview_fields = if cached_preview_due {
@@ -192,7 +192,7 @@ pub(crate) fn execute_direct_minimizer(
                         terminal_field_snapshot: false,
                         finished: false,
                     };
-                    if live.field_every_n == 1 {
+                    if live.field_cadence.publishes_full_catalog() {
                         if let Err(error) = super::preview::capture_native_fem_observables(
                             backend, engine, plan, fem_mesh_generation_id.as_deref(), &mut update,
                         ) { eprintln!("[fullmag-runner] native FEM observation: {}", error.message); }
@@ -284,7 +284,12 @@ pub(crate) fn execute_direct_minimizer(
         current_stats = accepted_stats;
 
         if let Some(live) = live.as_mut() {
-            let heavy_payload_every = live.field_every_n.max(1);
+            let heavy_payload_due = live.field_cadence.heavy_payload_due(current_stats.step);
+            // The full catalog carries a synchronous m of this step. An extra
+            // asynchronous copy would surface on a later, skipped step as an
+            // m-only generation without its fields.
+            let full_catalog_due =
+                heavy_payload_due && live.field_cadence.publishes_full_catalog();
             let display_selection = live.display_selection.map(|get| get());
             let preview_due = display_selection
                 .as_ref()
@@ -299,7 +304,7 @@ pub(crate) fn execute_direct_minimizer(
             let preview_callback_cpu_started = current_thread_cpu_time_ns();
             preview_handoff.reset_timings();
             let preview_start = std::time::Instant::now();
-            let magnetization = if current_stats.step % heavy_payload_every == 0 {
+            let magnetization = if heavy_payload_due && !full_catalog_due {
                 preview_handoff.request_magnetization(
                     backend,
                     node_count,
@@ -348,17 +353,13 @@ pub(crate) fn execute_direct_minimizer(
                 preview_handoff.poll_active()?
             };
             live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
-            let cached_preview_due = display_selection
-                .as_ref()
-                .map(|selection| {
-                    cached_display_refresh_due(
-                        last_cached_preview_revision,
-                        selection,
-                        current_stats.step,
-                        heavy_payload_every,
-                    )
-                })
-                .unwrap_or(false);
+            // `cached_display_refresh_due` with its stride term replaced by
+            // the admitted heavy-payload cadence (identical at zero interval).
+            let cached_preview_due = display_selection.as_ref().is_some_and(|selection| {
+                last_cached_preview_revision != Some(selection.revision)
+                    || current_stats.step <= 1
+                    || heavy_payload_due
+            });
             let cached_start = std::time::Instant::now();
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
@@ -422,7 +423,7 @@ pub(crate) fn execute_direct_minimizer(
                 terminal_field_snapshot: false,
                 finished: false,
             };
-            if live.field_every_n == 1 {
+            if full_catalog_due {
                 if let Err(error) = super::preview::capture_native_fem_observables(
                     backend, engine, plan, fem_mesh_generation_id.as_deref(), &mut update,
                 ) { eprintln!("[fullmag-runner] native FEM observation: {}", error.message); }
@@ -493,7 +494,7 @@ mod tests {
         let source = include_str!("direct_minimizer.rs");
         assert!(
             source.contains("artifacts.record_scalar(&accepted_stats)?;")
-                && source.contains("let magnetization = if current_stats.step % heavy_payload_every == 0")
+                && source.contains("let magnetization = if heavy_payload_due && !full_catalog_due {")
                 && source.contains("current_stats = accepted_stats;\n\n        if let Some(live) = live.as_mut() {")
                 && source.contains("live_stats.field_copy_bytes =\n                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);")
                 && source.contains("live_stats.wall_time_ns = live_stats")
