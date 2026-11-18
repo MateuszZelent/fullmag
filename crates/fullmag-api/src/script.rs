@@ -3,7 +3,7 @@
 use crate::error::ApiError;
 use crate::types::*;
 use fullmag_application::script_source_capture::{
-    material_catalog_input, runtime_helper_loads_authored_script,
+    material_catalog_input, runtime_helper_loads_authored_script, MATERIAL_CATALOG_UNAVAILABLE,
 };
 use fullmag_authoring::{
     scene_document_problem_projection, scene_document_to_script_builder, SceneDocument, StudyPlan,
@@ -1414,7 +1414,7 @@ fn run_python_helper_with_policy(
         let mut command = python_command(repo_root)?;
         command.args(args).stdin(Stdio::null());
         if runtime_helper_loads_authored_script(args) {
-            if let Some(snapshot) = material_catalog_snapshot()? {
+            if let Some(snapshot) = material_catalog_snapshot() {
                 let input = material_catalog_input(&snapshot)
                     .map_err(|error| ApiError::internal(error.to_string()))?;
                 command.arg("--material-catalog-stdin").stdin(Stdio::from(input));
@@ -2891,14 +2891,19 @@ study.stages.add_eigenmodes(count=4)
     }
 }
 
-fn material_catalog_snapshot() -> Result<Option<Vec<u8>>, ApiError> {
-    let versions = fullmag_workspace::material_catalog::read_published_material_versions()
-        .map_err(|error| ApiError::internal(format!("read shared material catalog: {error}")))?;
-    if versions.is_empty() {
-        return Ok(None);
-    }
-    serde_json::to_vec(&versions).map(Some)
-        .map_err(|error| ApiError::internal(format!("encode shared material catalog: {error}")))
+fn material_catalog_snapshot() -> Option<Vec<u8>> {
+    let snapshot = fullmag_workspace::material_catalog::read_published_material_versions()
+        .map_err(anyhow::Error::from)
+        .and_then(|versions| {
+            if versions.is_empty() {
+                return Ok(None);
+            }
+            serde_json::to_vec(&versions).map(Some).map_err(anyhow::Error::from)
+        });
+    snapshot.unwrap_or_else(|error| {
+        tracing::warn!(%error, "Shared material catalog is unavailable");
+        Some(MATERIAL_CATALOG_UNAVAILABLE.to_vec())
+    })
 }
 
 /// Bounded, environment-isolated executor for the shared immutable capture producer.
@@ -2910,7 +2915,7 @@ pub(crate) fn capture_startup_script_scene(
     let authored = real_root.join("packages/fullmag-py/src/fullmag");
     let fullmag = if authored.is_dir() { authored } else { real_root.join("python/site-packages/fullmag") };
     let fullmag = fs::canonicalize(fullmag).map_err(|error| ApiError::internal(format!("capture runtime root: {error}")))?;
-    let catalog = material_catalog_snapshot()?;
+    let catalog = material_catalog_snapshot();
     fullmag_application::script_source_capture::capture_authored_script(script_path, &fullmag,
         &fullmag_application::script_source_capture::CaptureOptions {
             scene_only: true,

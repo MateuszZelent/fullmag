@@ -27,9 +27,23 @@ def read_material_catalog(stream):
         records = json.loads(payload)
     except (UnicodeError, ValueError) as error:
         raise RuntimeError("source_capture_material_catalog_invalid") from error
+    if isinstance(records, dict) and len(records) == 1 and records.get("unavailable") is True:
+        return None
     if not isinstance(records, list):
         raise RuntimeError("source_capture_material_catalog_invalid")
     return records
+
+
+
+def read_material_catalog_stdin():
+    stream = sys.stdin.buffer
+    descriptor = stream.fileno()
+    try:
+        return read_material_catalog(stream)
+    finally:
+        # CPython's standard stream wrappers leave their inherited native descriptor open.
+        stream.close()
+        os.close(descriptor)
 
 
 def regular(path: Path) -> Path:
@@ -296,20 +310,25 @@ def exported_config(script: Path, options: dict, pins: dict, captured_code: dict
         ctypes_bootstrap = False
     # Import the canonical runtime before admitting local authored imports.
     sys.path[:] = [str(fullmag_root.parent), *runtime_paths, str(site)]
-    from fullmag._material_versions import MaterialVersionLookupError
+    from fullmag._material_versions import MaterialCatalogUnavailableError, MaterialVersionLookupError
     from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
     from fullmag.runtime.loader import load_problem_from_script
     from fullmag.runtime.run_config_export import export_run_config, RunConfigExportOptions
     scene_only = options.pop("scene_only", False)
     sys.path.insert(0, str(script.parent))
+    material_catalog = options["material_catalog"]
     try:
         loaded = load_problem_from_script(
-            script, lightweight_assets=scene_only, material_catalog=options["material_catalog"],
+            script, lightweight_assets=scene_only, material_catalog=material_catalog,
+            material_catalog_unavailable=material_catalog is None,
         )
     except MaterialVersionLookupError as error:
         if violations:
             raise RuntimeError("source_capture_observed_violation") from error
-        print(f"source_capture_missing_material_version: {error.key}", file=sys.stderr)
+        code = ("source_capture_material_catalog_unavailable"
+                if isinstance(error, MaterialCatalogUnavailableError)
+                else "source_capture_missing_material_version")
+        print(f"{code}: {error.key}", file=sys.stderr)
         raise SystemExit(MISSING_MATERIAL_VERSION_STATUS) from None
     backend = BackendTarget(options["backend"]) if options.get("backend") else None
     mode = ExecutionMode(options["mode"]) if options.get("mode") else None
@@ -371,8 +390,7 @@ def main() -> None:
         raise RuntimeError("source_capture_inventory_changed_before_export")
     material_catalog = []
     if args.material_catalog_stdin:
-        with sys.stdin.buffer as stream:
-            material_catalog = read_material_catalog(stream)
+        material_catalog = read_material_catalog_stdin()
     authoring = exported_config(script, {"fullmag_root": args.fullmag_root, "backend": args.backend,
                                       "mode": args.mode, "precision": args.precision, "scene_only": args.scene_only,
                                       "material_catalog": material_catalog}, pins, captured_code)

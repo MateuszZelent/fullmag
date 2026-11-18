@@ -19,6 +19,14 @@ class MaterialVersionLookupError(LookupError):
         super().__init__(f"Published material version {self.key!r} was not found in the bound catalog")
 
 
+class MaterialCatalogUnavailableError(MaterialVersionLookupError):
+    """The managed catalog could not be loaded for this run."""
+
+    def __init__(self, family: str, version: str) -> None:
+        self.key = f"{family}.{version}"
+        LookupError.__init__(self, f"The shared material catalog is unavailable for {self.key!r}")
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class PublishedMaterialVersion:
     """Read-only published material selected through ``fm.materials``."""
@@ -39,9 +47,18 @@ class PublishedMaterialVersion:
         }
 
 
-_catalog: ContextVar[Mapping[tuple[str, str], PublishedMaterialVersion]] = ContextVar(
+_catalog: ContextVar[Mapping[tuple[str, str], PublishedMaterialVersion] | None] = ContextVar(
     "fullmag_material_catalog", default=MappingProxyType({})
 )
+
+
+@contextmanager
+def _bind_unavailable_catalog() -> Iterator[None]:
+    token = _catalog.set(None)
+    try:
+        yield
+    finally:
+        _catalog.reset(token)
 
 
 @contextmanager
@@ -82,8 +99,11 @@ class _MaterialFamily:
         if name.startswith("_"):
             raise AttributeError(name)
         version = _version_key(name, "material version")
+        catalog = _catalog.get()
+        if catalog is None:
+            raise MaterialCatalogUnavailableError(self._key, version)
         try:
-            return _catalog.get()[self._key, version]
+            return catalog[self._key, version]
         except KeyError:
             raise MaterialVersionLookupError(self._key, version) from None
 

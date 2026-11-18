@@ -55,15 +55,18 @@ impl SceneMaterialVersionSource {
                 return Err("copied_from_family must differ from the published family".into());
             }
         }
-        if self
-            .source_project
-            .as_ref()
-            .is_some_and(|project| project.trim().is_empty() || project.len() > 4096)
-        {
-            return Err("material source project must contain 1 to 4096 bytes".into());
+        if let Some(project) = &self.source_project {
+            validate_material_source_project(project)?;
         }
         Ok(())
     }
+}
+
+pub fn validate_material_source_project(project: &str) -> Result<(), String> {
+    if project.trim().is_empty() || project.len() > 4096 {
+        return Err("material source project must contain 1 to 4096 bytes".into());
+    }
+    Ok(())
 }
 
 pub fn validate_material_version_key(field: &str, key: &str) -> Result<(), String> {
@@ -165,8 +168,8 @@ pub fn validate_material_source(source: &SceneMaterialSource) -> Result<(), Stri
         if source.catalog_id != version.catalog_id() {
             return Err("material source identity and published key disagree".into());
         }
-        if source.properties.ms.is_none() || source.properties.aex.is_none() {
-            return Err("published material source requires Ms and Aex".into());
+        if source.properties.ms.is_none() || !source.properties.aex.is_some_and(|aex| aex > 0.0) {
+            return Err("published material source requires Ms and positive Aex".into());
         }
     }
     let properties = &source.properties;

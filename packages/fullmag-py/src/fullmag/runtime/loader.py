@@ -379,9 +379,10 @@ def load_problem_from_script(
     lightweight_assets: bool = False,
     source_bytes: bytes | None = None,
     material_catalog: Iterable[Mapping[str, object]] | None = None,
+    material_catalog_unavailable: bool = False,
 ) -> LoadedProblem:
     import fullmag.world as world
-    from fullmag._material_versions import _bind_catalog
+    from fullmag._material_versions import _bind_catalog, _bind_unavailable_catalog
 
     source_path = Path(path).resolve()
     if source_bytes is None:
@@ -404,7 +405,9 @@ def load_problem_from_script(
         dont_inherit = False
 
     with ExitStack() as stack:
-        if material_catalog is not None:
+        if material_catalog_unavailable:
+            stack.enter_context(_bind_unavailable_catalog())
+        elif material_catalog is not None:
             stack.enter_context(_bind_catalog(material_catalog))
         world.begin_script_capture(source_path.parent)
         stack.callback(world.finish_script_capture)

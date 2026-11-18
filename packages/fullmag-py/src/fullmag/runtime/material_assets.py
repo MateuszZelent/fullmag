@@ -141,6 +141,8 @@ def _source(value: object, context: str) -> dict[str, Any]:
             raise ValueError(f"{context}.catalog_id and version disagree")
         if properties["Ms"] is None or properties["Aex"] is None:
             raise ValueError(f"{context}.properties requires Ms and Aex for a published version")
+        if properties["Aex"] <= 0:
+            raise ValueError(f"{context}.properties.Aex must be positive for a published version")
         result["version"] = version
     return result
 

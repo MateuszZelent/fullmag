@@ -13,7 +13,7 @@ from fullmag._progress import emit_progress
 from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 from fullmag.model.canonical import canonical_json_sha256
 from fullmag.model._incomplete import IncompletePhysicsError
-from fullmag.runtime.accepted_source_capture import read_material_catalog
+from fullmag.runtime.accepted_source_capture import read_material_catalog_stdin
 from fullmag.runtime.loader import load_problem_from_script
 from fullmag.runtime.scene_document import (
     build_builder_from_scene_document,
@@ -143,6 +143,7 @@ def _load_script(args: argparse.Namespace, *, lightweight_assets: bool):
         lightweight_assets=lightweight_assets,
         source_bytes=_read_source_snapshot(getattr(args, "source_snapshot", None)),
         material_catalog=getattr(args, "material_catalog", None),
+        material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
     )
 
 
@@ -338,8 +339,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     if getattr(args, "material_catalog_stdin", False):
-        with sys.stdin.buffer as stream:
-            args.material_catalog = read_material_catalog(stream)
+        args.material_catalog = read_material_catalog_stdin()
+        args.material_catalog_unavailable = args.material_catalog is None
 
     if args.command == "check-syntax":
         script_path = Path(args.script)
@@ -495,6 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lightweight_assets=True,
                 source_bytes=source_bytes,
                 material_catalog=getattr(args, "material_catalog", None),
+                material_catalog_unavailable=getattr(args, "material_catalog_unavailable", False),
             )
         except Exception as error:
             # The script itself failed for these exact bytes; the caller has

@@ -5,7 +5,7 @@ use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
 use fullmag_application::script_source_capture::{
-    material_catalog_input, runtime_helper_loads_authored_script,
+    material_catalog_input, runtime_helper_loads_authored_script, MATERIAL_CATALOG_UNAVAILABLE,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1105,7 +1105,7 @@ pub(crate) fn run_python_helper_with_interpreter(
 ) -> Result<std::process::Output> {
     let mut augmented_args;
     let (args, input) = if runtime_helper_loads_authored_script(args) {
-        if let Some(snapshot) = material_catalog_snapshot()? {
+        if let Some(snapshot) = material_catalog_snapshot() {
             augmented_args = args.to_vec();
             augmented_args.push("--material-catalog-stdin".into());
             (augmented_args.as_slice(), Some(material_catalog_input(&snapshot)?))
@@ -1118,13 +1118,16 @@ pub(crate) fn run_python_helper_with_interpreter(
     run_python_helper_with_interpreter_and_bound(root, interpreter, args, progress_callback, None, input)
 }
 
-pub(crate) fn material_catalog_snapshot() -> Result<Option<Vec<u8>>> {
-    let versions = fullmag_workspace::material_catalog::read_published_material_versions()
-        .context("read shared material catalog")?;
-    if versions.is_empty() {
-        return Ok(None);
-    }
-    serde_json::to_vec(&versions).map(Some).context("encode shared material catalog")
+pub(crate) fn material_catalog_snapshot() -> Option<Vec<u8>> {
+    let snapshot = fullmag_workspace::material_catalog::read_published_material_versions()
+        .map_err(anyhow::Error::from)
+        .and_then(|versions| {
+            if versions.is_empty() {
+                return Ok(None);
+            }
+            serde_json::to_vec(&versions).map(Some).map_err(anyhow::Error::from)
+        });
+    snapshot.unwrap_or_else(|_| Some(MATERIAL_CATALOG_UNAVAILABLE.to_vec()))
 }
 
 pub(crate) fn run_python_capture_helper(

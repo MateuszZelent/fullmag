@@ -13,6 +13,7 @@ const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
+pub const MATERIAL_CATALOG_UNAVAILABLE: &[u8] = br#"{"unavailable":true}"#;
 
 pub struct CapturedScriptSource {
     pub config: Option<ScriptExecutionConfig>,
@@ -273,16 +274,21 @@ pub fn material_catalog_input(snapshot: &[u8]) -> Result<File> {
     Ok(input)
 }
 
-fn missing_material_version(stderr: &[u8]) -> Option<&str> {
+fn material_catalog_lookup_error(stderr: &[u8]) -> Option<(&str, bool)> {
     let line = std::str::from_utf8(stderr).ok()?.lines().last()?;
-    let key = line.strip_prefix("source_capture_missing_material_version: ")?;
+    let (code, key) = line.split_once(": ")?;
+    let unavailable = match code {
+        "source_capture_missing_material_version" => false,
+        "source_capture_material_catalog_unavailable" => true,
+        _ => return None,
+    };
     let (family, version) = key.split_once('.')?;
     let valid = |part: &str| {
         part.len() <= 48
             && part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
             && part.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
     };
-    (valid(family) && valid(version)).then_some(key)
+    (valid(family) && valid(version)).then_some((key, unavailable))
 }
 
 fn response(
@@ -294,7 +300,10 @@ fn response(
     if output.stdout.len()>METADATA_LIMIT || output.stderr.len()>METADATA_LIMIT { bail!("accepted source capture metadata bound"); }
     if !output.status.success() {
         if output.status.code() == Some(27) {
-            if let Some(key) = missing_material_version(&output.stderr) {
+            if let Some((key, unavailable)) = material_catalog_lookup_error(&output.stderr) {
+                if unavailable {
+                    bail!("the shared material catalog is unavailable for {key}");
+                }
                 bail!("material version {key} was not found in the shared catalog");
             }
         }
@@ -436,11 +445,15 @@ mod tests {
     fn forwards_only_the_bounded_material_alias_from_a_lookup_failure() {
         for bad in ["yig", "yig.a.b", "YIG.test", "yig._hidden", "yig.sample extra"] {
             let message = format!("source_capture_missing_material_version: {bad}\n");
-            assert_eq!(missing_material_version(message.as_bytes()), None);
+            assert_eq!(material_catalog_lookup_error(message.as_bytes()), None);
         }
         assert_eq!(
-            missing_material_version(b"source_capture_missing_material_version: yig.sample_1\n"),
-            Some("yig.sample_1")
+            material_catalog_lookup_error(b"source_capture_missing_material_version: yig.sample_1\n"),
+            Some(("yig.sample_1", false))
+        );
+        assert_eq!(
+            material_catalog_lookup_error(b"source_capture_material_catalog_unavailable: yig.sample_1\n"),
+            Some(("yig.sample_1", true))
         );
     }
 

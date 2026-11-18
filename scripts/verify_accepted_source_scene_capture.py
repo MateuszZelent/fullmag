@@ -145,6 +145,13 @@ def main():
         assert result.returncode == 27 and result.stderr.rstrip().endswith(
             b"source_capture_missing_material_version: yig.test_fixture"
         ), result.stderr.decode()
+        result, _ = invoke(
+            sys.executable, helper, source, fullmag, "export", digest,
+            material_catalog={"unavailable": True},
+        )
+        assert result.returncode == 27 and result.stderr.rstrip().endswith(
+            b"source_capture_material_catalog_unavailable: yig.test_fixture"
+        ), result.stderr.decode()
         version = {"family": "yig", "version": "test_fixture", "source_project": "Fixture project"}
         properties = {"Ms": 140000, "Aex": 3.5e-12, "alpha": 0.01, "Dind": -0.002, "Dbulk": None}
         published = {

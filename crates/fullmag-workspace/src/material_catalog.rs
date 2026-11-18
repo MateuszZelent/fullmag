@@ -1,7 +1,7 @@
 //! Durable per-user material catalog. Scene assets are independent copies.
 use fullmag_authoring::{
-    SceneMaterialReference, SceneMaterialSource, SceneMaterialSourceKind,
-    SceneMaterialSourceProperties, PUBLISHED_MATERIAL_ID_PREFIX,
+    validate_material_source_project, SceneMaterialReference, SceneMaterialSource,
+    SceneMaterialSourceKind, SceneMaterialSourceProperties, PUBLISHED_MATERIAL_ID_PREFIX,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,9 @@ pub struct MaterialLibraryWriteRequest {
     pub references: Vec<MaterialReferenceResource>,
     #[serde(default)]
     pub source: Option<SceneMaterialSource>,
+    /// Name of the project from which the draft was copied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -97,6 +100,9 @@ pub struct MaterialLibraryEntryResource {
     pub properties: MaterialPropertiesResource,
     pub references: Vec<MaterialReferenceResource>,
     pub source: Option<SceneMaterialSource>,
+    /// Name of the project from which the draft was copied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_project: Option<String>,
 }
 impl MaterialLibraryEntryResource {
     pub fn source_snapshot(&self) -> SceneMaterialSource {
@@ -329,7 +335,13 @@ impl MaterialLibraryStore {
                 "material source cannot change; create a new variant instead".into(),
             ));
         }
+        if request.source_project.is_some() && request.source_project != stored.source_project {
+            return Err(MaterialLibraryError::Invalid(
+                "material source project cannot change; create a new variant instead".into(),
+            ));
+        }
         request.source = stored.source;
+        request.source_project = stored.source_project;
         let revision = revision
             .checked_add(1)
             .ok_or_else(|| MaterialLibraryError::Conflict("material revision exhausted".into()))?;
@@ -425,6 +437,7 @@ fn entry_from_request(
         properties: request.properties,
         references: request.references,
         source: request.source,
+        source_project: request.source_project,
     };
     validate_entry(&entry)?;
     Ok(entry)
@@ -457,6 +470,9 @@ fn validate_entry(entry: &MaterialLibraryEntryResource) -> Result<()> {
     validate_references(&entry.references)?;
     if let Some(source) = &entry.source {
         validate_material_source(source).map_err(MaterialLibraryError::Invalid)?;
+    }
+    if let Some(project) = &entry.source_project {
+        validate_material_source_project(project).map_err(MaterialLibraryError::Invalid)?;
     }
     Ok(())
 }
@@ -504,7 +520,7 @@ fn builtin_entries() -> Vec<MaterialLibraryEntryResource> {
         id:format!("builtin:{id}"),revision:1,name:name.into(),kind:SceneMaterialSourceKind::Builtin,
         summary:Some("Seed parameters; verify suitability for your sample and conditions. References do not certify every parameter.".into()),
         properties:MaterialPropertiesResource {ms:Some(ms),aex:Some(aex),alpha,dind:None,dbulk:None},
-        references:vec![MaterialReferenceResource {label:Some("Reference".into()),url:Some(format!("https://doi.org/{doi}")),citation:None}],source:None,
+        references:vec![MaterialReferenceResource {label:Some("Reference".into()),url:Some(format!("https://doi.org/{doi}")),citation:None}],source:None,source_project:None,
     }).collect()
 }
 

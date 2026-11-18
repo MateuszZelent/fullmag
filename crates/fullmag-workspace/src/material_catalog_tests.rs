@@ -73,6 +73,11 @@ fn open_migrates_v1_without_revising_the_catalog_or_rewriting_drafts() {
         .unwrap();
     assert_eq!(saved.revision, 3);
     assert_eq!(saved.name, "Legacy draft");
+    assert!(saved.source_project.is_none());
+    assert!(serde_json::to_value(saved)
+        .unwrap()
+        .get("source_project")
+        .is_none());
     let persisted: String = store
         .connection
         .query_row(
@@ -172,6 +177,15 @@ fn rejects_incomplete_drafts_reserved_ids_and_invalid_python_keys() {
         store.publish(publish_request(&saved.material.id, 1)),
         Err(MaterialLibraryError::Conflict(_))
     ));
+    assert!(matches!(
+        store.publish(publish_request(&saved.material.id, saved.material.revision)),
+        Err(MaterialLibraryError::Invalid(_))
+    ));
+    input.properties.aex = Some(0.0);
+    let saved = store
+        .update_with_revision(&saved.material.id, input.clone(), saved.material.revision)
+        .unwrap();
+    assert_eq!(saved.material.properties.aex, Some(0.0));
     assert!(matches!(
         store.publish(publish_request(&saved.material.id, saved.material.revision)),
         Err(MaterialLibraryError::Invalid(_))
@@ -320,4 +334,85 @@ fn corrupt_published_source_cannot_enter_a_snapshot() {
         assert!(matches!(failure, MaterialLibraryError::Storage(_)));
         assert!(failure.to_string().contains("sample.kuswik1"));
     }
+}
+
+#[test]
+fn publishing_a_reopened_draft_prefers_its_copied_project_over_the_upstream_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("library.sqlite3");
+    let mut store = MaterialLibraryStore::open(&path).unwrap();
+    let upstream = store
+        .publish(publish_request("builtin:yig", 1))
+        .unwrap()
+        .published
+        .source;
+    let mut input = draft();
+    input.source = Some(upstream.clone());
+    input.source_project = Some("Reopened project".into());
+    let saved = store.create_with_revision(input).unwrap();
+    assert_eq!(
+        saved.material.source_project.as_deref(),
+        Some("Reopened project")
+    );
+    drop(store);
+
+    let mut store = MaterialLibraryStore::open(&path).unwrap();
+    let catalog = store.list().unwrap();
+    let saved = catalog
+        .entries
+        .iter()
+        .find(|entry| entry.id == saved.material.id)
+        .unwrap();
+    assert_eq!(saved.source_project.as_deref(), Some("Reopened project"));
+    assert_eq!(saved.source.as_ref(), Some(&upstream));
+
+    let mut rename = draft();
+    rename.name = "Sample after reopening".into();
+    let updated = store
+        .update_with_revision(&saved.id, rename.clone(), saved.revision)
+        .unwrap()
+        .material;
+    assert_eq!(updated.source_project, saved.source_project);
+    assert_eq!(updated.source, saved.source);
+
+    rename.source_project = Some("Different project".into());
+    assert!(matches!(
+        store.update_with_revision(&updated.id, rename, updated.revision),
+        Err(MaterialLibraryError::Invalid(_))
+    ));
+
+    let mut publication = publish_request(&updated.id, updated.revision);
+    publication.version = "second_measurement".into();
+    publication.source_project = Some("Explicit publish fallback".into());
+    let source = store.publish(publication).unwrap().published.source;
+    assert_eq!(
+        source.version.unwrap().source_project.as_deref(),
+        Some("Reopened project")
+    );
+    assert_eq!(
+        upstream.version.unwrap().source_project.as_deref(),
+        Some("Earlier experiment")
+    );
+}
+
+#[test]
+fn draft_source_project_validates_blank_and_utf8_byte_length() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = MaterialLibraryStore::open(&directory.path().join("library.sqlite3")).unwrap();
+    let mut input = draft();
+    for value in [" \t\n".into(), "é".repeat(2049)] {
+        input.source_project = Some(value);
+        assert!(matches!(
+            store.create_with_revision(input.clone()),
+            Err(MaterialLibraryError::Invalid(_))
+        ));
+    }
+    let maximum = "é".repeat(2048);
+    input.source_project = Some(maximum.clone());
+    let saved = store.create_with_revision(input).unwrap();
+    assert_eq!(
+        saved.material.source_project.as_deref(),
+        Some(maximum.as_str())
+    );
+    assert_eq!(saved.catalog_revision, 2);
 }
