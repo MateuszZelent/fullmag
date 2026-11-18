@@ -21,14 +21,19 @@ std::complex<double> mass_inner_product(
     if (left.mode.size() != dof_count || right.mode.size() != dof_count) {
         return value;
     }
+    if (mass_matrix_row_major == nullptr) {
+        // Identity metric: q^H q in O(n). The former dense i/j loop multiplied
+        // by an implicit identity and was O(n^2) per call; for finite modes the
+        // result is the same value.
+        for (std::size_t i = 0; i < dof_count; ++i) {
+            value += std::conj(left.mode[i]) * right.mode[i];
+        }
+        return value;
+    }
     for (std::size_t i = 0; i < dof_count; ++i) {
         std::complex<double> weighted_right{0.0, 0.0};
         for (std::size_t j = 0; j < dof_count; ++j) {
-            const double mass =
-                mass_matrix_row_major != nullptr ?
-                    mass_matrix_row_major[i * dof_count + j] :
-                    (i == j ? 1.0 : 0.0);
-            weighted_right += mass * right.mode[j];
+            weighted_right += mass_matrix_row_major[i * dof_count + j] * right.mode[j];
         }
         value += std::conj(left.mode[i]) * weighted_right;
     }
