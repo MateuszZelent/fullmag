@@ -37,6 +37,16 @@ pub(super) fn has_material_inputs(scene: &SceneDocument) -> bool {
         && !fullmag_authoring::scene_document_has_unresolved_solve_prerequisites(scene)
 }
 
+#[derive(Debug)]
+pub(super) enum Evaluation {
+    Ready(Value),
+    Pending(String),
+}
+
+fn pending(reason: impl Into<String>) -> Result<Evaluation, ApiError> {
+    Ok(Evaluation::Pending(reason.into()))
+}
+
 /// Editing coefficients and completing Build Mesh both use this path. Geometry
 /// capture omits meshing; only the asset retained by the original build is used.
 pub(super) fn evaluate(
@@ -47,26 +57,25 @@ pub(super) fn evaluate(
     snapshot: &SessionStateResponse,
     scene: &SceneDocument,
     revision: u64,
-) -> Result<Option<Value>, ApiError> {
-    if !has_material_inputs(scene)
-        || mesh_build::bound_geometry_mesh_is_current(snapshot, scene) != Some(true)
-    {
-        return Ok(None);
+) -> Result<Evaluation, ApiError> {
+    if !has_material_inputs(scene) {
+        return pending("fem_material_or_initial_state_missing");
     }
-    let (Some(root), Some(reference), Some(mesh)) = (
-        store_root,
-        mesh_build::geometry_reuse_reference(snapshot, context),
-        snapshot.fem_mesh.as_ref(),
-    ) else {
-        return Ok(None);
+    if mesh_build::bound_geometry_mesh_is_current(snapshot, scene) != Some(true) {
+        return pending("geometry_input_binding_mismatch");
+    }
+    let Some(root) = store_root else { return pending("geometry_store_missing") };
+    let Some(reference) = mesh_build::geometry_reuse_reference(snapshot, context) else {
+        return pending("geometry_reuse_reference_unavailable");
     };
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else { return pending("geometry_mesh_missing") };
     let store = fullmag_session::SessionStore::open_existing(root.to_owned())
         .map_err(|error| ApiError::internal(format!("open geometry asset store: {error}")))?;
     let Some(asset) = mesh_build::load_geometry_reuse_asset(&store, scene, &reference)? else {
-        return Ok(None);
+        return pending("geometry_cas_asset_input_mismatch");
     };
     if !mesh_build::can_qualify_live_geometry_reuse(scene, &asset) {
-        return Ok(None);
+        return pending("geometry_asset_outside_supported_p1_reuse");
     }
 
     let requested = fullmag_application::RequestedExecution {
@@ -93,24 +102,25 @@ pub(super) fn evaluate(
         &reference.provenance(),
         std::slice::from_mut(&mut input),
     )? {
-        return Ok(None);
+        return pending("geometry_owner_or_mesh_recipe_mismatch");
     }
-    let Ok(problem) = fullmag_application::bind_declared_execution(&input.problem, vec![]) else {
-        return Ok(None);
+    let problem = match fullmag_application::bind_declared_execution(&input.problem, vec![]) {
+        Ok(problem) => problem,
+        Err(reason) => return pending(format!("geometry_execution_binding: {reason}")),
     };
-    let Ok(plan) = fullmag_plan::plan(&problem) else {
-        // A geometry-only model can be meshed before its full physics is executable.
-        return Ok(None);
+    let plan = match fullmag_plan::plan(&problem) {
+        Ok(plan) => plan,
+        Err(reason) => return pending(format!("geometry_damping_plan: {reason}")),
     };
     let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
-        return Ok(None);
+        return pending("geometry_damping_plan_not_fem");
     };
     if fem.fe_order != 1 {
-        return Ok(None);
+        return pending("geometry_damping_requires_p1");
     }
     let planned = fullmag_runner::FemMeshPayload::from(fem);
     if fullmag_runner::fem_mesh_topology_fingerprint(&planned) != mesh.topology_fingerprint() {
-        return Ok(None);
+        return pending("geometry_node_topology_mismatch");
     }
     // The solver uses magnet names for packed segments, whereas Build Mesh
     // retains immutable scene IDs. Resolve that association via the authored IR.
@@ -134,17 +144,18 @@ pub(super) fn evaluate(
                         == (built.node_start, built.node_count)
             })
     {
-        return Ok(None);
+        return pending("geometry_node_ownership_mismatch");
     }
-    let Ok(layout) = fullmag_runner::study_magnetization_layout_for_plan(&plan) else {
-        return Ok(None);
+    let layout = match fullmag_runner::study_magnetization_layout_for_plan(&plan) {
+        Ok(layout) => layout,
+        Err(error) => return pending(format!("geometry_damping_layout: {}", error.message)),
     };
-    let mut field = super::project_damping(plan.backend_plan, layout, revision);
-    if let Some(raw) = &mut field {
-        raw["geometry_source"] = reference.provenance();
-        raw["mesh_topology_sha256"] = mesh.topology_fingerprint().into();
-    }
-    Ok(field)
+    let Some(mut field) = super::project_damping(plan.backend_plan, layout, revision) else {
+        return pending("geometry_damping_projection_unavailable");
+    };
+    field["geometry_source"] = reference.provenance();
+    field["mesh_topology_sha256"] = mesh.topology_fingerprint().into();
+    Ok(Evaluation::Ready(field))
 }
 
 /// Build Mesh retains its own successful result when a partial scene has no
@@ -159,9 +170,8 @@ pub(crate) async fn refresh_after_build(
         let Some(scene) = snapshot.scene_document.clone() else {
             return;
         };
-        let revision = scene.revision;
         let evaluation =
-            super::prepare_snapshot(state, context.clone(), snapshot, scene, revision).await;
+            super::prepare_snapshot(state, context.clone(), snapshot, scene, super::DampingUpdate::GeometryBuild).await;
         let prepared = match evaluation {
             Ok(value) => value,
             Err(error) => {
@@ -175,8 +185,11 @@ pub(crate) async fn refresh_after_build(
         if prepared.validate(state, current).is_ok() {
             if prepared.field.is_some() {
                 prepared.publish(current);
-                current.state_version = current.state_version.wrapping_add(1);
+            } else {
+                // Build Mesh already retired the samples in its first transaction.
+                current.metadata.get_or_insert_with(|| json!({}).into())[super::PUBLICATION] = prepared.binding;
             }
+            current.state_version = current.state_version.wrapping_add(1);
             return;
         }
         if current.session.session_id != context.session_id

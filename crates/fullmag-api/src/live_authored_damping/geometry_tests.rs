@@ -74,7 +74,7 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     let baseline = selected
         .latest_fields
         .get("mat_alpha")
-        .expect("baseline damping after Build Mesh");
+        .unwrap_or_else(|| panic!("baseline damping after Build Mesh: {}", selected.metadata.as_ref().unwrap()[damping::PUBLICATION]));
     assert!(damping::matches_publication(&selected, baseline));
     assert_eq!(baseline["sample_location"], "node");
     assert_eq!(
@@ -209,7 +209,7 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
 
     let mut moved = edited_scene.clone();
     moved.objects[0].transform.translation[0] += 5e-9;
-    assert!(super::geometry::evaluate(
+    assert!(matches!(super::geometry::evaluate(
         &state.repo_root,
         temp.path(),
         Some(store.root()),
@@ -218,8 +218,7 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
         &moved,
         7
     )
-    .unwrap()
-    .is_none());
+    .unwrap(), super::geometry::Evaluation::Pending(reason) if reason == "geometry_input_binding_mismatch"));
     moved.revision = 7;
     {
         let mut current = state.current_live_state.write().await;
@@ -242,7 +241,7 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     let active = rebuilt
         .latest_fields
         .get("mat_alpha")
-        .expect("active ABL after rebuild");
+        .unwrap_or_else(|| panic!("active ABL after rebuild: {}", rebuilt.metadata.as_ref().unwrap()[damping::PUBLICATION]));
     assert!(damping::matches_publication(&rebuilt, active));
     assert_eq!(active["authored_damping_revision"], 7);
     assert_ne!(
@@ -271,6 +270,7 @@ async fn absorbing_boundary_build_mesh_and_patch_publish_fem_nodes_without_solve
     let pending = current.as_ref().unwrap();
     assert!(pending.fem_mesh.is_some());
     assert!(pending.latest_fields.get("mat_alpha").is_none());
+    assert_eq!(pending.metadata.as_ref().unwrap()[damping::PUBLICATION]["pending_reason"], "fem_material_or_initial_state_missing");
     assert!(pending
         .metadata
         .as_ref()

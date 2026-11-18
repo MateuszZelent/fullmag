@@ -158,8 +158,13 @@ pub(crate) async fn prepare(
         &context,
         state.current_live_session_epoch.load(Ordering::Acquire),
     )?;
-    let revision = scene.revision.saturating_add(1);
-    prepare_snapshot(state, context, snapshot, scene.clone(), revision).await.map(Some)
+    prepare_snapshot(state, context, snapshot, scene.clone(), DampingUpdate::SceneEdit).await.map(Some)
+}
+
+#[derive(Clone, Copy)]
+enum DampingUpdate {
+    SceneEdit,
+    GeometryBuild,
 }
 
 async fn prepare_snapshot(
@@ -167,8 +172,12 @@ async fn prepare_snapshot(
     context: CurrentLiveRequestContext,
     snapshot: SessionStateResponse,
     scene: SceneDocument,
-    revision: u64,
+    update: DampingUpdate,
 ) -> Result<PreparedDamping, ApiError> {
+    let revision = match update {
+        DampingUpdate::SceneEdit => scene.revision.saturating_add(1),
+        DampingUpdate::GeometryBuild => scene.revision,
+    };
     let repo = state.repo_root.clone();
     let workspace = state.current_workspace_root.clone();
     let store = state.submit_store_root.clone();
@@ -188,6 +197,7 @@ async fn prepare_snapshot(
             || snapshot.scene_document.as_ref().is_some_and(|previous| {
                 crate::scene_mesh_signature(previous) != crate::scene_mesh_signature(&scene)
             });
+        let mut pending_reason = None;
         let field = if !requires_domain_rebuild
             && metadata.is_some_and(|m| m.get("execution_plan").is_some())
         {
@@ -209,15 +219,29 @@ async fn prepare_snapshot(
                     None
                 }
             }
-        } else if !requires_domain_rebuild {
-            geometry::evaluate(
+        } else if !requires_domain_rebuild && snapshot.fem_mesh.is_some() {
+            match geometry::evaluate(
                 &repo, &workspace, store.as_deref(), &context, &snapshot, &scene, revision,
-            )?
+            ) {
+                Ok(geometry::Evaluation::Ready(field)) => Some(field),
+                Ok(geometry::Evaluation::Pending(reason)) => {
+                    pending_reason = Some(reason);
+                    None
+                }
+                Err(error) if matches!(update, DampingUpdate::GeometryBuild) => {
+                    pending_reason = Some(format!("geometry_damping_evaluation: {error}"));
+                    None
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
         let mut binding = binding(revision, field.as_ref());
         binding["requires_domain_rebuild"] = requires_domain_rebuild.into();
+        if let Some(reason) = pending_reason {
+            binding["pending_reason"] = reason.into();
+        }
         Ok(PreparedDamping {
             session_id: context.session_id,
             session_epoch: context.session_epoch,
