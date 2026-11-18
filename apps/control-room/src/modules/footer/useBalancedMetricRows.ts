@@ -16,13 +16,19 @@ export function useBalancedMetricRows(count: number): (element: HTMLElement | nu
   const elementRef = useRef<HTMLElement | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
   const countRef = useRef(count);
-  countRef.current = count;
 
   const apply = useCallback((element: HTMLElement) => {
     const basis = Number.parseFloat(getComputedStyle(element).getPropertyValue("--fm-metric-basis"));
     const columns = balancedMetricColumns(countRef.current, element.clientWidth, basis);
     element.style.setProperty("--fm-metric-width", `${100 / columns}%`);
   }, []);
+
+  // Refs must not be written during render. Effects run in declaration
+  // order, so the count is current before the re-apply effect below; the
+  // initial callback-ref apply uses the useRef initial value.
+  useEffect(() => {
+    countRef.current = count;
+  }, [count]);
 
   useEffect(() => {
     if (elementRef.current) apply(elementRef.current);
