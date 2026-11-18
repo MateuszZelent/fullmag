@@ -40167,13 +40167,15 @@
       },
       "ScratchSessionDevice": {
         "enum": [
-          "cpu"
+          "cpu",
+          "gpu"
         ],
         "type": "string"
       },
       "ScratchSessionPrecision": {
         "enum": [
-          "double"
+          "double",
+          "single"
         ],
         "type": "string"
       },
