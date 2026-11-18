@@ -638,6 +638,25 @@ export type FieldDriveReplaceRequest =
   components["schemas"]["FieldDriveReplaceRequest"];
 export type FieldDriveDeleteRequest =
   components["schemas"]["FieldDriveDeleteRequest"];
+export type MaskFieldDriveListResource =
+  components["schemas"]["MaskFieldDriveListResource"];
+export type MaskFieldDriveResource =
+  components["schemas"]["MaskFieldDriveResource"];
+export type MaskFieldDriveCreateRequest =
+  components["schemas"]["MaskFieldDriveCreateRequest"];
+export type MaskFieldDriveReplaceRequest =
+  components["schemas"]["MaskFieldDriveReplaceRequest"];
+export type MaskTermResource = components["schemas"]["MaskTermResource"];
+export type MaskFunctionResource =
+  components["schemas"]["MaskFunctionResource"];
+export type ReadyAntennaListResource =
+  components["schemas"]["ReadyAntennaListResource"];
+export type ReadyAntennaResource =
+  components["schemas"]["ReadyAntennaResource"];
+export type ReadyAntennaTermsRequest =
+  components["schemas"]["ReadyAntennaTermsRequest"];
+export type ReadyAntennaTermsResource =
+  components["schemas"]["ReadyAntennaTermsResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
 export type RegionDiagnosticsResource =
   components["schemas"]["RegionDiagnosticsResource"];

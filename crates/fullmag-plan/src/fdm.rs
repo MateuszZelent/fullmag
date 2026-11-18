@@ -2046,7 +2046,7 @@ mod region_shape_bounds_tests {
     }
 }
 
-fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
+pub(crate) fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
         GeometryEntryIR::Translate { base, by, .. } => {
             let nested = top_level_geometry_translation(base);
@@ -2774,7 +2774,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
-        !problem.field_drives.is_empty(),
+        !problem.field_drives.is_empty() || !problem.mask_field_drives.is_empty(),
         // Transport field outputs are study-level declarations.  A stage may
         // deliberately disable the complete charge->spin->torque pipeline
         // (for example during zero-current relaxation), so validation must
@@ -3393,6 +3393,19 @@ pub(crate) fn plan_fdm(
             cell_size,
             &problem.geometry.entries,
         )?;
+    let time_stage = crate::util::time_stage_context(problem);
+    let mask_field_term_bases = crate::mask_field::resolve_fdm_mask_field_terms(
+        problem,
+        &crate::mask_field::FdmMaskFieldDomain {
+            cell_centres_m: &point_coords,
+            active_mask: active_mask.as_deref(),
+            region_mask: &region_mask,
+            region_legend: &grid_certificate.region_legend,
+            target_aliases: &owner_names,
+            object_translation_m: top_level_translation,
+            stage_start_time_s: time_stage.start_time_s,
+        },
+    )?;
 
     let mut resolved_ms_for_transport = ms_field_opt
         .clone()
@@ -3468,8 +3481,9 @@ pub(crate) fn plan_fdm(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         regional_field_drive_bases,
+        mask_field_term_bases,
         solved_antenna_drive_bases: Vec::new(),
-        time_stage: crate::util::time_stage_context(problem),
+        time_stage,
         inter_region_exchange,
         region_owner: Vec::new(),
         gyromagnetic_ratio,
@@ -4572,6 +4586,12 @@ pub(crate) fn plan_fdm_multilayer(
     if !problem.field_drives.is_empty() {
         errors.push(
             "RegionalFieldDrive is not executable in the current public multilayer FDM path because FdmMultilayerPlanIR does not retain field drives; remove the drive or use a qualified single-grid FDM plan"
+                .to_string(),
+        );
+    }
+    if !crate::mask_field::active_mask_field_drives(problem).is_empty() {
+        errors.push(
+            "mask_field_drive_unsupported_lane:fdm_multilayer: mask antennas are realized on a single FDM grid (one magnet) only"
                 .to_string(),
         );
     }

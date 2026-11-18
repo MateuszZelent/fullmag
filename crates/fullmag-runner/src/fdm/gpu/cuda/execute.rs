@@ -396,13 +396,6 @@ pub(crate) fn apply_regional_drive_energy(
     magnetization: &[[f64; 3]],
 ) {
     let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
-    // A cellwise Ms field weights each cell like the device energy reductions do.
-    let saturation_magnetisation = |index: usize| {
-        plan.material
-            .ms_field
-            .as_ref()
-            .map_or(plan.material.saturation_magnetisation, |ms| ms[index])
-    };
     let mut magnetization_dot_field = 0.0;
     for resolved in &plan.regional_field_drive_bases {
         if !resolved.drive.enabled {
@@ -414,14 +407,8 @@ pub(crate) fn apply_regional_drive_energy(
             stats.time,
         );
         let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
-        for (index, (m, field)) in magnetization.iter().zip(&resolved.field_xyz).enumerate() {
-            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
-                continue;
-            }
-            magnetization_dot_field += multiplier
-                * saturation_magnetisation(index)
-                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
-        }
+        magnetization_dot_field +=
+            multiplier * weighted_magnetization_dot_field(plan, magnetization, &resolved.field_xyz);
     }
     for resolved in &plan.solved_antenna_drive_bases {
         if !resolved.drive.activation.is_active_for(
@@ -436,21 +423,51 @@ pub(crate) fn apply_regional_drive_energy(
             stats.time,
         );
         let multiplier = evaluate_time_dependence(&resolved.drive.waveform, waveform_time_s);
-        for (index, (m, field)) in magnetization
-            .iter()
-            .zip(&resolved.field_xyz_apm_per_a)
-            .enumerate()
-        {
-            if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
-                continue;
-            }
-            magnetization_dot_field += multiplier
-                * resolved.drive.peak_current_a
-                * saturation_magnetisation(index)
-                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
-        }
+        magnetization_dot_field += multiplier
+            * resolved.drive.peak_current_a
+            * weighted_magnetization_dot_field(plan, magnetization, &resolved.field_xyz_apm_per_a);
+    }
+    for basis in &plan.mask_field_term_bases {
+        let local_time_s =
+            crate::mask_time::mask_term_local_time(&plan.time_stage, basis.time_origin, stats.time);
+        let multiplier = fullmag_expr::eval_time_program(&basis.time_program, local_time_s);
+        magnetization_dot_field +=
+            multiplier * weighted_magnetization_dot_field(plan, magnetization, &basis.field_xyz);
     }
     split_native_regional_drive_energy(stats, -crate::MU0 * cell_volume * magnetization_dot_field);
+}
+
+/// `sum_i Ms_i phi_i (m_i . field_i)` over the active cells, weighted like the
+/// native external-energy reduction (`external_energy_blocks_kernel`): a
+/// cellwise Ms, and the volume fraction phi_i when a boundary correction
+/// (`volume` or `full`) uploads it; phi_i = 1 otherwise.
+#[cfg(any(feature = "cuda", test))]
+fn weighted_magnetization_dot_field(
+    plan: &FdmPlanIR,
+    magnetization: &[[f64; 3]],
+    field_xyz: &[[f64; 3]],
+) -> f64 {
+    let volume_fraction = match plan.boundary_correction.as_deref() {
+        Some("volume" | "full") => plan
+            .boundary_geometry
+            .as_ref()
+            .map(|geometry| geometry.volume_fraction.as_slice()),
+        _ => None,
+    };
+    let mut sum = 0.0;
+    for (index, (m, field)) in magnetization.iter().zip(field_xyz).enumerate() {
+        if plan.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+            continue;
+        }
+        let ms = plan
+            .material
+            .ms_field
+            .as_ref()
+            .map_or(plan.material.saturation_magnetisation, |ms| ms[index]);
+        let phi = volume_fraction.map_or(1.0, |phi| phi[index]);
+        sum += ms * phi * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+    }
+    sum
 }
 
 /// Native Zeeman is combined. Preserve it across repeated projections, while
@@ -492,6 +509,59 @@ mod regional_drive_energy_tests {
         super::split_native_regional_drive_energy(&mut stats, -1.0);
         assert_eq!(stats.e_total, stats.e_ex + stats.e_ext + stats.e_drive);
         assert_eq!(stats.per_object_scalars, unrelated);
+    }
+
+    fn boundary_geometry(volume_fraction: Vec<f64>) -> fullmag_ir::BoundaryGeometryIR {
+        let empty = vec![0.0; volume_fraction.len()];
+        fullmag_ir::BoundaryGeometryIR {
+            volume_fraction,
+            face_link_xp: empty.clone(),
+            face_link_xm: empty.clone(),
+            face_link_yp: empty.clone(),
+            face_link_ym: empty.clone(),
+            face_link_zp: empty.clone(),
+            face_link_zm: empty.clone(),
+            delta_xp: empty.clone(),
+            delta_xm: empty.clone(),
+            delta_yp: empty.clone(),
+            delta_ym: empty.clone(),
+            delta_zp: empty.clone(),
+            delta_zm: empty,
+            demag_corr_target_idx: Vec::new(),
+            demag_corr_source_idx: Vec::new(),
+            demag_corr_tensor: Vec::new(),
+            demag_corr_stencil_size: 0,
+        }
+    }
+
+    /// A boundary cell half filled with magnet contributes half of a full cell
+    /// to the drive energy, as in the native external-energy reduction.
+    #[test]
+    fn cuda_drive_energy_weights_boundary_cells_by_volume_fraction() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.material.saturation_magnetisation = 2.0;
+        plan.boundary_geometry = Some(boundary_geometry(vec![1.0, 0.5, 0.25]));
+        let magnetization = [[0.0, 0.0, 1.0]; 3];
+        let field = [[0.0, 0.0, 3.0]; 3];
+
+        plan.boundary_correction = Some("volume".to_string());
+        let full = super::weighted_magnetization_dot_field(&plan, &magnetization, &field);
+        assert_eq!(full, 2.0 * 3.0 * (1.0 + 0.5 + 0.25));
+        plan.boundary_correction = Some("full".to_string());
+        assert_eq!(super::weighted_magnetization_dot_field(&plan, &magnetization, &field), full);
+
+        // Without an active boundary tier the device uses phi = 1.
+        plan.boundary_correction = Some("none".to_string());
+        assert_eq!(super::weighted_magnetization_dot_field(&plan, &magnetization, &field), 18.0);
+
+        // Cellwise Ms and inactive cells.
+        plan.boundary_correction = Some("volume".to_string());
+        plan.material.ms_field = Some(vec![1.0, 4.0, 8.0]);
+        plan.active_mask = Some(vec![true, true, false]);
+        assert_eq!(
+            super::weighted_magnetization_dot_field(&plan, &magnetization, &field),
+            3.0 * (1.0 * 1.0 + 4.0 * 0.5)
+        );
     }
 }
 
@@ -546,6 +616,10 @@ fn plan_uploads_time_dependent_drive(plan: &FdmPlanIR) -> bool {
             .solved_antenna_drive_bases
             .iter()
             .any(|basis| dynamic(&basis.drive.waveform))
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent)
 }
 
 #[cfg(feature = "cuda")]
@@ -816,7 +890,11 @@ pub(crate) fn execute_cuda_fdm(
         })
         || plan.solved_antenna_drive_bases.iter().any(|basis| {
             !matches!(basis.drive.waveform, fullmag_ir::TimeDependenceIR::Constant)
-        });
+        })
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent);
     if has_dynamic_drive
         && plan.time_stage.waveform_origin_time_s() != plan.time_stage.start_time_s
     {
@@ -836,6 +914,11 @@ pub(crate) fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;

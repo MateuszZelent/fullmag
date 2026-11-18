@@ -32,6 +32,8 @@ import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
 import { TableAutosaveStageInspector } from "./stages/TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./stages/UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./stages/MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./stages/maskFieldDriveStageSummary";
 import { StageInitialStateSelector } from "./stages/StageInitialStateSelector";
 import { StageTextureAssignmentsEditor } from "./stages/StageTextureAssignmentsEditor";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
@@ -122,6 +124,11 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = draft?.pipelineNodeId && draft.kind === "unsupported"
     ? "unsupported" : resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
+  // Add/Update stages of a mask antenna keep their raw payload; they get a
+  // read-only summary instead of the generic "unsupported stage" notice.
+  const maskStageSummary = draft?.kind === "unsupported"
+    ? summarizeMaskFieldDriveStage(draft.rawStage)
+    : null;
   const frequencyDomainAuthoringView =
     resolveFrequencyDomainAuthoringView(selection.kind);
   const hysteresisView =
@@ -279,6 +286,13 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           {...commonProps}
           expectedKind="antenna_field_solve"
           kindLabel="Antenna Field Solve"
+        />
+      ) : maskStageSummary ? (
+        <MaskFieldDriveStageInspector
+          {...commonProps}
+          expectedKind="unsupported"
+          kindLabel={maskStageSummary.kindLabel}
+          summary={maskStageSummary}
         />
       ) : inspectorKind === "unsupported" ? (
         <UnsupportedStageInspector

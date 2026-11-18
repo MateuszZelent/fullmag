@@ -551,6 +551,8 @@ export type SelectionRef =
       /** Explicit source geometry for a newly authored regional field. */
       sourceObjectId?: string;
       fieldDriveId?: string;
+      /** Hand-written mask antenna; absent for a regional field drive. */
+      fieldDriveKind?: "mask";
       kind: "physics.field-drives" | "physics.field-drive";
       nodeId: string;
       type: "physics-field-drive";
@@ -1280,6 +1282,7 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.fieldDriveId === right.fieldDriveId &&
+        left.fieldDriveKind === right.fieldDriveKind &&
         left.draft === right.draft &&
         left.sourceObjectId === right.sourceObjectId
       );
