@@ -31,7 +31,7 @@ def _assert_source_contract() -> None:
     cpu_slepc = _section(
         source,
         "RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu",
-        "# The CPU FEM client is compiled with the host C++ compiler.",
+        "RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps",
     )
     cpu_petsc = _section(
         source,
