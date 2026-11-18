@@ -118,7 +118,11 @@ Faces use `x+`, `x-`, `y+`, `y-`, `z+`, and `z-`. `frame="object"` uses the
 axis-aligned bounds of the object's sampled magnetic points after removing
 the object's translation. `frame="universe"` uses the explicit study-universe
 box; when the universe is automatic, the planner uses the sampled object
-bounds as the deterministic fallback.
+bounds as the deterministic fallback. For FDM, the extrema come from the
+centres of active magnetic cells. Inactive cells, including holes and the
+padding of an imported grid, receive zero ABL contribution. A multilayer grid
+uses each magnet's own active mask. An explicit universe keeps its declared
+faces in world coordinates.
 
 W FEM bounds obejmują sumę węzłów wszystkich segmentów należących do jednego
 obiektu, z deduplikacją wspólnych węzłów. Marker podregionu konformalnego nie
@@ -232,8 +236,7 @@ inferred from the base material after planning. Invalid values fail at Python or
 IR validation with structured validation errors. The v2 authoring mutation
 also validates a profile before saving the object. The UI writes a typed
 configuration via the same optional scene field used for existing profiles.
-An explicit `null` is currently interpreted as omission by the object patch
-deserializer. The profile extension leaves that limitation open. Unsupported combinations,
+An explicit `null` in the object patch clears the layer. Omitting the field preserves it. Unsupported combinations,
 including forced CUDA multilayer with unqualified cellwise material fields, are
 still rejected by the execution planner.
 
@@ -282,7 +285,7 @@ round-trip. The new profile tests check analytic midpoint values, exact plateau,
 invalid custom expressions, and Python export. Rust tests cover IR validation,
 planner profiles, region ordering,
 and single-grid FDM CUDA planner materialization. Authoring tests cover scene and script
-builder round-trip. The `tests/vlad/4.5GHz_fem.py` loader test verifies the
+builder round-trip. The `examples/fem_absorbing_boundary.py` loader test verifies the
 flat top-level `study` style and the per-object layer parameters.
 
 ## 6. Completeness checklist
@@ -329,6 +332,7 @@ parameter, backend lane, and implementation symbol cited here:
 | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_absorbing_boundary` | Canonical editable profile export |
 | `crates/fullmag-plan/src/material.rs` | `apply_absorbing_boundary_layer` | FDM/FEM alpha-field materialization |
 | `crates/fullmag-plan/src/fem.rs` | `build_region_material_fields` | FEM material-field handoff |
+| `crates/fullmag-plan/src/tests.rs` | `fdm_absorbing_boundary_uses_magnetic_support` | Masked single-grid and multilayer alpha, including explicit universe faces. |
 | `crates/fullmag-plan/src/tests.rs` | `fdm_cuda_absorbing_boundary_plans_cellwise_damping` | Single-grid FDM CUDA planner regression |
 | `apps/control-room/src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.tsx` | `ObjectAbsorbingBoundaryPanel` | UI authoring and persistence |
 | `crates/fullmag-plan/src/tests/material_audit_fem.rs` | `fem_absorber_uses_the_union_of_conformal_owner_segments` | Mapa alpha nie zależy od podziału ownera na markery ani ich kolejności. |

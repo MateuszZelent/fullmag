@@ -431,14 +431,18 @@ fn grid_sample_points(
     points
 }
 
-fn fdm_material_sample_spacing(
+fn fdm_material_sampling(
     cell_size: [f64; 3],
-) -> crate::material::MaterialSampleSpacing<'static> {
+    active_mask: Option<&[bool]>,
+) -> crate::material::MaterialSampling<'_> {
     let minimum_positive_cell_size = cell_size
         .into_iter()
         .filter(|value| value.is_finite() && *value > 0.0)
         .fold(f64::INFINITY, f64::min);
-    crate::material::MaterialSampleSpacing::Uniform(minimum_positive_cell_size)
+    crate::material::MaterialSampling::Cells {
+        spacing: minimum_positive_cell_size,
+        active_mask,
+    }
 }
 
 /// Validate the exchange stiffness used by the rotated-interfacial-DMI
@@ -3176,7 +3180,7 @@ pub(crate) fn plan_fdm(
         active_mask.as_ref(),
     );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
-    let material_sample_spacing = fdm_material_sample_spacing(cell_size);
+    let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
@@ -3187,7 +3191,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Ms,
         material.saturation_magnetisation,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let ms_field_opt = match ms_field_resolved {
@@ -3214,7 +3218,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Aex,
         material.exchange_stiffness,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let aex_field_opt = match aex_field_resolved {
@@ -3259,7 +3263,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Alpha,
         material.damping,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let alpha_field_opt = match alpha_field_resolved {
@@ -4680,7 +4684,6 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
-        let material_sample_spacing = fdm_material_sample_spacing(cell_size);
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -4768,6 +4771,7 @@ pub(crate) fn plan_fdm_multilayer(
             .iter()
             .map(|point| point.position_world)
             .collect::<Vec<_>>();
+        let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
         let resolve_material_field = |parameter, base_value, label: &str| {
             let values = crate::material::resolve_spatial_parameter(
                 problem,
@@ -4775,7 +4779,7 @@ pub(crate) fn plan_fdm_multilayer(
                 parameter,
                 base_value,
                 &point_coords,
-                material_sample_spacing,
+                material_sampling,
                 placed.translation,
             )?;
             if values.len() != n_cells {

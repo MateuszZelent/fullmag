@@ -3663,7 +3663,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Ms,
             region_material.saturation_magnetisation,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_ms_regions,
         )
@@ -3675,7 +3675,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
             &sharp_conformal_aex_regions,
         )
@@ -3687,7 +3687,7 @@ fn build_region_material_fields(
             fullmag_ir::MaterialParameterNameIR::Alpha,
             region_material.damping,
             &points,
-            crate::material::MaterialSampleSpacing::PerPoint(&point_spacings),
+            crate::material::MaterialSampling::Nodes { spacings: &point_spacings },
             object_translation,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
