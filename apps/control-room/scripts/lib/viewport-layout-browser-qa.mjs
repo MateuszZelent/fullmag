@@ -82,6 +82,7 @@ export async function checkFooterReadability(page, { assertCanvas, timeout }) {
       for (const label of labels) {
         await tabs.getByRole("tab", { name: label, exact: true }).click();
         await waitForLayoutFrame(page);
+        await waitForFooterTransitions(page, timeout);
         const sample = await footer.evaluate((root) => {
           const selected = root.querySelector('.fm-footer__tabs [aria-selected="true"]');
           const panels = [...root.querySelectorAll(':scope > [role="tabpanel"]')].filter((panel) => !panel.hidden);
@@ -846,6 +847,19 @@ async function waitForThemeAndFrame(page, theme) {
   await waitForLayoutFrame(page);
   await page.waitForTimeout(80);
   await waitForLayoutFrame(page);
+}
+
+// Theme attributes and layout can settle before the tab color transitions.
+// Measure final contrast without disabling motion or relaxing the threshold.
+async function waitForFooterTransitions(page, timeout) {
+  await page.waitForFunction(() => {
+    const footer = document.querySelector(".fm-footer");
+    if (!footer) return false;
+    return !footer.getAnimations({ subtree: true }).some((animation) =>
+      animation instanceof CSSTransition &&
+      (animation.pending || animation.playState === "running"),
+    );
+  }, undefined, { polling: "raf", timeout: Math.min(timeout, 2_000) });
 }
 
 async function waitForLayoutFrame(page) {
