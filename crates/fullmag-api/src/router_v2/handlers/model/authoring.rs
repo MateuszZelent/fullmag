@@ -5262,7 +5262,6 @@ fn apply_object_patch(
                 })
             })
             .transpose()?;
-        mesh_dirty = true;
     }
     if mesh_dirty {
         mark_object_mesh_dirty(object);

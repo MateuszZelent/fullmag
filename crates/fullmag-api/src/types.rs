@@ -1144,6 +1144,16 @@ impl LatestFields {
         self.1.remove(quantity);
     }
 
+    pub(crate) fn retain_quantity_from(&mut self, previous: &Self, quantity: &str) {
+        self.remove(quantity);
+        if let Some(value) = previous.0.get(quantity) {
+            self.0.insert(quantity.to_string(), value.clone());
+        }
+        if let Some(reader) = previous.1.get(quantity) {
+            self.1.insert(quantity.to_string(), Arc::clone(reader));
+        }
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter().map(|(quantity, value)| (quantity, &**value))
     }
@@ -1223,6 +1233,12 @@ impl CachedPreviewFields {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+
+    pub(crate) fn forget_quantity(&mut self, quantity: &str) {
+        self.fields.remove(quantity);
+        self.accepted_latest_source_frames.remove(quantity);
+        self.accepted_preview_source_frames.retain(|(id, _, _, _, _), _| id != quantity);
     }
 
     pub(crate) fn clear_fields(&mut self) {

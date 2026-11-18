@@ -1524,7 +1524,8 @@ impl ProblemIR {
     }
 }
 
-fn validate_absorbing_boundary(
+/// Append all boundary-layer diagnostics using the owning resource path.
+pub fn validate_absorbing_boundary(
     path: &str,
     layer: &AbsorbingBoundaryLayerIR,
     errors: &mut Vec<String>,

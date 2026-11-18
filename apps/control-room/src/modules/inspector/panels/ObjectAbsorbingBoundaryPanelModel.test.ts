@@ -57,6 +57,16 @@ describe("ObjectAbsorbingBoundaryPanelModel", () => {
     }
   });
 
+  it("requires an explicit maximum damping and accepts zero", () => {
+    const draft = { ...absorbingBoundaryDraftFromObject(null), enabled: true, faces: ["x+"] };
+    for (const maxDamping of ["", "   "]) {
+      expect(buildAbsorbingBoundaryPatch({ ...draft, maxDamping }, 4)).toHaveProperty("error");
+    }
+    expect(buildAbsorbingBoundaryPatch({ ...draft, maxDamping: "0" }, 4)).toMatchObject({
+      patch: { absorbing_boundary: { max_damping: 0 } },
+    });
+  });
+
   it("builds a fail-closed patch for invalid widths and a typed object patch", () => {
     const invalid = buildAbsorbingBoundaryPatch(
       {

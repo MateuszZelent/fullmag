@@ -760,7 +760,7 @@ pub(crate) async fn build_and_publish_geometry_mesh(
     .await
     .map_err(|error| ApiError::internal(format!("geometry mesh build task failed: {error}")))??;
 
-    {
+    let damping_snapshot = {
         let _transition = state.current_live_session_transition.lock().await;
         if !state
             .current_command_ledger
@@ -839,7 +839,14 @@ pub(crate) async fn build_and_publish_geometry_mesh(
             &mut published,
             validated_scene_revision,
         );
+        let refresh = crate::live_authored_damping::geometry::invalidate_for_build(
+            &mut published, validated_scene_revision,
+        );
         *snapshot = published;
+        refresh.then(|| snapshot.clone())
+    };
+    if let Some(snapshot) = damping_snapshot {
+        crate::live_authored_damping::geometry::refresh_after_build(state, context, snapshot).await;
     }
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
         let display_revision = state.current_display_selection.read().await.revision;

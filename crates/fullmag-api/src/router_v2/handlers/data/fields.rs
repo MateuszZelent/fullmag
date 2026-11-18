@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::fdm_airbox_membership::resolve_fdm_airbox_membership;
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
-    current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
+    current_fem_damping_uses_nodes, current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
     flatten_json_field_values, is_fdm_snapshot, json_field_grid, json_field_matches_current_domain, json_field_value_count,
     live_magnetization_available, strict_flat_json_field_values,
 };
@@ -1614,8 +1614,16 @@ fn freshness_from_selected_observation_frame(
 fn latest_json_field_freshness(
     snapshot: &SessionStateResponse,
     value: &serde_json::Value,
-    _quantity_id: &str,
+    quantity_id: &str,
 ) -> FieldFreshness {
+    if quantity_id == "mat_alpha" {
+        if let Some(revision) = crate::live_authored_damping::publication_revision(snapshot)
+            .filter(|_| crate::live_authored_damping::matches_publication(snapshot, value))
+        {
+            // The edit belongs to a scene revision and has no physical solver clock.
+            return completed_field_freshness(0, 0, revision, 0, 0);
+        }
+    }
     let precedence = latest_field_source_precedence(snapshot, value);
     let current_step = current_source_step(snapshot);
     let mut freshness = completed_field_freshness(
@@ -1818,6 +1826,9 @@ fn materializer_status<'a>(
     snapshot: &'a SessionStateResponse,
     quantity_id: &str,
 ) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
+    if quantity_id == "mat_alpha" && crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return None;
+    }
     relevant_field_materialization_status(snapshot, quantity_id)
 }
 
@@ -1985,7 +1996,8 @@ fn pending_field_scope_point_count(
         ))
     })?;
     Ok(
-        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+        if !current_fem_damping_uses_nodes(snapshot, quantity_id)
+            && quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
             mesh.cell_count()
         } else {
             mesh.nodes.len()
@@ -2215,8 +2227,9 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             &resolved.canonical_unit,
-            value.get("spatial_kind").and_then(serde_json::Value::as_str)
-                .filter(|kind| kind.starts_with("fem_")),
+            current_fem_damping_uses_nodes(snapshot, qid).then_some("node").or_else(||
+                value.get("spatial_kind").and_then(serde_json::Value::as_str)
+                    .filter(|kind| kind.starts_with("fem_"))),
             resolved.quantity_revision,
             &gen_id,
             freshness,
@@ -2373,7 +2386,7 @@ pub async fn get_field_catalog(
         .map(|status| status.quantity.clone())
         .collect::<BTreeSet<_>>();
     for quantity_id in status_quantities {
-        let Some(status) = relevant_field_materialization_status(snapshot, &quantity_id) else {
+        let Some(status) = materializer_status(snapshot, &quantity_id) else {
             continue;
         };
         if status.state == fullmag_runner::LiveFieldMaterializationState::Complete {
@@ -3107,7 +3120,8 @@ pub async fn get_field_meta(
             "unsupported_scope: field '{quantity_id}' is not available on airbox scope"
         )));
     }
-    let location = current_fem_nodal_projection_kind(snapshot, quantity_id).map(str::to_string).or_else(|| snapshot
+    let location = current_fem_damping_uses_nodes(snapshot, quantity_id).then_some("node")
+        .or_else(|| current_fem_nodal_projection_kind(snapshot, quantity_id)).map(str::to_string).or_else(|| snapshot
         .preview_cache
         .get(quantity_id)
         .filter(|field| preview_field_source_is_qualified(snapshot, field))
@@ -4017,7 +4031,8 @@ fn resolve_field_scope(
         .filter(|index| *index < mesh.nodes.len())
         .collect::<Vec<_>>();
     let value_indices =
-        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+        if !current_fem_damping_uses_nodes(snapshot, quantity_id)
+            && quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
             node_indices
                 .iter()
                 .copied()
@@ -9598,6 +9613,36 @@ mod tests {
             Some(row.time),
         ));
         snapshot.scalar_rows.push(row);
+    }
+
+    #[test]
+    fn absorbing_boundary_publication_stays_current_after_a_physical_step() {
+        let mut snapshot = snapshot_with_field_provider("mat_alpha");
+        snapshot.live_state = Some(serde_json::from_value(serde_json::json!({
+            "status": "completed", "updated_at_unix_ms": 1234,
+            "latest_step": {
+                "kind": "physical_observation", "step": 8, "time": 8e-12, "dt": 1e-12,
+                "e_ex": 0.0, "e_demag": 0.0, "e_ext": 0.0, "e_total": 0.0,
+                "max_dm_dt": 0.0, "max_h_eff": 0.0, "wall_time_ns": 0, "grid": [1,1,1],
+                "field_materialization_states": [{
+                    "quantity": "mat_alpha", "source_step": 8, "request_revision": 4,
+                    "state": "error", "error": "previous run"
+                }], "finished": true
+            }
+        })).unwrap());
+        let field = serde_json::json!({"values": [0.3], "layout": {"grid_cells": [1,1,1]},
+            "authored_damping_revision": 12, "source_revision": 12});
+        snapshot.metadata = Some(serde_json::json!({"authored_damping":
+            crate::live_authored_damping::binding(12, Some(&field))}).into());
+        crate::session::replace_authored_damping(&mut snapshot, Some(field));
+        let alpha = snapshot.latest_fields.get("mat_alpha").unwrap();
+        let freshness = super::latest_json_field_freshness(&snapshot, alpha, "mat_alpha");
+        assert_eq!(freshness.state, FieldMaterializationState::Complete);
+        assert_eq!((freshness.source_revision, freshness.stale_by_steps), (12, 0));
+        assert_eq!((freshness.source_step, freshness.source_time_seconds), (0, None));
+        assert_eq!(freshness.materialized_at_unix_ms, 0);
+        assert!(freshness.materialization_reason_code.is_none());
+        assert!(materializer_status(&snapshot, "mat_alpha").is_none());
     }
 
     #[test]

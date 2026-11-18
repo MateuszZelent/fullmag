@@ -23,6 +23,7 @@ from fullmag.init.magnetization import (
 )
 from fullmag.init.textures import PresetTexture
 from fullmag.init.state_io import infer_magnetization_state_format
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
 from fullmag.model.antenna import (
     ANTENNA_PORT_MODE_SCHEMA_VERSION,
     AntennaSourceCutRt0,
@@ -5149,26 +5150,35 @@ def _render_geometries_from_override(
 
 
 def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
-    config = _normalize_mapping(raw)
-    if not config:
+    if raw is None:
         return []
-    faces = config.get("faces")
-    if not isinstance(faces, list) or not faces:
-        return []
-    face_expr = "(" + ", ".join(_py_repr(str(face)) for face in faces)
-    if len(faces) == 1:
-        face_expr += ","
-    face_expr += ")"
-    expression = config.get("expression")
-    expression_kwarg = f", expression={_py_repr(expression)}" if expression is not None else ""
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{var_name}.absorbing_boundary must be an object")
+    faces = raw.get("faces")
+    if not isinstance(faces, (list, tuple)):
+        raise ValueError(f"{var_name}.absorbing_boundary.faces must be an array")
+    try:
+        layer = AbsorbingBoundaryLayer(
+            total_width_m=raw["total_width_m"],
+            ramp_width_m=raw["ramp_width_m"],
+            max_damping=raw["max_damping"],
+            faces=tuple(faces),
+            profile=raw.get("profile", "smootherstep"),
+            frame=raw.get("frame", "object"),
+            expression=raw.get("expression"),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Invalid {var_name}.absorbing_boundary: {error}") from error
+    face_expr = "(" + ", ".join(_py_repr(face) for face in layer.faces)
+    face_expr += ",)" if len(layer.faces) == 1 else ")"
+    expression = f", expression={_py_repr(layer.expression)}" if layer.expression is not None else ""
     return [
         f"{var_name}.alpha.absorbing_boundary("
-        f"total_width={_py_float_roundtrip(float(config['total_width_m']))}, "
-        f"ramp_width={_py_float_roundtrip(float(config['ramp_width_m']))}, "
-        f"max_damping={_py_float_roundtrip(float(config['max_damping']))}, "
-        f"faces={face_expr}, "
-        f"profile={_py_repr(str(config.get('profile', 'smootherstep')))}, "
-        f"frame={_py_repr(str(config.get('frame', 'object')))}{expression_kwarg})"
+        f"total_width={_py_float_roundtrip(layer.total_width_m)}, "
+        f"ramp_width={_py_float_roundtrip(layer.ramp_width_m)}, "
+        f"max_damping={_py_float_roundtrip(layer.max_damping)}, "
+        f"faces={face_expr}, profile={_py_repr(layer.profile)}, "
+        f"frame={_py_repr(layer.frame)}{expression})"
     ]
 
 

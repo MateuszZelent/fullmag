@@ -66,6 +66,7 @@ pub use antenna_validity::{
     antenna_waveform_bandwidth_notes, classify_antenna_waveform_bandwidth,
 };
 pub use error::PlanError;
+pub use fem::damping_on_geometry_mesh;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_aligned_embedding_eligible, fdm_multilayer_cuda_aligned_embedding_error,

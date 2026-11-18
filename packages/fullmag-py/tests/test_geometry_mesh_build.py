@@ -83,6 +83,27 @@ class GeometryMeshBuildTests(unittest.TestCase):
             },
         }
         self.assertTrue(matches_solver_geometry_reuse(payload, [recipe, deepcopy(recipe)]))
+        # Build Mesh serializes ScriptBuilderPerGeometryMeshState, including
+        # the form's unset text inputs. The solver exports sparse recipes.
+        inherited = {
+            "geometry": "sphere-left", "geometry_name": "sphere-left", "object_id": "sphere-left",
+            "mode": "inherit", "build_requested": False,
+            "hmax": "", "hmin": "", "maximum_element_size": "", "minimum_element_size": "",
+            "curvature_factor": "", "growth_rate": "", "maximum_element_growth_rate": "",
+            "narrow_region_resolution": "", "interface_hmax": "", "interface_thickness": "",
+            "transition_distance": "", "edge_maximum_element_size": "", "edge_thickness": "",
+            "edge_transition_distance": "", "corner_maximum_element_size": "",
+            "corner_extent": "", "corner_transition_distance": "", "resolved_growth_rate": "",
+        }
+        built = deepcopy(payload)
+        built["mesh_options"]["per_geometry"] = [inherited]
+        self.assertTrue(matches_solver_geometry_reuse(built, [recipe]))
+        for override in ({"hmax": "1e-8"}, {"build_requested": True}, {"build_requested": 0},
+                         {"order": 2}, {"mode": "override"}, {"unknown": ""}, {"unknown": []}):
+            with self.subTest(override=override):
+                built["mesh_options"]["per_geometry"] = [{**inherited, **override}]
+                self.assertFalse(matches_solver_geometry_reuse(built, [recipe]))
+
 
         cases = []
         changed = deepcopy(recipe)
