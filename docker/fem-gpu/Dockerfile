@@ -208,6 +208,7 @@ RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git
       --with-cuda=1 \
       --with-cuda-dir=${CUDA_HOME} \
       --with-cuda-arch="${FULLMAG_PETSC_CUDA_ARCHITECTURES}" \
+      --download-mumps --download-scalapack --download-metis --download-parmetis \
       --with-hypre=1 \
       --with-hypre-dir=${INSTALL_PREFIX} && \
     make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
@@ -458,7 +459,7 @@ RUN if command -v nsys >/dev/null 2>&1; then nsys --version; else echo "profiler
 
 # DOC-ANCHOR: antenna-surface-gmp-dev-package
 # Keep exact-arithmetic packages after the cached native dependencies and tools.
-ARG FULLMAG_MPFR_DEBIAN_VERSION="4.1.0-3build3"
+ARG FULLMAG_MPFR_DEBIAN_VERSION="4.0.2-1"
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libgmp-dev "libmpfr-dev=${FULLMAG_MPFR_DEBIAN_VERSION}" "libmpfr6=${FULLMAG_MPFR_DEBIAN_VERSION}" && \
     rm -rf /var/lib/apt/lists/*
