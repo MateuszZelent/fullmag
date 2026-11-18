@@ -2378,7 +2378,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     _revalidate_helper_source_binding(helper_source_binding, selected)
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
-    configured_budget = _configured_group_budget(selected, layout)
     identity = _compose_identity(layout)
     from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
     requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
@@ -2453,11 +2452,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     else:
         control = provided_control
         toolchain, images = _validate_prepared_start_context(prepared)
-    retained_storage_bytes = None if reuse_state is None else _retained_storage_budget(control, reuse_state)
-    if reuse_state is not None and "FULLMAG_DEV_BACKEND_STORAGE_GIB" in configured_budget:
-        requested = configured_budget["FULLMAG_DEV_BACKEND_STORAGE_GIB"] * 1024**3
-        if str(requested) != (retained_storage_bytes or str(_LEGACY_DEV_STORAGE_BYTES)):
-            raise BuildControlError("Changing the DEV backend storage budget requires fresh-state archival of the existing group ledger")
     snapshot = _active_isolated_snapshot(control)
     if snapshot is not None and (snapshot["source_root"] != str(selected) or args.script is not None
           or getattr(args, "fresh_state", False)):
@@ -2504,8 +2498,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record}
-    if "FULLMAG_DEV_BACKEND_STORAGE_GIB" in configured_budget:
-        operation_inputs["backend_storage_gib"] = configured_budget["FULLMAG_DEV_BACKEND_STORAGE_GIB"]
     if getattr(args, "completed_recreation_attempt", None):
         operation_inputs["completed_recreation"] = {
             "attempt": args.completed_recreation_attempt,
@@ -2808,6 +2800,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         apply_requested_subnet(document, requested_network_subnet)
         from docker_volume_resources import apply_development_budget
         if prepared_budget_render is None:
+            configured_budget = _configured_group_budget(selected, layout)
             apply_development_budget(
                 control, document, configured_budget,
                 cold_budget_restore=cold_budget_restore, source_root=str(selected),
@@ -2825,6 +2818,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if reuse_state is not None:
             # Ordinary recreation keeps the authenticated policy of the retained
             # ledger. Only a fresh runtime archive applies a different limit.
+            retained_storage_bytes = _retained_storage_budget(control, reuse_state)
             _restore_compose_storage_budget(document, retained_storage_bytes)
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
