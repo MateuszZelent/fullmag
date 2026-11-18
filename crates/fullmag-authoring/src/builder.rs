@@ -986,6 +986,8 @@ pub struct ScriptBuilderState {
     pub initial_state: Option<ScriptBuilderInitialState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub geometries: Vec<ScriptBuilderGeometryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_assets: Option<crate::SceneMaterialAssetsMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

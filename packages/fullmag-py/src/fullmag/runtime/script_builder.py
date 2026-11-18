@@ -442,6 +442,24 @@ def export_builder_draft(
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    material_metadata = base_problem.runtime_metadata.get("material_assets")
+    if material_metadata is not None:
+        from fullmag.runtime.material_assets import (
+            canonical_material_assets,
+            reconcile_material_assets,
+            restore_inactive_material_dmi,
+        )
+
+        material_metadata = canonical_material_assets(material_metadata)
+        for magnet in base_problem.magnets:
+            if magnet.object_id is None:
+                # The DSL's default ID remains its name, but a newly authored
+                # geometry without an explicit ID cannot inherit an old asset.
+                material_metadata["assignments"].pop(magnet.name, None)
+                material_metadata.get("inactive_dmi", {}).pop(magnet.name, None)
+                material_metadata.get("active_dmi_without_coefficient", {}).pop(magnet.name, None)
+        restore_inactive_material_dmi(material_metadata, draft["geometries"])
+        draft["material_assets"] = reconcile_material_assets(material_metadata, draft["geometries"])
     fem_domain_mesh = _export_fem_domain_mesh_reference(
         base_problem,
         source_root=source_root,
@@ -761,6 +779,14 @@ def render_loaded_problem_as_script(
     authored_pipeline = overrides.get("study_pipeline", base_problem.runtime_metadata.get("study_pipeline"))
     if authored_pipeline is not None:
         lines.append(f"fm.runtime_metadata('study_pipeline', {_py_literal(authored_pipeline)})")
+
+    material_metadata = overrides.get("material_assets", base_problem.runtime_metadata.get("material_assets"))
+    if material_metadata is not None:
+        from fullmag.runtime.material_assets import canonical_material_assets
+
+        lines.append(
+            f"fm.runtime_metadata('material_assets', {_py_literal(canonical_material_assets(material_metadata))})"
+        )
 
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
@@ -1358,8 +1384,15 @@ def _render_scene_document_bootstrap(
             if isinstance(physics_stack, list)
             else set()
         )
+        inactive_dmi_kinds = {
+            str(entry.get("kind")) for entry in (physics_stack or [])
+            if isinstance(entry, Mapping) and entry.get("enabled") is False
+        }
         if isinstance(material, Mapping):
             for key in ("Ms", "Aex", "alpha", "Dind", "Dbulk", "Ku1", "Kc1"):
+                if (key == "Dind" and "interfacial_dmi" in inactive_dmi_kinds
+                        or key == "Dbulk" and "bulk_dmi" in inactive_dmi_kinds):
+                    continue
                 value = _finite_number(material.get(key))
                 if value is not None:
                     if (
@@ -10998,7 +11031,7 @@ def _export_geometry_entry(
 
     return {
         "name": magnet.name,
-        "object_id": magnet.object_id,
+        "object_id": magnet.object_id or magnet.name,
         "region_name": magnet.region_name,
         "geometry_kind": geometry_kind,
         "geometry_params": geometry_params,

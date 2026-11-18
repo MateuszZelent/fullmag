@@ -5,6 +5,12 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.material_assets import (
+    canonical_material_assets,
+    material_assets_from_scene,
+    reconcile_material_assets,
+    restore_inactive_material_dmi,
+)
 from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.runtime.imported_geometry_assets import imported_geometry_source_asset_fields
 from fullmag.model.geometry import RigidTransform
@@ -1701,12 +1707,21 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         geometries,
     )
     objects: list[dict[str, Any]] = []
-    materials: list[dict[str, Any]] = []
+    material_metadata = None
+    if builder.get("material_assets") is not None:
+        metadata = canonical_material_assets(builder["material_assets"])
+        if metadata.get("inactive_dmi"):
+            geometries = copy.deepcopy(geometries)
+            restore_inactive_material_dmi(metadata, geometries)
+        material_metadata = reconcile_material_assets(metadata, geometries)
+    materials: list[dict[str, Any]] = material_metadata["materials"] if material_metadata is not None else []
+    material_assignments = material_metadata["assignments"] if material_metadata is not None else {}
+    object_ids = material_metadata["object_ids"] if material_metadata is not None else {}
     magnetization_assets: list[dict[str, Any]] = []
 
     for geometry in geometries:
         name = str(geometry.get("name", "object"))
-        object_id = str(geometry.get("object_id") or name)
+        object_id = str(geometry.get("object_id") or object_ids.get(name) or name)
         geometry_params = dict(geometry.get("geometry_params") or {})
         translation = geometry_params.pop("translation", geometry_params.pop("translate", [0, 0, 0]))
         role = str(geometry.get("role") or "magnet")
@@ -1750,7 +1765,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                     "scale": _one_vec3(),
                     "pivot": _zero_vec3(),
                 },
-                "material_ref": "" if is_auxiliary else _material_id(name),
+                "material_ref": "" if is_auxiliary else material_assignments.get(object_id, _material_id(name)),
                 "region_name": geometry.get("region_name"),
                 "magnetization_ref": None if is_auxiliary else _magnetization_id(name),
                 "physics_stack": [] if is_auxiliary else physics_stack,
@@ -1768,13 +1783,14 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         )
         if is_auxiliary:
             continue
-        materials.append(
-            {
-                "id": _material_id(name),
-                "name": f"{name} material",
-                "properties": material_properties,
-            }
-        )
+        if material_metadata is None:
+            materials.append(
+                {
+                    "id": _material_id(name),
+                    "name": f"{name} material",
+                    "properties": material_properties,
+                }
+            )
         magnetization_assets.append(
             {
                 "id": _magnetization_id(name),
@@ -2111,7 +2127,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "visualization_hint": obj.get("visualization_hint") or {},
         }
         if not is_auxiliary:
-            entry["material"] = material_properties
+            # Per-object DSL edits may fork a shared scene material.
+            entry["material"] = dict(material_properties)
             entry["magnetization"] = magnetization
             entry["physics_stack"] = physics_stack
         geometries.append(entry)
@@ -2271,6 +2288,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "output_storage": study.get("output_storage"),
         "initial_state": study.get("initial_state"),
         "geometries": geometries,
+        "material_assets": material_assets_from_scene(scene),
         "couplings": scene.get("couplings") or [],
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
@@ -2640,6 +2658,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "output_storage": builder.get("output_storage"),
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
+        "material_assets": builder.get("material_assets"),
         "couplings": builder.get("couplings") or [],
         "field_drives": builder.get("field_drives") or [],
         "planar_monitors": builder.get("planar_monitors") or [],

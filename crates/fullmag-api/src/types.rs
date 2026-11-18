@@ -2259,6 +2259,7 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            material_assets: None,
             revision: 3,
             compute_resources: None,
             execution_profile: None,

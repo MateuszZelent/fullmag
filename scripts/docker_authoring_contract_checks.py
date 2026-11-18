@@ -36,7 +36,10 @@ sys.exit(result)
 
 def _source_hashes(selected: Path) -> dict[str, str]:
     paths = [selected / name for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
-                                         'scripts/docker_authoring_contract_checks.py')]
+                                         'scripts/docker_authoring_contract_checks.py',
+                                         'scripts/docker_diagnostic_source_checks.py',
+                                         'scripts/docker_volume_checks.py',
+                                         'scripts/just_storage_shell.sh')]
     for directory in ('crates', '.cargo'):
         paths.extend(path for path in (selected / directory).rglob('*')
                      if path.is_file() and path.suffix in ('.rs', '.toml'))
@@ -49,6 +52,22 @@ def _source_hashes(selected: Path) -> dict[str, str]:
 def run(control, selected: Path, identity, *, scope="authoring-contracts") -> int:
     commands = {
         "authoring-contracts": (COMMAND,),
+        "gpu-temperature-contracts": (
+            ('/usr/bin/env', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-runtime-control', '--lib', 'gpu_temperature'),
+        ),
+        "material-library-python-contracts": (
+            ('/usr/bin/env', 'PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src',
+             '/usr/local/bin/python3', '-B', '-m', 'unittest', 'discover',
+             '-s', '/opt/fullmag/source/packages/fullmag-py/tests',
+             '-p', 'test_material_assets_roundtrip.py', '-v'),
+        ),
+        "material-library-contracts": (
+            ('/usr/bin/env', 'CARGO_BUILD_JOBS=1', 'CARGO_INCREMENTAL=0', 'CARGO_PROFILE_BACKEND_DEV_DEBUG=0',
+             '/root/.cargo/bin/cargo', 'test', '--locked', '--profile', 'backend-dev',
+             '-p', 'fullmag-api', '--bin', 'fullmag-api', 'material_library'),
+        ),
         # Source-only tests keep native solver/runtime packages untouched.
         # Disable debug output and incremental duplication in this private target.
         "live-observation-contracts": (
@@ -135,8 +154,12 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
         ),
     }[scope]
     backend, document = codegen._running_service(control.project, 'backend', identity, selected)
+    diagnostic = None
     if document.get('State', {}).get('Health', {}).get('Status') != 'healthy':
-        raise BuildControlError('Authoring checks require a healthy selected backend')
+        if scope not in ('material-library-contracts', 'material-library-python-contracts', 'gpu-temperature-contracts'):
+            raise BuildControlError('Authoring checks require a healthy selected backend')
+        from docker_diagnostic_source_checks import admit_diagnostic_source_checks
+        diagnostic = admit_diagnostic_source_checks(backend, document, control.volume)
     mounts = {mount['Destination']: mount for mount in document.get('Mounts', [])}
     if any(mounts.get(destination, {}).get('Type') != 'volume'
            or mounts[destination].get('Name') != control.volume
@@ -145,41 +168,51 @@ def run(control, selected: Path, identity, *, scope="authoring-contracts") -> in
     before = _source_hashes(selected)
     inputs = {'scope': scope, 'container_id': backend,
               'image_id': document['Image'], 'source_hashes': before,
-              'commands': [list(command) for command in commands]}
+              'commands': [list(command) for command in commands],
+              'diagnostic_source_admission': diagnostic, 'runtime_qualification': 'NOT VERIFIED'}
     with control.operation('verification', inputs) as operation:
         root = operation['root']
         operation['receipt'].update(inputs, state='running', qualification='source tests only')
         control.write(root + '/receipt.json', operation['receipt'])
         outputs = []
         exit_code = 0
+        harness_error = None
         for command in commands:
             operation['daemon_pending'] = True
             result = docker_capture('exec', backend, '/usr/local/bin/python3', '-B', '-c',
                                     CHECK_SCRIPT, *command, allow_failure=True, timeout=1800)
             operation['daemon_pending'] = False
-            output = result.stdout.decode('utf-8', 'replace')
-            if (result.returncode == 0 and '/root/.cargo/bin/cargo' in command
-                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
-                raise BuildControlError('Selected Rust test harness did not execute tests')
-            if result.returncode == 0 and 'unittest' in command:
-                diagnostic = result.stderr.decode('utf-8', 'replace')
-                if 'Ran ' not in diagnostic or 'Ran 0 tests' in diagnostic:
-                    raise BuildControlError('Selected Python test harness did not execute tests')
             outputs.append((result.stdout, result.stderr))
             if result.returncode:
                 exit_code = result.returncode
                 break
+            output = result.stdout.decode('utf-8', 'replace')
+            if ('/root/.cargo/bin/cargo' in command
+                    and ('test result: ok.' not in output or 'running 0 tests' in output)):
+                harness_error = 'Selected Rust test harness did not execute tests'
+                break
+            if 'unittest' in command:
+                test_diagnostic = result.stderr.decode('utf-8', 'replace')
+                if 'Ran ' not in test_diagnostic or 'Ran 0 tests' in test_diagnostic:
+                    harness_error = 'Selected Python test harness did not execute tests'
+                    break
         control.write_bytes(root + '/stdout.log', b'\n'.join(value[0] for value in outputs))
         control.write_bytes(root + '/stderr.log', b'\n'.join(value[1] for value in outputs))
         after_backend, after = codegen._running_service(control.project, 'backend', identity, selected)
         if after_backend != backend or after['State']['StartedAt'] != document['State']['StartedAt']:
             raise BuildControlError('Backend identity changed during authoring tests')
+        if diagnostic is not None and admit_diagnostic_source_checks(backend, after, control.volume) != diagnostic:
+            raise BuildControlError('Diagnostic source-check authority changed during tests')
         if _source_hashes(selected) != before:
             raise BuildControlError('Authoring inputs changed during tests')
-        operation['receipt'].update(state='succeeded' if exit_code == 0 else 'failed-confirmed',
-                                    exit_code=exit_code)
-        control.write(root + '/receipt.json', operation['receipt'])
         for stdout, stderr in outputs:
             print(stdout.decode('utf-8', 'replace')[-24000:] + stderr.decode('utf-8', 'replace')[-8000:])
         print('Source check receipt: ' + root + '/receipt.json')
+        if harness_error is not None:
+            print(harness_error)
+            exit_code = 1
+            operation['receipt']['error'] = harness_error
+        operation['receipt'].update(state='succeeded' if exit_code == 0 else 'failed-confirmed',
+                                    exit_code=exit_code)
+        control.write(root + '/receipt.json', operation['receipt'])
         return exit_code

@@ -919,6 +919,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .put(handlers::workspace::replace_workspace_active_node),
         )
         .route(
+            "/v2/workspace/material-library",
+            get(handlers::material_library::list_materials)
+                .post(handlers::material_library::create_material),
+        )
+        .route(
+            "/v2/workspace/material-library/:id",
+            axum::routing::put(handlers::material_library::update_material)
+                .delete(handlers::material_library::delete_material),
+        )
+        .route(
             "/v2/workspace/items",
             get(handlers::workspace_items::list_items).post(handlers::workspace_items::post_item),
         )

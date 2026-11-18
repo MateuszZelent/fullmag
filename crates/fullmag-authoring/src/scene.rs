@@ -325,11 +325,13 @@ pub struct SceneMaterialAsset {
     pub id: String,
     pub name: String,
     pub properties: ScriptBuilderMaterialState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::SceneMaterialSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<SceneMaterialReference>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, utoipa::ToSchema)]
 pub struct SceneMaterialReference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,

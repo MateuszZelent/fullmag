@@ -139,6 +139,8 @@ vi.mock("./ObjectAbsorbingBoundaryPanel", () => ({
   ObjectAbsorbingBoundaryPanel: () => null,
 }));
 
+vi.mock("@/kernel/layout/MaterialLibraryDialog", () => ({ MaterialLibraryDialog: () => null }));
+
 import { ObjectMaterialPanel } from "./ObjectMaterialPanel";
 
 function selection(kind: "object.material" | "object.root"): Selection {

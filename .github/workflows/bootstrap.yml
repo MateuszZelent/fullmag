@@ -111,6 +111,9 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run material provenance and authoring roundtrip contracts
+        run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
+
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
         # its tests. This does not link or qualify the MFEM runtime.
@@ -132,6 +135,9 @@ jobs:
           cargo test -p fullmag-plan --lib antenna_current_source::tests::closed_loop_volume_budget_
           cargo test -p fullmag-plan --lib antenna_current_source::tests::external_lead_does_not_inherit_closed_loop_volume_budget
           cargo test -p fullmag-runner --lib antenna_field_solution::direct_quadrature
+
+      - name: Run material library and scene assignment contracts
+        run: cargo test --locked -p fullmag-api --bin fullmag-api material_library
 
       - name: Run shared accepted-inspection read contracts
         run: |
@@ -1215,6 +1221,9 @@ jobs:
 
       - name: Verify managed Make native contract ordering
         run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
+
+      - name: Run canonical material library script roundtrip contracts
+        run: python -m pytest -q packages/fullmag-py/tests/test_material_assets_roundtrip.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

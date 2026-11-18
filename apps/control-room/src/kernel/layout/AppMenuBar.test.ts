@@ -130,7 +130,7 @@ describe("app menu command model", () => {
     );
 
     expect(materialLibraryItem).toMatchObject({
-      label: "Material Library",
+      label: "Material database",
     });
   });
 
