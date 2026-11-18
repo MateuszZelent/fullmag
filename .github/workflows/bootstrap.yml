@@ -111,6 +111,12 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run absorbing boundary scene validation
+        run: |
+          cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
+          cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
 
@@ -452,9 +458,6 @@ jobs:
 
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
-
-      - name: Run absorbing boundary scene validation
-        run: cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
 
       - name: Run scene thermal intent preservation contracts
         run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
@@ -798,6 +801,13 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify absorbing boundary inspector editing
+        run: >-
+          pnpm --dir apps/control-room exec vitest run
+          src/modules/viewport-3d/model/viewport3DTargetFieldBuffer.test.ts
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanelModel.test.ts
+          src/modules/inspector/panels/ObjectAbsorbingBoundaryPanel.dom.test.tsx
 
       - name: Install Chromium for browser fixture smoke
         run: pnpm --dir apps/control-room exec playwright install --with-deps chromium
@@ -1249,10 +1259,14 @@ jobs:
           python -m pytest -q
           packages/fullmag-py/tests/test_eigen_scene_merge_contract.py
           packages/fullmag-py/tests/test_scene_document_problem_ir.py
+          packages/fullmag-py/tests/test_absorbing_boundary.py
           packages/fullmag-py/tests/test_mesh_stl_fallback_owner_binding.py
           packages/fullmag-py/tests/test_execution_profile_authoring_roundtrip.py
           packages/fullmag-py/tests/test_scene_execution_config.py
           packages/fullmag-py/tests/test_runtime_source_snapshot.py
+
+      - name: Verify absorbing layer reflection inputs and amplitude analysis
+        run: python -m unittest discover -s tests/standard_problems/absorbing_boundary -p test_reflection.py
 
       - name: Run FEM tested/runtime library identity contracts
         run: |

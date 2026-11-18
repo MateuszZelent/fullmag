@@ -2,6 +2,7 @@ pub(crate) mod artifacts;
 pub(crate) mod cpu;
 pub(crate) mod exchange_operator;
 pub(crate) mod gpu;
+pub(crate) mod live_layout;
 pub(crate) mod multilayer;
 pub(crate) mod schedules;
 

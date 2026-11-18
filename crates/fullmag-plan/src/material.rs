@@ -104,18 +104,25 @@ fn signed_distance_to_region_shape(point: [f64; 3], shape: &RegionShapeIR) -> Re
     }
 }
 
-/// Physical sampling length in metres, supplied by the owning discretization.
+/// Sampling support and spacing in metres supplied by the discretization.
 #[derive(Clone, Copy)]
-pub(crate) enum MaterialSampleSpacing<'a> {
-    Uniform(f64),
-    PerPoint(&'a [f64]),
+pub(crate) enum MaterialSampling<'a> {
+    Cells { spacing: f64, active_mask: Option<&'a [bool]> },
+    Nodes { spacings: &'a [f64] },
 }
 
-impl MaterialSampleSpacing<'_> {
-    fn at(self, index: usize) -> f64 {
+impl<'a> MaterialSampling<'a> {
+    fn spacing_at(self, index: usize) -> f64 {
         match self {
-            Self::Uniform(value) => value,
-            Self::PerPoint(values) => values[index],
+            Self::Cells { spacing, .. } => spacing,
+            Self::Nodes { spacings } => spacings[index],
+        }
+    }
+
+    fn active_mask(self) -> Option<&'a [bool]> {
+        match self {
+            Self::Cells { active_mask, .. } => active_mask,
+            Self::Nodes { .. } => None,
         }
     }
 }
@@ -271,7 +278,7 @@ pub(crate) fn resolve_spatial_parameter(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
-    spacing: MaterialSampleSpacing<'_>,
+    sampling: MaterialSampling<'_>,
     object_translation: [f64; 3],
 ) -> Result<Vec<f64>, String> {
     resolve_spatial_parameter_excluding_regions(
@@ -280,7 +287,7 @@ pub(crate) fn resolve_spatial_parameter(
         parameter,
         base_value,
         points,
-        spacing,
+        sampling,
         object_translation,
         &BTreeSet::new(),
     )
@@ -292,12 +299,12 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
     parameter: MaterialParameterNameIR,
     base_value: f64,
     points: &[[f64; 3]],
-    spacing: MaterialSampleSpacing<'_>,
+    sampling: MaterialSampling<'_>,
     object_translation: [f64; 3],
     excluded_region_ids: &BTreeSet<String>,
 ) -> Result<Vec<f64>, String> {
-    if let MaterialSampleSpacing::PerPoint(values) = spacing {
-        if values.len() != points.len() {
+    if let MaterialSampling::Nodes { spacings } = sampling {
+        if spacings.len() != points.len() {
             return Err("material sampling spacing count must match sample points".to_string());
         }
     }
@@ -423,7 +430,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
                         }
                         None => signed_distance_to_region_shape(coords, &region.shape)?,
                     };
-                    transition_weight(distance, transition, spacing.at(point_index))?
+                    transition_weight(distance, transition, sampling.spacing_at(point_index))?
                 } else {
                     1.0
                 };
@@ -479,6 +486,7 @@ pub(crate) fn resolve_spatial_parameter_excluding_regions(
             owner_object_id,
             &mut resolved_values,
             points,
+            sampling.active_mask(),
             object_translation,
         )?;
     }
@@ -508,20 +516,6 @@ fn validate_resolved_parameter_value(
             parameter, value
         ))
     }
-}
-
-fn bounds_from_points(points: &[[f64; 3]]) -> Option<[f64; 6]> {
-    let first = points.first()?;
-    let mut bounds = [first[0], first[1], first[2], first[0], first[1], first[2]];
-    for point in points.iter().skip(1) {
-        bounds[0] = bounds[0].min(point[0]);
-        bounds[1] = bounds[1].min(point[1]);
-        bounds[2] = bounds[2].min(point[2]);
-        bounds[3] = bounds[3].max(point[0]);
-        bounds[4] = bounds[4].max(point[1]);
-        bounds[5] = bounds[5].max(point[2]);
-    }
-    Some(bounds)
 }
 
 fn universe_bounds(problem: &ProblemIR) -> Option<[f64; 6]> {
@@ -591,6 +585,7 @@ fn apply_absorbing_boundary_layer(
     owner_object_id: &str,
     values: &mut [f64],
     points: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
     object_translation: [f64; 3],
 ) -> Result<(), String> {
     let Some(layer) = problem
@@ -607,35 +602,29 @@ fn apply_absorbing_boundary_layer(
     let profile = layer
         .compile_profile()
         .map_err(|error| format!("absorbing boundary for '{owner_object_id}': {error}"))?;
-    let (profile_points, bounds) = match layer.frame {
-        AbsorbingBoundaryFrameIR::Object => {
-            let local = points
-                .iter()
-                .map(|point| {
-                    [
-                        point[0] - object_translation[0],
-                        point[1] - object_translation[1],
-                        point[2] - object_translation[2],
-                    ]
-                })
-                .collect::<Vec<_>>();
-            let bounds = bounds_from_points(&local).ok_or_else(|| {
-                format!("absorbing boundary for '{owner_object_id}' requires at least one point")
-            })?;
-            (local, bounds)
-        }
-        AbsorbingBoundaryFrameIR::Universe => {
-            let bounds = universe_bounds(problem)
-                .or_else(|| bounds_from_points(points))
-                .ok_or_else(|| {
-                    format!(
-                        "absorbing boundary for '{owner_object_id}' requires at least one point"
-                    )
-                })?;
-            (points.to_vec(), bounds)
-        }
+    if active_mask.is_some_and(|mask| mask.len() != points.len()) {
+        return Err("absorbing boundary active mask length does not match points".to_string());
+    }
+    let active_points = points.iter().enumerate().filter(|(i, _)| {
+        active_mask.is_none_or(|mask| mask[*i])
+    });
+    let frame_point = |world: [f64; 3]| match layer.frame {
+        AbsorbingBoundaryFrameIR::Object => std::array::from_fn(|i| world[i] - object_translation[i]),
+        AbsorbingBoundaryFrameIR::Universe => world,
     };
-    for (value, point) in values.iter_mut().zip(profile_points) {
+    let explicit_bounds = match layer.frame {
+        AbsorbingBoundaryFrameIR::Object => None,
+        AbsorbingBoundaryFrameIR::Universe => universe_bounds(problem),
+    };
+    let bounds = explicit_bounds.or_else(|| {
+        let (min, max) = crate::mesh::bounds_from_points(active_points.clone().map(|(_, point)| point))?;
+        let [xmin, ymin, zmin] = frame_point(min);
+        let [xmax, ymax, zmax] = frame_point(max);
+        Some([xmin, ymin, zmin, xmax, ymax, zmax])
+    }).ok_or_else(|| format!("absorbing boundary for '{owner_object_id}' requires at least one magnetic point"))?;
+    for (index, world) in active_points {
+        let value = &mut values[index];
+        let point = frame_point(*world);
         let mut weight: f64 = 0.0;
         for &face in &layer.faces {
             let face_weight = absorbing_face_weight(face, point, bounds, layer, &profile)
@@ -792,7 +781,7 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
-            MaterialSampleSpacing::Uniform(1.0),
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
             [0.0, 0.0, 0.0],
         )
         .expect("alpha profile should resolve");
@@ -823,7 +812,7 @@ mod tests {
             config.expression = expression.map(str::to_string);
             problem.magnets[0].absorbing_boundary = Some(config);
             let mut values = [0.1; 5];
-            apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, [0.0; 3])
+            apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
                 .expect("profile should materialize");
             assert_eq!(values[0], 0.1);
             assert_eq!(values[1], 0.1);
@@ -845,7 +834,7 @@ mod tests {
         problem.magnets[0].absorbing_boundary = Some(config);
         let mut values = [0.1; 2];
         let points = [[0.0, 0.0, 0.0], [507.0 / 512.0, 0.0, 0.0]];
-        let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, [0.0; 3])
+        let error = apply_absorbing_boundary_layer(&problem, "strip", &mut values, &points, None, [0.0; 3])
             .unwrap_err();
         assert!(error.contains("expression is undefined"));
     }
@@ -866,7 +855,7 @@ mod tests {
             MaterialParameterNameIR::Alpha,
             0.1,
             &points,
-            MaterialSampleSpacing::Uniform(1.0),
+            MaterialSampling::Cells { spacing: 1.0, active_mask: None },
             [0.0, 0.0, 0.0],
         )
         .expect("corner profile should resolve");
