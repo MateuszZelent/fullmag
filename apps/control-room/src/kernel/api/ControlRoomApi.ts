@@ -1,5 +1,9 @@
 import type { MaterialLibraryResource, MaterialLibraryMutationResource, MaterialLibraryWriteRequest, MaterialLibraryUpdateRequest, MaterialLibraryDeleteRequest, MaterialLibraryDeleteResource, SceneMaterialSource } from "./apiTypes";
-import { WORKSPACE_MATERIAL_LIBRARY_PATH, WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH } from "./apiPaths";
+import type { MaterialVersionMutationResource, MaterialVersionPublishRequest, MaterialVersionUpdateRequest } from "./apiTypes";
+import {
+  WORKSPACE_MATERIAL_LIBRARY_PATH, WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH,
+  WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH,
+} from "./apiPaths";
 import { MODEL_OBJECT_SOURCE_SURFACE_PATH, MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH } from "./apiPaths";
 import type { ImportedSourceSurfaceResource, ImportedSourceSurfaceQuery } from "./apiTypes";
 import { WORKSPACE_ITEM_PLAYBACK_PATH, WORKSPACE_ITEM_PLAYBACK_FRAME_PATH, WORKSPACE_ITEM_PLAYBACK_GEOMETRY_PATH } from "./apiPaths";
@@ -1191,6 +1195,14 @@ export class ControlRoomApi {
   readonly workspace = {
     listMaterials: (options?: RequestOptions) =>
       this.requestJson<MaterialLibraryResource>(WORKSPACE_MATERIAL_LIBRARY_PATH, options),
+    publishMaterialVersion: (input: MaterialVersionPublishRequest, options?: RequestOptions) =>
+      this.postJson<MaterialVersionMutationResource, MaterialVersionPublishRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH, input, options,
+      ),
+    updateMaterialVersion: (family: string, version: string, input: MaterialVersionUpdateRequest, options?: RequestOptions) =>
+      this.patchJson<MaterialVersionMutationResource, MaterialVersionUpdateRequest>(
+        WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH, input, options, { path: { family, version } },
+      ),
     createMaterial: (input: MaterialLibraryWriteRequest, options?: RequestOptions) =>
       this.postJson<MaterialLibraryMutationResource, MaterialLibraryWriteRequest>(WORKSPACE_MATERIAL_LIBRARY_PATH, input, options),
     updateMaterial: (id: string, input: MaterialLibraryUpdateRequest, options?: RequestOptions) =>

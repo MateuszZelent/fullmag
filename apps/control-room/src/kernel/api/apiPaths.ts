@@ -1251,3 +1251,5 @@ export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
 
 export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/material-library");
 export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH = openApiV2Path("/v2/workspace/material-library/versions");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH = openApiV2Path("/v2/workspace/material-library/versions/{family}/{version}");

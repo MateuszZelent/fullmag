@@ -132,7 +132,10 @@ impl MaterialLibraryStore {
         key.copied_from_family = upstream_family(upstream)
             .filter(|family| *family != key.family.as_str())
             .map(str::to_owned);
-        key.source_project = entry.source_project.or(key.source_project);
+        key.source_project = entry
+            .source_project
+            .or(key.source_project)
+            .or_else(|| upstream.version.as_ref()?.source_project.clone());
         let original = builtin_entry(&key.family).map(|entry| entry.source_snapshot());
         source.catalog_id = catalog_id;
         source.name = display_name.clone();

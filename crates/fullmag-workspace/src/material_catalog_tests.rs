@@ -396,6 +396,31 @@ fn publishing_a_reopened_draft_prefers_its_copied_project_over_the_upstream_proj
 }
 
 #[test]
+fn republishing_a_variant_inherits_the_upstream_project_if_the_request_omits_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = MaterialLibraryStore::open(&directory.path().join("library.sqlite3")).unwrap();
+    let first = store.publish(publish_request("builtin:yig", 1)).unwrap();
+    let mut input = draft();
+    input.source = Some(first.published.source);
+    let saved = store.create(input).unwrap();
+
+    let mut request = publish_request(&saved.id, saved.revision);
+    request.version = "followup".into();
+    request.source_project = None;
+    let result = store.publish(request).unwrap();
+    assert_eq!(
+        result
+            .published
+            .source
+            .version
+            .unwrap()
+            .source_project
+            .as_deref(),
+        Some("Earlier experiment")
+    );
+}
+
+#[test]
 fn draft_source_project_validates_blank_and_utf8_byte_length() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = MaterialLibraryStore::open(&directory.path().join("library.sqlite3")).unwrap();

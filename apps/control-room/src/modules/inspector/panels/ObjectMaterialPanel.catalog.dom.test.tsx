@@ -1,7 +1,8 @@
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MaterialLibraryEntryResource, SceneMaterialResource, SceneResource } from "@/kernel/api/apiTypes";
+import type { MaterialLibraryEntryResource, PublishedMaterialVersion, SceneMaterialResource, SceneResource } from "@/kernel/api/apiTypes";
+import type { MaterialCatalogSelection } from "@/shared/domain/material/materialLibrary";
 import { installSimulationPreparationTestDom, TestElement, TestEvent, TestNode } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   scene: {} as SceneResource,
   dialog: null as null | {
     open: boolean; modelMaterial?: SceneMaterialResource;
-    onUseMaterial?: (entry: MaterialLibraryEntryResource) => Promise<void>;
+    onUseMaterial?: (selection: MaterialCatalogSelection) => Promise<void>;
   },
   create: vi.fn(), sceneRequest: vi.fn(), patchObject: vi.fn(), record: vi.fn(),
   invalidate: vi.fn(), publish: vi.fn(),
@@ -123,6 +124,31 @@ describe("ObjectMaterialPanel database lifecycle", () => {
     mocks.sceneRequest.mockImplementation(async () => mocks.scene);
     mocks.publish.mockImplementation((_resources: unknown, committed: SceneResource) => { mocks.scene = committed; });
     mocks.create.mockImplementation(async (...args: Parameters<typeof commit>) => commit(...args));
+  });
+
+  it("assigns a published snapshot atomically with its current alias and frozen provenance", async () => {
+    const published: PublishedMaterialVersion = {
+      display_name: "Current alias", revision: 9, archived: false, original: null,
+      source: {
+        catalog_id: "custom:published:permalloy:sample", catalog_revision: 7, name: "Original alias",
+        kind: "custom", properties: entry.properties, references: entry.references,
+        version: { family: "permalloy", version: "sample", source_project: "Film project", copied_from_family: "reference_film" },
+      },
+    };
+    const view = await mountPanel();
+    try {
+      await act(async () => button(view.container, "Choose from database").click());
+      await act(async () => { await mocks.dialog?.onUseMaterial?.(published); });
+      expect(mocks.create).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(/^mat:/), published.display_name, published.source.properties, published.source.references,
+        expect.anything(), { source: published.source, assignToObjectId: "object-a" },
+      );
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+      const copy = mocks.scene.materials?.find(({ name }) => name === published.display_name);
+      expect(copy?.source).toEqual(published.source);
+      expect(copy?.source?.version).not.toBe(published.source.version);
+      expect(view.container.textContent).toContain("permalloy.sample");
+    } finally { await view.dispose(); }
   });
 
   it("imports once with complete source and references, records history, and preserves the panel root", async () => {

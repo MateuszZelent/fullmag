@@ -264,6 +264,63 @@ try {
   await waitForScene((scene) => assigned(scene, object.id)?.source?.catalog_id === variant.id, "redo");
   checks.push("undo and redo assignment");
 
+  phase = "published version keyboard selection";
+  // Only the catalog projection is substituted. The model write and history
+  // restore below use the real authoring API and leave no publication behind.
+  const versionKey = "sample_" + token.replaceAll("-", "");
+  const versionSource = {
+    catalog_id: "custom:published:permalloy:" + versionKey,
+    catalog_revision: variant.revision,
+    name: variant.name,
+    kind: variant.kind,
+    properties: variant.properties,
+    references: variant.references,
+    version: { family: "permalloy", version: versionKey, source_project: "Material browser " + token + " A" },
+  };
+  const version = { source: versionSource, original: variant.source, display_name: variantName + " published", archived: false, revision: variant.revision };
+  const earlier = {
+    ...version, display_name: variantName + " archived", archived: true,
+    source: { ...versionSource, catalog_id: versionSource.catalog_id + "_older", version: { ...versionSource.version, version: versionKey + "_older" } },
+  };
+  const catalogPattern = "**" + catalogPath;
+  const versionCatalog = async (route) => {
+    const response = await route.fetch({ maxRedirects: 0 });
+    const snapshot = await response.json();
+    await route.fulfill({ response, json: { ...snapshot, versions: [...(snapshot.versions ?? []), version, earlier] } });
+  };
+  await page.route(catalogPattern, versionCatalog);
+  try {
+    await choose.click();
+    dialog = page.getByRole("dialog", { name: "Material database" });
+    const search = dialog.getByRole("searchbox", { name: "Search materials" });
+    await search.fill("permalloy." + versionKey);
+    const activeVersion = entry(dialog, versionSource.catalog_id);
+    await activeVersion.focus();
+    await page.keyboard.press("Enter");
+    const heading = dialog.getByRole("heading", { name: version.display_name, exact: true });
+    await heading.waitFor();
+    await page.waitForFunction((id) => document.activeElement?.id === id, await heading.getAttribute("id"));
+    await dialog.getByRole("heading", { name: /Compared with original/ }).waitFor();
+    assert.equal(await entry(dialog, earlier.source.catalog_id).count(), 0);
+    await button(dialog, "Show archived versions").click();
+    await entry(dialog, earlier.source.catalog_id).click();
+    assert.equal(await button(dialog, "Use in model").count(), 0);
+    await activeVersion.click();
+    await button(dialog, "Use in model").focus();
+    await page.keyboard.press("Enter");
+    await dialog.waitFor({ state: "hidden" });
+    const versionScene = await waitForScene((scene) => assigned(scene, object.id)?.source?.catalog_id === versionSource.catalog_id, "published assignment");
+    const versionCopy = assigned(versionScene, object.id);
+    assert.equal(versionCopy.name, version.display_name);
+    assert.deepEqual(versionCopy.source, versionSource);
+    assert.deepEqual(versionCopy.properties, versionSource.properties);
+    await restoreHistory(page, /^Undo/);
+    await waitForScene((scene) => assigned(scene, object.id)?.source?.catalog_id === variant.id, "undo published assignment");
+    checks.push("keyboard selection, archive visibility and atomic published snapshot assignment");
+  } finally {
+    await page.unroute(catalogPattern, versionCatalog);
+  }
+
   phase = "manual edit and ACK";
   await page.locator('[data-node-id="' + magneticNode + ':material"]').click();
   await page.getByText("Unmodified copy", { exact: true }).waitFor();

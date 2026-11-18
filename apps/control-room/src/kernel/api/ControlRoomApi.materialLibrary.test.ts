@@ -60,6 +60,20 @@ describe("shared material library facade", () => {
     expect(await body(calls[0].init)).toEqual({ base_revision: 7 });
   });
 
+  it("publishes and updates material versions through the workspace catalog", async () => {
+    const { api, calls } = harness();
+    const input = { material_id: "custom:sample", base_revision: 3, family: "yig", version: "sample_a", display_name: "Sample A" };
+    await api.workspace.publishMaterialVersion(input);
+    const metadata = { base_revision: 4, display_name: "New name", archived: true };
+    await api.workspace.updateMaterialVersion("yig", "sample_a", metadata);
+    expect(calls.map(({ url, init }) => [url.pathname, init?.method])).toEqual([
+      ["/v2/workspace/material-library/versions", "POST"],
+      ["/v2/workspace/material-library/versions/yig/sample_a", "PATCH"],
+    ]);
+    expect(await body(calls[0].init)).toEqual(input);
+    expect(await body(calls[1].init)).toEqual(metadata);
+  });
+
   it("keeps source import and assignment in one scoped authoring transaction", async () => {
     const { api, calls } = harness();
     await api.model.createMaterial("mat:copy", "Measured", write.properties, write.references,
