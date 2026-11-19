@@ -417,10 +417,12 @@ void main() {
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
+  vScalarValue = scalarFromVector(projected);
   float scalarSpan = fmScalarMax - fmScalarMin;
-  vScalarValue = scalarSpan > 0.0
-    ? (scalarFromVector(projected) - fmScalarMin) / scalarSpan
-    : 0.5;
+  // Leave invalid samples for the fragment's diagnostic color.
+  if (vScalarValue == vScalarValue && abs(vScalarValue) <= 3.0e38) {
+    vScalarValue = scalarSpan > 0.0 ? (vScalarValue - fmScalarMin) / scalarSpan : 0.5;
+  }
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   #include <clipping_planes_vertex>

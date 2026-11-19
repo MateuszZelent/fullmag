@@ -156,7 +156,10 @@ describe("viewport3dScalarSurfaceShader", () => {
     expect(material.uniforms.fmScalarMin.value).toBe(-1);
     expect(material.uniforms.fmScalarMax.value).toBe(1);
     expect(material.vertexShader).toMatch(
-      /vScalarValue = scalarSpan > 0\.0\s*\? \(scalarFromVector\(projected\) - fmScalarMin\) \/ scalarSpan\s*: 0\.5;/,
+      /vScalarValue = scalarSpan > 0\.0 \? \(vScalarValue - fmScalarMin\) \/ scalarSpan : 0\.5;/,
+    );
+    expect(material.vertexShader).toContain(
+      "if (vScalarValue == vScalarValue && abs(vScalarValue) <= 3.0e38)",
     );
     material.dispose();
   });
