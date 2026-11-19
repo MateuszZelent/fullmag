@@ -79,6 +79,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --dir apps/control-room exec playwright install --with-deps chromium
       - name: Build the API and CLI for the pinned CI checkout
+        id: build
         run: cargo build --locked -p fullmag-api --bin fullmag-api -p fullmag-cli --bin fullmag
       - name: Verify prepared FDM material publication
         if: matrix.backend == 'fdm'
@@ -98,6 +99,7 @@ jobs:
           cargo test --locked -p fullmag-cli --bin fullmag scene_patch_rebinds_fem_mesh_assets_by_object_identity
           cargo test --locked -p fullmag-cli --bin fullmag body_remesh_rejects_distinct_geometries_before_generating_one_mesh
       - name: Compare live alpha to the analytical profile in Chromium
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           ABL_BACKEND: ${{ matrix.backend }}
           FULLMAG_QA_URL: http://127.0.0.1:3246

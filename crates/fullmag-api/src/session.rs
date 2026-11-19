@@ -7845,7 +7845,20 @@ mod tests {
         let mesh = domain_fem_mesh("same-mesh");
         let mut current = test_current_snapshot();
         current.fem_mesh = Some(mesh.clone().into());
-        current.latest_fields.insert("H_demag".into(), json!({"values": [99.0]}));
+        let observation = |generation: &str, step: u64, value: f64| {
+            let mut live = live_state_with_magnetization(step, [1.0, 0.0, 0.0].repeat(4));
+            live.latest_step.grid = [4, 1, 1];
+            live.latest_step.fem_mesh_generation_id = Some(generation.to_owned());
+            json!({
+                "session_id": "test-session",
+                "latest_fields": {"H_demag": {
+                    "values": vec![[value, 0.0, 0.0]; 4],
+                    "source_step": step,
+                    "source_time_seconds": live.latest_step.time
+                }},
+                "live_state": live
+            })
+        };
         let workspace = json!({
             "mesh_reinitialization_command_id": "build-1",
             "last_build_summary": {"status": "completed", "command_id": "build-1",
@@ -7860,6 +7873,8 @@ mod tests {
             let request = serde_json::from_value(frame.clone()).unwrap();
             apply_current_live_snapshot_with_options(current, request, false).unwrap()
         };
+        assert!(apply(&mut current, &observation("same-mesh", 2, 99.0)));
+        assert_eq!(current.latest_fields.get("H_demag").unwrap()["observation_frame"]["source_step"], 2);
         assert!(apply(&mut current, &snapshot));
         assert!(current.latest_fields.get("H_demag").is_none());
 
@@ -7874,13 +7889,16 @@ mod tests {
         workspace["command_outcomes"][0]["mesh_generation_id"] = json!("next-mesh");
         assert!(apply(&mut current, &second));
 
-        let mut ordinary = second.clone();
+        let mut ordinary = observation("next-mesh", 4, 0.25);
+        ordinary["mesh_workspace"] = second["mesh_workspace"].clone();
         ordinary["mesh_workspace"].as_object_mut().unwrap().remove("mesh_reinitialization_command_id");
-        ordinary["latest_fields"] = json!({"H_demag": {"values": [0.25]}});
+        ordinary["clear_preview_cache"] = json!(true);
         assert!(apply(&mut current, &ordinary));
         assert!(!apply(&mut current, &snapshot));
         assert_eq!(current.fem_mesh.as_ref().unwrap().generation_id.as_deref(), Some("next-mesh"));
-        assert_eq!(current.latest_fields.get("H_demag").unwrap()["values"], json!([0.25]));
+        let field = current.latest_fields.get("H_demag").unwrap();
+        assert_eq!(field["values"], json!(vec![[0.25, 0.0, 0.0]; 4]));
+        assert_eq!(field["observation_frame"]["source_step"], 4);
         assert_eq!(current.mesh_workspace.as_ref().unwrap()["last_build_summary"]["command_id"], "build-2");
         assert!(current.accepted_terminal_field_generation.is_none());
     }
