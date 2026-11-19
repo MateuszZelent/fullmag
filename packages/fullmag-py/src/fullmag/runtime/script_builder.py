@@ -1536,6 +1536,9 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
+        if any(stage.get("kind") == "set_spin_torque_enabled" for stage in authored_stages):
+            for torque in builder.get("spin_torques") or []:
+                lines.append(f"study.spin_torque({_render_spin_torque_override(torque)})")
         region_vars: dict[tuple[str, str], str] = {}
         antenna_targets_region = any(
             _normalize_mapping(payload.get("target")).get("kind") == "region"

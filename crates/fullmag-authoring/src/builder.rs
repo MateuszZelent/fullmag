@@ -398,6 +398,7 @@ pub enum StudyPrimitiveStageKind {
     FftResponse,
     SetField,
     SetCurrent,
+    SetSpinTorqueEnabled,
     SaveState,
     LoadState,
     Export,
@@ -421,6 +422,7 @@ impl StudyPrimitiveStageKind {
         Self::FftResponse,
         Self::SetField,
         Self::SetCurrent,
+        Self::SetSpinTorqueEnabled,
         Self::SaveState,
         Self::LoadState,
         Self::Export,
@@ -431,7 +433,7 @@ impl StudyPrimitiveStageKind {
     pub fn is_pipeline_input_configuration(self) -> bool {
         matches!(
             self,
-            Self::SetField | Self::SetCurrent
+            Self::SetField | Self::SetCurrent | Self::SetSpinTorqueEnabled
                 | Self::AddFieldDrive | Self::AddMaskFieldDrive
                 | Self::UpdateMaskFieldDrive | Self::RemoveFieldDrive
                 | Self::TableAutosave | Self::Autosave
@@ -1319,6 +1321,28 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("k0-sinc")
         );
+    }
+
+    #[test]
+    fn script_imported_spin_torque_toggle_is_an_input_configuration() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "id": "pulse-on",
+                "label": "Pulse on",
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "set_spin_torque_enabled",
+                "payload": {"module_id": "pulse-torque", "enabled": true}
+            }]
+        }))
+        .expect("script-imported STT toggle must deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive spin torque toggle");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::SetSpinTorqueEnabled);
+        assert!(node.stage_kind.is_pipeline_input_configuration());
     }
 
     #[test]

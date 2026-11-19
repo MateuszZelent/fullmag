@@ -231,6 +231,7 @@ pub struct CaptureOptions<'a> {
     pub mode: Option<&'a str>,
     pub precision: Option<&'a str>,
     pub scene_only: bool,
+    pub include_run_config: bool,
     pub material_catalog: Option<&'a [u8]>,
 }
 fn display_path(path: &Path) -> String {
@@ -248,6 +249,7 @@ fn helper_arguments(script: &Path, fullmag: &Path, phase: &str, options: &Captur
         if let Some(value)=value { args.extend([key.into(),value.into()]); }
     }
     if options.scene_only { args.push("--scene-only".into()); }
+    if options.include_run_config { args.push("--include-run-config".into()); }
     if phase == "export" && options.material_catalog.is_some() {
         args.push("--material-catalog-stdin".into());
     }
@@ -340,9 +342,13 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
         Some(&first.capture.inventory_sha256),
     ), options.material_catalog.map(material_catalog_input).transpose()?, &mut run)?;
     validate_capture(&second.capture, script, fullmag)?;
-    if options.scene_only {
-        if second.config.is_some() || !second.scene.as_ref().is_some_and(Value::is_object) { bail!("source scene capture authoring shape"); }
-    } else if second.config.is_none() || second.scene.is_some() { bail!("source config capture authoring shape"); }
+    let expects_config = !options.scene_only || options.include_run_config;
+    if second.config.is_some() != expects_config
+        || (options.scene_only && !second.scene.as_ref().is_some_and(Value::is_object))
+        || (!options.scene_only && second.scene.is_some())
+    {
+        bail!("source capture returned an unexpected authoring shape");
+    }
     if second.capture.inventory_sha256 != first.capture.inventory_sha256
         || serde_json::to_value(&second.capture.runtime)?
             != serde_json::to_value(&first.capture.runtime)?

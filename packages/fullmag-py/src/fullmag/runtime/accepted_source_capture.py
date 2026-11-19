@@ -315,6 +315,7 @@ def exported_config(script: Path, options: dict, pins: dict, captured_code: dict
     from fullmag.runtime.loader import load_problem_from_script
     from fullmag.runtime.run_config_export import export_run_config, RunConfigExportOptions
     scene_only = options.pop("scene_only", False)
+    include_run_config = options.pop("include_run_config", False)
     sys.path.insert(0, str(script.parent))
     material_catalog = options["material_catalog"]
     try:
@@ -333,18 +334,19 @@ def exported_config(script: Path, options: dict, pins: dict, captured_code: dict
     backend = BackendTarget(options["backend"]) if options.get("backend") else None
     mode = ExecutionMode(options["mode"]) if options.get("mode") else None
     precision = ExecutionPrecision(options["precision"]) if options.get("precision") else None
+    authoring = {}
     if scene_only:
         from fullmag.runtime.script_builder import export_builder_draft
         from fullmag.runtime.scene_document import build_scene_document_from_builder
-        authoring = {"scene": build_scene_document_from_builder(export_builder_draft(loaded))}
-    else:
+        authoring["scene"] = build_scene_document_from_builder(export_builder_draft(loaded))
+    if not scene_only or include_run_config:
         ir = loaded.to_ir(requested_backend=backend, execution_mode=mode, execution_precision=precision,
                           asset_cache=loaded.problem.geometry_asset_cache, include_geometry_assets=True,
                           _copy_cached_geometry_assets=False)
         config = export_run_config(loaded, ir, options=RunConfigExportOptions(
             requested_backend=backend, execution_mode=mode, execution_precision=precision,
             include_geometry_assets=True, source_root=loaded.source_path.parent, source_stem=loaded.source_path.stem))
-        authoring = {"config": config}
+        authoring["config"] = config
     # A known refusal never needs further work to decide acceptance. Successful
     # exports still undergo both complete independent post-export checks below.
     if violations:
@@ -378,6 +380,7 @@ def main() -> None:
     parser.add_argument("--expected-inventory")
     parser.add_argument("--backend"); parser.add_argument("--mode"); parser.add_argument("--precision")
     parser.add_argument("--scene-only", action="store_true")
+    parser.add_argument("--include-run-config", action="store_true")
     parser.add_argument("--material-catalog-stdin", action="store_true")
     args = parser.parse_args()
     script = regular(Path(args.script))
@@ -393,6 +396,7 @@ def main() -> None:
         material_catalog = read_material_catalog_stdin()
     authoring = exported_config(script, {"fullmag_root": args.fullmag_root, "backend": args.backend,
                                       "mode": args.mode, "precision": args.precision, "scene_only": args.scene_only,
+                                      "include_run_config": args.include_run_config,
                                       "material_catalog": material_catalog}, pins, captured_code)
     print(json.dumps({**authoring, "capture": pins}, separators=(",", ":")))
 

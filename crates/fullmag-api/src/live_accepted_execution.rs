@@ -1749,8 +1749,8 @@ fn materialize_live_accepted(
 /// admitted source script.  The authored SceneDocument and the Python export
 /// remain unchanged; ordinary UI/managed sources outside the Docker source
 /// prefix retain their existing output policy.
-fn apply_docker_output_storage_binding(
-    inputs: &mut [fullmag_application::StudyStepExecutionInput],
+fn apply_docker_output_storage_binding<'a>(
+    problems: impl IntoIterator<Item = &'a mut fullmag_ir::ProblemIR>,
     scene: &fullmag_authoring::SceneDocument,
     source_script_path: Option<&Path>,
 ) -> Result<(), ApiError> {
@@ -1768,11 +1768,11 @@ fn apply_docker_output_storage_binding(
         scene,
         source_script_path,
     )?;
-    apply_resolved_docker_output_storage_binding(inputs, &binding, source_script_path)
+    apply_resolved_docker_output_storage_binding(problems, &binding, source_script_path)
 }
 
-fn apply_resolved_docker_output_storage_binding(
-    inputs: &mut [fullmag_application::StudyStepExecutionInput],
+fn apply_resolved_docker_output_storage_binding<'a>(
+    problems: impl IntoIterator<Item = &'a mut fullmag_ir::ProblemIR>,
     binding: &Value,
     source_script_path: &Path,
 ) -> Result<(), ApiError> {
@@ -1792,8 +1792,8 @@ fn apply_resolved_docker_output_storage_binding(
         .ok_or_else(|| ApiError::bad_request("Docker startup source path has no valid script stem"))?
         .to_string();
 
-    for input in inputs {
-        let runtime_metadata = &mut input.problem.problem_meta.runtime_metadata;
+    for problem in problems {
+        let runtime_metadata = &mut problem.problem_meta.runtime_metadata;
         runtime_metadata.insert("output_storage".to_string(), output_storage.clone());
         runtime_metadata.insert(
             "output_storage_source_dir".to_string(),
@@ -2088,13 +2088,23 @@ fn prepare_live_accepted(
     } else {
         None
     };
+    // SceneDocument carries the STT actions but does not encode material
+    // assignments made between scripted Run or Relax captures.
+    let capture_fdm_stt_stages = matches!(
+        &submission,
+        LiveAcceptedSubmission::Startup { source_path: Some(path), .. }
+            if path.starts_with(crate::docker_startup::CONTAINER_SOURCE_ROOT)
+    ) && scene.study.requested_backend.eq_ignore_ascii_case("fdm")
+        && scene.study.stages.iter().any(|stage| stage.kind == "set_spin_torque_enabled");
     let mut closed_capture = if source_bound_pipeline {
         let source_path = match (&submission, &generated_scene_source) {
             (LiveAcceptedSubmission::Startup { source_path: Some(path), .. }, None) => path,
             (_, Some(generated)) => &generated.path,
             _ => return Err(ApiError::internal("closed-loop source preparation lost its owner")),
         };
-        let capture = crate::script::capture_startup_script_scene(repo_root, workspace_root, source_path)?;
+        let mut capture = crate::script::capture_startup_script_scene(
+            repo_root, workspace_root, source_path, capture_fdm_stt_stages,
+        )?;
         let entry = capture.manifest["entry_relative_path"].as_str().ok_or_else(|| ApiError::unprocessable("captured source entry missing"))?;
         let source = capture.files.get(entry).ok_or_else(|| ApiError::unprocessable("captured source entry bytes missing"))?;
         let captured_source_sha256 = fullmag_session::hex_sha256(source);
@@ -2130,9 +2140,20 @@ fn prepare_live_accepted(
                     "captured script does not reproduce the immutable startup scene"));
             }
         }
-        // Capture authoring without geometry; bind the profile before preparing a source.
-        let config = crate::script::scene_document_to_authored_script_config_with_asset_root(
-            repo_root, workspace_root, asset_root, &effective_scene, &requested_execution)?;
+        let config = if let Some(mut config) = capture.config.take() {
+            if config.stages.is_empty() {
+                return Err(ApiError::unprocessable("scripted FDM STT capture has no stage snapshots"));
+            }
+            let problems = std::iter::once(&mut config.ir)
+                .chain(config.stages.iter_mut().map(|stage| &mut stage.ir));
+            apply_docker_output_storage_binding(problems, &effective_scene, Some(source_path))?;
+            config
+        } else {
+            // Bind the profile before preparing geometry for Scene-only input.
+            crate::script::scene_document_to_authored_script_config_with_asset_root(
+                repo_root, workspace_root, asset_root, &effective_scene, &requested_execution,
+            )?
+        };
         capture.verify_unchanged().map_err(|error| ApiError::conflict_with_code(
             "accepted_script_source_changed", format!("source changed during scene preparation: {error:#}")))?;
         Some((capture, config))
@@ -2197,7 +2218,7 @@ fn prepare_live_accepted(
         },
     );
     apply_docker_output_storage_binding(
-        &mut inputs,
+        inputs.iter_mut().map(|input| &mut input.problem),
         &effective_scene,
         source_script_path.as_deref(),
     )?;
@@ -2309,7 +2330,7 @@ fn prepare_live_accepted(
     let (mut catalog, mut initial_state) = if let Some((capture, config)) = closed_capture.take() {
         let layers = inputs.first().ok_or_else(|| ApiError::unprocessable("closed-loop migration input missing"))?.layers.clone();
         let bound = fullmag_application::materialize_captured_study_input(
-            "script-base", config.ir, &defaults.execution_profile, layers.clone(),
+            "script-base", config.ir.clone(), &defaults.execution_profile, layers.clone(),
             |id, version| if id == published_profile.profile_id && version == published_profile.version {
                 Ok(published_profile.clone())
             } else { Err("closed-loop execution profile differs from pinned live profile".into()) },
@@ -2322,8 +2343,13 @@ fn prepare_live_accepted(
         )?);
         let prepared_request = preparation_constraints.for_problem(&bound.problem)
             .map_err(|error| ApiError::unprocessable(error.to_string()))?;
-        let config = crate::script::scene_document_to_bound_prepared_script_config_with_asset_root(
-            repo_root, workspace_root, asset_root, &effective_scene, &prepared_request, &bound.problem)?;
+        let config = if capture_fdm_stt_stages {
+            config
+        } else {
+            crate::script::scene_document_to_bound_prepared_script_config_with_asset_root(
+                repo_root, workspace_root, asset_root, &effective_scene, &prepared_request, &bound.problem,
+            )?
+        };
         let compiled = fullmag_application::compile_accepted_closed_loop_pipeline(
             config, study.study_id.clone(), effective_scene.revision, defaults.execution_profile.clone(), layers,
             capture.manifest.clone(),
@@ -4238,7 +4264,7 @@ mod tests {
         );
 
         apply_resolved_docker_output_storage_binding(
-            &mut inputs,
+            inputs.iter_mut().map(|input| &mut input.problem),
             &binding,
             Path::new("/opt/fullmag/source/examples/authored_filename.py"),
         )
