@@ -96,6 +96,7 @@ _LABEL_PREFIX = "com.fullmag.backend-cache."
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_WORKTREE_IDENTIFIER = re.compile(r"^[a-z0-9_][a-z0-9._-]{0,127}$")
 _VOLUME_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _HEX_OR_ID = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
@@ -162,6 +163,12 @@ def _require_identifier(value: str, label: str) -> str:
     return value
 
 
+def _require_worktree_identifier(value: str, label: str = "worktree_id") -> str:
+    if not isinstance(value, str) or _WORKTREE_IDENTIFIER.fullmatch(value) is None:
+        raise BackendVolumeCacheError(f"{label} is not a safe worktree identifier")
+    return value
+
+
 def _validated_control_namespace(value: Any) -> str:
     if not isinstance(value, str) or (value and _CONTROL_NAMESPACE.fullmatch(value) is None):
         raise BackendVolumeCacheError("control namespace must be empty or namespaces/<32 lowercase hexadecimal characters>")
@@ -222,7 +229,7 @@ def cache_key(
     """
 
     source = _source_root(source_root)
-    worktree = _require_identifier(worktree_id, "worktree_id")
+    worktree = _require_worktree_identifier(worktree_id)
     toolchain = _require_image_id(toolchain_image, "toolchain_image")
     if cargo_profile not in SUPPORTED_CARGO_PROFILES:
         raise BackendVolumeCacheError(
@@ -279,8 +286,9 @@ def _control_volume_labels(profile: Mapping[str, Any]) -> dict[str, str]:
 def volume_labels(profile: Mapping[str, Any], role: str) -> dict[str, str]:
     if role not in set(VOLUME_ROLES):
         raise BackendVolumeCacheError(f"unknown volume role: {role}")
-    if role == CONTROL_VOLUME_ROLE:
-        return _control_volume_labels(profile)
+    if role == CONTROL_VOLUME_ROLE or (role == BUILD_VOLUME_ROLE and profile.get("group_volume")):
+        labels = _control_volume_labels(profile)
+        return labels
     if role == PACKAGE_VOLUME_ROLE and profile.get("shared_packages") is True:
         return shared_volume_labels(str(profile["project_id"]), SHARED_PACKAGE_ROLE)
     return {
@@ -347,6 +355,8 @@ def mount_specs(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
         "read_only": False,
         "volume": control_volume,
     })
+    if profile.get("group_volume"):
+        mounts[0]["volume"]["subpath"] = profile["build_subpath"]
     return mounts
 
 
@@ -385,6 +395,8 @@ def _cache_environment(profile: Mapping[str, Any]) -> dict[str, str]:
         "FULLMAG_BACKEND_CACHE_CONTROL_NAMESPACE": CONTROL_BACKEND_TARGET,
         "FULLMAG_BACKEND_CACHE_RECEIPT": RECEIPT_TARGET,
     }
+    if profile.get("group_volume"):
+        environment["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
     if profile.get("shared_packages") is True:
         environment.update({
             "FULLMAG_SHARED_BACKEND_STORE": SHARED_BACKEND_TARGET,
@@ -467,6 +479,9 @@ def _plan(
     control_volume_name: str,
     control_namespace: str,
     shared_packages: bool = False,
+    group_volume: bool = False,
+    group_helper_id: str | None = None,
+    prepared_group_owner: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(shared_packages, bool):
         raise BackendVolumeCacheError("shared_packages must be a boolean")
@@ -476,7 +491,7 @@ def _plan(
     image = _require_image_id(image, "runtime image")
     toolchain_image = _require_image_id(toolchain_image, "toolchain image")
     control_namespace = _validated_control_namespace(control_namespace)
-    worktree_id = _require_identifier(str(layout.get("worktree_id", "")), "worktree_id")
+    worktree_id = _require_worktree_identifier(str(layout.get("worktree_id", "")))
     project_id = _safe_project_id(layout)
     control_project = layout.get("compose_project")
     if control_project is not None:
@@ -494,6 +509,17 @@ def _plan(
         project_id, unit_key, control_volume_name,
         shared_packages=shared_packages,
     )
+    if not isinstance(group_volume, bool):
+        raise BackendVolumeCacheError("group_volume must be a boolean")
+    if group_volume:
+        from bootstrap_docker_toolchain import control_volume_name as canonical_control_volume
+        if not shared_packages or control_project is None or canonical_control_volume(control_project) != control_volume_name:
+            raise BackendVolumeCacheError("Single group storage requires canonical control and shared packages")
+        if group_helper_id is not None and re.fullmatch(r"[0-9a-f]{64}", group_helper_id) is None:
+            raise BackendVolumeCacheError("Group helper identity must be an exact container ID")
+        unit_key = _sha256({"schema": "fullmag.private-group-cache-unit.v1", "project_id": project_id,
+                           "worktree_id": worktree_id, "source_root": identity["inputs"]["source_root"]})
+        volume_names[BUILD_VOLUME_ROLE] = control_volume_name
     owner_id = unit_key
     profile = {
         "schema": SCHEMA,
@@ -553,6 +579,19 @@ def _plan(
         "host_receipt_path": None,
         "environment": {},
     }
+    if group_volume:
+        profile.update(group_volume=True, group_helper_id=group_helper_id,
+                       build_subpath="/".join(x for x in (control_namespace, "private/backend") if x))
+        profile["volume_roles"][BUILD_VOLUME_ROLE]["labels"] = volume_labels(profile, BUILD_VOLUME_ROLE)
+    if prepared_group_owner is not None:
+        environment = layout.get("env")
+        if not isinstance(environment, Mapping):
+            raise BackendVolumeCacheError("prepared group owner requires the resolver source project identity")
+        profile["source_project_id"] = _require_identifier(
+            environment.get("FULLMAG_PROJECT_ID"), "resolver source project identity"
+        )
+        profile["prepared_group_owner"] = prepared_group_owner
+        profile["prepared_group_owner"] = _validated_prepared_group_owner(profile)
     profile["environment"] = _cache_environment(profile)
     profile["mounts"] = _mount_specs(profile)
     profile["maintenance_service"] = _maintenance_service(profile)
@@ -574,6 +613,9 @@ def prepare(
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
     shared_packages: bool = False,
+    group_volume: bool = False,
+    group_helper_id: str | None = None,
+    prepared_group_owner: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the v2 plan and optionally create only its exact missing pair.
 
@@ -590,7 +632,8 @@ def prepare(
         toolchain_image=toolchain_image, cargo_profile=cargo_profile,
         control_volume_name=control_volume_name,
         control_namespace=control_namespace,
-        shared_packages=shared_packages,
+        shared_packages=shared_packages, group_volume=group_volume, group_helper_id=group_helper_id,
+        prepared_group_owner=prepared_group_owner,
     )
     if docker is not None:
         profile["volume_documents"] = ensure_volume_pair(
@@ -615,6 +658,9 @@ def prepare_ready(
     active_consumers: Iterable[Mapping[str, Any]]
     | Callable[[], Iterable[Mapping[str, Any]]] = (),
     shared_packages: bool = False,
+    group_volume: bool = False,
+    group_helper_id: str | None = None,
+    prepared_group_owner: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prepare and admit a pair after a managed guest maintenance callback.
 
@@ -636,7 +682,8 @@ def prepare_ready(
         control_volume_name=control_volume_name,
         control_namespace=control_namespace,
         active_consumers=active_consumers,
-        shared_packages=shared_packages,
+        shared_packages=shared_packages, group_volume=group_volume, group_helper_id=group_helper_id,
+        prepared_group_owner=prepared_group_owner,
     )
     if not isinstance(profile.get("volume_documents"), Mapping):
         raise BackendVolumeCacheError("ready cache preparation has no volume receipt")
@@ -669,6 +716,49 @@ def _validate_mountpoint(value: Any) -> str:
         raise BackendVolumeCacheError(str(error)) from error
 
 
+
+def _validated_prepared_group_owner(profile: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Validate the namespace owner already authenticated by group_storage.
+
+    Root volume labels describe physical-root provenance. The bounded launcher
+    obtains this manifest under its active BuildControl lease, after the root
+    volume and the exact namespaced private/.owner.json have been verified.
+    """
+    owner = profile.get("prepared_group_owner")
+    if owner is None:
+        return None
+    if not isinstance(owner, Mapping):
+        raise BackendVolumeCacheError("prepared group owner must be a manifest")
+    from bootstrap_docker_toolchain import control_volume_name
+    from docker_group_storage import SCHEMA as GROUP_OWNER_SCHEMA, ROLE_SUBPATHS
+
+    namespace = _validated_control_namespace(profile.get("control_namespace", ""))
+    project = profile.get("control_project")
+    if (profile.get("group_volume") is not True or profile.get("shared_packages") is not True
+            or not namespace or not isinstance(project, str)
+            or profile["volume_names"][CONTROL_VOLUME_ROLE] != control_volume_name(project)
+            or profile["volume_names"][BUILD_VOLUME_ROLE] != profile["volume_names"][CONTROL_VOLUME_ROLE]):
+        raise BackendVolumeCacheError("prepared group owner requires the exact namespaced stable group volume")
+    source_project = _require_identifier(profile.get("source_project_id"), "resolver source project identity")
+    expected = {
+        "schema": GROUP_OWNER_SCHEMA,
+        "compose_project": project,
+        "control_volume": profile["volume_names"][CONTROL_VOLUME_ROLE],
+        "control_namespace": namespace,
+        "source_project_id": source_project,
+        "source_worktree_id": profile["worktree_id"],
+        "source_root": profile["identity"]["inputs"]["source_root"],
+        "layout": {"version": 1, "private_root": "private",
+                   "roles": {role: path for role, path in ROLE_SUBPATHS.items() if role != "control"}},
+    }
+    try:
+        encoded = json.dumps(dict(owner), sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as error:
+        raise BackendVolumeCacheError("prepared group owner is not a bounded JSON manifest") from error
+    if encoded != json.dumps(expected, sort_keys=True, separators=(",", ":")):
+        raise BackendVolumeCacheError("prepared group owner differs from the current namespace/source profile")
+    return json.loads(encoded)
+
 def _validate_volume_document(
     document: Mapping[str, Any], profile: Mapping[str, Any], role: str
 ) -> dict[str, Any]:
@@ -680,7 +770,24 @@ def _validate_volume_document(
     labels = document.get("Labels")
     if not isinstance(labels, Mapping):
         raise BackendVolumeCacheError("backend cache named volume has no labels")
-    if role == CONTROL_VOLUME_ROLE:
+    if role == CONTROL_VOLUME_ROLE or (role == BUILD_VOLUME_ROLE and profile.get("group_volume")):
+        if profile.get("group_volume"):
+            # Bootstrap's shared labels are canonical. Extra launcher labels
+            # were historically optional; when present, they must still agree.
+            optional = {
+                "org.fullmag.build-control.schema": "fullmag.build-control.v1",
+                "org.fullmag.compose.project": profile["control_project"],
+                "org.fullmag.source.worktree-id": profile["worktree_id"],
+                "org.fullmag.build.role": "control",
+            }
+            namespace_owner = _validated_prepared_group_owner(profile)
+            for key, value in optional.items():
+                if key not in labels or labels[key] == value:
+                    continue
+                if key == "org.fullmag.source.worktree-id" and namespace_owner is not None:
+                    _require_worktree_identifier(labels[key], "historical root worktree label")
+                    continue
+                raise BackendVolumeCacheError("Group cache volume belongs to another source/group")
         required = {
             CONTROL_VOLUME_LABEL_SCHEMA: CONTROL_VOLUME_SCHEMA,
             CONTROL_VOLUME_LABEL_MOUNT: CONTROL_VOLUME_MOUNT,
@@ -920,7 +1027,7 @@ def _is_registered_shared_maintenance(
         and isinstance(cache_key_value, str)
         and _HEX_OR_ID.fullmatch(cache_key_value) is not None
         and isinstance(worktree_id, str)
-        and _IDENTIFIER.fullmatch(worktree_id) is not None
+        and _WORKTREE_IDENTIFIER.fullmatch(worktree_id) is not None
         and isinstance(toolchain_id, str)
         and _IMAGE_ID.fullmatch(toolchain_id) is not None
         and cargo_profile in SUPPORTED_CARGO_PROFILES
@@ -1087,6 +1194,20 @@ def _assert_no_active_consumers(
                 if profile.get("shared_packages") is True and name == package_volume:
                     continue
                 if name in names:
+                    if name == profile["volume_names"][CONTROL_VOLUME_ROLE] and profile.get("group_volume"):
+                        helper = profile.get("group_helper_id")
+                        if (helper is not None and document.get("Id") == helper
+                                and labels.get("org.fullmag.compose.project") == profile["control_project"]
+                                and config.get("User") == "65532:65532"
+                                and document.get("HostConfig", {}).get("Privileged") is not True):
+                            continue
+                        source_path = mount.get("Source", "")
+                        mountpoint = _validate_mountpoint(source_path.split("/_data",1)[0]+"/_data")
+                        subpath = _observed_volume_subpath(document, mount, mount.get("Destination"), name, mountpoint)
+                        owned = profile["build_subpath"]
+                        if not subpath or _daemon_paths_overlap("/"+subpath, "/"+owned):
+                            raise BackendVolumeCacheError("Active consumer aliases private group backend state")
+                        continue
                     if name == profile["volume_names"][CONTROL_VOLUME_ROLE]:
                         # Control is intentionally shared by services in a Compose group.
                         continue
@@ -1157,7 +1278,7 @@ def inspect_volume_pair(
 
 
 def _create_volume(docker: Callable[..., Any], profile: Mapping[str, Any], role: str) -> None:
-    if role == CONTROL_VOLUME_ROLE:
+    if role == CONTROL_VOLUME_ROLE or (role == BUILD_VOLUME_ROLE and profile.get("group_volume")):
         raise BackendVolumeCacheError(
             "shared control volume must be created and labeled by Docker bootstrap"
         )
@@ -1353,6 +1474,9 @@ def validate(
         "receipt_storage": "docker-named-volume",
         "host_receipt_path": None,
     }
+    if profile.get("prepared_group_owner") is not None:
+        receipt["source_project_id"] = profile["source_project_id"]
+        receipt["prepared_group_owner"] = _validated_prepared_group_owner(profile)
     result = dict(profile)
     result.update({
         "state": "ready",
@@ -1433,6 +1557,7 @@ def _validate_service_labels(service: Mapping[str, Any], profile: Mapping[str, A
 def validate_overlay(document: Mapping[str, Any], profile: Mapping[str, Any]) -> None:
     """Validate the runtime overlay without creating a maintenance service."""
 
+    _validated_prepared_group_owner(profile)
     services = document.get("services")
     if not isinstance(services, Mapping) or set(services) != {BACKEND_SERVICE}:
         raise BackendVolumeCacheError("volume cache overlay has unexpected services")
@@ -1454,6 +1579,7 @@ def validate_overlay(document: Mapping[str, Any], profile: Mapping[str, Any]) ->
 def validate_maintenance_overlay(document: Mapping[str, Any], profile: Mapping[str, Any]) -> None:
     """Validate the separate privileged-but-bounded maintenance overlay."""
 
+    _validated_prepared_group_owner(profile)
     services = document.get("services")
     if not isinstance(services, Mapping) or set(services) != {MAINTENANCE_SERVICE}:
         raise BackendVolumeCacheError("maintenance overlay has unexpected services")
@@ -1632,6 +1758,7 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
 
     if profile.get("schema") != SCHEMA or profile.get("state") != "ready":
         raise BackendVolumeCacheError("backend volume cache profile is not ready")
+    _validated_prepared_group_owner(profile)
     config = document.get("Config")
     if not isinstance(config, Mapping):
         raise BackendVolumeCacheError("backend container has no config")
@@ -1727,6 +1854,9 @@ def validate_container(document: Mapping[str, Any], profile: Mapping[str, Any]) 
         _control_namespace_subpath(control_namespace),
         volume_documents,
     )
+    if profile.get("group_volume"):
+        _validate_control_mount_subpath(document, matching[BUILD_TARGET], BUILD_TARGET,
+            profile["volume_names"][BUILD_VOLUME_ROLE], profile["build_subpath"], volume_documents)
     if profile.get("shared_packages") is True:
         package_subpath = shared_group(str(profile["unit_key"]))
         _validate_shared_mount_subpath(

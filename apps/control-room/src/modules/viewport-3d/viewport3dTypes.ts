@@ -60,6 +60,7 @@ export const VIEWPORT_3D_DIRTY_REASONS = [
   "camera-projection-followup",
   "camera-resource",
   "canvas-mounted",
+  "complex-phase",
   "airbox-field-colors",
   "airbox-points",
   "airbox-surface",

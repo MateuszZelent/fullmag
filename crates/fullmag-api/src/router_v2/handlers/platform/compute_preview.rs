@@ -89,7 +89,7 @@ fn build_preview(
         }
         input
             .problem
-            .validate()
+            .validate_before_execution_profile_binding()
             .map_err(|errors| ApiError::bad_request(errors.join("; ")))?;
     }
     if seen.len()

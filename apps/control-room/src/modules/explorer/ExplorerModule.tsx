@@ -15,6 +15,11 @@ import type {
   SolverProfileResource,
 } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+} from "@/kernel/api/apiPaths";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
@@ -69,7 +74,8 @@ import {
 } from "@/kernel/resources/sessionDiscretization";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
-import { useObservationFrameListResource } from "@/kernel/resources/observationFrameResources";
+import { useObservationFrameListPages } from "@/kernel/resources/useObservationFrameListPages";
+import { Button } from "@/shared/ui/Button";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { matchesAirboxTopologyIdentity } from "@/kernel/resources/meshTopologyIdentity";
@@ -153,6 +159,7 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { StudyResultHistory } from "./StudyResultHistory";
 import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
 type TextureLoadNodeRequestedEvent =
@@ -387,6 +394,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const previousSelectedNodeId = useRef<string | null>(null);
   const lastRevealedSelectionPath = useRef<string | null>(null);
+  const parentWithoutAbsorbingBoundary = useRef<string | null>(null);
   const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
@@ -413,6 +421,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frozenSpins = useFrozenSpinsCollectionResource({ enabled: modelTabActive });
   const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
+    { ignorePhase: true },
   );
   const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =
@@ -496,6 +505,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
+  const sharedCommandResources = useMemo(() => ({
+    [MESHING_BUILDS_CURRENT_PATH]: activeBuild.status === "ready" ? activeBuild.data : null,
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: manifest.status === "ready" ? manifest.data : null,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.status === "ready" ? stageExecution.data : null,
+  }), [
+    activeBuild.data,
+    activeBuild.status,
+    manifest.data,
+    manifest.status,
+    stageExecution.data,
+    stageExecution.status,
+  ]);
   const activeHysteresisStageId = useMemo(
     () => activeHysteresisStageIdFromExecution(stageExecution.data),
     [stageExecution.data],
@@ -545,9 +566,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const resolvedResultContextRunId = reconciledResultContextRunId;
   const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
-  const observationFrames = useObservationFrameListResource({
+  const observationFrames = useObservationFrameListPages({
     enabled: resultsResourceActive && resultContextIsCurrent,
     runId: resultContextIsCurrent ? resolvedResultContextRunId : null,
+    selectedFrameId: selectedRef?.type === "observation-frame" && selectedRef.runId === resolvedResultContextRunId
+      ? selectedRef.frameId
+      : null,
   });
   const resultContextRun = useResultContextRunResource(
     resultContextIsCurrent ? null : resolvedResultContextRunId,
@@ -559,7 +583,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       ? []
       : resultContextRun.status === "ready" && resultContextRun.data
         ? [
-            "Selected run is not the current session run; run-scoped result resources are not published.",
+            "Live observation frames are available for the current run. Open a saved Study state to inspect this run's published final results.",
           ]
         : resultContextRun.status === "error"
           ? ["Selected result run could not be loaded."]
@@ -733,7 +757,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const currentManifestParts = Array.isArray(manifest.data?.mesh_parts)
       ? manifest.data.mesh_parts
       : null;
-    const manifestSceneRevision = revisionValue(manifest.data?.source_scene_revision);
+    const manifestSceneRevision = revisionValue(
+      manifest.data?.validated_for_scene_revision ?? manifest.data?.source_scene_revision,
+    );
     const sceneRevisionMatches = currentSceneRevision !== null &&
       manifestSceneRevision !== null &&
       String(currentSceneRevision) === String(manifestSceneRevision);
@@ -778,6 +804,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         activeBuild.data?.last_build_error ??
         latestSuccessfulBuild.data?.last_build_error,
       manifestSourceSceneRevision: manifest.data?.source_scene_revision,
+      manifestValidatedSceneRevision: manifest.data?.validated_for_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
@@ -1002,26 +1029,45 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
-    if (
-      !modelTabActive ||
-      selectedRef?.type !== "airbox" ||
-      !selectedNodeId
-    ) {
+    if (!modelTabActive || selectedRef?.type !== "scene-object" ||
+      selectedRef.kind !== "object.magnetic-parameters") {
+      parentWithoutAbsorbingBoundary.current = null;
       return;
     }
+    if (modelResource.status !== "ready") return;
+    const parent = resolveCurrentExplorerSelectionNode(baseNodes, selectedRef.nodeId, selectedRef);
+    const key = JSON.stringify([modelResource.sessionScopeKey, selectedRef.nodeId]);
+    const wasAbsent = parentWithoutAbsorbingBoundary.current === key;
+    parentWithoutAbsorbingBoundary.current = null;
+    if (!parent) return;
+    if (!parent.children?.some((node) => node.kind === "object.absorbing-boundary")) {
+      parentWithoutAbsorbingBoundary.current = key;
+    } else if (wasAbsent) {
+      expandExplorerNodes("model", [parent.id]);
+    }
+  }, [baseNodes, modelResource.sessionScopeKey, modelResource.status, modelTabActive, selectedRef]);
+
+  useEffect(() => {
+    if (!modelTabActive || !selectedNodeId) return;
+    const boundarySelected = selectedRef?.type === "scene-object" &&
+      selectedRef.kind === "object.absorbing-boundary";
+    if (boundarySelected && modelResource.status !== "ready") return;
+    if (!boundarySelected && selectedRef?.type !== "airbox") return;
     const currentNode = resolveCurrentExplorerSelectionNode(
       baseNodes,
       selectedNodeId,
       selectedRef,
       baseNodes,
     );
-    if (!currentNode || !currentNode.kind.startsWith("airbox.")) return;
+    if (!currentNode) {
+      if (boundarySelected) kernel.selection.clear("explorer");
+      return;
+    }
+    if (!boundarySelected && !currentNode.kind.startsWith("airbox.")) return;
     const currentRef = selectionRefFromNode(currentNode);
     if (selectionRefEquals(selectedRef, currentRef)) return;
-    // Refresh only the selected node's resource facets. Selection identity and
-    // inspector routing remain stable as mesh resources invalidate.
     selectExplorerNode(kernel, currentNode, "explorer");
-  }, [baseNodes, kernel, modelTabActive, selectedNodeId, selectedRef]);
+  }, [baseNodes, kernel, modelResource.status, modelTabActive, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(
@@ -1068,12 +1114,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           onTabChange={setExplorerActiveTab}
         />
         {activeTab === "results" ? (
-          <ResultContextSelector
-            currentRunId={currentRunId}
-            knownRunIds={knownResultContextRunIds}
-            onChange={setExplorerResultContextRunId}
-            selectedRunId={resolvedResultContextRunId}
-          />
+          <>
+            <ResultContextSelector
+              currentRunId={currentRunId}
+              knownRunIds={knownResultContextRunIds}
+              onChange={setExplorerResultContextRunId}
+              selectedRunId={resolvedResultContextRunId}
+            />
+            <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
+              onPreviewRun={setExplorerResultContextRunId} />
+          </>
         ) : null}
         <AnalysisFieldOverlayContextNotice
           context={analysisFieldOverlayContext}
@@ -1150,8 +1200,30 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           sceneResourceData={
             modelResource.status === "ready" ? modelResource.data : null
           }
+          sharedCommandResources={sharedCommandResources}
           tabId={activeTab}
         />
+        {activeTab === "results" && observationFrames.status !== "idle" ? (
+          <div className="flex flex-wrap items-center gap-2 px-2 py-1" role="group" aria-label="State snapshots" aria-busy={observationFrames.loading}>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <p className="m-0 w-full break-words text-fm-help" role="alert">
+                {(observationFrames.error ?? observationFrames.refreshError)?.message}
+              </p>
+            ) : observationFrames.loading ? (
+              <p className="m-0 w-full text-fm-help" role="status">Loading state snapshots…</p>
+            ) : null}
+            <Button disabled={observationFrames.loading} onClick={observationFrames.refetch} size="sm" type="button">
+              Refresh snapshots
+            </Button>
+            {observationFrames.error || observationFrames.refreshError ? (
+              <Button onClick={observationFrames.retry} size="sm" type="button">Retry snapshots</Button>
+            ) : observationFrames.hasMore ? (
+              <Button disabled={observationFrames.loading} onClick={observationFrames.loadMore} size="sm" type="button">
+                Load more snapshots
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </WorkspaceRenderProfiler>
   );

@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-regional_field_drive",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_regional_field_drive"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_regional_field_drive",
@@ -63,7 +46,7 @@
         "python": "id",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "stable drive ID",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -73,7 +56,7 @@
         "python": "name",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "display name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
@@ -83,7 +66,7 @@
         "python": "target",
         "type": "FieldTarget",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed global/object/region target",
         "meaning": "spatial target",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
@@ -93,7 +76,7 @@
         "python": "amplitude_B_T",
         "type": "float",
         "default": "required",
-        "si_unit": "T",
+        "si_unit": "$\\mathrm{T}$",
         "validation": "finite and non-negative",
         "meaning": "field amplitude",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
@@ -103,7 +86,7 @@
         "python": "direction",
         "type": "tuple[float,float,float]",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "finite non-zero; normalized",
         "meaning": "field direction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
@@ -113,7 +96,7 @@
         "python": "spatial_profile",
         "type": "FieldProfile",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed profile",
         "meaning": "spatial envelope",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
@@ -123,8 +106,8 @@
         "python": "waveform",
         "type": "Waveform",
         "default": "required",
-        "si_unit": "1",
-        "validation": "typed waveform with to_ir",
+        "si_unit": "$1$",
+        "validation": "typed waveform with `to_ir`",
         "meaning": "time envelope",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "waveform"
@@ -133,8 +116,8 @@
         "python": "time_origin",
         "type": "str",
         "default": "stage_local",
-        "si_unit": "1",
-        "validation": "stage_local or absolute",
+        "si_unit": "$1$",
+        "validation": "`stage_local` or `absolute`",
         "meaning": "time origin",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
         "problem_ir": "time_origin"
@@ -143,7 +126,7 @@
         "python": "activation",
         "type": "Activation or None",
         "default": "None",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed activation when supplied",
         "meaning": "activation window",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",
@@ -153,7 +136,7 @@
         "python": "enabled",
         "type": "bool",
         "default": "True",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "boolean",
         "meaning": "activation flag",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved field drive",

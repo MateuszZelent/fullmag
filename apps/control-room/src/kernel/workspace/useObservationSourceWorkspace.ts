@@ -6,11 +6,10 @@ import { useSessionResourceIdentity } from "../resources/useSessionStatus";
 import { sessionResourceIdentityKey } from "../resources/sessionResourceIdentity";
 
 import {
+  EMPTY_OBSERVATION_SOURCE,
   observationSourceWorkspaceStore,
   type ObservationSourceWorkspaceState,
 } from "./observationSourceWorkspace";
-
-const SERVER_SNAPSHOT: ObservationSourceWorkspaceState = { pinned: null };
 
 export function useObservationSourceWorkspaceSelector<T>(
   selector: (state: ObservationSourceWorkspaceState) => T,
@@ -26,11 +25,11 @@ export function useObservationSourceWorkspaceSelector<T>(
     () => {
       const snapshot = observationSourceWorkspaceStore.getSnapshot();
       const scopedSnapshot =
-        identityKey && snapshot.pinned?.sessionIdentityKey === identityKey
+        identityKey && (snapshot.pinned ?? snapshot.prepared)?.sessionIdentityKey === identityKey
           ? snapshot
-          : SERVER_SNAPSHOT;
+          : EMPTY_OBSERVATION_SOURCE;
       return selector(scopedSnapshot);
     },
-    () => selector(SERVER_SNAPSHOT),
+    () => selector(EMPTY_OBSERVATION_SOURCE),
   );
 }

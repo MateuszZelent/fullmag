@@ -7,7 +7,7 @@ import {
   BufferGeometry,
   type MeshBasicMaterial,
   type MeshLambertMaterial,
-  type ShaderMaterial,
+  type MeshStandardMaterial,
 } from "three";
 import {
   RENDER_POLICIES,
@@ -41,6 +41,7 @@ import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
 import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUpload";
+import { Viewport3DInteractionWireframe } from "./Viewport3DInteractionWireframe";
 import {
   type Viewport3DScalarColorUploadResult,
   useViewport3DScalarColorUpload,
@@ -55,9 +56,11 @@ import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry
 import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyScalarShaderColorBuffer,
+  applyScalarSurfaceMaterialPolicy,
   createScalarSurfaceShaderMaterial,
   scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
+  type Viewport3DScalarSurfaceMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type {
   Viewport3DFieldRenderModel,
@@ -68,9 +71,12 @@ import type {
 import { buildViewport3DRenderableMeshPartKey } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { BoundsBox } from "./BoundsLayers";
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
+import { ComplexGlyphPassLayer, ComplexVectorGlyphLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolveMeshPartSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   pointColorFromSettings,
@@ -103,7 +109,7 @@ import {
 } from "./meshPartScalarTransition";
 import {
   buildModeCompositionScalarColorBuffer,
-  buildModeCompositionVectorLayerInput,
+  buildModeCompositionComplexGlyphInput,
   modeCompositionTargetIdForMeshPart,
   resolveModeCompositionMeshPartRenderPlan,
 } from "../model/modeCompositionViewportProjection";
@@ -520,14 +526,15 @@ export function createMeshPartScalarShaderMaterials({
 }: {
   buffer: ScalarColorBuffer | null | undefined;
   enabled: boolean;
-  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength">;
+  materialProfile: Pick<Viewport3DMaterialProfile["magneticSurface"], "toneMapped" | "shadeStrength"> &
+    Partial<Pick<Viewport3DMaterialProfile["magneticSurface"], "presentation">>;
   surfaceOpacity?: number;
   surfacePolicy?: ReturnType<typeof surfaceMaterialPolicyProps>;
   surfacePolicyFront?: ReturnType<typeof surfaceMaterialPolicyPropsFront> | null;
   tracker: Pick<Viewport3DResourceTracker, "track" | "release">;
 }): {
-  back: ShaderMaterial | null;
-  front: ShaderMaterial | null;
+  back: Viewport3DScalarSurfaceMaterial | null;
+  front: Viewport3DScalarSurfaceMaterial | null;
 } {
   if (!enabled || !buffer) {
     return { back: null, front: null };
@@ -539,6 +546,7 @@ export function createMeshPartScalarShaderMaterials({
       opacity: surfaceOpacity,
       shadeStrength: materialProfile.shadeStrength,
       toneMapped: materialProfile.toneMapped,
+      presentation: materialProfile.presentation,
     }),
   );
   const front = surfacePolicyFront
@@ -549,6 +557,7 @@ export function createMeshPartScalarShaderMaterials({
           opacity: surfaceOpacity,
           shadeStrength: materialProfile.shadeStrength,
           toneMapped: materialProfile.toneMapped,
+          presentation: materialProfile.presentation,
         }),
       )
     : null;
@@ -571,7 +580,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   magnetizationTexturePreview,
   meshQualityColors,
   modeCompositionId,
-  modeCompositionPhaseRad,
+  modeCompositionPhase = null,
   modeCompositionSnapshot,
   settings,
   topologyModel,
@@ -595,7 +604,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshQualityColors: ScalarColorBuffer | null;
   modeCompositionId: string | null;
-  modeCompositionPhaseRad?: number | null;
+  /** Live phase cell of the modal layer; materials bind it, renders never read it. */
+  modeCompositionPhase?: LivePhaseUniform | null;
   modeCompositionSnapshot: ModeCompositionFieldLayerSnapshot | null;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
@@ -668,7 +678,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   });
 
   const edgeIndices = resolveMeshPartWireframeEdgeIndices(
-    renderSettings.geometryScope,
+    renderSettings.wireframeGeometryScope ?? "surface",
     partModel,
     renderSettings.wireframeVisible,
   );
@@ -687,7 +697,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (topologyModel?.positions.byteLength ?? 0) + (edgeIndices?.byteLength ?? 0),
     invalidate,
     itemCount: edgeIndices?.length ?? 0,
-    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.geometryScope}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
+    key: `mesh-part-wireframe:${part.id}:scope=${renderSettings.wireframeGeometryScope ?? "surface"}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${edgeIndices?.byteLength ?? 0}`,
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -752,7 +762,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       geometryNodeIndices: expandSurfaceFaces ? surfaceIndices : null,
       identity: modal.buffer.identity,
       layer: modal.buffer.layer,
-      phaseRad: modeCompositionPhaseRad,
+      phase: modeCompositionPhase,
       projectionKey: [
         part.id,
         surfaceGeometryProjection,
@@ -764,7 +774,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   }, [
     expandSurfaceFaces,
     modeRenderPlan,
-    modeCompositionPhaseRad,
+    modeCompositionPhase,
     part.id,
     partModel.surfaceNodeIndices,
     surfaceGeometryProjection,
@@ -773,26 +783,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     topologyRevision,
   ]);
   const modalSurfaceActive = Boolean(modeScalarColors);
-  const modalVectorLayerInput = useMemo(() => {
-    const modal = modeRenderPlan?.surfacePass;
-    if (modal?.owner !== "modal" || !topologyModel) return null;
-    return buildModeCompositionVectorLayerInput({
-      field: modal.buffer.field,
-      identity: modal.buffer.identity,
-      layer: modal.buffer.layer,
-      phaseRad: modeCompositionPhaseRad,
-      topologyNodeCount,
-      topologyPositions: topologyModel.positions,
-      vectorScale,
-    });
-  }, [
-    modeCompositionPhaseRad,
-    modeRenderPlan,
-    topologyModel,
-    topologyNodeCount,
-    vectorScale,
-  ]);
-  const modalVectorsActive = Boolean(modalVectorLayerInput?.segments);
+  // Phase-independent and cached per field and layer appearance; the glyph
+  // shader applies the layer phase from modeCompositionPhase.
+  const modalLayer =
+    modeRenderPlan?.surfacePass.owner === "modal"
+      ? modeRenderPlan.surfacePass.buffer.layer
+      : null;
+  const modalGlyphInput =
+    modeRenderPlan?.surfacePass.owner === "modal" && topologyModel
+      ? buildModeCompositionComplexGlyphInput({
+          field: modeRenderPlan.surfacePass.buffer.field,
+          identity: modeRenderPlan.surfacePass.buffer.identity,
+          layer: modeRenderPlan.surfacePass.buffer.layer,
+          topologyNodeCount,
+          topologyPositions: topologyModel.positions,
+          vectorScale,
+        })
+      : null;
+  const modalVectorsActive = Boolean(modalGlyphInput);
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
@@ -985,6 +993,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const materialFrontRef = useRef<MeshBasicMaterial>(null);
   const litMaterialRef = useRef<MeshLambertMaterial>(null);
   const litMaterialFrontRef = useRef<MeshLambertMaterial>(null);
+  const standardMaterialRef = useRef<MeshStandardMaterial>(null);
+  const standardMaterialFrontRef = useRef<MeshStandardMaterial>(null);
   const { hasScalarColors: hasUploadedVertexScalarColors } =
     resolveMeshPartVisibleScalarColorState({
     effectiveScalarColors,
@@ -1006,8 +1016,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const surfacePolicy = surfacePassPolicies.back;
   const surfacePolicyFront = surfacePassPolicies.front;
-  const litSurfaceMaterial =
-    !hasUploadedVertexScalarColors && materialProfile.uniformGeometry.lit;
   const scalarShaderBuffer = committedScalarColorState.buffer;
   // Stable "program shape" key: null when there is no buffer, otherwise one of 4 strings
   // (scalar/orientation × real/complex). Deliberately does NOT depend on scalarShaderBuffer's
@@ -1018,6 +1026,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const scalarShaderVariantKey = scalarShaderBuffer
     ? scalarSurfaceShaderVariantKey(scalarShaderBuffer)
     : null;
+  const fieldPresentationEnabled = Boolean(materialProfile.magneticSurface.presentation);
 
   const scalarShaderMaterials = useMemo(
     () =>
@@ -1036,6 +1045,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [
       committedScalarColorState.pipeline,
       fieldColorLayersEnabled,
+      fieldPresentationEnabled,
       meshQualityColors,
       modalSurfaceActive,
       scalarShaderVariantKey,
@@ -1044,6 +1054,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const scalarShaderMaterial = scalarShaderMaterials.back;
   const scalarShaderMaterialFront = scalarShaderMaterials.front;
+  const surfaceMaterialPlan = resolveMeshPartSurfaceMaterialPlan({
+    hasScalarShaderMaterial: Boolean(scalarShaderMaterial),
+    hasUploadedVertexScalarColors,
+    materialProfile,
+  });
 
   useLayoutEffect(() => {
     // Add normals only for an explicitly lit pass; keep the same geometry and
@@ -1055,9 +1070,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       Boolean(scalarShaderMaterial) &&
       materialProfile.magneticSurface.shadeStrength > 0;
     const uniformSurfaceNeedsNormals =
-      !hasUploadedVertexScalarColors &&
-      !scalarShaderMaterial &&
-      materialProfile.uniformGeometry.lit;
+      surfaceMaterialPlan.kind === "standard" ||
+      surfaceMaterialPlan.kind === "lambert";
     if (!shaderNeedsNormals && !uniformSurfaceNeedsNormals) {
       return;
     }
@@ -1065,11 +1079,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate();
   }, [
     geometry,
-    hasUploadedVertexScalarColors,
     invalidate,
     materialProfile.magneticSurface.shadeStrength,
-    materialProfile.uniformGeometry.lit,
     scalarShaderMaterial,
+    surfaceMaterialPlan.kind,
   ]);
 
   useEffect(
@@ -1090,8 +1103,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
-      Object.assign(scalarShaderMaterial, surfacePolicy);
+      applyScalarSurfaceMaterialPolicy(scalarShaderMaterial, surfacePolicy);
       scalarShaderMaterial.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
     }
@@ -1101,9 +1115,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         committedScalarColorState.buffer,
         surfaceOpacity,
         materialProfile.magneticSurface.shadeStrength,
+        materialProfile.magneticSurface.presentation,
       );
       if (surfacePolicyFront) {
-        Object.assign(scalarShaderMaterialFront, surfacePolicyFront);
+        applyScalarSurfaceMaterialPolicy(scalarShaderMaterialFront, surfacePolicyFront);
       }
       scalarShaderMaterialFront.toneMapped =
         materialProfile.magneticSurface.toneMapped ?? false;
@@ -1117,6 +1132,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate,
     materialProfile.magneticSurface.shadeStrength,
     materialProfile.magneticSurface.toneMapped,
+    materialProfile.magneticSurface.presentation,
     scalarShaderMaterial,
     scalarShaderMaterialFront,
     surfaceOpacity,
@@ -1137,6 +1153,12 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     if (litMaterialFrontRef.current) {
       litMaterialFrontRef.current.needsUpdate = true;
     }
+    if (standardMaterialRef.current) {
+      standardMaterialRef.current.needsUpdate = true;
+    }
+    if (standardMaterialFrontRef.current) {
+      standardMaterialFrontRef.current.needsUpdate = true;
+    }
   }, [hasUploadedVertexScalarColors]);
 
   const vectorLayerInput = resolveMeshPartVectorLayerInput({
@@ -1149,7 +1171,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     wireframeReady: Boolean(edgeGeometry),
     pointsReady: Boolean(pointGeometry),
     vectorsReady: viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      Boolean(modalVectorLayerInput?.segments ?? vectorLayerInput.segments),
+      Boolean(
+        modalGlyphInput ??
+          vectorLayerInput.complexGlyphs ??
+          vectorLayerInput.segments,
+      ),
     modalSurfaceActive,
     modalVectorsActive,
   });
@@ -1240,35 +1266,50 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {(modalSurfaceActive || renderPlan.surface.visible) && geometry ? (
         <>
           <mesh
+            castShadow={surfaceMaterialPlan.castShadow}
             geometry={geometry}
+            receiveShadow={surfaceMaterialPlan.receiveShadow}
             renderOrder={surfacePassPolicies.renderOrderBack}
             userData={MESH_PART_SURFACE_USER_DATA}
           >
             {scalarShaderMaterial ? (
               <primitive attach="material" object={scalarShaderMaterial} />
-            ) : litSurfaceMaterial ? (
+            ) : surfaceMaterialPlan.kind === "standard" ? (
+              <meshStandardMaterial
+                ref={standardMaterialRef}
+                color={meshColor}
+                metalness={surfaceMaterialPlan.metalness}
+                opacity={surfaceOpacity}
+                roughness={surfaceMaterialPlan.roughness}
+                toneMapped={surfaceMaterialPlan.toneMapped}
+                vertexColors={hasUploadedVertexScalarColors}
+                {...surfacePolicy}
+              />
+            ) : surfaceMaterialPlan.kind === "lambert" ? (
               <meshLambertMaterial
                 ref={litMaterialRef}
                 color={meshColor}
                 opacity={surfaceOpacity}
-                toneMapped={materialProfile.magneticSurface.toneMapped}
+                toneMapped={surfaceMaterialPlan.toneMapped}
                 vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
-            ) : (
+            ) : surfaceMaterialPlan.kind === "basic" ? (
               <meshBasicMaterial
                 ref={materialRef}
                 color={meshColor}
                 opacity={surfaceOpacity}
-                toneMapped={materialProfile.magneticSurface.toneMapped}
+                toneMapped={surfaceMaterialPlan.toneMapped}
                 vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
-            )}
+            ) : null}
           </mesh>
           {surfacePolicyFront ? (
             <mesh
+              castShadow={surfaceMaterialPlan.castShadow}
               geometry={geometry}
+              receiveShadow={surfaceMaterialPlan.receiveShadow}
               renderOrder={
                 surfacePassPolicies.renderOrderFront ??
                 RENDER_POLICIES.contextSurfaceFront.renderOrder
@@ -1277,40 +1318,53 @@ export const MeshPartLayer = memo(function MeshPartLayer({
             >
               {scalarShaderMaterialFront ? (
                 <primitive attach="material" object={scalarShaderMaterialFront} />
-              ) : litSurfaceMaterial ? (
+              ) : surfaceMaterialPlan.kind === "standard" ? (
+                <meshStandardMaterial
+                  ref={standardMaterialFrontRef}
+                  color={meshColor}
+                  metalness={surfaceMaterialPlan.metalness}
+                  opacity={surfaceOpacity}
+                  roughness={surfaceMaterialPlan.roughness}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
+                  vertexColors={hasUploadedVertexScalarColors}
+                  {...surfacePolicyFront}
+                />
+              ) : surfaceMaterialPlan.kind === "lambert" ? (
                 <meshLambertMaterial
                   ref={litMaterialFrontRef}
                   color={meshColor}
                   opacity={surfaceOpacity}
-                  toneMapped={materialProfile.magneticSurface.toneMapped}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
                   vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
-              ) : (
+              ) : surfaceMaterialPlan.kind === "basic" ? (
                 <meshBasicMaterial
                   ref={materialFrontRef}
                   color={meshColor}
                   opacity={surfaceOpacity}
-                  toneMapped={materialProfile.magneticSurface.toneMapped}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
                   vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
-              )}
+              ) : null}
             </mesh>
           ) : null}
         </>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
-        <lineSegments
+        <Viewport3DInteractionWireframe
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          surfaceIndices={partModel.edgeIndices}
+          tracker={tracker}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
             opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
-        </lineSegments>
+        </Viewport3DInteractionWireframe>
       ) : null}
       {renderPlan.bounds.visible ? (
         <BoundsBox
@@ -1334,34 +1388,53 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      (modalVectorsActive || renderPlan.vectors.visible) ? (
+      modalGlyphInput &&
+      modalLayer ? (
+        <ComplexVectorGlyphLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId={part.id}
+          colorMode="orientation"
+          fallbackColor={String(colors.field)}
+          fieldBufferId={modalGlyphInput.fieldBufferId}
+          glyphs={modalGlyphInput.glyphs}
+          opacity={modalLayer.appearance.opacity}
+          phase={
+            modeCompositionPhase ??
+            modalLayer.phase_rad + modalLayer.animation.phase_offset_rad
+          }
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible &&
+        vectorLayerInput.complexGlyphs ? (
+        <ComplexGlyphPassLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId={part.id}
+          fallbackColor={String(colors.field)}
+          fieldBufferId={requestedFieldBufferId}
+          opacity={renderPlan.vectors.opacity}
+          pass={vectorLayerInput.complexGlyphs}
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
+        renderPlan.vectors.visible ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
-          buildReference={
-            modalVectorLayerInput?.buildReference ?? vectorLayerInput.buildReference
-          }
+          buildReference={vectorLayerInput.buildReference}
           carrierId={part.id}
           colors={colors}
-          colorMode={
-            modalVectorsActive
-              ? "orientation"
-              : vectorColorModeFromSettings(renderSettings, vectorColorMode)
-          }
+          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           sessionIdentity={sessionIdentity}
-          opacity={
-            modalVectorsActive
-              ? modeRenderPlan?.surfacePass.owner === "modal"
-                ? modeRenderPlan.surfacePass.buffer.layer.appearance.opacity
-                : 1
-              : renderPlan.vectors.opacity
-          }
-          segments={modalVectorLayerInput?.segments ?? vectorLayerInput.segments}
-          glyphColorsOverride={modalVectorsActive ? undefined : vectorLayerInput.glyphColors}
-          colorScale={modalVectorsActive ? undefined : vectorLayerInput.colorScale}
-          fieldBufferId={
-            modalVectorLayerInput?.buildReference.fieldBufferId ?? requestedFieldBufferId
-          }
+          opacity={renderPlan.vectors.opacity}
+          segments={vectorLayerInput.segments}
+          glyphColorsOverride={vectorLayerInput.glyphColors}
+          colorScale={vectorLayerInput.colorScale}
+          fieldBufferId={requestedFieldBufferId}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />

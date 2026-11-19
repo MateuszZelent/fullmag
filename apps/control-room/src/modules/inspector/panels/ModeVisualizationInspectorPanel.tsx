@@ -11,7 +11,11 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
-import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import {
+  useAnalysisFieldOverlay,
+  useAnalysisFieldOverlayDisplayedPhase,
+  type AnalysisFieldOverlayController,
+} from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { Button } from "@/shared/ui/Button";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
@@ -106,7 +110,15 @@ interface ModeVisualizationPhaseControlProps {
     loop: boolean;
   }) => void;
   phaseRad: string;
+  /**
+   * Overlay whose running animation the slider follows. The live phase is
+   * read here, in this leaf, at a bounded rate so the owning Inspector panel
+   * does not re-render on animation frames.
+   */
+  livePhaseController?: AnalysisFieldOverlayController | null;
 }
+
+const LIVE_PHASE_READOUT_HZ = 10;
 
 export function ModeVisualizationPhaseControl({
   animate = false,
@@ -114,10 +126,17 @@ export function ModeVisualizationPhaseControl({
   animationLoop = true,
   animationRateHz = 1,
   disabled,
+  livePhaseController = null,
   onSetPhase,
   onAnimationChange,
-  phaseRad,
+  phaseRad: committedPhaseRad,
 }: ModeVisualizationPhaseControlProps) {
+  const followLivePhase = animate && livePhaseController !== null;
+  const livePhaseRad = useAnalysisFieldOverlayDisplayedPhase(
+    followLivePhase ? livePhaseController : null,
+    { maxHz: LIVE_PHASE_READOUT_HZ },
+  );
+  const phaseRad = followLivePhase ? livePhaseRad.toFixed(2) : committedPhaseRad;
   const [phaseDraft, setPhaseDraft] = useState(phaseRad);
   const [isPhaseEditing, setIsPhaseEditing] = useState(false);
   const committedPhaseValue =
@@ -138,6 +157,7 @@ export function ModeVisualizationPhaseControl({
           <div className="fm-mode-phase-control__value">
             <input
               aria-label="Mode visualization phase slider"
+              aria-valuetext={`${committedPhaseValue} rad`}
               className="fm-mode-phase-control__slider"
               disabled={disabled}
               max={PHASE_MAX_RAD}
@@ -504,6 +524,9 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
           animationLoop={activeTargetOverlay?.animation?.loop ?? true}
           animationRateHz={activeTargetOverlay?.animation?.animationRateHz ?? 1}
           disabled={!activeTargetOverlay || !modeFieldReady}
+          livePhaseController={
+            activeTargetOverlay ? kernel.analysisFieldOverlay : null
+          }
           onAnimationChange={(animation) => {
             kernel.analysisFieldOverlay.update({ animation });
           }}

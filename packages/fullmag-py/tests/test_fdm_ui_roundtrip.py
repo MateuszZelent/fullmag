@@ -15,6 +15,90 @@ from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_
 
 
 class FdmUiRoundTripTests(unittest.TestCase):
+    def test_scene_ui_round_trip_keeps_exchange_only_time_dependent_stt(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "exchange_only_stt.py"
+            source.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("exchange_only_stt")
+                    study.engine("fdm")
+                    study.device("gpu", precision="double")
+                    study.mode("extended")
+                    study.universe(mode="manual", size=(8e-9, 4e-9, 1e-9))
+                    study.cell(2e-9, 2e-9, 1e-9)
+                    film = study.geometry(fm.Box(size=(8e-9, 4e-9, 1e-9)), name="film")
+                    film.Ms = 5e5
+                    film.Aex = 15e-12
+                    film.alpha = 0.02
+                    film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+                    study.exchange()
+                    study.disable_demag()
+                    study.spin_torque(
+                        fm.SlonczewskiSTT(
+                            current_density=(0, 0, -2.6e10),
+                            id="stt",
+                            spin_polarization=(0, 1, 0),
+                            free_layer_thickness_m=1e-9,
+                            target=fm.RegionRef("film"),
+                            stack_normal=(0, 0, -1),
+                            time_expression=fm.TimeExpression(
+                                "heaviside(t-on) * sin(2*pi*f*(t-on))",
+                                constants={"f": 4e9, "on": 10e-12},
+                                event_times_s=(10e-12,),
+                            ),
+                        )
+                    )
+                    study.solver(integrator="rk45", dt=1e-12)
+                    study.stages.add_run(1e-9)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = load_problem_from_script(source, lightweight_assets=True)
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            self.assertFalse(scene["study"]["demag_enabled"])
+
+            # Apply the same SceneDocument override path used by Control Room.
+            scene["study"]["demag_enabled"] = False
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder_overrides_from_scene_document(scene),
+            )["rendered_source"]
+            self.assertIsInstance(rendered, str)
+            self.assertIn("study.disable_demag()", rendered)
+            self.assertIn("fm.TimeExpression(", rendered)
+
+            rewritten = root / "exchange_only_stt_rewritten.py"
+            rewritten.write_text(rendered, encoding="utf-8")
+            round_tripped = load_problem_from_script(
+                rewritten,
+                lightweight_assets=True,
+            )
+
+        problem_ir = round_tripped.problem.to_ir()
+        self.assertEqual(
+            [term["kind"] for term in problem_ir["energy_terms"]],
+            ["exchange"],
+        )
+        torque = next(
+            module
+            for module in problem_ir["spin_torque_modules"]
+            if module.get("kind") == "slonczewski"
+        )
+        self.assertEqual(
+            torque["time_expression"],
+            {
+                "source": "heaviside(t-on) * sin(2*pi*f*(t-on))",
+                "constants": {"f": 4e9, "on": 10e-12},
+                "event_times_s": [10e-12],
+            },
+        )
+
     def test_cell_size_authoring_rewrites_without_legacy_fdm_wrappers(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

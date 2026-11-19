@@ -131,6 +131,7 @@ fn expected_lane(
         ExplicitFixedFemGpuDouble => (Fem, Gpu, Double, TimestepPolicyKind::Fixed),
         ExplicitAdaptiveFdmCpuDouble => (Fdm, Cpu, Double, TimestepPolicyKind::Adaptive),
         ExplicitAdaptiveFdmCudaDouble => (Fdm, Cuda, Double, TimestepPolicyKind::Adaptive),
+        ExplicitAdaptiveFdmCudaSingle => (Fdm, Cuda, fullmag_ir::ExecutionPrecision::Single, TimestepPolicyKind::Adaptive),
         ExplicitAdaptiveFemCpuDouble => (Fem, Cpu, Double, TimestepPolicyKind::Adaptive),
         ExplicitAdaptiveFemGpuDouble => (Fem, Gpu, Double, TimestepPolicyKind::Adaptive),
     }
@@ -363,7 +364,7 @@ mod tests {
             .iter()
             .map(|entry| entry.key.qualification_id)
             .collect::<Vec<_>>();
-        assert_eq!(ids.len(), 9);
+        assert_eq!(ids.len(), 10);
         for expected in [
             LlgTimestepQualificationId::ExplicitFixedFdmCpuDouble,
             LlgTimestepQualificationId::ExplicitFixedFdmCudaDouble,
@@ -372,6 +373,7 @@ mod tests {
             LlgTimestepQualificationId::ExplicitFixedFemGpuDouble,
             LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
             LlgTimestepQualificationId::ExplicitAdaptiveFdmCudaDouble,
+            LlgTimestepQualificationId::ExplicitAdaptiveFdmCudaSingle,
             LlgTimestepQualificationId::ExplicitAdaptiveFemCpuDouble,
             LlgTimestepQualificationId::ExplicitAdaptiveFemGpuDouble,
         ] {

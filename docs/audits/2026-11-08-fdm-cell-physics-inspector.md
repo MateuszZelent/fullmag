@@ -1,0 +1,18 @@
+# Inspektor fizyki wybranej komórki FDM
+
+Kliknięcie fizycznej komórki regularnej siatki FDM otwiera zakładkę **Physics**. Pokazuje ona opublikowane współczynniki materiałowe (w pierwszej kolejności Ms, Aex i α), składowe mx/my/mz, normę m oraz lokalne energie. Zakładka **Grid** zachowuje dotychczasowy podgląd tożsamości komórki i siatki.
+
+Widok używa typografii i tokenów Catppuccin istniejącego inspektora. Parametry mają zwięzłe etykiety i wyrównane wartości. Magnetyzacja tworzy jeden poziomy odczyt. Tabela energii ma wspólne nagłówki jednostek J/m³ oraz J i wyróżnia sumę. Identyfikator runu, środek, objętość i krok/czas źródłowych pól znajdują się w zwijanych szczegółach. Usunięto ogólne kafelki `unknown`, które dublowały ramkę komórki i nie opisywały jej fizyki. Pełną precyzję liczby można sprawdzić w jej dymku; widoczny element `data` zachowuje wartość liczbową.
+
+Odczyt korzysta z istniejącego typowanego katalogu pól oraz zasobów `planar-default/meta` i `planar-default/probe`; nie dodaje endpointu ani mutacji modelu. Pobiera punkt w dokładnym środku komórki i sprawdza zwrócony ordinal, współrzędne, generację, rewizję siatki oraz źródło. Każda para meta/sonda ma przypięte rewizje. Świeży status przed i po transakcji chroni przed publikacją wartości z różnych zmian runu lub pól. Tożsamość zasobu uwzględnia komórkę, sesję i kanoniczne zależności pól rozpoznawane przez istniejący most realtime. Odczyty są sekwencyjne, ograniczone do 32 wielkości i używają najmniejszego obsługiwanego rastra metadanych 16×16; przeglądarka otrzymuje pojedyncze próbki, nie całe pola.
+
+Energia komórki to opublikowana gęstość energii pomnożona przez jej objętość. Zachowane są znak i rzeczywiste zero. Brak danych, niezgodna jednostka, niegotowe pole, nieaktualne zaznaczenie i obca geometria nie stają się zerami. Widok czeka na rozstrzygnięcie typu siatki; wspólna siatka FFT multilayer nie jest traktowana jako fizyczna komórka. Jest to podgląd aktualnego opublikowanego stanu runu, a nie edytor materiału ani przeglądarka wszystkich historycznych klatek.
+
+## Weryfikacja
+
+- Pełny zestaw Control Room: **9619 testów**, 923 pliki — PASS, w zarządzanym kontenerze frontend z `FULLMAG_TEST_SOURCE_ROOT=/opt/fullmag/source`.
+- Testy dotyczące próbek, widoku, ramki i kontraktu CSS: **51/51 PASS**; TypeScript, ESLint bez ostrzeżeń, architecture hygiene i API hygiene — PASS. Końcowe dopracowanie odstępów ponownie sprawdzono testami CSS i widoku.
+- Rzeczywista przeglądarka: kliknięcie komórki 5, zgodność materiału i magnetyzacji z publicznymi sondami, zgodność energii komórki z gęstością i objętością, obsługa zakładek klawiaturą, oba motywy, brak poziomego przepełnienia, poprawny WebGL2. Dokładny receipt oraz zrzuty zapisano obok raportu.
+- Odbiór wykonano na zachowanej sesji FDM CPU/double i zakończonym runie `run-live-e851e2eabec7835c216c1b8ec7423872b77c8c3b977de9982bb9b77b1cdae6d5`. Nie uruchamiano ponownie symulacji ani nie zmieniano materiału/siatki. Backend pozostaje istniejącą wersją `dc7eeb6ce8f4c1d35885be15568c75f2aec20d8d`; zmiana dotyczy frontendu korzystającego ze sprawdzonych zasobów tego API. Odbiór nie stanowi kwalifikacji pozostałych realizacji ani walidacji zbieżności fizycznej.
+
+Po odbiorze dopracowano wyłącznie kolor tekstu znacznika stanu: wykorzystuje istniejące tokeny `success-text`, `warning-text` i `danger-text`, zapewniające kontrast AA także w jasnym motywie. Receipt przeglądarkowy zachowuje dokładne wcześniejsze hashe; trzy zmienione deklaracje i nowe hashe są jawnie zapisane w `post_browser_changes`. Układ i logika nie uległy zmianie. Obliczony kontrast tekstu stanu wynosi 5,41–5,46:1 w Latte i 5,75–9,89:1 w Mocha; ponownie przeszło 11/11 testów kontraktu CSS.

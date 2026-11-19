@@ -14,6 +14,123 @@ import stat
 import backend_shared_store as shared
 
 
+QUARANTINE_SCHEMA = "fullmag.shared-candidate-quarantine.v1"
+QUARANTINE_NAMESPACE = "shared-identity-v1"
+
+
+def _quarantine_inventory(b, candidate):
+    files, directories = b._stage_tree_inventory(candidate)
+    if len(files) + len(directories) > b.MAX_FAILED_CANDIDATE_ENTRIES:
+        b._fail("shared candidate quarantine inventory exceeds its bound")
+    return {"directories": sorted(directories), "files": [
+             {"path": relative, "sha256": b._sha256_file(candidate / relative, "quarantine payload")[0],
+             "size": (candidate / relative).stat().st_size,
+             "mode": stat.S_IMODE((candidate / relative).stat().st_mode)}
+            for relative in sorted(files)]}
+
+
+def _immutable_receipt(b, path, document):
+    data = b._canonical(document)
+    if len(data) > 8 * 1024**2:
+        b._fail("shared candidate quarantine receipt exceeds its bound")
+    if path.exists() or path.is_symlink():
+        existing, metadata = b._read_regular(path, "shared candidate quarantine receipt", 8 * 1024**2)
+        if metadata.st_nlink != 1 or existing != data:
+            b._fail("shared candidate quarantine receipt collision")
+        return
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o440)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    b._fsync_directory(path.parent, "shared candidate quarantine receipt")
+
+
+def _finish_quarantine(b, store, output, control_root, build_root, proof):
+    name = proof.get("name")
+    if (proof.get("schema") != QUARANTINE_SCHEMA or proof.get("state") != "prepared"
+            or not isinstance(name, str) or not b.PACKAGE_CANDIDATE_NAME_RE.fullmatch(name)
+            or proof.get("output") != str(output) or proof.get("build_root") != str(build_root)
+            or proof.get("group") != b.os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", "")):
+        b._fail("shared candidate quarantine owner differs")
+    candidate = control_root / b.PACKAGE_CANDIDATES_DIRNAME / name
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
+    target = archive / name
+    if candidate.exists() and (target.exists() or target.is_symlink()):
+        b._fail("shared candidate quarantine destination collision")
+    payload = candidate if candidate.exists() else target
+    store.private_alias(output, payload, proof["group"])
+    if _quarantine_inventory(b, payload) != proof.get("inventory"):
+        b._fail("shared candidate quarantine payload identity differs")
+    marker_raw, _ = b._read_regular(payload / b.PACKAGE_CANDIDATE_MARKER, "quarantine marker", 16 * 1024)
+    receipt_raw, _ = b._read_regular(payload / "backend-build-receipt.json", "quarantine package receipt", 8 * 1024**2)
+    if (b._sha256_bytes(marker_raw) != proof.get("marker_sha256")
+            or b._sha256_bytes(receipt_raw) != proof.get("receipt_sha256")
+            or b._sha256_bytes(b._canonical(proof["inventory"])) != proof.get("inventory_sha256")):
+        b._fail("shared candidate quarantine metadata identity differs")
+    if payload == candidate:
+        b._validate_candidate_marker(candidate, output, build_root, state="ready")
+        os.rename(candidate, target)
+        b._fsync_directory(candidate.parent, "shared candidate quarantine source")
+        b._fsync_directory(archive, "shared candidate quarantine destination")
+    _immutable_receipt(b, archive / (name + ".completed.json"), {
+        "schema": QUARANTINE_SCHEMA, "state": "completed", "name": name,
+        "prepared_sha256": b._sha256_bytes(b._canonical(proof)), "target": str(target),
+    })
+    b._log_phase("shared-package", "candidate-quarantined", candidate=name)
+
+
+def _resume_quarantines(b, store, output, control_root, build_root):
+    journal = control_root / b.PACKAGE_ROTATION_JOURNAL_NAME
+    if journal.exists() or journal.is_symlink():
+        b._fail("shared candidate quarantine requires recovered package rotation")
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
+    if not archive.exists() and not archive.is_symlink():
+        return
+    b._ensure_directory(archive, "shared candidate quarantine")
+    entries = list(archive.iterdir())
+    if len(entries) > 3 * b.MAX_PACKAGE_CANDIDATES:
+        b._fail("shared candidate quarantine exceeds its bounded entry limit")
+    prepared = [p for p in entries if p.name.endswith(".prepared.json")]
+    allowed = {name for p in prepared for name in (
+        p.name, p.name.removesuffix(".prepared.json"),
+        p.name.removesuffix(".prepared.json") + ".completed.json")}
+    if any(p.name not in allowed for p in entries):
+        b._fail("shared candidate quarantine contains an unknown entry")
+    for path in prepared:
+        proof, _ = b._read_json(path, "shared candidate quarantine intent", 8 * 1024**2)
+        if path.name != str(proof.get("name")) + ".prepared.json":
+            b._fail("shared candidate quarantine intent filename differs")
+        _immutable_receipt(b, path, proof)
+        _finish_quarantine(b, store, output, control_root, build_root, proof)
+
+
+def _quarantine_mismatch(b, store, output, control_root, build_root, candidate, marker, receipt, raw):
+    records = receipt["artifacts"]
+    if marker["artifact_inventory_sha256"] != b._sha256_bytes(b._canonical(records)):
+        b._fail("ready shared candidate marker inventory differs")
+    b._assert_direct_candidate_inventory(candidate, records, include_receipt=True)
+    group = b.os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", "")
+    store.private_alias(output, candidate, group)
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
+    b._ensure_directory(archive, "shared candidate quarantine")
+    if len(list(archive.iterdir())) + 3 > 3 * b.MAX_PACKAGE_CANDIDATES:
+        b._fail("shared candidate quarantine exceeds its bounded entry limit")
+    if any((archive / (candidate.name + suffix)).exists() or
+           (archive / (candidate.name + suffix)).is_symlink()
+           for suffix in ("", ".prepared.json", ".completed.json")):
+        b._fail("shared candidate quarantine destination collision")
+    marker_raw, _ = b._read_regular(candidate / b.PACKAGE_CANDIDATE_MARKER, "quarantine marker", 16 * 1024)
+    inventory = _quarantine_inventory(b, candidate)
+    proof = {"schema": QUARANTINE_SCHEMA, "state": "prepared", "name": candidate.name,
+        "output": str(output), "build_root": str(build_root), "group": group,
+        "reason": "shared-input-receipt-mismatch", "marker_sha256": b._sha256_bytes(marker_raw),
+        "receipt_sha256": b._sha256_bytes(raw), "inventory": inventory,
+        "inventory_sha256": b._sha256_bytes(b._canonical(inventory))}
+    _immutable_receipt(b, archive / (candidate.name + ".prepared.json"), proof)
+    _finish_quarantine(b, store, output, control_root, build_root, proof)
+
+
 def _write_diagnostics(b, archive, data):
     target = archive / "shared-candidate-recovery.log"
     if target.exists() or target.is_symlink():
@@ -40,6 +157,10 @@ def recover_ready(b, output, control_root, build_root):
     if configured != str(shared.ROOT):
         b._fail("shared candidate recovery requires the managed store")
     store = shared.Store(Path(configured))
+    try:
+        _resume_quarantines(b, store, output, control_root, build_root)
+    except shared.StoreError as error:
+        b._fail(str(error))
     for candidate in b._candidate_retirement_entries(control_root):
         # A committed rotation may leave an empty or marker-only directory.
         # The existing current-package proof owns that recovery path.
@@ -65,7 +186,11 @@ def recover_ready(b, output, control_root, build_root):
                 or inputs.get("runtime_source_digest") != source.get("runtime_source_digest")
                 or not isinstance(inputs.get("build"), dict)
                 or any(receipt.get("build", {}).get(key) != value for key, value in inputs["build"].items())):
-            b._fail("ready shared candidate receipt does not attest its cache inputs")
+            try:
+                _quarantine_mismatch(b, store, output, control_root, build_root, candidate, marker, receipt, raw)
+            except shared.StoreError as error:
+                b._fail(str(error))
+            continue
         records = receipt["artifacts"]
         if marker["artifact_inventory_sha256"] != b._sha256_bytes(b._canonical(records)):
             b._fail("ready shared candidate marker inventory differs")

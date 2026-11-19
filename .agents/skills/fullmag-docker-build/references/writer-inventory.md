@@ -6,6 +6,13 @@ sprawdzono natywnym Git dla Windows; WSL Git nie interpretuje jego Windowsowego
 wskaźnika `.git`. Numery linii odnoszą się do tego odczytu. To mapa do ponownej
 weryfikacji przy zmianie kodu, nie dowód uruchomienia wszystkich tras.
 
+**Status topologii:** dalsze sekcje są historycznym audytem implementacji.
+[ADR 0076](../../../../docs/adr/0076-single-private-volume-per-dev-group.md)
+zastępuje ich wcześniejsze zalecenia o wielu prywatnych volume’ach dla nowej
+polityki daily DEV. Starych receipts i szczegółów audytu nie usuwaj. Implementacja
+jednego `BuildControl.volume` oraz runtime pozostają **NOT VERIFIED** do czasu
+ponownego audytu źródeł, Compose i mountów.
+
 ## Doprecyzowanie 20.10.2026 — idempotentny start i jawne wyniki skryptu
 
 Task `docker-dev-up-20261020` dodaje orkiestrator `docker_dev_up.ensure_up`.
@@ -122,7 +129,7 @@ volumes, obrazów ani BuildKit cache i nie ustala quota. Wolumeny `external`
 przeżywają odtworzenie/usunięcie kontenera. Nie używaj `compose down -v` jako
 zamiennika bezpiecznego cleanupu. Kontrolowana retencja grupy to osobny zakres;
 bez niej nie twierdź, że całe zużycie dysku jest ograniczone. Aktywny Docker
-Desktop cold build/start, inspect, incremental cache-hit, HMR, run `.py` i GC
+Desktop cold build/start, inspect, package cache-hit, HMR, run `.py` i GC
 pozostają `NOT VERIFIED`.
 
 ### Generowanie źródeł API — delta 19.10.2026

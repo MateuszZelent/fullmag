@@ -1,0 +1,345 @@
+{
+  "document": {
+    "path": "docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_mapped_not_production_qualified",
+      "reason": "Explicit LLG and adaptive sources/tests are mapped; the qualification registry remains unvalidated, and the stiff tangent-plane lane is planned."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_mapped_not_production_qualified",
+      "reason": "Explicit LLG and adaptive sources/tests are mapped; the qualification registry remains unvalidated, and the stiff tangent-plane lane is planned."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "covered_by_related_source_map_not_qualified",
+      "reason": "FDM integrator implementation mapping is maintained in note 0480; this note does not assert production qualification."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "covered_by_related_source_map_not_qualified",
+      "reason": "FDM integrator implementation mapping is maintained in note 0480; this note does not assert production qualification."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-canonical-llg-rhs",
+      "symbols": ["m", "gamma-0", "alpha", "H-effective", "tau-nc"],
+      "sources": ["fem-cpu-rhs", "fem-gpu-rhs"]
+    },
+    {
+      "id": "eq-effective-field-variational",
+      "symbols": ["H-effective", "mu-0", "Ms", "E", "m"],
+      "sources": ["fem-cpu-effective-field", "fem-gpu-effective-field"]
+    },
+    {
+      "id": "eq-autonomous-energy-dissipation",
+      "symbols": ["alpha", "gamma-0", "mu-0", "Ms", "H-effective", "E", "dV"],
+      "sources": ["dissipation-requirement"],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-adaptive-timestep-bounds",
+      "symbols": ["dt-min", "dt-initial", "dt-max"],
+      "sources": ["adaptive-ir", "adaptive-validation", "python-policy-test"]
+    },
+    {
+      "id": "eq-maximum-vector-error",
+      "symbols": ["eta-i", "m-i-hi", "m-i-lo", "max-err", "eta"],
+      "sources": ["adaptive-norm"]
+    },
+    {
+      "id": "eq-advanced-vector-error",
+      "symbols": ["eta-i", "e-i", "m-i-n", "m-i-hi", "atol", "rtol"],
+      "sources": ["adaptive-norm"]
+    },
+    {
+      "id": "eq-adaptive-controller-startup",
+      "symbols": ["r", "s", "eta-n", "q"],
+      "sources": ["adaptive-decision"]
+    },
+    {
+      "id": "eq-adaptive-controller-pi",
+      "symbols": ["r", "s", "eta-n", "eta-previous", "q"],
+      "sources": ["adaptive-decision"]
+    },
+    {
+      "id": "eq-tangent-plane-weak-form",
+      "symbols": [],
+      "sources": ["tangent-plane-requirement"],
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "eq-tangent-plane-retraction",
+      "symbols": [],
+      "sources": ["tangent-plane-requirement"],
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "m",
+      "meaning": "reduced magnetization",
+      "si_unit": "1"
+    },
+    {
+      "id": "gamma-0",
+      "latex": "gamma_0",
+      "meaning": "`mu_0 |gamma|`",
+      "si_unit": "m/(A s)"
+    },
+    {
+      "id": "alpha",
+      "latex": "alpha",
+      "meaning": "Gilbert damping",
+      "si_unit": "1"
+    },
+    {
+      "id": "H-effective",
+      "latex": "H_eff",
+      "meaning": "effective field",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "tau-nc",
+      "latex": "\\tau_\\mathrm{nc}",
+      "meaning": "explicitly enabled nonconservative contribution to $\\partial m/\\partial t$",
+      "si_unit": "1/s"
+    },
+    {
+      "id": "mu-0",
+      "latex": "\\mu_0",
+      "meaning": "vacuum permeability",
+      "si_unit": "N A^-2"
+    },
+    {
+      "id": "Ms",
+      "latex": "Ms",
+      "meaning": "saturation magnetization",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "modeled magnetic energy",
+      "si_unit": "J"
+    },
+    {
+      "id": "dV",
+      "latex": "dV",
+      "meaning": "volume integration element",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "dt-min",
+      "latex": "dt_min",
+      "meaning": "physical time or timestep",
+      "si_unit": "s"
+    },
+    {
+      "id": "dt-initial",
+      "latex": "dt_initial",
+      "meaning": "physical time or timestep",
+      "si_unit": "s"
+    },
+    {
+      "id": "dt-max",
+      "latex": "dt_max",
+      "meaning": "physical time or timestep",
+      "si_unit": "s"
+    },
+    {
+      "id": "max-err",
+      "latex": "max_err",
+      "meaning": "maximum node/cell embedded vector error",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta",
+      "latex": "eta",
+      "meaning": "normalized error acceptance metric",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta-i",
+      "latex": "\\eta_i",
+      "meaning": "normalized embedded error at degree of freedom $i$",
+      "si_unit": "1"
+    },
+    {
+      "id": "m-i-hi",
+      "latex": "m_i^{hi}",
+      "meaning": "high-order embedded magnetization state",
+      "si_unit": "1"
+    },
+    {
+      "id": "m-i-lo",
+      "latex": "m_i^{lo}",
+      "meaning": "low-order embedded magnetization state",
+      "si_unit": "1"
+    },
+    {
+      "id": "e-i",
+      "latex": "e_i",
+      "meaning": "embedded vector error at active degree of freedom $i$",
+      "si_unit": "1"
+    },
+    {
+      "id": "m-i-n",
+      "latex": "m_i^n",
+      "meaning": "accepted magnetization at active degree of freedom $i$",
+      "si_unit": "1"
+    },
+    {
+      "id": "atol",
+      "latex": "atol",
+      "meaning": "advanced absolute/relative error tolerances",
+      "si_unit": "1"
+    },
+    {
+      "id": "rtol",
+      "latex": "rtol",
+      "meaning": "advanced absolute/relative error tolerances",
+      "si_unit": "1"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "proposed timestep ratio",
+      "si_unit": "1"
+    },
+    {
+      "id": "s",
+      "latex": "s",
+      "meaning": "dimensionless controller safety factor",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta-n",
+      "latex": "\\eta_n",
+      "meaning": "current normalized error metric",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta-previous",
+      "latex": "\\eta_{n-1}",
+      "meaning": "previous normalized error metric",
+      "si_unit": "1"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "embedded estimator order",
+      "si_unit": "1"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  },
+  "sources": [
+    {
+      "id": "fem-cpu-rhs",
+      "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp",
+      "symbol": "evaluate_rk_stage_rhs",
+      "responsibility": "Compose the FEM CPU effective-field LLG term, enabled direct torques, and stage-local RHS."
+    },
+    {
+      "id": "fem-gpu-rhs",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu",
+      "symbol": "gpu_rk_compute_rhs_for_magnetization",
+      "responsibility": "Compose the FEM GPU effective-field LLG term, enabled direct torques, and stage-local RHS."
+    },
+    {
+      "id": "fem-cpu-effective-field",
+      "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp",
+      "symbol": "compute_effective_fields_for_magnetization",
+      "responsibility": "Assemble the FEM CPU effective field from the enabled modeled interactions."
+    },
+    {
+      "id": "fem-gpu-effective-field",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu",
+      "symbol": "gpu_rk_compute_effective_field_for_magnetization",
+      "responsibility": "Assemble the FEM GPU effective field for an RK magnetization state."
+    },
+    {
+      "id": "adaptive-norm",
+      "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp",
+      "symbol": "compute_adaptive_error_norm",
+      "responsibility": "Compute the maximum active-node scaled embedded vector error using the resolved tolerances."
+    },
+    {
+      "id": "adaptive-decision",
+      "path": "native/include/fullmag_adaptive_step_decision.hpp",
+      "symbol": "decide",
+      "responsibility": "Resolve the backend-neutral order-aware adaptive accept/retry decision and next timestep."
+    },
+    {
+      "id": "adaptive-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "AdaptiveTimeStepIR",
+      "responsibility": "Represent requested adaptive tolerance and timestep policy in ProblemIR."
+    },
+    {
+      "id": "adaptive-validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_adaptive_timestep",
+      "responsibility": "Validate adaptive bounds, tolerances, integrator choice, and execution requirements."
+    },
+    {
+      "id": "python-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Expose study-level Python solver authoring and lower requested dynamics into ProblemIR."
+    },
+    {
+      "id": "python-policy-test",
+      "path": "packages/fullmag-py/tests/test_llg_solver_contract.py",
+      "symbol": "test_adaptive_policy_preserves_omitted_initial",
+      "responsibility": "Check omitted requested initial timestep intent survives Python-to-IR lowering."
+    },
+    {
+      "id": "dissipation-requirement",
+      "path": "docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md",
+      "symbol": "DOC-ANCHOR:planned-dissipation-invariant",
+      "responsibility": "State the autonomous dissipation qualification requirement without claiming it is production qualification evidence.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "tangent-plane-requirement",
+      "path": "docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md",
+      "symbol": "DOC-ANCHOR:planned-tangent-plane-weak-form",
+      "responsibility": "Own the future tangent-plane formulation and retraction requirements; this is not an implementation source.",
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "tests": [
+    {
+      "path": "backends/fem/tests/llg_rhs_contract.cpp",
+      "symbol": "llg_rhs_uses_llg_gilbert_form_and_nodewise_damping",
+      "scope": "FEM native LLG RHS convention and damping."
+    },
+    {
+      "path": "backends/fem/tests/adaptive_dt_contract.cpp",
+      "symbol": "adaptive_error_norm_uses_nodewise_vector_l2_scale",
+      "scope": "Nodewise normalized embedded-error calculation."
+    },
+    {
+      "path": "backends/fem/tests/adaptive_dt_contract.cpp",
+      "symbol": "shared_golden_vectors_match_cpu_and_gpu_host_adapters",
+      "scope": "Backend-neutral adaptive controller golden vectors across CPU and GPU host adapters."
+    },
+    {
+      "path": "packages/fullmag-py/tests/test_llg_solver_contract.py",
+      "symbol": "test_adaptive_policy_preserves_omitted_initial",
+      "scope": "Lossless preservation of omitted adaptive initial timestep intent."
+    }
+  ]
+}

@@ -196,13 +196,15 @@ describe("mounted simulation preparation UI", () => {
       (element) => element.getAttribute("data-slot-id") === "viewport-main",
       "initial workspace viewport",
     );
-    const status = findElement(
+    // Reading the session is not preparation: no window until the backend
+    // reports work or a failure.
+    const status = findElements(
       container,
       (element) => hasClass(element, "fm-simulation-startup"),
-      "initial preparation status",
     );
     expect(container.textContent).toContain("Viewport module");
-    expect(status.getAttribute("data-state")).toBe("connecting");
+    expect(status).toEqual([]);
+    expect(container.textContent).not.toContain("Preparing simulation");
     expect(workspace.hasAttribute("inert")).toBe(false);
     expect(workspace.hasAttribute("aria-hidden")).toBe(false);
 

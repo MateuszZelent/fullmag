@@ -87,7 +87,13 @@
 .fm-start-pill--ready .fm-start-pill__dot { background: var(--fm-project-ready); }
 .fm-start-pill--running .fm-start-pill__dot {
   background: var(--fm-project-running);
-  animation: fm-pulse 1600ms ease-in-out infinite;
+}
+
+/* Persistent scale pulse: opt-in only. */
+@media (prefers-reduced-motion: no-preference) {
+  .fm-start-pill--running .fm-start-pill__dot {
+    animation: fm-pulse 1600ms ease-in-out infinite;
+  }
 }
 .fm-start-pill--failed .fm-start-pill__dot { background: var(--fm-project-failed); }
 .fm-start-pill--draft .fm-start-pill__dot { background: var(--fm-project-draft); }
@@ -870,6 +876,13 @@
   border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
   animation: fm-pulse var(--fm-start-skeleton-period) ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Loading placeholder keeps an opacity-only pulse, without scaling rows. */
+  .fm-start-skeleton__row {
+    animation-name: fm-reduced-busy-pulse;
+  }
 }
 
 /* ── Inspector: project details ───────────────────────────────────────── */
@@ -1822,6 +1835,7 @@
 
 .fm-start-locations li {
   display: flex;
+  min-inline-size: 0;
   justify-content: space-between;
   gap: var(--fm-space-3);
 }
@@ -2682,11 +2696,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-start *,
-  .fm-start *::before,
-  .fm-start *::after {
-    animation: none !important;
-    transition: none !important;
+  /* Tile hover lift/press snaps; colour and shadow transitions remain. */
+  .fm-start-tile {
+    transition-property: border-color, background-color, box-shadow;
   }
 }
 

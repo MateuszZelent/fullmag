@@ -10,8 +10,12 @@ function Slider({
   "aria-labelledby": ariaLabelledBy,
   className,
   ref,
+  valueText,
   ...props
-}: ComponentPropsWithRef<typeof SliderPrimitive.Root>) {
+}: ComponentPropsWithRef<typeof SliderPrimitive.Root> & {
+  /** Formats a thumb value (with its unit) for aria-valuetext. */
+  valueText?: (value: number) => string;
+}) {
   return (
     <SliderPrimitive.Root
       ref={ref}
@@ -21,10 +25,11 @@ function Slider({
       <SliderPrimitive.Track className="fm-slider__track">
         <SliderPrimitive.Range className="fm-slider__range" />
       </SliderPrimitive.Track>
-      {(props.defaultValue ?? props.value ?? [0]).map((_, i) => (
+      {(props.value ?? props.defaultValue ?? [0]).map((thumbValue, i) => (
         <SliderPrimitive.Thumb
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
+          aria-valuetext={valueText?.(thumbValue)}
           className="fm-slider__thumb"
           key={i}
         />

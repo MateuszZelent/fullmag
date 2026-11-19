@@ -4359,6 +4359,73 @@ mod tests {
     }
 
     #[test]
+    fn slonczewski_time_expression_rejects_coupled_spin_transport() {
+        let mut problem = problem(ExecutionDevice::Cpu);
+        problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        let StudyIR::TimeEvolution {
+            dynamics: DynamicsIR::Llg { integrator, .. },
+            ..
+        } = &mut problem.study
+        else {
+            panic!("fixture uses time evolution");
+        };
+        *integrator = "rk45".into();
+        let CurrentModuleIR::CurrentTransport {
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!("fixture uses a complete charge transport");
+        };
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        problem.spin_transport_modules[0].requested_execution.execution_mode =
+            ExecutionMode::Extended;
+        // This test is about the explicit J(t) + transport incompatibility;
+        // remove magnetic spin sinks so the Slonczewski module does not also
+        // need a DriftDiffusionSpinTorque consumer to satisfy an unrelated
+        // transport invariant.
+        problem.spin_transport_modules[0].materials[0].material.lambda_j_m =
+            ReactionLengthIR::Disabled(DisabledReactionIR::Disabled);
+        crate::plan(&problem)
+            .expect("the complete coupled transport fixture is valid without a J(t) torque");
+
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".into()),
+            id: Some("cpp-time-drive".into()),
+            target: Some(RegionRefIR {
+                object_id: "strip".into(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v2".into(),
+            current_density: Some([0.0, 0.0, 1.0e10]),
+            current_source: None,
+            degree: 0.3,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.0e-9),
+            fixed_layer_position: None,
+            realization: Some(SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".into(),
+            }),
+            time_expression: Some(TimeExpressionIR {
+                source: "1".into(),
+                constants: Default::default(),
+                event_times_s: Vec::new(),
+            }),
+        }];
+
+        let error = crate::plan(&problem)
+            .expect_err("time-dependent Slonczewski torque cannot share the coupled transport lane");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("time_expression") && reason.contains("coupled spin/charge transport")
+        }), "unexpected planner diagnostics: {:?}", error.reasons);
+    }
+
+    #[test]
     fn adaptive_cuda_fdm_spin_transport_fails_in_planner_before_runtime() {
         let mut problem = problem(ExecutionDevice::Gpu);
         let CurrentModuleIR::CurrentTransport {

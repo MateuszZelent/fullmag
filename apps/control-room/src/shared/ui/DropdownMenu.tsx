@@ -4,9 +4,23 @@ import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronRight, Circle } from "lucide-react";
 import {
   type ComponentPropsWithRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useId,
 } from "react";
 
 import { cn } from "@/shared/utils/className";
+
+/** Keep menus clear of viewport edges when Radix flips/shifts them. */
+const MENU_COLLISION_PADDING = 8;
+
+/**
+ * Embedded form controls own their keys: without this, the Radix menu
+ * typeahead and arrow navigation steal characters and arrows from the input.
+ * Escape and Tab still reach the menu so it can close / release focus.
+ */
+function keepKeysInControl(event: ReactKeyboardEvent) {
+  if (event.key !== "Escape" && event.key !== "Tab") event.stopPropagation();
+}
 
 const DropdownMenu = DropdownMenuPrimitive.Root;
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -44,12 +58,14 @@ DropdownMenuSubTrigger.displayName =
 
 function DropdownMenuSubContent({
   className,
+  collisionPadding = MENU_COLLISION_PADDING,
   ref,
   ...props
 }: ComponentPropsWithRef<typeof DropdownMenuPrimitive.SubContent>) {
   return (
     <DropdownMenuPrimitive.SubContent
       ref={ref}
+      collisionPadding={collisionPadding}
       className={cn("fm-dropdown-content", className)}
       {...props}
     />
@@ -60,6 +76,7 @@ DropdownMenuSubContent.displayName =
 
 function DropdownMenuContent({
   className,
+  collisionPadding = MENU_COLLISION_PADDING,
   ref,
   sideOffset = 4,
   ...props
@@ -68,6 +85,7 @@ function DropdownMenuContent({
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         ref={ref}
+        collisionPadding={collisionPadding}
         sideOffset={sideOffset}
         className={cn("fm-dropdown-content", className)}
         {...props}
@@ -208,12 +226,14 @@ function DropdownMenuSliderItem({
   onChange,
   className,
 }: DropdownMenuSliderItemProps) {
+  const labelId = useId();
   return (
     <div
       className={cn("fm-dropdown-slider", className)}
+      onKeyDown={keepKeysInControl}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <span className="fm-dropdown-slider__label">{label}</span>
+      <span className="fm-dropdown-slider__label" id={labelId}>{label}</span>
       <input
         type="range"
         min={min}
@@ -221,6 +241,7 @@ function DropdownMenuSliderItem({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        aria-labelledby={labelId}
         className="fm-dropdown-slider__input"
       />
       <span className="fm-dropdown-slider__value">{value}</span>
@@ -241,16 +262,19 @@ function DropdownMenuColorItem({
   onChange,
   className,
 }: DropdownMenuColorItemProps) {
+  const labelId = useId();
   return (
     <div
       className={cn("fm-dropdown-color", className)}
+      onKeyDown={keepKeysInControl}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <span className="fm-dropdown-color__label">{label}</span>
+      <span className="fm-dropdown-color__label" id={labelId}>{label}</span>
       <input
         type="color"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        aria-labelledby={labelId}
         className="fm-dropdown-color__input"
       />
     </div>
@@ -272,17 +296,20 @@ function DropdownMenuTextItem({
   placeholder,
   className,
 }: DropdownMenuTextItemProps) {
+  const labelId = useId();
   return (
     <div
       className={cn("fm-dropdown-text", className)}
+      onKeyDown={keepKeysInControl}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <span className="fm-dropdown-text__label">{label}</span>
+      <span className="fm-dropdown-text__label" id={labelId}>{label}</span>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        aria-labelledby={labelId}
         className="fm-dropdown-text__input"
       />
     </div>

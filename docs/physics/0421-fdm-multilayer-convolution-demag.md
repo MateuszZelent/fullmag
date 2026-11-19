@@ -15,7 +15,9 @@ $\boldsymbol\delta_{d,s}=\mathbf o_d-\mathbf o_s$ and
 $\mathbf H_d=-\sum_s\mathsf N_{d\leftarrow s}\mathbf M_s$. It must not depend
 and it must not depend on layer order or on the sign of the offset. The method
 uses separate native and scratch grids while preserving the magnetostatic
-physics. The qualified boundary mode is `open`; PBC is fail-closed.
+physics. The qualified boundary mode is `open`. The aligned FP64 CUDA PG-BB
+source path also supports [lateral periodic cells](0501-fdm-multilayer-projected-gradient-bb.md#lateral-periodic-cells-fp64-cuda-pg-bb),
+pending managed device qualification.
 
 (governing-equations)=
 ## Governing equations
@@ -387,7 +389,7 @@ counterpart is an intentional gap, not an alias under another name.
 | `2dmulticonvolution=1` | Treat every mesh as an independent 2D mesh, even with its own Z discretization. | `two_d_stack` is legal only when every layer has exactly one native Z cell; CPU has a descriptor catalog and workspace for this subset. | This is not full BORIS `=1`: BORIS reduces arbitrary Z discretization, while Fullmag rejects multi-cell Z fail-closed. |
 | `2dmulticonvolution=2` | Split every mesh into 2D layers along Z; every layer participates in layered convolution. | No implementation or Python/IR/UI fields. | This is a separate functional gap, not an alias for `two_d_stack`; layer decomposition, transfer, and tests must be defined. |
 | `ncommonstatus=false` | BORIS chooses `n_common` from the largest mesh dimensions (for 2D, `n_common.z=1`). | No status flag; omitting `common_cells*` invokes planner-auto policy based on the scratch union and native Z. | Semantics are not one-to-one; provenance must record auto-policy and the resolved grid, and docs must not call it BORIS's largest-mesh default. |
-| `ncommon=(nx,ny,nz)` | The user forces a common cell count; `nz=1` is part of BORIS 2D policy. | `common_cells=(nx,ny,nz)` or `common_cells_xy=(nx,ny)`; `nz=1` does not legally reduce a layer with multiple native Z cells. | Validate common scratch, origin, and insertion/crop boundaries; CUDA with transfer remains fail-closed. |
+| `ncommon=(nx,ny,nz)` | The user forces a common cell count; `nz=1` is part of BORIS 2D policy. | `common_cells=(nx,ny,nz)` or `common_cells_xy=(nx,ny)`; `nz=1` does not legally reduce a layer with multiple native Z cells. | Validate common scratch, origin, and insertion/crop boundaries; CUDA permits only the bounded centered same-cell insertion/crop lane described below; other transfers remain fail-closed. |
 | Common-cell pitch | BORIS computes `h_common = convolution_rect / n_common` and uses the maximum cell for transfer-dimension normalization. | Fullmag treats common-cell size, native-cell size, and transform layout as separate descriptor fields; transfer or rejection is explicit, and different geometry never silently changes the native grid. | A separate pitch/volume and tolerance proof is needed for each cell-size class; equal `n_common` alone does not prove equal cells. |
 | Different XY extents/centers | `Rect_collection` expands and aligns rectangles to the maximum common size while attempting to preserve common XY projections. | The planner materializes the XY union and `push_pull`; runtime validates insertion offset, lag-zero, and destination crop, and the catalog binds each kernel to its exact layout. | CPU has a fail-closed contract and layout tests, but full extent/center coverage and GPU require fresh runtime artifacts. |
 | Different Z thicknesses | In 2D the XY cell size is common but `h_z` may differ; the kernel has independent `h_src`, `h_dst`. | Checked `compute_shifted_kernel_pair` plus Appendix-A Newell; the active CPU runner handles unequal `h_z` in `two_d_stack`. | GL8, inverse FFT, and focused CPU tests pass; production-qualified runtime/CUDA is absent. |
@@ -396,7 +398,7 @@ counterpart is an intentional gap, not an alias under another name.
 | Kernel reuse and parity | BORIS has a kernel-module catalog, identical-pair reuse, and controlled ±Z symmetries. | CPU runtime has `kernel_catalog` (one tensor per unique `KernelReuseKey`) and `pair_bindings`; the key includes mode, oriented offset, both cell sizes, volumes, transform/padding/crop, representation, precision, scheme, and boundary. Telemetry reports hits/misses, pair and FFT counts, and cold/warm memory. | The catalog/workspace implementation is complete for the CPU descriptor path, but does not yet qualify every BORIS family (reduced/full, X/Y/XYZ shift) or CUDA. Any fingerprint change must invalidate reuse. |
 | Storage/symmetry | BORIS distinguishes real/reduced and full-complex storage; 2D zShift has specific real/imag components. | `TensorDemagKernel` stores six full complex components; the reduced-storage fast path is not runtime-qualified. | Reduction, sign reconstruction, and memory tests are needed separately for CPU/CUDA. |
 | CPU/GPU | BORIS has FFTW CPU and CUDA realizations of the same method. | CPU FP64 is the reference; CUDA has ABI guards and authoring/IR support, but no fresh managed parity. FP32 is also not qualified. | Do not claim executable GPU support without a device artifact, parity, and FFT telemetry. |
-| PBC images | `demag_pbc_images` and `Set_PBC` apply the same number of PBC images to all meshes in the supermesh and multilayer convolution. | Fullmag supports only `open` boundaries; the planner rejects PBC for multilayer and the UI has no silent fallback. | PBC is a complete functional gap: explicit Python/IR fields, kernel images, energy, provenance, and separate CPU/CUDA qualification are required. |
+| PBC images | `demag_pbc_images` and `Set_PBC` apply the same number of PBC images to all meshes in the supermesh and multilayer convolution. | The aligned FP64 CUDA PG-BB source path supports finite lateral images with open Z. | Managed device qualification is pending. Other multilayer lanes reject PBC. |
 | Empty cells and energy | BORIS tracks `non_empty_cells` and `total_nonempty_volume`, normalizes energy by non-empty volume, and supports masks and mesh exclusion. | Fullmag preserves an active mask on each native layer, computes volume-weighted energy, and publishes target-only Airbox `H_demag`; solver masks and visual full-domain fields are separate. | Maintain separate mask, volume, and energy evidence for each transfer class; source tests do not replace a fresh runtime artifact. |
 | Antiferromagnetic and atomistic meshes | BORIS tracks `antiferromagnetic_meshes_present`, separate modules, and forced transfer for atomistic meshes. | The public Fullmag multilayer contract covers named ferromagnetic FDM objects; it has no AFM, atomistic-mesh, or transfer-to-common-scratch semantics. | This is an explicit product-scope gap, not an allowed fallback. It would require a separate material model, mask, transfer, energy, and qualification. |
 | Reconfiguration and invalidation | BORIS `UpdateConfiguration_MConv_Demag` destroys and recreates modules after mesh, `n_common`, mode, or PBC changes. | Fullmag resolves a new plan per topology fingerprint; CPU runtime keeps fingerprint invalidation for the catalog/workspace and rejects incompatible geometry. | End-to-end session evidence for dynamic reconfiguration and post-replan parity is still missing; the fingerprint alone is not that evidence. |
@@ -575,6 +577,72 @@ end planning with an error.
 | FDM | GPU | implemented; executable contract partial; runtime-verified no; physically-validated no; production-qualified no | CUDA exists, but the current managed gate is `not_qualified`; the assisted heterogeneous operator must fail closed or be unified with the CPU descriptor path |
 | FEM | CPU | not-applicable | this note covers FDM FFT/Newell, not FEM magnetostatics |
 | FEM | GPU | not-applicable | this note covers FDM FFT/Newell, not FEM magnetostatics |
+
+### Centered same-cell CUDA insertion/crop (29 October 2026)
+
+The source adds a bounded FP64 native CUDA lane for different native extents
+on identical Cartesian cells. It requires `three_d`, open boundaries, a positive
+fixed-step Heun timestep, no frozen spins, one common convolution grid, and
+native grids contained in that grid. XY padding must be even in cells and the
+resolved physical origins must agree with centered integer offsets. Native Z
+starts at its layer's scratch Z origin; oriented pair kernels retain the actual
+`destination.native_origin.z - source.native_origin.z` displacement. Only
+coordinate arithmetic roundoff is tolerated by the planner.
+
+The additive C enum `FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2` distinguishes
+this operation from the existing `IDENTITY = 0` and generic `PUSH_PULL = 1`.
+The ABI v2 struct layouts and old enum semantics are unchanged. Python keeps
+its existing `FDMDemag`/per-object cell API; a qualifying planned `push_pull`
+descriptor is lowered to the new native enum. There is no public input for
+fake native padding or for replacing the physical body geometry.
+
+For this lane all cell volumes coincide. Each active native voxel maps to
+exactly one scratch voxel with coefficient one; all other scratch values are
+zero. The pull map is the transpose crop and returns zero at inactive native
+cells. This is the equal-volume specialization of
+{eq}`eq-multilayer-transfer-moment-density` and satisfies
+{eq}`eq-multilayer-transfer-adjoint` without covered-volume renormalization or
+interpolation. Per-layer Ms is applied once when forming physical M. Native
+field snapshots and the energy in {eq}`eq-multilayer-energy` use each body's
+physical native mask and volume.
+
+Analytic initial textures remain `preset_texture` descriptors through Python
+materialization for the FDM multilayer strategy. The Rust planner evaluates
+them after resolving each native crop, origin, object transform and mask.
+Pre-sampling on the padded study-wide asset grid would instead create an
+incorrect-length initial field. Explicit sampled arrays retain strict native
+length validation. Ordinary single-grid and FEM materialization are unchanged.
+
+For the bimeron-film/cylinder case at 2.5 nm cells, the common grid is
+240×240×20: film 240×240×4 with XY offset (0,0), cylinder 40×40×20
+with XY offset (100,100). The scratch grid is computational; it does not add
+magnetic material in the 5 nm gap or outside either body.
+
+Native CUDA multilayer also consumes `StageAutosave.fields.every_steps`
+through the accepted-step policy shared with FEM GPU. Fields are captured at
+step zero, the requested stride, and a forced terminal sample from existing
+`StateObservables`; OutputIR captures at that exact state/name are deduplicated.
+Due fields make an observation failure fatal rather than silently writing an
+empty field store. This fixes a measured run with two table rows and zero
+requested field samples. General every-seconds StageAutosave capture is outside
+this change. The mandatory `m_final.json` execution artifact remains separate
+from scheduled field output.
+
+The new lane uses the native pairwise CUDA/cuFFT refresh, including current,
+predictor, accepted-state and rollback refreshes. A complete refresh records
+one forward FFT, one pair product and one inverse FFT per oriented pair:
+L² forward, L² inverse, L² accumulations. Provenance labels it
+`cuda_native_multilayer_demag_v2_centered_pairwise`. It does not claim the
+D-07 batched L-forward/L-inverse algorithm. Host observation snapshots remain
+explicit in the transfer telemetry.
+
+Status at this source checkpoint: implemented contract and source fixtures;
+**managed runtime, numerical CPU/GPU parity, scientific and production
+qualification NOT VERIFIED**. The small unequal-grid probe is intended to compare
+same-state fields/energy and a single accepted Heun step before the physical
+relaxation. Arbitrary XY shifts, half-cell offsets, unequal cell pitches,
+partial overlaps, PBC, frozen spins and other integrators/precisions remain
+outside this new lane.
 
 ### Accepted-state observations and the CUDA Airbox observer (20 October 2026)
 
@@ -837,3 +905,9 @@ the qualification status.
 
 | Accepted CUDA Airbox observer | crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs | materialize_airbox_observation_snapshot_gpu | target-only host volume transfer plus native CUDA target-grid demag | FDM GPU | no new executable evidence | source-visible; runtime/parity NOT VERIFIED | uncommitted master snapshot, see mx3 continuation manifest |
 | Accepted original-context field binding | crates/fullmag-runner/src/accepted_materialization.rs | materialize_captured_observables | bind fields/energies to exact final M, clock, layout and lane | FDM CPU/GPU | no new executable evidence | source-visible; runtime NOT VERIFIED | uncommitted master snapshot, see mx3 continuation manifest |
+| cudaCenteredAdmission | crates/fullmag-plan/src/fdm.rs | fdm_multilayer_cuda_aligned_embedding_eligible | bounds exact centered same-cell geometry before allocation | FDM GPU FP64 | centered embedding planner fixtures | source only; runtime/numerical parity NOT VERIFIED | current source snapshot |
+| cudaCenteredPush | backends/fdm/gpu/cuda/runtime/context.cu | static void build_centered_aligned_push_map_host | one-hot centered insertion with empty scratch exterior | FDM GPU FP64 | native centered-map fixture | source only; compiled fixture not run | current source snapshot |
+| cudaCenteredPull | backends/fdm/gpu/cuda/runtime/context.cu | static void build_centered_aligned_pull_map_host | exact transpose crop onto masked native cells | FDM GPU FP64 | native centered-map fixture | source only; compiled fixture not run | current source snapshot |
+| cudaCenteredExecution | crates/fullmag-runner/src/fdm/gpu/cuda/native.rs | validate_multilayer_stage_telemetry_impl | distinguish actual pairwise L² FFT counts from D-07 batched counts | FDM GPU FP64 | centered pairwise telemetry fixture | source only; runtime NOT VERIFIED | current source snapshot |
+| fdmNativePresetInit | packages/fullmag-py/src/fullmag/model/problem.py | _materialize_preset_texture_initial_conditions | preserve multilayer analytic textures until final native crop is resolved | FDM authoring | test_fdm_multilayer_preset_materialization.py | 102 related Python tests passed; managed plan/device proof pending | current source snapshot |
+| cudaAcceptedStepFieldCapture | crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs | record_accepted_step_autosave_fields | capture requested native fields at accepted steps and terminal without extra GPU copies | FDM GPU FP64 | accepted-step policy/dedupe source fixtures | source implemented; managed field-count verification pending | current source snapshot |

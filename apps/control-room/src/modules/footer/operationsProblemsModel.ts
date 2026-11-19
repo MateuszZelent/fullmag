@@ -6,15 +6,6 @@ import type {
   SimulationPreparationResource,
 } from "@/kernel/api/apiTypes";
 
-export interface OperationProjectionRow {
-  detail: string;
-  id: string;
-  label: string;
-  revision: string;
-  source: "Command" | "Mesh" | "Preparation";
-  status: string;
-}
-
 export interface ProblemProjectionRow {
   code: string;
   detail: string;
@@ -23,11 +14,6 @@ export interface ProblemProjectionRow {
   revision: string;
   severity: "error" | "info" | "warning";
   source: "Command" | "Geometry" | "Mesh" | "Preparation";
-}
-
-export interface OperationsProjectionModel {
-  gaps: readonly string[];
-  rows: readonly OperationProjectionRow[];
 }
 
 export interface ProblemsProjectionModel {
@@ -44,16 +30,13 @@ interface ProjectionResourceState {
   status: string;
 }
 
-interface OperationsProjectionInput {
+interface ProblemsProjectionInput {
   commandQueue: CommandQueueStatusResource | null;
+  geometryDiagnostics: GeometryDiagnosticsResource | null;
+  latestSuccessfulMesh: MeshLastSuccessfulBuildResource | null;
   meshBuild: MeshActiveBuildResource | null;
   preparation: SimulationPreparationResource | null;
   resources?: readonly ProjectionResourceState[];
-}
-
-interface ProblemsProjectionInput extends OperationsProjectionInput {
-  geometryDiagnostics: GeometryDiagnosticsResource | null;
-  latestSuccessfulMesh: MeshLastSuccessfulBuildResource | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -86,80 +69,6 @@ function projectionGaps(
     }
     return [];
   });
-}
-
-function preparationDetail(
-  preparation: SimulationPreparationResource,
-): string {
-  const activeStage = preparation.active_stage_id
-    ? preparation.stages.find((stage) => stage.id === preparation.active_stage_id)
-    : null;
-  return activeStage
-    ? activeStage.progress_label ?? activeStage.detail ?? activeStage.label
-    : preparation.failure?.summary ??
-        (preparation.receipt
-          ? "Accepted preparation receipt published"
-          : "No active stage");
-}
-
-function meshOperation(
-  meshBuild: MeshActiveBuildResource | null,
-): OperationProjectionRow | null {
-  if (!meshBuild) return null;
-  const active = asRecord(meshBuild.active_build);
-  const summary = asRecord(meshBuild.last_build_summary);
-  const source = active ?? summary;
-  if (!source && !meshBuild.last_build_error) return null;
-  const buildId = display(
-    source?.build_id ?? meshBuild.provenance?.build_id,
-    "current",
-  );
-  return {
-    detail: meshBuild.last_build_error ??
-      display(source?.detail ?? source?.mesh_name, "Published build state"),
-    id: `mesh:${buildId}`,
-    label: `Mesh build ${buildId}`,
-    revision: display(meshBuild.revision),
-    source: "Mesh",
-    status: display(
-      source?.status,
-      meshBuild.last_build_error ? "failed" : active ? "running" : "completed",
-    ),
-  };
-}
-
-export function buildOperationsProjection(
-  input: OperationsProjectionInput,
-): OperationsProjectionModel {
-  const rows: OperationProjectionRow[] = [];
-  if (input.preparation) {
-    rows.push({
-      detail: preparationDetail(input.preparation),
-      id: `preparation:${input.preparation.preparation_id}`,
-      label: `Preparation ${input.preparation.preparation_id}`,
-      revision: display(input.preparation.revision),
-      source: "Preparation",
-      status: input.preparation.status,
-    });
-  }
-
-  const mesh = meshOperation(input.meshBuild);
-  if (mesh) rows.push(mesh);
-
-  for (const command of (input.commandQueue?.commands ?? [])
-    .toSorted((left, right) => right.seq - left.seq)
-    .slice(0, 100)) {
-    rows.push({
-      detail: command.error ?? command.reason ?? command.completion_status ?? "No detail published",
-      id: `command:${command.command_id}`,
-      label: command.kind,
-      revision: display(command.seq),
-      source: "Command",
-      status: command.status,
-    });
-  }
-
-  return { gaps: projectionGaps(input.resources), rows };
 }
 
 function lastGoodMeshDetail(

@@ -231,7 +231,7 @@ export function MetricHistogramChart({ metric }: MetricHistogramChartProps) {
   if (data.length === 0) return null;
 
   return (
-    <div
+    <div role="img"
       aria-label={data
         .map((bin) => `${bin.binLabel}: ${bin.count.toLocaleString("en-US")}`)
         .join(", ")}
@@ -348,7 +348,7 @@ export function SizeDistributionChart({
   if (data.length === 0) return null;
 
   return (
-    <div
+    <div role="img"
       aria-label={data
         .map((bin) => `${bin.binLabel}: ${bin.count.toLocaleString("en-US")}`)
         .join(", ")}

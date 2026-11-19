@@ -5,6 +5,8 @@ export interface StudyStageSourceEntry {
   stageKind: string | null;
   label: string | null;
   enabled: boolean;
+  nodeEnabled?: boolean;
+  ancestorsEnabled?: boolean;
   groupIds: readonly string[];
 }
 
@@ -35,7 +37,7 @@ export function readStudyStageSource(value: unknown): StudyStageSource {
   const fail = (error: string): StudyStageSource => ({ kind: "invalid", entries: [], error });
   const nodes = document?.nodes === undefined ? [] : document.nodes;
   const version = document?.version === undefined ? "study_pipeline.v1" : document.version;
-  if (!document || version !== "study_pipeline.v1" || !Array.isArray(nodes)) {
+  if (!document || (version !== "study_pipeline.v1" && version !== "study_pipeline.v2") || !Array.isArray(nodes)) {
     return fail("Unsupported or malformed study pipeline; the dormant flat list is not used.");
   }
   const visit = (nodes: unknown[], enabled: boolean, groups: string[]): string | null => {
@@ -64,7 +66,7 @@ export function readStudyStageSource(value: unknown): StudyStageSource {
         entries.push({ payload, queueId: node.id,
           label: typeof node.label === "string" ? node.label : null,
           stageKind: node.node_kind === "macro" ? `macro:${stageKind}` : stageKind,
-          enabled: active, groupIds: [...groups] });
+          enabled: active, nodeEnabled: node.enabled !== false, ancestorsEnabled: enabled, groupIds: [...groups] });
       } else return "Unsupported study pipeline node kind.";
     }
     return null;

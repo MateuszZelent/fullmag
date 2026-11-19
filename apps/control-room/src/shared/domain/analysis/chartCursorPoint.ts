@@ -11,6 +11,7 @@ export interface AnalysisChartResourceRef {
     | "analysis.frequency_domain"
     | "analysis.spin_wave"
     | "data.table.rows"
+    | "diagnostics.run_performance"
     | "simulation.solver.energies.history";
   resourceKey: string;
   tableId: string;

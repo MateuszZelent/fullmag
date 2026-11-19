@@ -1651,6 +1651,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         });
 
@@ -1730,6 +1731,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],
@@ -1888,6 +1890,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         };
 
@@ -1971,6 +1974,7 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             inter_region_exchange: vec![],
+            region_owner: Vec::new(),
             ..Default::default()
         };
 

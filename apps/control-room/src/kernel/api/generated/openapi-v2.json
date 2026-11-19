@@ -14,6 +14,111 @@
       }
     },
     "schemas": {
+      "AbsorbingBoundaryDirectionIR": {
+        "enum": [
+          "outward",
+          "inward"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFaceIR": {
+        "enum": [
+          "x+",
+          "x-",
+          "y+",
+          "y-",
+          "z+",
+          "z-"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryFrameIR": {
+        "enum": [
+          "object",
+          "universe"
+        ],
+        "type": "string"
+      },
+      "AbsorbingBoundaryIR": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayerIR"
+          },
+          {
+            "$ref": "#/components/schemas/AbsorbingBoundaryLayersIR"
+          }
+        ]
+      },
+      "AbsorbingBoundaryLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+            },
+            "type": "array"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "faces",
+          "profile",
+          "frame"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryLayersIR": {
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/SpatialAbsorbingLayerIR"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "layers"
+        ],
+        "type": "object"
+      },
+      "AbsorbingBoundaryProfileIR": {
+        "enum": [
+          "linear",
+          "quadratic",
+          "smootherstep",
+          "logarithmic",
+          "tanh",
+          "custom"
+        ],
+        "type": "string"
+      },
       "AcceptedAntennaInspectionCatalogResource": {
         "properties": {
           "entries": {
@@ -230,6 +335,16 @@
       },
       "AcceptedObservationFrameRef": {
         "properties": {
+          "authored_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuthoredInitialStateOrigin"
+              }
+            ]
+          },
           "domain_generation_id": {
             "type": "string"
           },
@@ -4974,6 +5089,39 @@
         ],
         "type": "object"
       },
+      "AuthoredInitialStateOrigin": {
+        "additionalProperties": false,
+        "description": "Input identity of an authored initial-state publication. It has its own\ngeneration even when its domain and solver clock have not changed.",
+        "properties": {
+          "initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plan_fingerprint": {
+            "type": "string"
+          },
+          "preparation_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "plan_fingerprint",
+          "scene_revision",
+          "initial_state_revision",
+          "values_sha256"
+        ],
+        "type": "object"
+      },
       "AuthoringTransactionRequest": {
         "oneOf": [
           {
@@ -5024,12 +5172,52 @@
                 ],
                 "type": "string"
               },
+              "magnetization_apply": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MagnetizationApplyRequest",
+                    "description": "A deliberate magnetization reset, including repeated assignments\nwhose authored texture value is unchanged."
+                  }
+                ]
+              },
               "scene": {
                 "type": "object"
               }
             },
             "required": [
               "scene",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Save and explicitly reinitialize exactly one authored texture target.",
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "apply_magnetization"
+                ],
+                "type": "string"
+              },
+              "operation_id": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/MagnetizationApplyTarget"
+              }
+            },
+            "required": [
+              "base_revision",
+              "operation_id",
+              "target",
               "kind"
             ],
             "type": "object"
@@ -5228,6 +5416,12 @@
           },
           {
             "properties": {
+              "assign_to_object_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "base_revision": {
                 "format": "int64",
                 "minimum": 0,
@@ -5256,6 +5450,16 @@
                   "$ref": "#/components/schemas/MaterialReferenceResource"
                 },
                 "type": "array"
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneMaterialSource"
+                  }
+                ]
               }
             },
             "required": [
@@ -5685,6 +5889,16 @@
         "properties": {
           "committed_scene": {
             "$ref": "#/components/schemas/SceneResource"
+          },
+          "magnetization_apply": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MagnetizationApplyReceiptResource"
+              }
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -6421,6 +6635,16 @@
               "null"
             ]
           },
+          "execution_binding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionBinding"
+              }
+            ]
+          },
           "field_materialization_requirements": {
             "items": {
               "$ref": "#/components/schemas/FieldMaterializationRequirement"
@@ -6696,6 +6920,35 @@
         ],
         "type": "object"
       },
+      "CommandExecutionBinding": {
+        "description": "Immutable binding of an accepted command to its own execution.",
+        "properties": {
+          "requested_target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "description": "The selected authored step for a single-stage execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
       "CommandExecutionReadbackResource": {
         "properties": {
           "backend": {
@@ -6864,6 +7117,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "execution_binding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionBinding"
+              }
             ]
           },
           "request_id": {
@@ -11559,6 +11822,13 @@
           "drives": {
             "items": {
               "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "mask_drives": {
+            "description": "Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).",
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
             },
             "type": "array"
           }
@@ -17396,6 +17666,69 @@
         ],
         "type": "object"
       },
+      "HistoricalScalarCoverage": {
+        "enum": [
+          "solver_series",
+          "terminal_sample"
+        ],
+        "type": "string"
+      },
+      "HistoricalScalarWindow": {
+        "description": "Archived physical samples read from one claim-qualified artifact.",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "content_sha256": {
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/HistoricalScalarCoverage"
+          },
+          "next_start": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "series": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity"
+          },
+          "total_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "series",
+          "artifact_id",
+          "content_sha256",
+          "coverage",
+          "total_rows",
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
       "HistoryEntry": {
         "properties": {
           "at": {
@@ -19571,6 +19904,103 @@
         ],
         "type": "object"
       },
+      "ImportedSourceSurfaceQuery": {
+        "properties": {
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "source_sha256"
+        ],
+        "type": "object"
+      },
+      "ImportedSourceSurfaceResource": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "coordinate_frame": {
+            "type": "string"
+          },
+          "coordinate_unit": {
+            "type": "string"
+          },
+          "node_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "scale_to_metres": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_eligible": {
+            "description": "This surface is source geometry, not a generated or validated volume mesh.",
+            "type": "boolean"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "surface_id": {
+            "type": "string"
+          },
+          "topology_format": {
+            "type": "string"
+          },
+          "triangle_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "purpose",
+          "object_id",
+          "scene_revision",
+          "surface_id",
+          "source_sha256",
+          "coordinate_frame",
+          "coordinate_unit",
+          "scale_to_metres",
+          "node_count",
+          "triangle_count",
+          "bounds_min",
+          "bounds_max",
+          "solver_eligible",
+          "topology_format"
+        ],
+        "type": "object"
+      },
       "InactiveSelectionPolicySchema": {
         "enum": [
           "warn_and_intersect",
@@ -20016,6 +20446,12 @@
                   {
                     "$ref": "#/components/schemas/SceneRegionRef"
                   }
+                ]
+              },
+              "time_expression": {
+                "type": [
+                  "object",
+                  "null"
                 ]
               }
             },
@@ -20539,6 +20975,10 @@
           "solver": {
             "$ref": "#/components/schemas/SolverSummary",
             "description": "Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`."
+          },
+          "solver_energy_current_available": {
+            "description": "Whether `simulation/solver/energies/current` can return a source-qualified current sample now.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -20555,6 +20995,156 @@
           "metrics"
         ],
         "type": "object"
+      },
+      "MagnetizationApplyReceiptResource": {
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "prepared_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparedInitialStateResource"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/MagnetizationApplyScope"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MagnetizationApplyStatus"
+          }
+        },
+        "required": [
+          "operation_id",
+          "scene_revision",
+          "scopes",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/MagnetizationApplyScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation_id",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyScope": {
+        "additionalProperties": false,
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyStatus": {
+        "enum": [
+          "initial_state_pending",
+          "initial_state_ready"
+        ],
+        "type": "string"
+      },
+      "MagnetizationApplyTarget": {
+        "oneOf": [
+          {
+            "properties": {
+              "asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "asset",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              },
+              "texture_override": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneTextureOverride"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "texture_override",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "MagnetizationAssetPatchRequest": {
         "properties": {
@@ -20626,6 +21216,668 @@
             ]
           }
         ]
+      },
+      "MaskFieldDriveCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveListResource": {
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "drives"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveReplaceRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/MaskFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "MaskFieldDriveResource": {
+        "additionalProperties": false,
+        "description": "A hand-written mask antenna (`mask_field_drive.v1`, ADR 0081).",
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frame": {
+            "$ref": "#/components/schemas/MaskFrameResource"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/MaskShapeResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "target",
+          "shape",
+          "position_m",
+          "frame",
+          "terms",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
+      "MaskFrameResource": {
+        "description": "Frame of a mask antenna's position and of its mask coordinates.",
+        "enum": [
+          "world",
+          "local"
+        ],
+        "type": "string"
+      },
+      "MaskFunctionLocalResource": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "description": "`field_expr.v1` text.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionParameterResource": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "description": "Authored text of the value, for display only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MaskFunctionResource": {
+        "additionalProperties": false,
+        "description": "A mask function of `x, y, z` (three outputs, tesla) or a time function of\n`t` (one output), as `field_expr.v1` equations.",
+        "properties": {
+          "expression_version": {
+            "type": "string"
+          },
+          "locals": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionLocalResource"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outputs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/MaskFunctionParameterResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "expression_version",
+          "outputs"
+        ],
+        "type": "object"
+      },
+      "MaskLibraryCallResource": {
+        "additionalProperties": false,
+        "description": "The ready-antenna call (`fullmag.antennas`) that produced a term.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "call_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "function": {
+            "type": "string"
+          },
+          "output_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "function",
+          "arguments",
+          "call_index",
+          "output_index"
+        ],
+        "type": "object"
+      },
+      "MaskShapeResource": {
+        "description": "Support shape of a mask antenna (`mask_field_drive.v1` has no CSG shapes).",
+        "oneOf": [
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "box"
+                ],
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "size",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "height": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "height",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "radius",
+              "center",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskSourceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "function": {
+                "$ref": "#/components/schemas/MaskFunctionResource"
+              },
+              "kind": {
+                "enum": [
+                  "function"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "function",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "An array mask written by a loop: float32 3-vectors in tesla.",
+            "properties": {
+              "cell_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "data": {
+                "type": "string"
+              },
+              "encoding": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "sampled"
+                ],
+                "type": "string"
+              },
+              "origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "size": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "encoding",
+              "data",
+              "sha256",
+              "size",
+              "cell_m",
+              "origin_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaskTermResource": {
+        "additionalProperties": false,
+        "properties": {
+          "mask": {
+            "$ref": "#/components/schemas/MaskSourceResource"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskLibraryCallResource"
+              }
+            ]
+          },
+          "time": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MaskFunctionResource",
+                "description": "Absent: a static term."
+              }
+            ]
+          }
+        },
+        "required": [
+          "mask"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the entry being deleted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryDeleteResource": {
+        "properties": {
+          "revision": {
+            "description": "Catalog revision after deletion.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryEntryResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "name",
+          "kind",
+          "properties",
+          "references"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryMutationResource": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+          },
+          {
+            "properties": {
+              "catalog_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "catalog_revision"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "The entry clock protects edits; the catalog clock invalidates shared readers."
+      },
+      "MaterialLibraryResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialLibraryEntryResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedMaterialVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "revision",
+          "entries",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "MaterialLibraryUpdateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+          },
+          {
+            "properties": {
+              "base_revision": {
+                "description": "Revision of the entry being replaced, not the catalog revision.",
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "base_revision"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MaterialLibraryWriteRequest": {
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/MaterialPropertiesResource"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialReferenceResource"
+            },
+            "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "source_project": {
+            "description": "Name of the project from which the draft was copied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "properties"
+        ],
+        "type": "object"
       },
       "MaterialParameterFieldDataListResource": {
         "properties": {
@@ -21180,6 +22432,16 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
@@ -21187,6 +22449,83 @@
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionMutationResource": {
+        "properties": {
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "published": {
+            "$ref": "#/components/schemas/PublishedMaterialVersion"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "published"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionPublishRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "base_revision": {
+            "description": "Revision of the source entry.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "material_id": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "material_id",
+          "base_revision",
+          "family",
+          "version",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "MaterialVersionUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "base_revision": {
+            "description": "Revision of the published version's metadata.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_revision",
+          "display_name",
+          "archived"
         ],
         "type": "object"
       },
@@ -25299,6 +26638,15 @@
               "integer",
               "null"
             ]
+          },
+          "validated_for_scene_revision": {
+            "description": "Current scene whose mesher inputs still match this immutable publication.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -26124,6 +27472,26 @@
             },
             "type": "array"
           },
+          "initial_state_pending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MagnetizationApplyReceiptResource"
+              }
+            ]
+          },
+          "prepared_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparedInitialStateResource"
+              }
+            ]
+          },
           "ready_to_export": {
             "type": "boolean"
           },
@@ -26539,9 +27907,13 @@
       "ObjectPatchRequest": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "base_revision": {
@@ -27593,6 +28965,35 @@
         ],
         "type": "object"
       },
+      "PlanarCropState": {
+        "additionalProperties": false,
+        "description": "Session crop of the planar view: the sampled u/v window in meters.",
+        "properties": {
+          "u_max_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "u_min_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_max_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_min_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "u_min_m",
+          "u_max_m",
+          "v_min_m",
+          "v_max_m"
+        ],
+        "type": "object"
+      },
       "PlanarEmptyPolicySchema": {
         "enum": [
           "exclude_empty",
@@ -27725,6 +29126,15 @@
       "PlanarFieldFrameResource": {
         "properties": {
           "bounds_uv_m": {
+            "description": "Sampled u/v window; equals `full_bounds_uv_m` without a window.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "full_bounds_uv_m": {
+            "description": "Full u/v bounds of the resolved frame.",
             "items": {
               "format": "double",
               "type": "number"
@@ -27765,7 +29175,8 @@
           "u_axis",
           "v_axis",
           "normal",
-          "bounds_uv_m"
+          "bounds_uv_m",
+          "full_bounds_uv_m"
         ],
         "type": "object"
       },
@@ -27873,6 +29284,17 @@
           },
           "non_injective": {
             "type": "boolean"
+          },
+          "observation_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedObservationFrameRef",
+                "description": "Accepted source observation, when the exact selected carrier proves it.\nNull means cross-quantity temporal coherence cannot be established."
+              }
+            ]
           },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
@@ -28033,6 +29455,72 @@
         ],
         "type": "object"
       },
+      "PlanarFieldOverlayState": {
+        "additionalProperties": false,
+        "description": "One field layer on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
+        "properties": {
+          "colormap": {
+            "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/PlanarFieldComponent"
+          },
+          "contours_visible": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mesh_visible": {
+            "type": "boolean"
+          },
+          "points_visible": {
+            "type": "boolean"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/PlanarColorRangeState"
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "raster_visible": {
+            "type": "boolean"
+          },
+          "streamlines_visible": {
+            "type": "boolean"
+          },
+          "vector_style": {
+            "$ref": "#/components/schemas/PlanarVectorStyleState"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "view_scope": {
+            "$ref": "#/components/schemas/PlanarViewScopeState"
+          },
+          "visible": {
+            "description": "Layer visibility; absent in layers persisted before the flag.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "quantity_id",
+          "component",
+          "view_scope",
+          "colormap",
+          "range",
+          "raster_opacity",
+          "raster_visible",
+          "vectors_visible",
+          "vector_style"
+        ],
+        "type": "object"
+      },
       "PlanarFieldProbeResource": {
         "properties": {
           "cell_id": {
@@ -28050,6 +29538,21 @@
               "integer",
               "null"
             ]
+          },
+          "nearest_node": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarProbeNodeResource",
+                "description": "Nearest FEM node or FDM cell centre when `nearest=node` was requested\nand `nearest_node_status` is `ok`."
+              }
+            ]
+          },
+          "nearest_node_status": {
+            "description": "`not_requested`, `ok`, `empty`, `unsupported_operator` or\n`unsupported_quantity`.",
+            "type": "string"
           },
           "occupancy": {
             "type": "string"
@@ -28103,7 +29606,8 @@
           "v_m",
           "world_m",
           "occupancy",
-          "sampling_method"
+          "sampling_method",
+          "nearest_node_status"
         ],
         "type": "object"
       },
@@ -28257,6 +29761,14 @@
           "pan_v_m"
         ],
         "type": "object"
+      },
+      "PlanarLayerModel": {
+        "description": "How the planar view composes its fields.\n\n`Legacy`: the base fields (`quantity_id`, `component`, `colormap`, ...) are\ndrawn under `field_overlays`. `Layers`: `field_overlays` is the single\nfield-layer list and the base sample only provides frame and section meta.",
+        "enum": [
+          "legacy",
+          "layers"
+        ],
+        "type": "string"
       },
       "PlanarLayerState": {
         "properties": {
@@ -28660,6 +30172,73 @@
           "color",
           "opacity",
           "size"
+        ],
+        "type": "object"
+      },
+      "PlanarProbeNodeResource": {
+        "description": "Nearest discretization node of a probe point (`eq-planar-nearest-node`):\nthe closest vertex of the containing FEM element, or the containing FDM\ncell centre, with its value without interpolation.",
+        "properties": {
+          "in_plane_distance_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "kind": {
+            "description": "`fem_node` or `fdm_cell_center`.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "Mesh node index or cell index.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "normal_offset_m": {
+            "description": "Signed distance of the node from the plane along the frame normal.",
+            "format": "double",
+            "type": "number"
+          },
+          "scalar": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "u_m": {
+            "description": "Projection of the node onto the frame.",
+            "format": "double",
+            "type": "number"
+          },
+          "v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "world_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "node_id",
+          "world_m",
+          "u_m",
+          "v_m",
+          "in_plane_distance_m",
+          "normal_offset_m"
         ],
         "type": "object"
       },
@@ -29093,6 +30672,25 @@
             "type": "object"
           },
           {
+            "description": "Canonical scene object identity, intersected with the selected source.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "enum": [
@@ -29187,6 +30785,17 @@
               }
             ]
           },
+          "crop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarCropState",
+                "description": "Omitted preserves the crop (unless the plane or source changes);\n`null` clears it."
+              }
+            ]
+          },
           "default_slice": {
             "oneOf": [
               {
@@ -29203,6 +30812,16 @@
               "null"
             ]
           },
+          "field_overlays": {
+            "description": "Omitted preserves the list; a supplied list replaces it atomically.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "interaction": {
             "oneOf": [
               {
@@ -29210,6 +30829,16 @@
               },
               {
                 "$ref": "#/components/schemas/PlanarInteractionState"
+              }
+            ]
+          },
+          "layer_model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarLayerModel"
               }
             ]
           },
@@ -29359,6 +30988,17 @@
           "component": {
             "$ref": "#/components/schemas/PlanarFieldComponent"
           },
+          "crop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarCropState",
+                "description": "Sampling window (crop) in the u/v axes of the current frame; `None`\nsamples the full frame."
+              }
+            ]
+          },
           "default_slice": {
             "$ref": "#/components/schemas/DefaultPlanarSliceState"
           },
@@ -29368,8 +31008,19 @@
               "null"
             ]
           },
+          "field_overlays": {
+            "description": "Field layers of the planar view (the wire name is kept for persisted\nsessions). Under `layer_model = layers` this is the only list of drawn\nfields; under `legacy` it holds the additional fields over the base.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": "array"
+          },
           "interaction": {
             "$ref": "#/components/schemas/PlanarInteractionState"
+          },
+          "layer_model": {
+            "$ref": "#/components/schemas/PlanarLayerModel",
+            "description": "`legacy` for state persisted before field layers; restore migrates it\nto `layers` with [`migrate_planar_layer_model`]."
           },
           "layers": {
             "$ref": "#/components/schemas/PlanarLayerState"
@@ -29945,6 +31596,42 @@
           "failed"
         ],
         "type": "string"
+      },
+      "PreparedInitialStateResource": {
+        "additionalProperties": false,
+        "properties": {
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_frame_id": {
+            "type": "string"
+          },
+          "publication_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "initial_state_revision",
+          "publication_id",
+          "observation_frame_id",
+          "domain_generation_id",
+          "values_sha256"
+        ],
+        "type": "object"
       },
       "PrescribedSotFormulaVersion": {
         "enum": [
@@ -31976,6 +33663,41 @@
         ],
         "type": "object"
       },
+      "PublishedMaterialVersion": {
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "original": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SceneMaterialSource"
+          }
+        },
+        "required": [
+          "source",
+          "display_name",
+          "archived",
+          "revision"
+        ],
+        "type": "object"
+      },
       "QuantityCatalogEntry": {
         "properties": {
           "capability_state": {
@@ -32356,6 +34078,113 @@
           "window_step_count",
           "window_wall_time_ns",
           "source_revision"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaArgumentResource": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "Absent: the argument is required, or its default follows another argument.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "doc": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "description": "SI unit of the value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "unit",
+          "doc"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaListResource": {
+        "additionalProperties": false,
+        "properties": {
+          "antennas": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "antennas"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaResource": {
+        "additionalProperties": false,
+        "description": "A ready antenna of `fullmag.antennas`: a function that returns mask terms.",
+        "properties": {
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyAntennaArgumentResource"
+            },
+            "type": "array"
+          },
+          "function": {
+            "description": "Qualified name, the `function` of a term's origin.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "summary",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "function": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "function",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ReadyAntennaTermsResource": {
+        "description": "The terms one ready-antenna call returns, each with its origin.",
+        "properties": {
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/MaskTermResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "terms"
         ],
         "type": "object"
       },
@@ -33710,6 +35539,209 @@
         ],
         "type": "object"
       },
+      "RunPerformancePointResource": {
+        "description": "Bounded automatic run telemetry. GPU samples describe the whole device.",
+        "properties": {
+          "cpu_percent": {
+            "description": "Process CPU utilization; can exceed 100 percent for multiple cores.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu_power_watts": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rss_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "elapsed_monotonic_ns"
+        ],
+        "type": "object"
+      },
+      "RunPerformanceResource": {
+        "properties": {
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collection_overhead_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_scope": {
+            "type": "string"
+          },
+          "gpu_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_evaluate_host_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_rejected_attempts": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_step_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/RunPerformancePointResource"
+            },
+            "maxItems": 120,
+            "type": "array"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "rows_dropped": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_step_callback_records": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "state",
+          "sample_sequence",
+          "elapsed_monotonic_ns",
+          "unique_step_callback_records",
+          "rows_dropped",
+          "gpu_scope",
+          "points"
+        ],
+        "type": "object"
+      },
       "RunSource": {
         "description": "What produced the results.",
         "properties": {
@@ -33817,6 +35849,84 @@
         ],
         "type": "object"
       },
+      "RuntimeAuthoredInitialStateSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "study"
+                ],
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scene_revision",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage"
+                ],
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "scene_revision",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "initial_state_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "prepared"
+                ],
+                "type": "string"
+              },
+              "publication_id": {
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scene_revision",
+              "initial_state_revision",
+              "publication_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "RuntimeCapabilityMatrix": {
         "properties": {
           "engines": {
@@ -33841,6 +35951,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeInitialStateRequest"
+              }
             ]
           },
           "precondition": {
@@ -33887,6 +36007,22 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "current_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandRunPrecondition"
+              }
+            ]
+          },
+          "domain_generation_id": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -33975,6 +36111,43 @@
           "enabled"
         ],
         "type": "object"
+      },
+      "RuntimeCommandRunPrecondition": {
+        "description": "Pin the current run seen when Compute was requested, including its absence.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "none"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "run"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "RuntimeCommandTarget": {
         "oneOf": [
@@ -34084,6 +36257,93 @@
             },
             "required": [
               "command_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeInitialStateRequest": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "default_for_target"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "authored_initial_state"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/RuntimeAuthoredInitialStateSource"
+              }
+            },
+            "required": [
+              "source",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "allow_stale_model": {
+                "type": "boolean"
+              },
+              "artifact_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "stage_result"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "case_id",
+              "artifact_id",
+              "content_sha256",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "latest_compatible_state"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
               "kind"
             ],
             "type": "object"
@@ -34753,6 +37013,40 @@
         ],
         "type": "object"
       },
+      "ScalarSeriesIdentity": {
+        "description": "Run, authored execution step, case and worker attempt of one scalar series.",
+        "properties": {
+          "attempt_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "task_id",
+          "step_id",
+          "case_id",
+          "attempt_id",
+          "ownership_epoch"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -34797,6 +37091,17 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "series": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScalarSeriesIdentity",
+                "description": "Present for the current, authenticated accepted Study series, even\nwhile awaiting its first physical sample."
+              }
+            ]
           },
           "total_rows": {
             "format": "int64",
@@ -35688,6 +37993,29 @@
           }
         ]
       },
+      "SceneMaterialReference": {
+        "properties": {
+          "citation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SceneMaterialResource": {
         "properties": {
           "id": {
@@ -35705,12 +38033,115 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialSource"
+              }
+            ]
           }
         },
         "required": [
           "id",
           "name",
           "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSource": {
+        "properties": {
+          "catalog_id": {
+            "type": "string"
+          },
+          "catalog_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SceneMaterialSourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/SceneMaterialSourceProperties"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/SceneMaterialReference"
+            },
+            "type": "array"
+          },
+          "version": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMaterialVersionSource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "catalog_id",
+          "catalog_revision",
+          "name",
+          "kind",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMaterialSourceKind": {
+        "enum": [
+          "builtin",
+          "custom",
+          "modified"
+        ],
+        "type": "string"
+      },
+      "SceneMaterialSourceProperties": {
+        "properties": {
+          "Aex": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dbulk": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Dind": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "Ms": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "alpha": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "alpha"
         ],
         "type": "object"
       },
@@ -35784,6 +38215,35 @@
           "outside"
         ],
         "type": "string"
+      },
+      "SceneMaterialVersionSource": {
+        "additionalProperties": false,
+        "description": "A stable published material key and the provenance recorded at publication.",
+        "properties": {
+          "copied_from_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "family": {
+            "type": "string"
+          },
+          "source_project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "family",
+          "version"
+        ],
+        "type": "object"
       },
       "SceneMetadataResource": {
         "properties": {
@@ -35977,9 +38437,13 @@
       "SceneObjectResource": {
         "properties": {
           "absorbing_boundary": {
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AbsorbingBoundaryIR"
+              }
             ]
           },
           "allocated_region_ids": {
@@ -36801,6 +39265,18 @@
           },
           "study": {
             "additionalProperties": true,
+            "properties": {
+              "thermal_noise": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThermalNoiseResource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
             "type": [
               "object",
               "null"
@@ -37810,13 +40286,15 @@
       },
       "ScratchSessionDevice": {
         "enum": [
-          "cpu"
+          "cpu",
+          "gpu"
         ],
         "type": "string"
       },
       "ScratchSessionPrecision": {
         "enum": [
-          "double"
+          "double",
+          "single"
         ],
         "type": "string"
       },
@@ -39078,6 +41556,12 @@
           },
           "asset_id": {
             "type": "string"
+          },
+          "content_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session_id": {
             "type": "string"
@@ -42460,6 +44944,226 @@
         ],
         "type": "object"
       },
+      "SpatialAbsorbingGeometryIR": {
+        "oneOf": [
+          {
+            "properties": {
+              "faces": {
+                "items": {
+                  "$ref": "#/components/schemas/AbsorbingBoundaryFaceIR"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "faces"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "faces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "plane"
+                ],
+                "type": "string"
+              },
+              "normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "origin": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "origin",
+              "normal",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "cylinder"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "axis",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "direction": {
+                "$ref": "#/components/schemas/AbsorbingBoundaryDirectionIR"
+              },
+              "kind": {
+                "enum": [
+                  "sphere"
+                ],
+                "type": "string"
+              },
+              "radius_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "center",
+              "radius_m",
+              "direction",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region_boundary"
+                ],
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expression": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "expression"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SpatialAbsorbingLayerIR": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "expression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frame": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryFrameIR"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/SpatialAbsorbingGeometryIR"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "max_damping": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AbsorbingBoundaryProfileIR"
+          },
+          "ramp_width_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_width_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "layer_id",
+          "name",
+          "enabled",
+          "frame",
+          "total_width_m",
+          "ramp_width_m",
+          "max_damping",
+          "profile",
+          "geometry"
+        ],
+        "type": "object"
+      },
       "SpinAuthoringDeleteRequest": {
         "properties": {
           "base_revision": {
@@ -43557,13 +46261,14 @@
                     ]
                   },
                   "until_seconds": {
+                    "description": "Omit for an exact authored StageId in the accepted Study lane.",
                     "format": "double",
-                    "type": "number"
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   }
                 },
-                "required": [
-                  "until_seconds"
-                ],
                 "type": "object"
               },
               {
@@ -44044,6 +46749,428 @@
         ],
         "type": "object"
       },
+      "StudyResultAuthoredRelation": {
+        "enum": [
+          "matching_authored_input",
+          "authored_input_changed",
+          "stage_absent",
+          "authoring_unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultCompletion": {
+        "description": "Terminal solver evidence qualified against the same final state and attempt.",
+        "properties": {
+          "converged": {
+            "description": "Absent when this completion carries no relaxation evidence.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "metric_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricKind"
+              }
+            ]
+          },
+          "metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metric_unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricUnit"
+              }
+            ]
+          },
+          "metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageStopReason"
+              }
+            ]
+          },
+          "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "StudyResultDomainRelation": {
+        "enum": [
+          "matching_published_layout",
+          "different_published_layout",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultGeometry": {
+        "oneOf": [
+          {
+            "properties": {
+              "cell_size_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "grid_cells": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "fdm"
+                ],
+                "type": "string"
+              },
+              "origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "grid_cells",
+              "origin_m",
+              "cell_size_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "fdm_multilayer"
+                ],
+                "type": "string"
+              },
+              "layers": {
+                "items": {
+                  "$ref": "#/components/schemas/StudyResultLayerGeometry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "layers",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "element_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "fem"
+                ],
+                "type": "string"
+              },
+              "node_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "node_count",
+              "element_count",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StudyResultInitialState": {
+        "properties": {
+          "reset_scopes": {
+            "description": "Authored samples that replaced the base state at the named scopes.",
+            "items": {
+              "$ref": "#/components/schemas/StudyResultResetScope"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StudyResultInitialStateSource"
+          }
+        },
+        "required": [
+          "source",
+          "reset_scopes"
+        ],
+        "type": "object"
+      },
+      "StudyResultInitialStateSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "authored"
+                ],
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reference",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "stage_result"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "selection": {
+                "$ref": "#/components/schemas/StudyResultInputSelection"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "case_id",
+              "artifact_id",
+              "content_sha256",
+              "selection",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "prepared"
+                ],
+                "type": "string"
+              },
+              "publication_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "publication_id",
+              "artifact_id",
+              "content_sha256",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StudyResultInputSelection": {
+        "enum": [
+          "predecessor",
+          "selected_result",
+          "latest_compatible",
+          "pinned_result"
+        ],
+        "type": "string"
+      },
+      "StudyResultLayerGeometry": {
+        "properties": {
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "grid_cells": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value_offset": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "layer_id",
+          "object_id",
+          "grid_cells",
+          "origin_m",
+          "cell_size_m",
+          "value_offset",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "StudyResultPredecessorRelation": {
+        "enum": [
+          "newer_different_output",
+          "earlier_predecessor_changed",
+          "newer_same_output",
+          "no_later_matching_input",
+          "not_applicable",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultResetScope": {
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id"
+        ],
+        "type": "object"
+      },
+      "StudyResultStateResource": {
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_sha256": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "description": "Exact layout fingerprint, including the magnetically active support.",
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/StudyResultGeometry"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "support_available": {
+            "description": "If true, the support subresource returns FMSP in sample order.",
+            "type": "boolean"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "source",
+          "artifact_id",
+          "artifact_sha256",
+          "step",
+          "time_s",
+          "sample_count",
+          "domain_generation_id",
+          "topology_fingerprint",
+          "geometry",
+          "support_available"
+        ],
+        "type": "object"
+      },
       "StudyRuntimePatchRequest": {
         "properties": {
           "parallel_execution": {
@@ -44131,6 +47258,142 @@
           "requested_precision",
           "requested_mode",
           "parallel_execution"
+        ],
+        "type": "object"
+      },
+      "StudyStageResult": {
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_sha256": {
+            "type": "string"
+          },
+          "authored_relation": {
+            "$ref": "#/components/schemas/StudyResultAuthoredRelation"
+          },
+          "authored_stage_id": {
+            "description": "Authored stage identity when it can be mapped to the durable execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "codec_id": {
+            "type": "string"
+          },
+          "codec_version": {
+            "type": "string"
+          },
+          "completion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StudyResultCompletion",
+                "description": "Omitted when no exact terminal completion record is available."
+              }
+            ]
+          },
+          "domain_relation": {
+            "$ref": "#/components/schemas/StudyResultDomainRelation",
+            "description": "Comparison with the published live magnetization layout."
+          },
+          "initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StudyResultInitialState",
+                "description": "Qualified input of the producing task attempt. Legacy evidence may be absent."
+              }
+            ]
+          },
+          "predecessor_relation": {
+            "$ref": "#/components/schemas/StudyResultPredecessorRelation",
+            "description": "Later successful results along the inherited chain of admitted inputs."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity",
+            "description": "The owner of both the final state and the archived scalar series."
+          },
+          "study_id": {
+            "type": "string"
+          },
+          "supports_magnetization_input": {
+            "description": "Same-space and input-port admission are verified when a command is submitted.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_id",
+          "study_id",
+          "source",
+          "artifact_id",
+          "artifact_sha256",
+          "codec_id",
+          "codec_version",
+          "accepted_at",
+          "authored_relation",
+          "supports_magnetization_input"
+        ],
+        "type": "object"
+      },
+      "StudyStageResultsResource": {
+        "properties": {
+          "authored_input_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_stage_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "description": "Current project. Each result retains the original project for playback.",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/StudyStageResult"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "project_id",
+          "authored_stage_ids",
+          "results"
         ],
         "type": "object"
       },
@@ -44450,6 +47713,30 @@
           "never"
         ],
         "type": "string"
+      },
+      "ThermalNoiseResource": {
+        "additionalProperties": false,
+        "description": "Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport.",
+        "properties": {
+          "seed": {
+            "description": "Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy.",
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "temperature": {
+            "description": "Positive finite temperature in kelvin.",
+            "exclusiveMinimum": 0,
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature"
+        ],
+        "type": "object"
       },
       "ThreadAutoSchema": {
         "enum": [
@@ -46573,6 +49860,17 @@
           "wireframe_color": {
             "type": "string"
           },
+          "wireframe_geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope",
+                "description": "Optional independent FEM wireframe extent; absent means legacy/default surface edges."
+              }
+            ]
+          },
           "wireframe_opacity": {
             "format": "double",
             "type": "number"
@@ -47115,6 +50413,16 @@
               },
               {
                 "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "wireframe_geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
               }
             ]
           }
@@ -50052,6 +53360,504 @@
           },
           "500": {
             "description": "Corrupt, oversized or invalid scalar"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authored stage ID or exact durable execution ID. Omit to include all final states.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable run in the owning workspace.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation from a previous response with the same filters.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100. The default is 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyStageResultsResource"
+                }
+              }
+            },
+            "description": "Published final states for the selected durable run"
+          },
+          "400": {
+            "description": "Invalid filter or page"
+          },
+          "404": {
+            "description": "Unknown run"
+          },
+          "409": {
+            "description": "Run or result ownership differs"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyResultStateResource"
+                }
+              }
+            },
+            "description": "Immutable Study state with its exact spatial carrier"
+          },
+          "404": {
+            "description": "Unknown result"
+          },
+          "409": {
+            "description": "Inconsistent project, run or carrier binding"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/magnetization": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMVP v3 magnetization bound to the saved result and its exact domain",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-encoding": {
+                "description": "FMVP;version=3",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged immutable magnetization"
+          },
+          "404": {
+            "description": "Unknown result"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/scalars": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalScalarWindow"
+                }
+              }
+            },
+            "description": "Immutable scalar series owned by this saved Study state"
+          },
+          "400": {
+            "description": "Invalid row limit"
+          },
+          "404": {
+            "description": "Qualified archived scalars unavailable"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/support": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMSP support mask in exact saved sample order",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No explicit support mask"
+          },
+          "304": {
+            "description": "Unchanged immutable mask"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/topology": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMMT v2 topology of the saved FEM state",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged immutable topology"
+          },
+          "404": {
+            "description": "FEM topology is unavailable"
           }
         },
         "tags": [
@@ -56189,6 +59995,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56295,6 +60111,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -56419,6 +60272,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56525,6 +60388,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -56652,6 +60552,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56758,6 +60668,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -56889,6 +60836,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -56904,6 +60871,15 @@
             "schema": {
               "format": "double",
               "type": "number"
+            }
+          },
+          {
+            "description": "`node` additionally returns the nearest FEM node or FDM cell centre\n(`eq-planar-nearest-node`); any other value is rejected.",
+            "in": "query",
+            "name": "nearest",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -56989,6 +60965,43 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57110,6 +61123,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57245,6 +61278,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -57366,6 +61436,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57472,6 +61552,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -57593,6 +61710,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57699,6 +61826,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -57823,6 +61987,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57929,6 +62103,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -58061,6 +62272,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58167,6 +62388,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -58299,6 +62557,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58405,6 +62673,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -58537,6 +62842,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58643,6 +62958,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -58782,6 +63134,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -58797,6 +63169,15 @@
             "schema": {
               "format": "double",
               "type": "number"
+            }
+          },
+          {
+            "description": "`node` additionally returns the nearest FEM node or FDM cell centre\n(`eq-planar-nearest-node`); any other value is rejected.",
+            "in": "query",
+            "name": "nearest",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -58882,6 +63263,43 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59011,6 +63429,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59146,6 +63584,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -59275,6 +63750,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59381,6 +63866,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -59510,6 +64032,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59616,6 +64148,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -59748,6 +64317,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59854,6 +64433,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -61918,6 +66534,18 @@
             }
           },
           {
+            "description": "Expected authored magnetization frame from the current field metadata",
+            "in": "header",
+            "name": "x-fullmag-expected-observation-frame-id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Exact immutable artifact carrier selector.",
             "in": "query",
             "name": "carrier_id",
@@ -62171,6 +66799,12 @@
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
+                }
+              },
+              "x-fullmag-observation-frame-id": {
+                "description": "Identity of the authored magnetization frame, when served",
+                "schema": {
+                  "type": "string"
                 }
               },
               "x-fullmag-payload-state": {
@@ -63317,6 +67951,40 @@
               }
             },
             "description": "GPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/performance": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_performance",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPerformanceResource"
+                }
+              }
+            },
+            "description": "Bounded automatic telemetry for the verified current run attempt"
+          },
+          "304": {
+            "description": "Performance snapshot not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "Retryable performance observation conflict"
           }
         },
         "tags": [
@@ -66333,6 +71001,174 @@
         ]
       }
     },
+    "/v2/sessions/current/model/mask-field-drives": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaskFieldDriveListResource"
+                }
+              }
+            },
+            "description": "Hand-written mask antennas"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_mask_field_drives",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate field drive"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/mask-field-drives/{drive_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted a mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "put": {
+        "operationId": "model_put_sessions_current_model_mask_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable mask antenna id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaskFieldDriveReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Replaced a mask antenna"
+          },
+          "400": {
+            "description": "Invalid mask antenna"
+          },
+          "404": {
+            "description": "Mask antenna not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/material-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_material_fields",
@@ -66976,6 +71812,101 @@
         ]
       }
     },
+    "/v2/sessions/current/model/objects/{object_id}/source-surface": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_objects_object_id_source_surface",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportedSourceSurfaceResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Source or object unavailable"
+          },
+          "409": {
+            "description": "Source or scene changed"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/objects/{object_id}/source-surface/topology": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_objects_object_id_source_surface_topology",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scene_revision",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_sha256",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Source-only FMMT v2: zero cells, triangular facets"
+          },
+          "206": {
+            "description": "Binary range"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "409": {
+            "description": "Stale scene or source"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/oersted-fields": {
       "get": {
         "operationId": "model_get_sessions_current_model_oersted_fields",
@@ -67458,6 +72389,69 @@
           },
           "404": {
             "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_ready_antennas",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaListResource"
+                }
+              }
+            },
+            "description": "Ready antennas of fullmag.antennas"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/ready-antennas/terms": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_ready_antennas_terms",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadyAntennaTermsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyAntennaTermsResource"
+                }
+              }
+            },
+            "description": "Mask terms returned by one ready-antenna call"
+          },
+          "400": {
+            "description": "Unknown antenna or invalid arguments"
           }
         },
         "tags": [
@@ -68241,6 +73235,18 @@
       "post": {
         "operationId": "model_post_sessions_current_model_transactions",
         "parameters": [
+          {
+            "description": "Required for a scoped magnetization apply",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "$ref": "#/components/parameters/FullmagSessionScope"
           }
@@ -69262,8 +74268,11 @@
             },
             "description": "Current solver energy sample"
           },
+          "204": {
+            "description": "No current solver energy sample is available"
+          },
           "404": {
-            "description": "No solver energy data"
+            "description": "No active workspace"
           }
         },
         "tags": [
@@ -69368,6 +74377,183 @@
         },
         "tags": [
           "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/results": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_results",
+        "parameters": [
+          {
+            "description": "Authored stage ID or exact durable execution ID. Omit to include all final states.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable run in the owning workspace.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation from a previous response with the same filters.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100. The default is 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyStageResultsResource"
+                }
+              }
+            },
+            "description": "Bounded durable Study results and their current authored relation"
+          },
+          "400": {
+            "description": "Invalid filter, page size or cursor"
+          },
+          "404": {
+            "description": "Workspace or requested run is unavailable"
+          },
+          "409": {
+            "description": "Workspace changed or the result binding is inconsistent"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/results/scalars": {
+      "get": {
+        "operationId": "data_get_sessions_current_simulation_stages_results_scalars",
+        "parameters": [
+          {
+            "description": "Exact accepted run",
+            "in": "query",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact accepted Study step",
+            "in": "query",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact output case",
+            "in": "query",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Succeeded worker attempt",
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Succeeded worker ownership epoch",
+            "in": "query",
+            "name": "ownership_epoch",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Comma-separated scalar columns",
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "First archived row ordinal",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of rows, 1 to 2048",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalScalarWindow"
+                }
+              }
+            },
+            "description": "Archived scalar samples and their exact source"
+          },
+          "404": {
+            "description": "Qualified scalar history unavailable"
+          }
+        },
+        "tags": [
+          "data"
         ]
       }
     },
@@ -70900,6 +76086,414 @@
         ]
       }
     },
+    "/v2/workspace/material-library": {
+      "get": {
+        "operationId": "workspace_get_workspace_material_library",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryResource"
+                }
+              }
+            },
+            "description": "Built-in entries, user drafts and published versions with catalog revision"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "operationId": "workspace_post_workspace_material_library",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material document"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material identity already exists or is read-only"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions": {
+      "post": {
+        "operationId": "workspace_post_workspace_material_library_versions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Immutable material version published"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or incomplete material"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Source material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source revision or version already exists"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/versions/{family}/{version}": {
+      "patch": {
+        "operationId": "workspace_patch_workspace_material_library_versions_family_version",
+        "parameters": [
+          {
+            "description": "Stable material family key",
+            "in": "path",
+            "name": "family",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable published version key",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialVersionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialVersionMutationResource"
+                }
+              }
+            },
+            "description": "Published version metadata updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid version key or metadata"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Published version does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale version metadata revision"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v2/workspace/material-library/{id}": {
+      "delete": {
+        "operationId": "workspace_delete_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryDeleteResource"
+                }
+              }
+            },
+            "description": "Material deleted and catalog revision advanced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material identity or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      },
+      "put": {
+        "operationId": "workspace_put_workspace_material_library_id",
+        "parameters": [
+          {
+            "description": "Stable custom material identity",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterialLibraryUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialLibraryMutationResource"
+                }
+              }
+            },
+            "description": "User material replaced"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid material or revision"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material does not exist"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale revision or read-only built-in material"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Material catalog storage is unavailable"
+          }
+        },
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/v2/workspace/roots": {
       "get": {
         "operationId": "workspace_items_get_workspace_roots",
@@ -71139,12 +76733,15 @@
     "antenna_field_solve",
     "change_device",
     "add_field_drive",
+    "add_mask_field_drive",
+    "update_mask_field_drive",
     "remove_field_drive",
     "table_autosave",
     "autosave",
     "fft_response",
     "set_field",
     "set_current",
+    "set_spin_torque_enabled",
     "save_state",
     "load_state",
     "export"

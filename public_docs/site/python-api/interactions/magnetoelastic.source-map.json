@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-magnetoelastic",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_magnetoelastic"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_magnetoelastic",
@@ -63,7 +46,7 @@
         "python": "magnet",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty magnet link",
         "meaning": "magnetic object link",
         "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
@@ -73,7 +56,7 @@
         "python": "body",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty body link",
         "meaning": "mechanical body link",
         "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
@@ -83,7 +66,7 @@
         "python": "law",
         "type": "str",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty law link",
         "meaning": "magnetostriction law link",
         "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",

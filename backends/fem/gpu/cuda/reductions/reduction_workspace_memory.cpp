@@ -133,7 +133,8 @@ bool gpu_reduction_workspace_allocate(
     reduction_workspace_bytes =
         (3u * reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS) * sizeof(double) +
         reductions.temp_storage_bytes;
-    return true;
+    return gpu_object_average_allocate(
+        reductions.object_average, node_count, device_bytes, reduction_workspace_bytes, error);
 #else
     (void)reductions;
     (void)node_count;
@@ -146,6 +147,7 @@ bool gpu_reduction_workspace_allocate(
 
 void gpu_reduction_workspace_free(FemGpuReductionWorkspaceDeviceState &reductions)
 {
+    gpu_object_average_free(reductions.object_average);
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (reductions.host_scalar_result != nullptr && reductions.scalar_result_pinned) {
         cudaFreeHost(reductions.host_scalar_result);

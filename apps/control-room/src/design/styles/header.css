@@ -107,6 +107,17 @@
   color: var(--fm-accent);
 }
 
+/* Application menubar: one continuous strip, open trigger visibly active. */
+.fm-header__menubar {
+  display: flex;
+  align-items: center;
+}
+
+.fm-header__menubar > .fm-header__nav-item[aria-expanded="true"] {
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+}
+
 .fm-header__quick-actions {
   display: flex;
   align-items: center;
@@ -176,6 +187,7 @@
 .fm-header__search-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-header__kbd {
@@ -316,6 +328,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-header__project-status-dirty {
@@ -506,6 +519,7 @@
   max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-helper-modal {
@@ -695,4 +709,20 @@
   margin: 0;
   font-size: var(--fm-font-size-2xs);
   color: var(--fm-warning);
+}
+
+/* Reduced motion: transform transitions snap; colour/shadow transitions remain. */
+@media (prefers-reduced-motion: reduce) {
+  .fm-header__nav-item,
+  .fm-header__action-btn {
+    transition-property: background-color, color;
+  }
+
+  .fm-header__run-btn {
+    transition-property: background-color;
+  }
+
+  .fm-header__helper-trigger {
+    transition-property: background-color, border-color, color;
+  }
 }

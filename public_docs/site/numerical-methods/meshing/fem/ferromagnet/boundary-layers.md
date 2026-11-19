@@ -32,9 +32,9 @@ d_j=d_0q^j,\qquad j=0,\ldots,N-1.
 
 | Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| $d_0$ | first requested layer thickness | m |
-| $q$ | requested layer stretching ratio | 1 |
-| $N$ | requested layer count | 1 |
+| $d_0$ | first requested layer thickness | $\mathrm{m}$ |
+| $q$ | requested layer stretching ratio | $1$ |
+| $N$ | requested layer count | $1$ |
 
 (boundary-layers-assumptions-and-validity)=
 ## Assumptions and validity
@@ -48,13 +48,13 @@ The table is exhaustive for this public family entry point. Alias rows are alter
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `boundary_layer_count` | `int \| None` | `None` | 1 | coerced with int(...), then result must be >= 1; non-integral numeric values truncate toward zero | requested layer count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_count` |
-| `boundary_layer_thickness` | `float \| None` | `None` | m | finite and > 0 when supplied | first-wall spacing passed as hwall_n and thickness | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_thickness` |
-| `boundary_layer_stretching` | `float \| None` | `None` | 1 | finite and > 0 when supplied | successive-layer growth ratio | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_stretching` |
-| `boundary_layer_target_surface_tags` | `Sequence[int] \| None` | `None` | 1 | positive integer entity tags | explicit target surfaces; their boundary curves are derived | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_tags` |
-| `boundary_layer_target_curve_tags` | `Sequence[int] \| None` | `None` | 1 | positive integer entity tags | explicit target curves | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_tags` |
-| `boundary_layer_target_surface_selectors` | `Sequence[Mapping[str, object]] \| None` | `None` | 1 | each item must be a selector mapping | semantic surface targets resolved at build time | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors` |
-| `boundary_layer_target_curve_selectors` | `Sequence[Mapping[str, object]] \| None` | `None` | 1 | each item must be a selector mapping | semantic curve targets resolved at build time | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_selectors` |
+| `boundary_layer_count` | `int \| None` | `None` | $1$ | coerced with int(...), then result must be >= 1; non-integral numeric values truncate toward zero | requested layer count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_count` |
+| `boundary_layer_thickness` | `float \| None` | `None` | $\mathrm{m}$ | finite and > 0 when supplied | first-wall spacing passed as hwall_n and thickness | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_thickness` |
+| `boundary_layer_stretching` | `float \| None` | `None` | $1$ | finite and > 0 when supplied | successive-layer growth ratio | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_stretching` |
+| `boundary_layer_target_surface_tags` | `Sequence[int] \| None` | `None` | $1$ | positive integer entity tags | explicit target surfaces; their boundary curves are derived | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_tags` |
+| `boundary_layer_target_curve_tags` | `Sequence[int] \| None` | `None` | $1$ | positive integer entity tags | explicit target curves | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_tags` |
+| `boundary_layer_target_surface_selectors` | `Sequence[Mapping[str, object]] \| None` | `None` | $1$ | each item must be a selector mapping | semantic surface targets resolved at build time | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors` |
+| `boundary_layer_target_curve_selectors` | `Sequence[Mapping[str, object]] \| None` | `None` | $1$ | each item must be a selector mapping | semantic curve targets resolved at build time | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].boundary_layer_target_curve_selectors` |
 
 ```python
 # %% imports
@@ -104,6 +104,7 @@ The source index maps public authoring, lowering, realization, reporting, and ba
 ### FEM CPU/GPU plan and runtime consumption
 
 `plan_fem` resolves the domain or per-object mesh asset, validates typed MeshIR and region ownership, and places that mesh in `FemPlanIR`; this is the planning consumer after Python realization. The production runner enters `execute_fem_with_context_in_mode`, normalizes the FEM plan, resolves CPU/GPU behavior, and calls the configuration-selected `execute_native_fem` implementation for native execution. `apply_native_fem_runtime_contract` is not a gate: after runtime observations exist, it returns `()` and only populates `ExecutionProvenance` fields such as execution mode, qualification status, data residency, CUDA-kernel use, GPU Poisson use, and hot-loop synchronization counts. A source-backed Python mesh build is therefore not itself CPU or GPU runtime proof; actual execution and its populated provenance provide that evidence.
+
 (boundary-layers-validation)=
 ## Validation
 

@@ -1368,6 +1368,16 @@ pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<
             &object_region_ids,
             &mut errors,
         );
+        if let Some(config) = &module.absorbing_boundary {
+            let path = format!("magnetization_modules[{index}].absorbing_boundary");
+            crate::validate_absorbing_boundary_config(&path, config, &mut errors);
+            let owner = module.target.object_id.as_str();
+            for region_id in config.referenced_regions() {
+                if !object_region_ids.contains(&(owner, region_id)) {
+                    errors.push(format!("{path} references missing region '{region_id}' on '{owner}'"));
+                }
+            }
+        }
         if !material_ids.contains(module.material_id.as_str()) {
             errors.push(format!(
                 "magnetization_modules[{index}] missing material '{}'",
@@ -2365,8 +2375,23 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
                     }
                 }
             }
-            EnergyTermIR::RotatedInterfacialDmi { d } => {
+            EnergyTermIR::RotatedInterfacialDmi { d, object_ids } => {
                 rotated_interfacial_dmi_count += 1;
+                if let Some(ids) = object_ids {
+                    if ids.is_empty() {
+                        errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi object_ids must not be empty"));
+                    }
+                    let mut seen = BTreeSet::new();
+                    for id in ids {
+                        if id.trim().is_empty() || !seen.insert(id) {
+                            errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi object_ids must be nonempty and unique"));
+                        }
+                        if !problem.magnets.iter().any(|magnet| magnet.object_id.as_deref().unwrap_or(magnet.name.as_str()) == id) {
+                            errors.push(format!("energy_terms[{index}] rotated_interfacial_dmi references unknown magnet object_id '{id}'"));
+                        }
+                    }
+                }
+
                 if !d.is_finite() {
                     errors.push(format!(
                         "energy_terms[{index}] rotated_interfacial_dmi D must be finite"
@@ -3209,6 +3234,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 free_layer_thickness_m,
                 fixed_layer_position,
                 realization,
+                time_expression,
                 ..
             } => {
                 validate_vector_binding(
@@ -3218,6 +3244,16 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     current_source,
                     errors,
                 );
+                if let Some(expression) = time_expression {
+                    if formula_version != "slonczewski.fullmag.v2" || current_density.is_none()
+                        || !matches!(realization, Some(crate::SlonczewskiRealizationIR::ThinLayerHomogenized { .. }))
+                    {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression requires canonical thin-layer prescribed current density"));
+                    }
+                    if let Err(error) = expression.compile() {
+                        errors.push(format!("spin_torque_modules[{index}].time_expression: {error}"));
+                    }
+                }
                 if !vector3_is_finite(spin_polarization) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski spin_polarization must contain finite values"
@@ -4376,7 +4412,11 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
     )
 }
 
-pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mut Vec<String>) {
+pub(crate) fn validate_runtime_selection(
+    problem: &crate::ProblemIR,
+    require_qualified_execution: bool,
+    errors: &mut Vec<String>,
+) {
     if let Some(value) = problem
         .problem_meta
         .runtime_metadata
@@ -4547,7 +4587,7 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
         crate::ExecutionPrecision::Single => "single",
         crate::ExecutionPrecision::Double => "double",
     };
-    if device == Some("auto") && typed == "single" {
+    if require_qualified_execution && device == Some("auto") && typed == "single" {
         errors.push("runtime_metadata.runtime_selection device='auto' with execution_precision='single' is not qualified; select device='gpu' explicitly".to_string());
     }
     if precision.is_some_and(|value| value != typed) {

@@ -801,7 +801,7 @@ function magneticParametersNode(
     icon: "magnet",
     objectId: object.id,
     status: object.material ? "ready" : "degraded",
-    children: [
+    children: compactExplorerNodes([
       {
         id: `${parentId}:magnetic-parameters:material`,
         kind: "object.material",
@@ -822,7 +822,16 @@ function magneticParametersNode(
         objectId: object.id,
         status: interaction.enabledCount > 0 ? "ready" as const : "degraded" as const,
       })),
-    ],
+      object.hasAbsorbingBoundary ? {
+        id: `${parentId}:magnetic-parameters:absorbing-boundary`,
+        kind: "object.absorbing-boundary",
+        label: "Absorbing Boundary",
+        parentId: `${parentId}:magnetic-parameters`,
+        icon: "wave",
+        objectId: object.id,
+        status: "ready",
+      } : null,
+    ]),
   };
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "fullmag-expr"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Runtime dependencies stay empty: the crate is linked into the IR, the planner,
+# the runners and the API, and must build wherever `std` does.
+[dependencies]
+
+[dev-dependencies]
+serde_json = { workspace = true }

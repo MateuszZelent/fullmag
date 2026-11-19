@@ -170,7 +170,8 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
     try {
         debug_checkpoint("context_initialize_mfem:enter");
         std::unique_ptr<mfem::Mesh> mesh_owner;
-        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error)) {
+        FemMarkerMaps marker_maps;
+        if (!build_mfem_mesh(ctx.mesh, mesh_owner, error, &marker_maps)) {
             return false;
         }
         auto *mesh = mesh_owner.get();
@@ -358,6 +359,7 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
         }
         debug_checkpoint("context_initialize_mfem:exchange_operator_ready");
         ctx.mfem_context.mesh = mesh_owner.release();
+        ctx.mfem_context.marker_maps = std::move(marker_maps);
         ctx.mfem_context.fec = fec.release();
         ctx.mfem_context.fes = fes.release();
         ctx.mfem_context.gf_mx = gf_mx.release();
@@ -490,6 +492,7 @@ void context_destroy_mfem(Context &ctx)
     ctx.mfem_context.fec = nullptr;
     ctx.mfem_context.mesh = nullptr;
     ctx.mfem_context.selected_device_index = -1;
+    ctx.mfem_context.marker_maps = {};
     ctx.mfem_context.ready = false;
     ctx.exchange.mfem.ready = false;
     ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = false;

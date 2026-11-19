@@ -1,3 +1,4 @@
+mod scheduler_idle_backoff;
 mod scheduler_owner_control;
 mod worker_startup_gate;
 
@@ -34,6 +35,9 @@ struct SchedulerArgs {
     max_tasks: Option<usize>,
     max_idle_polls: usize,
     idle_poll_interval: Duration,
+    /// Cap of the adaptive idle interval; equals `idle_poll_interval` when
+    /// the scheduler is not resident.
+    idle_poll_maximum: Duration,
     process_timeout: Duration,
     heartbeat_interval: Duration,
 }
@@ -260,6 +264,10 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
     let mut recovery_writer_deferred = false;
     let mut checkpoint_writer_deferred = false;
     let mut candidate_writer_deferred = false;
+    let mut idle_backoff = scheduler_idle_backoff::IdleBackoff::new(
+        args.idle_poll_interval,
+        args.idle_poll_maximum,
+    );
 
     loop {
         reap_finished(
@@ -286,6 +294,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                 );
                 checkpoint_writer_deferred = true;
             }
+            idle_backoff.reset();
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
@@ -343,6 +352,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
             if shutdown_requested.load(Ordering::Acquire) && active.is_empty() {
                 break;
             }
+            idle_backoff.reset();
             std::thread::sleep(args.idle_poll_interval);
             continue;
         }
@@ -377,6 +387,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                         }));
                         recovery_writer_deferred = true;
                     }
+                    idle_backoff.reset();
                     std::thread::sleep(args.idle_poll_interval);
                     continue;
                 }
@@ -486,6 +497,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
                             }));
                             candidate_writer_deferred = true;
                         }
+                        idle_backoff.reset();
                         std::thread::sleep(args.idle_poll_interval);
                         continue;
                     }
@@ -546,10 +558,12 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         }
 
         if started_any {
+            idle_backoff.reset();
             consecutive_idle_polls = 0;
             continue;
         }
         if !active.is_empty() {
+            idle_backoff.reset();
             std::thread::sleep(Duration::from_millis(10));
             continue;
         }
@@ -560,7 +574,7 @@ fn run_scheduler(args: SchedulerArgs, shutdown_requested: Arc<AtomicBool>) -> Re
         }
         idle_poll_count = idle_poll_count.saturating_add(1);
         consecutive_idle_polls = consecutive_idle_polls.saturating_add(1);
-        std::thread::sleep(args.idle_poll_interval);
+        idle_backoff.sleep_idle(&shutdown_requested);
     }
 
     let shutdown = shutdown_requested.load(Ordering::Acquire);
@@ -1293,6 +1307,15 @@ fn parse_args() -> Result<SchedulerArgs> {
         .map(|value| parse_u64("--idle-poll-milliseconds", value))
         .transpose()?
         .unwrap_or(100);
+    let idle_poll_max_milliseconds = values
+        .remove("--idle-poll-max-milliseconds")
+        .map(|value| parse_u64("--idle-poll-max-milliseconds", value))
+        .transpose()?;
+    let idle_poll_maximum = scheduler_idle_backoff::idle_poll_maximum(
+        idle_poll_max_milliseconds,
+        resident,
+        Duration::from_millis(idle_poll_milliseconds),
+    )?;
     let process_timeout_seconds = take_required_u64(&mut values, "--process-timeout-seconds")?;
     let heartbeat_interval_milliseconds =
         take_required_u64(&mut values, "--heartbeat-interval-milliseconds")?;
@@ -1323,6 +1346,7 @@ fn parse_args() -> Result<SchedulerArgs> {
         max_tasks,
         max_idle_polls,
         idle_poll_interval: Duration::from_millis(idle_poll_milliseconds),
+        idle_poll_maximum,
         process_timeout: Duration::from_secs(process_timeout_seconds),
         heartbeat_interval: Duration::from_millis(heartbeat_interval_milliseconds),
     })

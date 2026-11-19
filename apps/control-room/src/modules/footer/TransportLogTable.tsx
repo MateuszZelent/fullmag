@@ -82,7 +82,7 @@ export function TransportLogTable({
 
   return (
     <>
-      <div className="fm-footer-traffic" aria-label="Transport traffic summary">
+      <div role="group" className="fm-footer-traffic" aria-label="Transport traffic summary">
         <div className="fm-footer-traffic__metric">
           <span>Window</span>
           <strong>{formatTransportWindow(trafficSummary.windowMs)}</strong>

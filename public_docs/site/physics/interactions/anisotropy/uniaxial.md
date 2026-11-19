@@ -102,6 +102,15 @@ The field is parallel to the local easy axis. It is not a demagnetizing field, d
 Poisson solve, and has no boundary condition of its own. The LLG torque and magnetization
 normalization are owned by the dynamics contract.
 
+```{figure} /_static/diagrams/anisotropy-uniaxial-and-cubic-landscapes.svg
+:alt: Two-panel anisotropy diagram highlighting panel (a) for Fullmag's uniaxial energy density -Ku1 q^2 - Ku2 q^4 across easy-axis, easy-plane, and easy-cone regimes, together with the constant energy offset against K_u1 sin^2(theta) forms and identical effective field H_u, alongside cubic landscapes in panel (b).
+:width: 100%
+:name: fig-uniaxial-anisotropy-landscape
+:figclass: fm-physics-figure
+
+Panel (a) shows Fullmag's uniaxial anisotropy regimes (easy axis, easy plane, and easy cone) and the constant energy offset against $\sin^2\theta$ conventions while keeping $\mathbf H_{\mathrm u}$ unchanged (Stoner & Wohlfarth 1948; Collings et al. 2023).
+```
+
 (uniaxial-symbols-and-si-units)=
 ## Symbols and SI units
 
@@ -127,8 +136,8 @@ normalization are owned by the dynamics contract.
 (uniaxial-assumptions-and-validity)=
 ## Assumptions and validity
 
-- `Ku1` and `Ku2` are SI energy-density constants in J/m^3. They are not exchange stiffnesses
-  and are not supplied in J/m.
+- `Ku1` and `Ku2` are SI energy-density constants in $\mathrm{J\,m^{-3}}$. They are not exchange stiffnesses
+  and are not supplied in $\mathrm{J\,m^{-1}}$.
 - The configured axis is required to be a finite non-zero direction for an active realization.
   Native paths normalize it; the stored public tuple is not silently treated as unit length.
 - The reduced magnetization is expected to satisfy the surrounding dynamics normalization contract.
@@ -171,7 +180,6 @@ body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.alpha = 0.01
 body.Ku1 = 0.5e6
-body.Ku2 = 0.05e6
 body.anisU = (0.0, 0.0, 1.0)
 body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.stages.add_relax(
@@ -180,10 +188,23 @@ study.stages.add_relax(
     max_steps=50_000,
     tolT=1.0e-6,
 )
+
+# %% Material inspection when authoring second-order Ku2
+material_with_ku2 = fm.Material(
+    name="uniaxial_k2_film",
+    Ms=800.0e3,
+    A=13.0e-12,
+    alpha=0.01,
+    Ku1=0.5e6,
+    Ku2=0.05e6,
+    anisU=(0.0, 0.0, 1.0),
+)
+assert material_with_ku2.to_ir()["uniaxial_anisotropy_k2"] == 0.05e6
 ```
 
-The anisotropy values belong to the material/geometry handle and the stage pipeline is the
-executable user workflow. The compatibility constructor is documented separately as a lowering
+The stage-first handle (`MagnetHandle`) exposes `body.Ku1` and `body.anisU` directly;
+second-order `Ku2` and spatial `Ku_field`/`Ku2_field` belong to `fm.Material(...)` or the
+compatibility constructor. The compatibility constructor is documented separately as a lowering
 inspection fixture, not as a way to launch a simulation.
 
 The compatibility object is requested intent. The resolved IR is material-owned. Supplying both
@@ -279,8 +300,7 @@ fallback is implied by the presence of a host reference implementation.
 (uniaxial-implementation-mapping)=
 ## Implementation mapping
 
-The adjacent `uniaxial.source-map.json` records stable path-plus-symbol citations. Ownership is
-split deliberately:
+Responsibilities are split across Python authoring, planning, and native kernels:
 
 - Python `UniaxialAnisotropy` and `_migrate_legacy_anisotropy_energy_terms` own public migration.
 - `Material` owns canonical values and serialization.
@@ -290,8 +310,7 @@ split deliberately:
 - FEM CPU owns nodal/quadrature field and energy evaluation.
 - FEM CUDA owns device field/energy kernels and reductions.
 
-Line numbers are intentionally not the citation identity because source edits move them. Use the
-stable symbol and inspect the current line range when reviewing a particular revision.
+Refer to the symbol entries in the source-code index below when locating the current implementation across Python, planner, and backend kernels.
 
 (uniaxial-validation)=
 ## Validation and qualification
@@ -317,24 +336,11 @@ contract tests alone do not prove executed-device parity.
 (uniaxial-scientific-bibliography)=
 ## Scientific bibliography
 
-- Brown, W. F., *Micromagnetics*, Wiley, 1963.
-- FullMag internal source of truth: `docs/physics/0402-uniaxial-anisotropy.md`.
-- FullMag material and compatibility implementation: `packages/fullmag-py/src/fullmag/model/structure.py` and `packages/fullmag-py/src/fullmag/model/energy.py`.
+1. E. C. Stoner and E. P. Wohlfarth, “A mechanism of magnetic hysteresis in heterogeneous alloys,” *Philosophical Transactions of the Royal Society of London. Series A, Mathematical and Physical Sciences* **240**(826), 599–642 (1948). [doi:10.1098/rsta.1948.0007](https://doi.org/10.1098/rsta.1948.0007).
+2. J. B. Collings, R. Rama-Eiroa, R. M. Otxoa, R. F. L. Evans, and R. W. Chantrell, “Generalized form of the magnetic anisotropy field in micromagnetic and atomistic spin models,” *Physical Review B* **107**(6), 064413 (2023). [doi:10.1103/PhysRevB.107.064413](https://doi.org/10.1103/PhysRevB.107.064413) | [Open-access PDF (White Rose)](https://eprints.whiterose.ac.uk/id/eprint/197787/1/PhysRevB.107.064413.pdf) | [arXiv:2210.10916](https://arxiv.org/abs/2210.10916).
+3. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers / Wiley, New York (1963). [WorldCat record](https://search.worldcat.org/title/536451).
 
 (uniaxial-source-code-index)=
-
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

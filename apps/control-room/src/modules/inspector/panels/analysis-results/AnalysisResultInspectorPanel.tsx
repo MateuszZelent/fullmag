@@ -234,7 +234,7 @@ export function AnalysisResultInspectorPanel({
             defaultOpen: diagnostics.length > 0,
             content:
               diagnostics.length > 0 ? (
-                diagnostics.map((line) => <FieldRow key={line} label="Note" value={line} />)
+                [...new Set(diagnostics)].map((line) => <FieldRow key={line} label="Note" value={line} />)
               ) : (
                 <FieldRow label="Diagnostics" value="None" />
               ),
@@ -382,6 +382,9 @@ function AnalysisResultFieldControls({
             animationLoop={activeOverlay?.animation?.loop ?? true}
             animationRateHz={activeOverlay?.animation?.animationRateHz ?? 1}
             disabled={!activeOverlayOwned}
+            livePhaseController={
+              activeOverlayOwned ? kernel.analysisFieldOverlay : null
+            }
             onAnimationChange={setAnimation}
             onSetPhase={setPhase}
             phaseRad={String(phaseRad)}

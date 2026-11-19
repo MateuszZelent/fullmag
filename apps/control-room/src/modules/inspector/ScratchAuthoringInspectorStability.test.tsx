@@ -499,7 +499,7 @@ describe("scratch material Inspector stability", () => {
     }
   });
 
-  it("serializes an anisotropy write against the nested boundary writer and preserves the boundary draft", async () => {
+  it("keeps the boundary activation draft while an anisotropy write is pending", async () => {
     const properties = {
       Aex: 1.3e-11,
       Dbulk: null,
@@ -540,14 +540,14 @@ describe("scratch material Inspector stability", () => {
       properties,
       scene_revision: currentScene.revision,
     });
-    fixture.interactionLoad.mockResolvedValue({
+    fixture.interactionLoad.mockImplementation(async () => ({
       enabled: true,
       interaction_kind: "uniaxial_anisotropy",
       object_id: "object-a",
-      params: { axis: [0, 0, 1], ku1: 3e5 },
+      params: { axis: [0, 0, 1], ku1: currentScene.revision === 21 ? 3e5 : 4e5 },
       present: true,
-      scene_revision: 21,
-    });
+      scene_revision: currentScene.revision,
+    }));
     fixture.patchObjectInteraction.mockReturnValue(anisotropyAck.promise);
     fixture.patchObject.mockImplementation(async (_objectId, patch) => {
       const nextObject = {
@@ -564,26 +564,27 @@ describe("scratch material Inspector stability", () => {
     const editSessionStore = createInspectorEditSessionStore();
     const mounted = await mountFixture(
       fixture,
-      { ...selectionA, kind: "object", nodeId: "object:object-a" },
+      selectionA,
       { editSessionStore, withFooter: true, withGuard: true },
     );
     try {
       await waitForText(mounted.container, "Old material");
       await act(async () => {
         changeInput(input(mounted.container, "Ku1"), "400000");
-        changeInput(input(mounted.container, "Total width"), "5e-7");
+        const activation = input(mounted.container, "Absorbing Boundary");
+        Object.assign(activation, { checked: false });
+        activation.click();
       });
+      expect(() => input(mounted.container, "Total width")).toThrow();
+      expect(exactButton(mounted.container, "Apply").disabled).toBe(true);
       await act(async () => {
         button(mounted.container, "Apply Anisotropy").click();
-        // This stale enabled button must fail the shared lease before calling
-        // patchObject, even before React publishes disabled state.
-        button(mounted.container, "Apply boundary").click();
       });
       await flushResource();
       expect(fixture.patchObjectInteraction).toHaveBeenCalledOnce();
       expect(fixture.patchObject).not.toHaveBeenCalled();
-      expect(input(mounted.container, "Total width").disabled).toBe(false);
-      expect(input(mounted.container, "Total width").value).toBe("5e-7");
+      expect(input(mounted.container, "Absorbing Boundary").disabled).toBe(false);
+      expect(input(mounted.container, "Absorbing Boundary")).toHaveProperty("checked", false);
       const savingSession = editSessionStore.getCurrentSession();
       expect(savingSession?.applying).toBe(true);
       expect(savingSession?.dirty).toBe(true);
@@ -597,15 +598,15 @@ describe("scratch material Inspector stability", () => {
       } as unknown as AuthoringTransactionResponse));
       await flushResource();
       expect(editSessionStore.getCurrentSession()?.applying).toBe(false);
-      expect(input(mounted.container, "Total width").value).toBe("5e-7");
+      expect(input(mounted.container, "Absorbing Boundary")).toHaveProperty("checked", false);
       expect(editSessionStore.getCurrentSession()?.dirty).toBe(true);
 
-      await act(async () => button(mounted.container, "Apply boundary").click());
+      await act(async () => exactButton(mounted.container, "Apply").click());
       await flushResource();
       expect(fixture.patchObject).toHaveBeenCalledOnce();
       expect(fixture.patchObject.mock.calls[0][1]).toMatchObject({
         base_revision: 22,
-        absorbing_boundary: { total_width_m: 5e-7 },
+        absorbing_boundary: null,
       });
     } finally {
       anisotropyAck.resolve({

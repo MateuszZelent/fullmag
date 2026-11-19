@@ -3,8 +3,12 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
+import { openViewport3DInspector, getViewport3DInspectorSnapshot, setViewport3DInspectorContext } from "./viewport3dInspectorState";
+import { getViewport3DProjection, hasViewport3DProjectionOwner, toggleRegisteredViewport3DProjection } from "./viewport3dCameraCommands";
 import { viewport3dStore } from "./viewport3dStore";
+import { VIEW_DIRECTION_COMMANDS } from "./viewport3dViewDirections";
 import type {
   Viewport3DDimensionFrameAnnotation,
   Viewport3DDimensionFrameDensity,
@@ -29,22 +33,22 @@ const VISUAL_PROFILE_COMMANDS: Array<{
   {
     id: "viewport-3d.profile-interactive-lite",
     profileId: "interactive-lite",
-    title: "Use Interactive Lite 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"]} quality profile`,
   },
   {
     id: "viewport-3d.profile-interactive",
     profileId: "interactive",
-    title: "Use Interactive 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive} quality profile`,
   },
   {
     id: "viewport-3d.profile-balanced",
     profileId: "balanced",
-    title: "Use Balanced 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced} quality profile`,
   },
   {
     id: "viewport-3d.profile-figure",
     profileId: "figure",
-    title: "Use Figure 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure} quality profile`,
   },
   {
     id: "viewport-3d.profile-capture",
@@ -288,9 +292,10 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: () => viewport3dStore.getSnapshot().widgets.cameraDialogOpen,
-        run: () => {
-          viewport3dStore.setCameraDialogOpen(true);
+        isActive: () => getViewport3DInspectorSnapshot().context === "view" && getViewport3DInspectorSnapshot().section === "view",
+        run: (context) => {
+          openViewport3DInspector("view");
+          context.layout?.setPanelVisible("right", true);
           return { status: "completed" };
         },
       },
@@ -305,6 +310,34 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      {
+        id: "viewport-3d.export-model",
+        title: "Export 3D model",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isEnabled: ({ layout }) => {
+          const view = layout?.get();
+          return !view || view.activeViewportMainModuleId === "viewport-3d" ||
+            view.viewportCompanion?.moduleId === "viewport-3d";
+        },
+        disabledReason: () => "Open the 3D viewport to export a model.",
+        run: () => {
+          viewport3dStore.openExport3DDialog();
+          return { status: "completed" };
+        },
+      },
+      ...VIEW_DIRECTION_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        run: () => {
+          viewport3dStore.requestViewDirection(command.direction);
+          return { status: "completed" as const };
+        },
+      })),
       {
         id: "viewport-3d.toggle-viewcube",
         title: "Toggle ViewCube",
@@ -335,9 +368,27 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: () => viewport3dStore.getSnapshot().widgets.settingsDialogOpen,
-        run: () => {
-          viewport3dStore.setSettingsDialogOpen(true);
+        isActive: () => getViewport3DInspectorSnapshot().context === "view",
+        run: (context) => {
+          openViewport3DInspector();
+          context.layout?.setPanelVisible("right", true);
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.toggle-settings",
+        title: "Toggle 3D View Inspector",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => getViewport3DInspectorSnapshot().context === "view",
+        run: (context) => {
+          if (getViewport3DInspectorSnapshot().context === "view" && context.layout?.get().panelVisible.right !== false) {
+            setViewport3DInspectorContext("selection");
+          } else {
+            openViewport3DInspector();
+            context.layout?.setPanelVisible("right", true);
+          }
           return { status: "completed" };
         },
       },
@@ -358,8 +409,9 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        run: () => {
-          viewport3dStore.setSettingsDialogOpen(true);
+        run: (context) => {
+          openViewport3DInspector();
+          context.layout?.setPanelVisible("right", true);
           return { status: "completed" };
         },
       },
@@ -369,25 +421,12 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: () =>
-          viewport3dStore.getSnapshot().widgets.cameraProjection ===
-          "orthographic",
-        run: (context) => {
-          // Use the local store for the immediate toggle state. Resource data can
-          // lag behind queued patches, which would make repeated clicks compute
-          // the same "next" projection and leave the button stuck.
-          const currentProjection =
-            viewport3dStore.getSnapshot().widgets.cameraProjection;
-          const nextProjection =
-            currentProjection === "orthographic" ? "perspective" : "orthographic";
-          // Update the local store immediately so the viewport responds without
-          // waiting for the backend round-trip.
-          viewport3dStore.setCameraProjection(nextProjection);
-          if (!isSavedMaterializedDatasetSelection(context)) {
-            context.cameraRegistry?.patchCamera({ projection: nextProjection });
-          }
-          return { status: "completed" };
-        },
+        isEnabled: hasViewport3DProjectionOwner,
+        disabledReason: () => "Open the 3D viewport to change its projection.",
+        isActive: () => getViewport3DProjection() === "orthographic",
+        run: () => toggleRegisteredViewport3DProjection()
+          ? { status: "completed" }
+          : { status: "cancelled", message: "The 3D camera is no longer available." },
       },
       {
         id: "viewport-3d.hsl-reference-auto",

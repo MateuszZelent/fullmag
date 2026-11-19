@@ -28,19 +28,44 @@ textarea {
 
 :focus-visible {
   border-radius: var(--fm-radius-sm);
-  outline: none;
+  /* Transparent (not none): invisible normally, painted by forced colors. */
+  outline: 2px solid transparent;
   box-shadow: var(--fm-focus-ring);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    transition-duration: 1ms !important;
-    animation-duration: 1ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
+/*
+ * Forced colors (Windows High Contrast) strip box-shadow, which is how every
+ * component draws its focus ring. Restore a system-colour outline globally;
+ * !important in this low layer outranks per-component `outline: none`.
+ */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 1px !important;
   }
+}
+
+/*
+ * Reduced motion is handled per rule next to each animation or transition
+ * (opt-in under `prefers-reduced-motion: no-preference`, or gentler
+ * parameters under `reduce`). No global duration override.
+ */
+
+/* Shared opacity-only crossfades used as reduced-motion alternatives. */
+@keyframes fm-reduced-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fm-reduced-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Non-vestibular busy indicator: opacity pulse instead of spin/slide. */
+@keyframes fm-reduced-busy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 @keyframes accordion-down {
@@ -61,7 +86,7 @@ textarea {
   margin: -1px;
   padding: 0;
   border: 0;
-  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -85,7 +110,12 @@ textarea {
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-sm);
   text-decoration: none;
-  transition: transform 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fm-skip-link {
+    transition: transform 120ms ease-out;
+  }
 }
 
 .fm-skip-link:focus-visible {

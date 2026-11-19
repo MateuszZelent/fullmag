@@ -48,6 +48,7 @@ import type {
   HysteresisSettleTraceResource,
   HysteresisSettlePipelineSchema,
   HysteresisStagePlanSchema,
+  StudyStageResult,
 } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -63,6 +64,8 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
+import { stageResultInitialState } from "./StageInitialStateSelector";
 
 const TEST_SESSION_IDENTITY: SessionResourceIdentity = {
   requestScopeEpoch: "api-instance:stage-inspectors-test",
@@ -197,6 +200,8 @@ import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
 import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./maskFieldDriveStageSummary";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -279,6 +284,41 @@ function render(
   );
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function expectFormFieldUnit(
+  markup: string,
+  label: string,
+  unit: string,
+  disabled = false,
+): void {
+  const labelPattern = new RegExp(`<label\\b[^>]*>${escapeRegExp(label)}<\\/label>`);
+  const disabledPattern = disabled ? `(?=[^>]*\\bdisabled="")` : "";
+  const inputPattern = new RegExp(
+    `<input\\b(?=[^>]*\\baria-label="${escapeRegExp(label)}")${disabledPattern}[^>]*>`,
+  );
+  const unitPattern = new RegExp(
+    `<span\\b(?=[^>]*\\bclass="[^"]*fm-inspector-form-field__unit[^"]*")[^>]*>${escapeRegExp(unit)}<\\/span>`,
+  );
+  const labelElement = markup.match(labelPattern)?.[0];
+  const inputElement = markup.match(inputPattern)?.[0];
+  const unitElement = markup.match(unitPattern)?.[0];
+  if (!labelElement || !inputElement || !unitElement) {
+    throw new Error(`Expected the ${label} field, its input, and its ${unit} unit.`);
+  }
+  const fieldId = inputElement.match(/\bid="([^"]+)"/)?.[1];
+  const unitId = unitElement.match(/\bid="([^"]+)"/)?.[1];
+  if (!fieldId || !unitId) {
+    throw new Error(`Expected ${label} and its ${unit} unit to have linked IDs.`);
+  }
+  expect(labelElement).toContain(`for="${fieldId}"`);
+  const describedBy = inputElement.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
+  expect(describedBy).toContain(unitId);
+  if (disabled) expect(inputElement).toContain('disabled=""');
+}
+
 function renderMounted(
   children: ReactNode,
   defaultValue = defaultAccordionValue,
@@ -334,6 +374,19 @@ function hysteresisFamilyVariantPointsRef(
 }
 
 describe("Study stage inspectors", () => {
+  it("keeps saved results strict until the user chooses to use one as a seed", () => {
+    const result: StudyStageResult = {
+      project_id: "project", study_id: "study", artifact_id: "state-a", artifact_sha256: "a".repeat(64),
+      source: { run_id: "run-a", task_id: "task-a", step_id: "relax", case_id: "default", attempt_id: "attempt-a", ownership_epoch: 1 },
+      codec_id: "fullmag.runner.field_json", codec_version: "v1", accepted_at: "",
+      authored_relation: "authored_input_changed", supports_magnetization_input: true,
+    };
+    expect(stageResultInitialState(result)).toEqual({
+      kind: "stage_result", run_id: "run-a", step_id: "relax", case_id: "default",
+      artifact_id: "state-a", content_sha256: result.artifact_sha256, allow_stale_model: false,
+    });
+    expect(stageResultInitialState({ ...result, authored_relation: "authoring_unavailable" })?.allow_stale_model).toBe(false);
+  });
   it("exposes the periodic-airbox magnetostatic control for eigenmode authoring", () => {
     const frameProps = props("eigenmodes");
     const html = render(
@@ -415,6 +468,43 @@ describe("Study stage inspectors", () => {
     expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
       "Unsupported Stage",
     );
+    const addAntenna = summarizeMaskFieldDriveStage({
+      kind: "add_mask_field_drive",
+      drive: {
+        id: "antenna",
+        name: "Antenna",
+        target: { kind: "object", object_id: "sample" },
+        shape: { kind: "box", size: [6e-6, 1e-6, 4.5e-8] },
+        frame: "world",
+        time_origin: "absolute",
+        terms: [{
+          mask: { kind: "function", function: {
+            name: "antenna_mask", parameters: [{ name: "B01", value: 0.0002 }],
+            outputs: ["B01 * sin(k * x)", "0.0", "0.0"],
+          } },
+          time: { name: "antenna_time", parameters: [{ name: "frequency", value: 3.6e9 }],
+            outputs: ["sin(2 * pi * frequency * t)"] },
+        }],
+      },
+    })!;
+    const addAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={addAntenna} />,
+    );
+    expect(addAntennaHtml).toContain("Add Antenna");
+    expect(addAntennaHtml).toContain("antenna_mask(B01 = 0.0002)");
+    expect(addAntennaHtml).toContain("sin(2 * pi * frequency * t)");
+    expect(addAntennaHtml).not.toContain("Unsupported Stage");
+    const updateAntenna = summarizeMaskFieldDriveStage({
+      kind: "update_mask_field_drive",
+      drive_id: "antenna",
+      term: null,
+      mask_parameters: { B01: 0.0004 },
+    })!;
+    const updateAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={updateAntenna} />,
+    );
+    expect(updateAntennaHtml).toContain("Antenna Update");
+    expect(updateAntennaHtml).toContain("B01 = 0.0004");
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
     ).toContain("Execution Device");
@@ -523,7 +613,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(tableHtml, "t_sampling", "s", true);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -555,7 +645,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(autosaveHtml, "Every", "s", true);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -567,9 +657,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expectFormFieldUnit(antennaHtml, "Cutoff fc", "Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expectFormFieldUnit(antennaHtml, "Center t0", "s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 

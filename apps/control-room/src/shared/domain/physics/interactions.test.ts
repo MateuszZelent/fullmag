@@ -251,6 +251,18 @@ describe("physics interaction catalog", () => {
     }
   });
 
+  it("clears selected rDMI targets together with the disabled coefficient", () => {
+    const scene = {
+      objects: [],
+      study: { rotated_interfacial_dmi: 0.004, rotated_interfacial_dmi_object_ids: ["film"] },
+    } as unknown as SceneResource;
+    expect(buildStudyInteractionPatchFromDraft(
+      { enabled: false, id: "rotated_interfacial_dmi", present: true, values: {} }, scene,
+    )).toEqual({ patch: { study: {
+      rotated_interfacial_dmi: null, rotated_interfacial_dmi_object_ids: null,
+    } } });
+  });
+
   it("rejects invalid typed drafts before hitting the API", () => {
     expect(
       buildObjectInteractionPatchFromDraft({

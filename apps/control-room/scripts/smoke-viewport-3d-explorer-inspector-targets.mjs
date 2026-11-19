@@ -25,7 +25,10 @@ const timeoutMs = Number(process.env.CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS ?? 30_
 const CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(appDir, "../..");
-const browserAuditArtifactDir = join(appDir, ".artifacts", "viewport-3d-browser-audit");
+const browserAuditArtifactDir = resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    join(appDir, ".artifacts", "viewport-3d-browser-audit"),
+);
 // Keep enough rendered support cells for canvas-delta assertions while still
 // retaining a strict outside-support Airbox and two independent regions.
 // The physical extent remains [-1, 1]^3 with a central [-0.5, 0.5]^3 support.
@@ -100,7 +103,7 @@ try {
   } else {
     const analysisHandoffOnly = targetSmokePhase === "analysis-handoff";
     const fdmOnly = targetSmokePhase === "fdm" || analysisHandoffOnly;
-    const femOnly = targetSmokePhase === "fem";
+    const femOnly = targetSmokePhase === "fem" || targetSmokePhase === "wireframe-scope";
     const fdm = femOnly ? null : await verifyFdmObjectAndAirboxTargets(browser, url);
     const fieldFailures = fdmOnly || femOnly ? null : await verifyFdmFieldFailureRecovery(browser, url);
     const fem = fdmOnly ? null : await verifyFemObjectTargetAndFallback(browser, url);
@@ -218,6 +221,7 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
   const errors = attachBrowserErrors(page);
   await installFixtureApi(page, fixture);
   await installFixtureConfig(page);
+
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FDM initial");
@@ -315,6 +319,19 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
   const errors = attachBrowserErrors(page);
   await installFixtureApi(page, fixture);
   await installFixtureConfig(page);
+  await page.addInitScript(() => {
+    window.__wireframeInspectorCommits = 0;
+    let rendererId = 0;
+    window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      supportsFiber: true,
+      renderers: new Map(),
+      inject(renderer) { this.renderers.set(++rendererId, renderer); return rendererId; },
+      onCommitFiberRoot() { window.__wireframeInspectorCommits++; },
+      onCommitFiberUnmount() {},
+      onPostCommitFiberRoot() {},
+      checkDCE() {},
+    };
+  });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     await assertHealthyCanvas(page, "FEM initial");
@@ -328,6 +345,18 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     }
     await selectVisualizationNode(page, "fem-owned", null);
     await assertTarget(page, "object:fem-owned");
+    if (process.env.CONTROL_ROOM_TARGET_SMOKE_PHASE === "wireframe-scope") {
+      const panel = page.locator(".fm-inspector-panel").last();
+      await panel.getByRole("radio", { name: "Shaded + Wireframe", exact: true }).click();
+      await waitForVisualizationMutationSettled(page, panel);
+      const wireframeScope = await verifyFemWireframeScope(page, fixture);
+      await captureBrowserAuditScreenshot(page, "target-smoke-wireframe-scope.png");
+      await selectAirboxVisualization(page);
+      await assertAirboxControls(page);
+      await assertHealthyCanvas(page, "FEM wireframe scope and Airbox exclusion");
+      assertNoBrowserErrors(errors);
+      return { wireframeScope, airboxScopeControlAbsent: true };
+    }
     const ownedBeforePixels = await sampleViewportPixels(page);
     await assertNoViewportPixelDelta(page, ownedBeforePixels, "FEM owned target no-op negative control");
     await setObjectDisplayState(page, { colorbar: true, vectors: true, wireframe: true });
@@ -335,6 +364,7 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     const ownedRenderModeDeltas = await verifyPrimaryRenderModeCycle(page, "FEM owned object");
     await setObjectDisplayState(page, { colorbar: true, vectors: true, wireframe: true });
     const owned = await readTargetControls(page);
+    const wireframeScope = await verifyFemWireframeScope(page, fixture);
     await selectVisualizationNode(page, "fem-fallback", null);
     await assertTarget(page, "object:fem-fallback");
     const fallbackBeforePixels = await sampleViewportPixels(page, 1);
@@ -360,7 +390,11 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     await assertHealthyCanvas(page, "FEM target/fallback interactions");
     assertNoBrowserErrors(errors);
     await captureBrowserAuditScreenshot(page, "target-smoke-fem-success.png");
-    return { fallbackDelta, fallbackTarget: "object:fem-fallback", fieldRequests: fixture.fieldRequests, ownedDelta, ownedRenderModeDeltas, ownedTarget: "object:fem-owned" };
+    return { fallbackDelta, fallbackTarget: "object:fem-fallback", fieldRequests: fixture.fieldRequests, ownedDelta, ownedRenderModeDeltas, ownedTarget: "object:fem-owned", wireframeScope };
+  } catch (error) {
+    await captureBrowserAuditScreenshot(page, "target-smoke-fem-failure.png");
+    const body = await page.locator("body").innerText();
+    throw new Error(`FEM target smoke failed: ${error instanceof Error ? error.message : String(error)}; browserErrors=${JSON.stringify(errors)}; page=${body.slice(0, 6000)}`, { cause: error });
   } finally {
     await page.close();
   }
@@ -601,6 +635,10 @@ async function installFixtureConfig(page) {
 }
 
 async function installFixtureApi(page, fixture) {
+  // Keep unrelated platform/Home requests inside the isolated fixture origin.
+  if (apiBase === "http://fullmag-target-smoke.fixture.invalid") {
+    await page.route(`${apiBase}/**`, (route) => fulfillEmpty(route, 204));
+  }
   await page.route("**/v2/sessions", async (route) => {
     await fulfillJson(route, {
       schema_version: "session_list.v1",
@@ -685,6 +723,7 @@ async function installFixtureApi(page, fixture) {
       const scoped = fdmScopedFieldVectorBuffer({ fieldRequest, fixture });
       return fulfillBinary(route, scoped.buffer, scoped.headers);
     }
+    if (path === "/v2/sessions/current/data/quantities") return fulfillJson(route, quantityCatalogFixture());
     if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, fieldCatalogFixture());
     return fulfillEmpty(route, 204);
   });
@@ -796,7 +835,7 @@ async function setObjectDisplayState(page, expected) {
   if (expected.wireframe && (await shadedWithEdges.getAttribute("aria-checked")) !== "true") {
     await shadedWithEdges.click();
     await page.waitForFunction(
-      () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded +"]')?.getAttribute("aria-checked") === "true",
+      () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded + Wireframe"]')?.getAttribute("aria-checked") === "true",
       null,
       { timeout: timeoutMs },
     );
@@ -855,9 +894,15 @@ async function waitForVisualizationMutationSettled(page, panel) {
   if (!panelHandle) throw new Error("Selected visualization Inspector disappeared while saving a display mutation.");
   try {
     await page.waitForFunction(
-      (element) =>
-        element instanceof HTMLElement &&
-        !element.innerText.includes("Saving display changes."),
+      (element) => {
+        const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+        const sync = audit?.readVisualizationSyncSnapshot?.();
+        const controller = audit?.readVisualizationControllerSnapshot?.();
+        return element instanceof HTMLElement && Boolean(sync && controller) &&
+          !sync.inflightPatch && !sync.pendingPatch && !sync.error &&
+          Object.keys(controller.pendingOverrides ?? {}).length === 0 &&
+          !element.innerText.includes("Saving display changes.");
+      },
       panelHandle,
       { timeout: timeoutMs },
     );
@@ -895,8 +940,8 @@ async function waitForInspectorNoOpacityAnimation(page, panel) {
   );
 }
 
-async function captureInspectorMutationProbe(page) {
-  return page.evaluate(() => {
+async function captureInspectorMutationProbe(page, relatedGroupLabel = null) {
+  return page.evaluate((relatedGroup) => {
     const panel = Array.from(document.querySelectorAll(".fm-inspector-panel")).at(-1);
     if (!(panel instanceof HTMLElement)) throw new Error("No Airbox Inspector panel is mounted.");
     const rootSlot = "__airboxIndependentInspectorRoot";
@@ -909,7 +954,8 @@ async function captureInspectorMutationProbe(page) {
       'button, select, input, textarea, [role="button"], [role="radio"], [role="switch"]',
     // Quantity and its unit picker are related controls; changing from m to H
     // legitimately adds a display-unit picker. All other controls must persist.
-    ))).filter((control) => !["Quantity source", "Display unit"].includes(control.getAttribute("aria-label"))).map((control, index) => ({
+    ))).filter((control) => !["Quantity source", "Display unit"].includes(control.getAttribute("aria-label")) &&
+      (!relatedGroup || control.closest('[role="radiogroup"]')?.getAttribute("aria-label") !== relatedGroup)).map((control, index) => ({
       ariaDisabled: control.getAttribute("aria-disabled"),
       disabled: "disabled" in control && control.disabled === true,
       key: [index, control.tagName, control.id, control.getAttribute("aria-label"), control.getAttribute("role")].join("|"),
@@ -947,7 +993,65 @@ async function captureInspectorMutationProbe(page) {
       sameRoot: window[rootSlot] === panel,
       scroll,
     };
-  });
+  }, relatedGroupLabel);
+}
+
+async function verifyFemWireframeScope(page, fixture) {
+  const panel = page.locator(".fm-inspector-panel").last();
+  const group = panel.getByRole("radiogroup", { name: "Wireframe mesh", exact: true });
+  const surface = group.getByRole("radio", { name: "Surface mesh", exact: true });
+  if (await surface.getAttribute("aria-checked") !== "true") throw new Error("FEM wireframe must default to Surface mesh.");
+  const readSettings = () => page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__.readVisualizationTargetSettings({ id: "object:fem-owned", kind: "object" }));
+  const unrelated = (settings) => Object.fromEntries(Object.entries(settings).filter(([key]) => key !== "wireframeGeometryScope"));
+  const initial = await readSettings();
+  const evidence = [];
+  for (const [value, label] of [["full", "Full volume mesh"], ["surface", "Surface mesh"]]) {
+    const radio = group.getByRole("radio", { name: label, exact: true });
+    await radio.scrollIntoViewIfNeeded();
+    await radio.focus();
+    await waitForInspectorNoOpacityAnimation(page, panel);
+    await page.evaluate(() => {
+      delete window.__airboxIndependentInspectorRoot;
+      window.__wireframeScopeFocus = document.activeElement;
+    });
+    const before = await captureInspectorMutationProbe(page, "Wireframe mesh");
+    const commitStart = await page.evaluate(() => window.__wireframeInspectorCommits);
+    if (!(commitStart > 0)) throw new Error("React commit probe did not observe the fixture roots.");
+    const requestStart = fixture.requests.length;
+    const patchStart = countVisualizationPatches(fixture);
+    const started = createDeferred(), released = createDeferred();
+    fixture.nextVisualizationAck = { started, released };
+    const response = page.waitForResponse((item) => item.request().method() === "PATCH" && item.url().endsWith("/visualization/state"));
+    void response.catch(() => {});
+    try {
+      await radio.click();
+      await waitForDeferred(started.promise, "wireframe scope PATCH", timeoutMs);
+      await waitForAnimationFrame(page);
+      await waitForAnimationFrame(page);
+      assertInspectorMutationStable(before, await captureInspectorMutationProbe(page, "Wireframe mesh"), "while the wireframe scope ACK is delayed");
+      if (!await page.evaluate(() => document.activeElement === window.__wireframeScopeFocus)) throw new Error("Wireframe scope mutation lost focus while pending.");
+      released.resolve();
+      await response;
+      await waitForVisualizationMutationSettled(page, panel);
+      await waitForAnimationFrame(page);
+      assertInspectorMutationStable(before, await captureInspectorMutationProbe(page, "Wireframe mesh"), "after the wireframe scope ACK");
+      if (!await page.evaluate(() => document.activeElement === window.__wireframeScopeFocus)) throw new Error("Wireframe scope mutation lost focus after ACK.");
+      const settings = await readSettings();
+      if (settings.wireframeGeometryScope !== value || JSON.stringify(unrelated(settings)) !== JSON.stringify(unrelated(initial))) {
+        throw new Error(`Wireframe scope changed unrelated target settings: ${JSON.stringify({ initial, settings })}`);
+      }
+      const commits = await page.evaluate((start) => window.__wireframeInspectorCommits - start, commitStart);
+      const requests = fixture.requests.length - requestStart;
+      if (commits > 32 || requests > 16 || countVisualizationPatches(fixture) - patchStart !== 1) {
+        throw new Error(`Wireframe scope exceeded its mutation budget: ${JSON.stringify({ commits, requests })}`);
+      }
+      evidence.push({ value, commits, requests, focusRetained: true, rootStable: true, unrelatedSettingsPreserved: true });
+    } finally {
+      released.resolve();
+      fixture.nextVisualizationAck = null;
+    }
+  }
+  return evidence;
 }
 
 function assertInspectorMutationStable(before, after, phase) {
@@ -1127,6 +1231,7 @@ async function assertAirboxControls(page) {
   const panel = page.locator(".fm-inspector-panel").last();
   await panel.getByRole("button", { name: "Toggle vector field arrows" }).waitFor({ state: "visible", timeout: timeoutMs });
   if (await panel.getByRole("radio", { name: "Shaded", exact: true }).count()) throw new Error("Airbox exposed a shaded render mode.");
+  if (await panel.getByRole("radiogroup", { name: "Wireframe mesh", exact: true }).count()) throw new Error("Airbox exposed the FEM wireframe scope control.");
   if (await panel.getByRole("radio", { name: "Wireframe", exact: true }).count() !== 1) throw new Error("Airbox did not expose wireframe mode.");
   if (await panel.getByRole("radio", { name: "Points", exact: true }).count() !== 1) throw new Error("Airbox did not expose points mode.");
   if (await panel.getByRole("switch", { name: "Add colorbar to viewport" }).count()) throw new Error("Airbox exposed a colorbar control.");
@@ -1864,7 +1969,7 @@ function createFemAirboxIndependentFixture() {
 function baseFixture(discretization, objects) {
   return {
     fieldRequests: [], requests: [],
-    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
+    status: { api_contract_version: "1.0.0", capabilities: { binary_fields: true, explicit_topology: discretization === "fem", node_fields: true, preview_3d: true, structured_grid: discretization === "fdm" }, display: { active_quantity_id: "m", view_mode: "3d" }, domain: { cell_count: discretization === "fdm" ? FDM_TARGET_GRID_CELL_COUNT : 8, discretization, generation_id: 1 }, energies: {}, lifecycle: { commandability: "allowed", connectivity: "connected", session_resource: "active", solver: "awaiting_command" }, metrics: {}, resources: { domain_generation_id: 1, field_catalog_revision: 1, field_revision: 1, fields_revision: 1, mesh_revision: 1, scene_revision: 1, topology_revision: 1, visualization_state_revision: 1 }, run: null, runtime_bundle_version: "browser-target-fixture", session: { created_at: "0", name: "browser target fixture", request_scope_epoch: "browser-fixture-api:1", session_epoch: "browser-target-fixture@1", session_id: "browser-target-fixture", workspace_root: "/tmp" }, solver: { state: "idle" } },
     visualization: { active_quantity_id: "m", layers: { airbox: { vectors: { visible: false }, wireframe: { visible: true } }, surface: { visible: true }, vectors: { visible: false }, wireframe: { visible: false } }, overrides: [], quantity: { active_quantity_id: "m" }, revision: 1, schema_version: 1 },
     scene: { objects, revision: 1, schema_version: 2 },
     universe: { mesh_dirty: false, object_bounds_max: [1, 1, 1], object_bounds_min: [-1, -1, -1], scene_revision: 1, study_universe_mesh: null, universe: null },

@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-zeeman",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_zeeman"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_zeeman",
@@ -63,7 +46,7 @@
         "python": "fm.Zeeman.B",
         "type": "tuple[float,float,float]",
         "default": "required",
-        "si_unit": "T",
+        "si_unit": "$\\mathrm{T}$",
         "validation": "finite three-vector",
         "meaning": "applied magnetic induction",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",

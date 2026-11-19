@@ -12,6 +12,9 @@ use fullmag_session::SessionStore;
 use std::collections::BTreeMap;
 
 pub(crate) const MAX_CONTEXT_BYTES: u64 = 64 * 1024 * 1024;
+// The state envelope contains the terminal field plus the checkpoint's
+// magnetization and reference. The admission context carries only the latter.
+pub(crate) const MAX_FROZEN_STATE_ENVELOPE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 
 pub struct FrozenStageExecutionContext {
@@ -200,7 +203,7 @@ fn source_lifecycle(
     if entries.next().is_some() {
         bail!("frozen source output catalog binding is ambiguous");
     }
-    let raw = bounded_object(store, &output.object_ref, MAX_CONTEXT_BYTES)?;
+    let raw = bounded_object(store, &output.object_ref, MAX_FROZEN_STATE_ENVELOPE_BYTES)?;
     let decoded = fullmag_application::decode_study_artifact_bytes(
         &pinned.data_kind,
         &pinned.codec_id,

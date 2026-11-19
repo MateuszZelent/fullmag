@@ -102,6 +102,60 @@ describe("inactiveViewportResourcePolicy", () => {
     expect(releasePause).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps 3D resources active for a visible companion and resumes pause when it closes", () => {
+    const layout = new LayoutController(new EventBus<KernelEventMap>());
+    layout.setActiveViewportMainModule("analysis-plots");
+
+    const activePredicates = new Set<(resourceKey: string) => boolean>();
+    const releasesByPredicate = new Map<
+      (resourceKey: string) => boolean,
+      Array<() => void>
+    >();
+    const runtimeStore = {
+      beginPauseMatching: vi.fn((predicate: (resourceKey: string) => boolean) => {
+        activePredicates.add(predicate);
+        const release = vi.fn(() => {
+          activePredicates.delete(predicate);
+        });
+        const releases = releasesByPredicate.get(predicate) ?? [];
+        releases.push(release);
+        releasesByPredicate.set(predicate, releases);
+        return release;
+      }),
+    };
+
+    const dispose = createViewport3DInactiveResourcePauseController({
+      layout,
+      runtimeStore,
+    });
+
+    expect(activePredicates.has(isViewport3DExclusiveResourceKey)).toBe(true);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+    const initialViewportPauseRelease =
+      releasesByPredicate.get(isViewport3DExclusiveResourceKey)?.[0];
+
+    layout.setViewportCompanion({ moduleId: "viewport-3d", placement: "beside" });
+
+    expect(initialViewportPauseRelease).toHaveBeenCalledTimes(1);
+    expect(activePredicates.has(isViewport3DExclusiveResourceKey)).toBe(false);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
+
+    layout.setViewportCompanion(null);
+
+    expect(activePredicates.has(isViewport3DExclusiveResourceKey)).toBe(true);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(3);
+    const closedCompanionPauseRelease =
+      releasesByPredicate.get(isViewport3DExclusiveResourceKey)?.[1];
+
+    layout.setActiveViewportMainModule("viewport-3d");
+
+    expect(closedCompanionPauseRelease).toHaveBeenCalledTimes(1);
+    expect(activePredicates.has(isViewport3DExclusiveResourceKey)).toBe(false);
+
+    dispose();
+    expect(activePredicates.size).toBe(0);
+  });
+
   it("does not classify ordinary field vectors as planar-monitor resources", () => {
     const layout = new LayoutController(new EventBus<KernelEventMap>());
     const predicates: Array<(resourceKey: string) => boolean> = [];

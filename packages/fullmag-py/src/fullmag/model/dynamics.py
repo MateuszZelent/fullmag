@@ -21,6 +21,7 @@ SUPPORTED_INTEGRATORS = {
 INTEGRATOR_ALIASES: dict[str, str] = {
     "dp54": "rk45",
     "bs23": "rk23",
+    "rk32": "rk23",
 }
 
 # Integrators that support embedded error estimation (adaptive step).

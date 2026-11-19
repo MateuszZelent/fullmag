@@ -34,7 +34,7 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "fm.study(problem_name)", "type": "callable", "default": "None", "si_unit": "$1$", "validation": "problem_name is None or a valid name accepted by study", "meaning": "creates the stage-first authoring builder", "backend_support": "public authoring surface; runtime is lane-specific", "problem_ir": "problem_meta and captured study state"}
+      {"python": "fm.study(problem_name)", "type": "callable", "default": "None", "si_unit": "$1$", "validation": "`problem_name` is `None` or a valid name accepted by `study`", "meaning": "creates the stage-first authoring builder", "backend_support": "public authoring surface; runtime is lane-specific", "problem_ir": "`problem_meta` and captured study state"}
     ]
   }
 }

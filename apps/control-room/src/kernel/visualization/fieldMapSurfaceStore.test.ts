@@ -41,6 +41,20 @@ describe("field-map surface store", () => {
   });
 
   it("uses the same deterministic snapshot for server and first client render", () => {
-    expect(fieldMapStore.get()).toEqual({ evidenceStatus: null, planar: null, sectionGeometry: null });
+    expect(fieldMapStore.get()).toEqual({ evidenceStatus: null, objectLayers: [], planar: null, sectionGeometry: null });
+  });
+
+  it("publishes realized object layers once per real change", () => {
+    const listener = vi.fn();
+    const unsubscribe = fieldMapStore.subscribe(listener);
+    const layer = { max: 2e-9, min: 0, name: "film", objectId: "film" };
+
+    fieldMapStore.set({ objectLayers: [layer] });
+    const published = fieldMapStore.get().objectLayers;
+    fieldMapStore.set({ objectLayers: [{ ...layer }] });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(fieldMapStore.get().objectLayers).toBe(published);
+    unsubscribe();
   });
 });

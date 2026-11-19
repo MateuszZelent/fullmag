@@ -10,12 +10,14 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type {
   CurrentRunResource,
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
+  RunPerformanceResource,
   ScalarWindowResource,
   SceneResource,
   SolverStatusResource,
@@ -30,6 +32,7 @@ import {
   useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useObjectMetricsResource,
+  useRunPerformanceResource,
   useScalarWindowResource,
   useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -44,6 +47,7 @@ import {
 } from "@/kernel/runtime/runtimeStateDisplay";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { Progress } from "@/shared/ui/Progress";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 import { formatTorqueT } from "@/shared/domain/physics/torqueUnits";
 import { hasEmptyObjectMagneticModel } from "@/shared/domain/physics/objectMagneticModel";
 
@@ -52,6 +56,9 @@ import {
   useAntennaFieldEta,
   type AntennaFieldEta,
 } from "./antennaFieldEta";
+
+import { resolveFooterPerformanceStep } from "./footerPerformanceProgress";
+import { useBalancedMetricRows } from "./useBalancedMetricRows";
 
 // UI display locale only. Scientific values and exports keep their existing
 // invariant serialization and are not routed through this formatter.
@@ -82,17 +89,31 @@ type FooterScalarResourceSample = {
   sessionId: string;
 };
 
+type FooterRelaxationAlgorithm = NonNullable<
+  LiveStatusResource["solver"]["relaxation_algorithm"]
+>;
+
+const FOOTER_RELAXATION_ALGORITHMS = new Set<FooterRelaxationAlgorithm>([
+  "llg_overdamped",
+  "projected_gradient_bb",
+  "nonlinear_cg",
+  "tangent_plane_implicit",
+]);
+
 const FOOTER_SCALAR_COLUMNS = ["step", "time", "mx", "my", "mz", "e_total"] as const;
 
 export function FooterTelemetry({
   bus,
   status,
   stageExecution,
+  statusHost = null,
   view,
 }: {
   bus: EventBus<KernelEventMap>;
   status: FooterTelemetryStatus | null;
   stageExecution: Pick<ResourceResult<StageExecutionResource | null>, "data" | "status">;
+  /** Dock header slot for the run status; falls back to an in-panel strip. */
+  statusHost?: HTMLElement | null;
   view: "overview" | "antenna";
 }) {
   const solverStatus = useSolverStatusResource({ enabled: Boolean(status) && view === "overview" });
@@ -112,6 +133,9 @@ export function FooterTelemetry({
         } : null,
   );
   const generalTelemetryEnabled = Boolean(status) && view === "overview" && !antennaStage;
+  const performance = useRunPerformanceResource({
+    enabled: generalTelemetryEnabled && Boolean(status?.run?.run_id),
+  });
   const liveSample = useFooterLiveScalarSample(bus);
   const scalarWindow = useScalarWindowResource({
     columns: FOOTER_SCALAR_COLUMNS,
@@ -165,12 +189,25 @@ export function FooterTelemetry({
     scalarWindow.data,
     {
       magneticModelPresent: resolveFooterMagneticModelPresent(scene),
+      performance: performance.data,
+      performanceStatus: performance.status,
+      performanceRefreshFailed: Boolean(performance.error || performance.refreshError),
       currentRunStatus: currentRunForStatus?.status,
       nowMs: antennaNowMs,
       stageExecutionUnpublished,
       userSolvePhase,
     },
   );
+  const metricGroups = telemetry.metrics.reduce<
+    { id: FooterTelemetryGroup; metrics: [FooterTelemetryMetric, ...FooterTelemetryMetric[]] }[]
+  >((groups, metric) => {
+    const id = metricGroup(metric.id);
+    const current = groups.at(-1);
+    if (current?.id === id) current.metrics.push(metric);
+    else groups.push({ id, metrics: [metric] });
+    return groups;
+  }, []);
+  const metricsGridRef = useBalancedMetricRows(telemetry.metrics.length);
 
   if (view === "antenna" && !antennaStage) {
     return (
@@ -189,48 +226,100 @@ export function FooterTelemetry({
     );
   }
 
+  const statusSummary = (
+    <TelemetryStatusSummary
+      detail={telemetry.statusDetail}
+      online={telemetry.onlineTitle}
+      onlineDetail={telemetry.onlineDetail}
+      state={telemetry.statusState}
+      title={telemetry.statusTitle}
+    />
+  );
+  const progressStrip = telemetry.antennaProgress ? (
+    <AntennaFieldProgressStrip progress={telemetry.antennaProgress} eta={antennaEta} />
+  ) : telemetry.frequencyDomainProgress ? (
+    <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
+  ) : telemetry.stageProgressNotice ? (
+    <span
+      className="fm-footer-telemetry__notice"
+      data-state="unpublished"
+      title="The runtime returned no stage execution projection (HTTP 204). Run status remains authoritative."
+    >
+      {telemetry.stageProgressNotice}
+    </span>
+  ) : null;
+
   return (
     <div className="fm-footer-telemetry" role="region" aria-label={view === "antenna" ? "Antenna telemetry" : "Simulation telemetry"}>
-      <div className="fm-footer-telemetry__strip">
-        <span
-          className="fm-footer-telemetry__strip-dot"
-          data-state={telemetry.statusState}
-          aria-hidden="true"
-        />
-        <span className="text-fm-xs font-medium text-fm-primary whitespace-nowrap truncate">
-          {telemetry.statusTitle}
-        </span>
-        <span className="text-fm-muted text-fm-2xs select-none flex-shrink-0" aria-hidden="true">·</span>
-        <span className="text-fm-xs text-fm-secondary whitespace-nowrap truncate">
-          {telemetry.onlineTitle}
-        </span>
-        {telemetry.antennaProgress ? (
-          <AntennaFieldProgressStrip progress={telemetry.antennaProgress} eta={antennaEta} />
-        ) : telemetry.frequencyDomainProgress ? (
-          <>
-            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
-            <FrequencyDomainProgressStrip progress={telemetry.frequencyDomainProgress} />
-          </>
-        ) : telemetry.stageProgressNotice ? (
-          <>
-            <span className="w-px h-3 bg-fm-subtle flex-shrink-0 mx-fm-1" aria-hidden="true" />
-            <span
-              className="text-fm-2xs text-fm-muted whitespace-nowrap truncate"
-              data-state="unpublished"
-              title="The runtime returned no stage execution projection (HTTP 204). Run status above remains authoritative."
-            >
-              {telemetry.stageProgressNotice}
-            </span>
-          </>
-        ) : null}
-      </div>
+      {statusHost ? createPortal(statusSummary, statusHost) : null}
+      {!statusHost || progressStrip ? (
+        <div className="fm-footer-telemetry__strip">
+          {statusHost ? null : statusSummary}
+          {progressStrip}
+        </div>
+      ) : null}
 
-      <div className="fm-footer-telemetry__metrics"><div className="fm-footer-telemetry__metrics-grid" aria-label="Runtime metrics">
-        {telemetry.metrics.map((metric) => (
-          <TelemetryMetric key={metric.id} group={metricGroup(metric.id)} {...metric} />
-        ))}
-      </div></div>
+      <TooltipProvider delayDuration={250} skipDelayDuration={120}>
+        <div className="fm-footer-telemetry__metrics">
+          <div ref={metricsGridRef} role="group" className="fm-footer-telemetry__metrics-grid" aria-label="Simulation metrics">
+            {metricGroups.map(({ id, metrics }) => (
+              <div
+                className="fm-footer-telemetry__group"
+                data-group={id}
+                key={`${id}-${metrics[0].id}`}
+                role="group"
+                aria-label={`${FOOTER_TELEMETRY_GROUP_LABELS[id]} metrics`}
+              >
+                {metrics.map((metric) => (
+                  <TelemetryMetric
+                    key={metric.id}
+                    detail={metric.detail}
+                    group={id}
+                    label={metric.label}
+                    subdetail={metric.subdetail}
+                    unit={metric.unit}
+                    value={metric.value}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </TooltipProvider>
     </div>
+  );
+}
+
+/** Status reads as plain words; the "System Status:" prefix only repeats the context. */
+function compactStatusTitle(title: string): string {
+  return title.replace(/^System Status:\s*/i, "");
+}
+
+function TelemetryStatusSummary({
+  detail,
+  online,
+  onlineDetail,
+  state,
+  title,
+}: {
+  detail: string;
+  online: string;
+  onlineDetail: string;
+  state: string;
+  title: string;
+}) {
+  const label = compactStatusTitle(title);
+  return (
+    <span
+      className="fm-footer-telemetry__status"
+      data-state={state}
+      role="status"
+      title={`${label}: ${detail}\n${online}: ${onlineDetail}`}
+    >
+      <span className="fm-footer-telemetry__strip-dot" data-state={state} aria-hidden="true" />
+      <span className="fm-footer-telemetry__status-title">{label}</span>
+      <span className="fm-footer-telemetry__status-online">{online}</span>
+    </span>
   );
 }
 
@@ -283,7 +372,12 @@ export type FooterTelemetryStatus = {
   scalarsRevision: number;
   solver: Pick<
     LiveStatusResource["solver"],
-    "converged" | "dt" | "max_torque_T" | "state"
+    | "algorithm"
+    | "converged"
+    | "dt"
+    | "max_torque_T"
+    | "relaxation_algorithm"
+    | "state"
   >;
 };
 
@@ -325,9 +419,11 @@ export function selectFooterTelemetryStatus(
     requestScopeEpoch: data.session.request_scope_epoch,
     scalarsRevision: data.resources.scalars_revision,
     solver: {
+      algorithm: data.solver.algorithm ?? null,
       converged: data.solver.converged ?? null,
       dt: data.solver.dt ?? null,
       max_torque_T: data.solver.max_torque_T ?? null,
+      relaxation_algorithm: data.solver.relaxation_algorithm ?? null,
       state: data.solver.state,
     },
   };
@@ -376,6 +472,8 @@ export function footerTelemetryStatusEquals(
       previous.run?.solver_time ?? null,
       next.run?.solver_time ?? null,
     ) &&
+    Object.is(previous.solver.algorithm, next.solver.algorithm) &&
+    Object.is(previous.solver.relaxation_algorithm, next.solver.relaxation_algorithm) &&
     Object.is(previous.solver.converged, next.solver.converged) &&
     Object.is(previous.solver.dt, next.solver.dt) &&
     Object.is(previous.solver.max_torque_T, next.solver.max_torque_T) &&
@@ -415,6 +513,9 @@ export function buildFooterTelemetryModel(
   scalarWindow?: ScalarWindowResource | null,
   runtimePhase?: {
     magneticModelPresent?: boolean | null;
+    performance?: RunPerformanceResource | null;
+    performanceStatus?: ResourceResult<RunPerformanceResource>["status"];
+    performanceRefreshFailed?: boolean;
     currentRunStatus?: string | null;
     nowMs?: number | null;
     stageExecutionUnpublished?: boolean;
@@ -456,6 +557,19 @@ export function buildFooterTelemetryModel(
       sessionSolverState: status?.solver?.state,
     }) ?? "unknown";
   const runtimeStateLabel = formatRuntimeStateLabel(runtimeState);
+  const activeStageMethod = resolveFooterActiveStageMethod(status, stageExecution);
+  const runtimeRelaxationAlgorithm = resolveFooterRuntimeRelaxationAlgorithm(
+    status,
+    runSolverStatus,
+    stageExecution,
+  );
+  const runtimeSolverDescription = describeFooterSolverAlgorithm(
+    runtimeRelaxationAlgorithm,
+    runSolverStatus?.integrator,
+    activeStageMethod,
+  );
+  const activeSolverExecution = Boolean(status.run?.run_id) &&
+    (isRuntimeStateActive(runtimeState) || activeStageMethod !== null);
   const simTimeSeconds =
     (completedRun
       ? status?.run?.solver_time ??
@@ -464,16 +578,26 @@ export function buildFooterTelemetryModel(
       : scalarSampleNumber(liveRow, "time") ??
         runSolverStatus?.sim_time_seconds ??
         status?.run?.solver_time) ?? null;
-  const pseudoTimeSeconds =
-    scalarSampleNumber(liveRow, "pseudo_time_s") ??
-    runSolverStatus?.pseudo_time_seconds ??
-    null;
+  const currentStageIsLlg = isFooterLlgRuntimeStageMethod(activeStageMethod);
+  const pseudoTimeSeconds = currentStageIsLlg
+    ? null
+    : scalarSampleNumber(liveRow, "pseudo_time_s") ??
+      runSolverStatus?.pseudo_time_seconds ??
+      null;
   const activeRuntimeSeconds =
     scalarSampleNumber(liveRow, "active_runtime_s") ??
     objectNumber(runSolverStatus, "active_runtime_seconds") ??
     null;
   const usesPseudoTime = pseudoTimeSeconds !== null;
-  const primaryTimeSeconds = usesPseudoTime ? pseudoTimeSeconds : simTimeSeconds;
+  const directMinimizerWithoutPseudoTime =
+    runtimeRelaxationAlgorithm !== null &&
+    runtimeRelaxationAlgorithm !== "llg_overdamped" &&
+    !usesPseudoTime;
+  const primaryTimeSeconds = usesPseudoTime
+    ? pseudoTimeSeconds
+    : directMinimizerWithoutPseudoTime
+      ? null
+      : simTimeSeconds;
   const totalSteps =
     (completedRun
       ? status?.run?.solver_steps ??
@@ -483,6 +607,9 @@ export function buildFooterTelemetryModel(
         runSolverStatus?.step_index ??
         status?.run?.solver_steps ??
         status?.metrics?.total_steps) ?? null;
+  const observedSolverStep = resolveFooterPerformanceStep(
+    status.run?.run_id, runtimePhase?.performance,
+  );
   const stepsPerSecond = status?.metrics?.steps_per_second;
   const maxTorqueT =
     scalarSampleNumber(liveRow, "max_torque_T") ??
@@ -561,6 +688,20 @@ export function buildFooterTelemetryModel(
         : status
           ? "Source: session status"
           : "Source unavailable";
+  const solverMetric: FooterTelemetryMetric = {
+    detail: activeSolverExecution
+      ? runtimeSolverDescription?.detail ?? "Runtime solver provenance unavailable"
+      : "No active solver execution",
+    icon: <Gauge size={14} aria-hidden="true" />,
+    id: "active-solver",
+    label: "Solver",
+    subdetail: activeSolverExecution
+      ? `Runtime state: ${runtimeStateLabel}`
+      : `State: ${runtimeStateLabel}`,
+    value: activeSolverExecution
+      ? runtimeSolverDescription?.value ?? "Unknown"
+      : "—",
+  };
   const frequencyDomainProgress = buildFrequencyDomainProgress({
     responseProgress,
     responseSweep,
@@ -584,12 +725,16 @@ export function buildFooterTelemetryModel(
       {
         detail: usesPseudoTime
           ? "Direct minimizer pseudotime"
-          : "Physical simulation time",
+          : directMinimizerWithoutPseudoTime
+            ? `${runtimeSolverDescription?.detail ?? "Direct minimizer"} does not integrate physical time`
+            : "Physical simulation time",
         icon: <Clock3 size={14} aria-hidden="true" />,
         id: "time",
         label: usesPseudoTime ? "Pseudo time" : "Sim time",
-        subdetail: timeSource,
-        unit: "s",
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Not applicable: the runtime did not publish pseudotime"
+          : timeSource,
+        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
         value: formatScientific(primaryTimeSeconds, "—"),
       },
       ...(usesPseudoTime
@@ -627,32 +772,57 @@ export function buildFooterTelemetryModel(
         value: formatFixed(stepsPerSecond, 1, "—"),
       },
 
+      ...(observedSolverStep !== null ? [{
+        detail: "Last backend-reported solver step for the recorded stage. Field and scalar sample clocks are independent.",
+        icon: <Hash size={14} aria-hidden="true" />,
+        id: "solver-progress",
+        label: "Solver step",
+        subdetail: `Stage ${runtimePhase?.performance?.step_id ?? "unknown"} · ${
+          runtimePhase?.performanceRefreshFailed
+            ? "last observed; refresh unavailable"
+            : runtimePhase?.performanceStatus && runtimePhase.performanceStatus !== "ready"
+              ? "last observed; updating"
+              : "observed"
+        }`,
+        value: formatInteger(observedSolverStep),
+        unit: "steps",
+      }] : []),
       {
-        detail: "Latest step",
+        detail: observedSolverStep !== null ? "Step of the displayed telemetry sample" : "Latest step",
         icon: <Hash size={14} aria-hidden="true" />,
         id: "step",
-        label: "Step",
-        subdetail: `t=${formatScientific(
-          completedRun || liveRow
-            ? simTimeSeconds
-            : objectMetrics?.time_seconds ?? simTimeSeconds,
-          "—",
-        )} s`,
+        label: observedSolverStep !== null ? "Sample step" : "Step",
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Physical time not applicable"
+          : `t=${formatScientific(
+              completedRun || liveRow
+                ? simTimeSeconds
+                : objectMetrics?.time_seconds ?? simTimeSeconds,
+              "—",
+            )} s`,
         value: formatInteger(
           completedRun || liveRow ? totalSteps : objectMetrics?.step ?? totalSteps,
         ),
         unit: "steps",
       },
       {
-        detail: usesPseudoTime ? "Minimizer pseudotime step" : "Solver timestep",
+        detail: usesPseudoTime
+          ? "Minimizer pseudotime step"
+          : directMinimizerWithoutPseudoTime
+            ? `${runtimeSolverDescription?.value ?? "Direct minimizer"} does not publish a physical timestep`
+            : "Solver timestep",
         icon: <Clock3 size={14} aria-hidden="true" />,
         id: "dt",
         label: usesPseudoTime ? "Pseudo dt" : "dt",
-        subdetail: `State: ${runtimeStateLabel}`,
-        unit: "s",
-        value: formatScientific(dt, "—"),
+        subdetail: directMinimizerWithoutPseudoTime
+          ? "Not applicable: no physical timestep is used"
+          : `State: ${runtimeStateLabel}`,
+        unit: directMinimizerWithoutPseudoTime ? undefined : "s",
+        value: formatScientific(directMinimizerWithoutPseudoTime ? null : dt, "—"),
       },
-      ...(!usesPseudoTime && (errorEstimate !== null || maxError !== null)
+      solverMetric,
+      ...(!usesPseudoTime && !directMinimizerWithoutPseudoTime &&
+      (errorEstimate !== null || maxError !== null)
         ? [
             {
               detail: "Latest embedded vector error",
@@ -1350,7 +1520,13 @@ function FrequencyDomainProgressStrip({
     <div className="fm-footer-telemetry__freq-strip">
       <span className="fm-footer-telemetry__freq-strip-title">{progress.title}</span>
       {chips.length > 0 ? (
-        <span className="fm-footer-telemetry__freq-strip-chip">{chips[0]}</span>
+        <span
+          className="fm-footer-telemetry__freq-strip-chip"
+          aria-label={chips[0]}
+          title={chips[0]}
+        >
+          {chips[0]}
+        </span>
       ) : null}
       <div
         aria-label={progress.title}
@@ -1450,6 +1626,115 @@ function resolveFooterSolverStatus(
   return solverStatus;
 }
 
+export function resolveFooterRuntimeRelaxationAlgorithm(
+  status: FooterTelemetryStatus | null | undefined,
+  solverStatus?: SolverStatusResource | null,
+  stageExecution?: StageExecutionResource | null,
+): FooterRelaxationAlgorithm | null {
+  if (!status?.run?.run_id) return null;
+  const currentSolverStatus = resolveFooterSolverStatus(status, solverStatus);
+  const currentStageMethod = resolveFooterActiveStageMethod(status, stageExecution);
+  const stageAlgorithm = normalizeFooterStageMethod(currentStageMethod);
+  if (stageAlgorithm) return stageAlgorithm;
+  const candidates = [
+    currentSolverStatus?.relaxation_algorithm,
+    status.solver.relaxation_algorithm,
+    currentSolverStatus?.algorithm,
+    status.solver.algorithm,
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeFooterRelaxationAlgorithm(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function resolveFooterActiveStageMethod(
+  status: FooterTelemetryStatus,
+  stageExecution: StageExecutionResource | null | undefined,
+): string | null {
+  if (
+    !stageExecution ||
+    stageExecution.session_id !== status.sessionId ||
+    stageExecution.session_epoch !== status.sessionEpoch ||
+    stageExecution.request_scope_epoch !== status.requestScopeEpoch ||
+    stageExecution.run_id !== status.run?.run_id ||
+    !isRuntimeStateActive(stageExecution.runtime_state) ||
+    !Number.isSafeInteger(stageExecution.active_stage_index)
+  ) {
+    return null;
+  }
+  const activeStage = stageExecution.stages.find(
+    (stage) => stage.index === stageExecution.active_stage_index,
+  );
+  if (
+    !activeStage ||
+    !["active", "running"].includes(activeStage.status.trim().toLowerCase())
+  ) {
+    return null;
+  }
+  return activeStage.current_settle_step_method ?? null;
+}
+
+function normalizeFooterRelaxationAlgorithm(
+  value: unknown,
+): FooterRelaxationAlgorithm | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return FOOTER_RELAXATION_ALGORITHMS.has(normalized as FooterRelaxationAlgorithm)
+    ? normalized as FooterRelaxationAlgorithm
+    : null;
+}
+
+function normalizeFooterStageMethod(value: string | null): FooterRelaxationAlgorithm | null {
+  if (isFooterLlgRuntimeStageMethod(value)) return "llg_overdamped";
+  return normalizeFooterRelaxationAlgorithm(value);
+}
+
+function isFooterLlgRuntimeStageMethod(value: string | null): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "llg_overdamped" || normalized === "heun_dynamics_settle";
+}
+
+function describeFooterSolverAlgorithm(
+  algorithm: FooterRelaxationAlgorithm | null,
+  integrator: string | null | undefined,
+  stageMethod: string | null,
+): { detail: string; value: string } | null {
+  if (stageMethod?.trim().toLowerCase() === "heun_dynamics_settle") {
+    return {
+      detail: "Landau–Lifshitz–Gilbert overdamped with Heun integrator",
+      value: "LLG + HEUN",
+    };
+  }
+  switch (algorithm) {
+    case "projected_gradient_bb":
+      return { detail: "Barzilai–Borwein direct minimizer", value: "BB" };
+    case "nonlinear_cg":
+      return { detail: "Nonlinear conjugate-gradient direct minimizer", value: "NCG" };
+    case "tangent_plane_implicit":
+      return { detail: "Tangent-plane implicit direct minimizer", value: "TPI" };
+    case "llg_overdamped": {
+      const activeIntegrator = integrator?.trim() || null;
+      return {
+        detail: activeIntegrator
+          ? `Landau–Lifshitz–Gilbert overdamped with ${activeIntegrator} integrator`
+          : "Landau–Lifshitz–Gilbert overdamped",
+        value: activeIntegrator ? `LLG + ${activeIntegrator.toUpperCase()}` : "LLG",
+      };
+    }
+    default: {
+      const runtimeIntegrator = integrator?.trim() || null;
+      return runtimeIntegrator
+        ? {
+            detail: `Runtime integrator ${runtimeIntegrator}`,
+            value: runtimeIntegrator.toUpperCase(),
+          }
+        : null;
+    }
+  }
+}
+
 function isTerminalFooterSolverState(value: unknown): boolean {
   if (typeof value !== "string") return false;
   return TERMINAL_FOOTER_SOLVER_STATES.has(value.trim().toLowerCase());
@@ -1473,52 +1758,75 @@ export function resolvePrimaryTelemetryObjectId(
   return objects.find((object) => !hasEmptyObjectMagneticModel(object))?.id ?? null;
 }
 
-function metricGroup(id: string): "runtime" | "solver" | "magnetization" | "energy" {
+type FooterTelemetryGroup = "runtime" | "solver" | "magnetization" | "energy";
+
+const FOOTER_TELEMETRY_GROUP_LABELS: Record<FooterTelemetryGroup, string> = {
+  runtime: "Runtime",
+  solver: "Solver",
+  magnetization: "Magnetization",
+  energy: "Energy",
+};
+
+function metricGroup(id: string): FooterTelemetryGroup {
   if (id.startsWith("energy-")) return "energy";
   if (id === "avg-mx" || id === "avg-my" || id === "avg-mz" || id === "avg-m") return "magnetization";
-  if (id === "step" || id === "dt" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
+  if (id === "solver-progress" || id === "step" || id === "dt" || id === "active-solver" || id === "solver-error" || id === "solver-max-error" || id === "max-torque") return "solver";
   return "runtime";
 }
 
+/**
+ * One readout: label and value only. Provenance and method notes live in a
+ * contextual tooltip (hover or keyboard focus) so the dock stays one or two
+ * rows tall instead of growing with expandable descriptions.
+ */
 function TelemetryMetric({
   detail,
   group,
-  icon,
   label,
   subdetail,
   unit,
   value,
 }: {
   detail: string;
-  group: "runtime" | "solver" | "magnetization" | "energy";
-  icon: ReactNode;
+  group: FooterTelemetryGroup;
   label: string;
   subdetail: string;
   unit?: string;
   value: string;
 }) {
-  const tooltip = `${label}: ${value}${unit ? ` ${unit}` : ""}\n${detail}\n${subdetail}`;
+  const reading = `${value}${unit ? ` ${unit}` : ""}`;
   return (
-    <div
-      className="fm-footer-telemetry__metric"
-      data-group={group}
-      title={tooltip}
-    >
-      <div className="fm-footer-telemetry__metric-label">
-        {icon}
-        <span>{label}</span>
-      </div>
-      <div className="fm-footer-telemetry__metric-value">
-        <span>{value}</span>
-        {unit ? (
-          <span className="fm-footer-telemetry__metric-unit">{unit}</span>
-        ) : null}
-      </div>
-      <div className="fm-footer-telemetry__metric-detail">
-        <span>{detail}</span>
-        <span>{subdetail}</span>
-      </div>
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className="fm-footer-telemetry__metric"
+          data-group={group}
+          role="group"
+          tabIndex={0}
+          aria-label={`${label}: ${reading}`}
+        >
+          <span className="fm-footer-telemetry__metric-label">{label}</span>
+          <span className="fm-footer-telemetry__metric-value">
+            <span className="fm-footer-telemetry__metric-number">{value}</span>
+            {unit ? <span className="fm-footer-telemetry__metric-unit">{unit}</span> : null}
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent
+        className="fm-footer-telemetry__tooltip"
+        data-group={group}
+        side="top"
+        align="start"
+      >
+        <span className="fm-footer-telemetry__tooltip-head">
+          <span className="fm-footer-telemetry__tooltip-label">{label}</span>
+          <span className="fm-footer-telemetry__tooltip-group">{FOOTER_TELEMETRY_GROUP_LABELS[group]}</span>
+        </span>
+        <span className="fm-footer-telemetry__tooltip-value">{reading}</span>
+        <span className="fm-footer-telemetry__tooltip-detail">{detail}</span>
+        {subdetail ? <span className="fm-footer-telemetry__tooltip-detail">{subdetail}</span> : null}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

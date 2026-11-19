@@ -14,8 +14,6 @@ source_of_truth: "Universe airbox policy, AirboxOptions, shared-domain manifest 
 (public-docs-numerical-methods-meshing-fem-airbox-index)=
 # FEM airbox mesh
 
-**Last changes: 12:31 24.08.2026**
-
 The airbox branch documents the universe-owned exterior FEM domain from geometric enclosure through graded tetrahedralization, semantic outer markers and capability-gated periodic pairing.
 
 ::::{admonition} Implementation status
@@ -254,7 +252,3 @@ grading
 boundary-closure
 periodic-airbox
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

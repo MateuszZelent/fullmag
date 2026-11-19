@@ -49,6 +49,7 @@ void reset_metadata(FemGpuState &state)
     state.lifecycle.stage_count = 0;
     state.lifecycle.device_bytes = 0;
     state.lifecycle.reduction_workspace_bytes = 0;
+    state.packed_field_download.dof_len = 0;
     state.reductions.temp_storage_bytes = 0;
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.residency.host_state = FemGpuSyncState::HostClean;
@@ -86,6 +87,7 @@ void reset_metadata(FemGpuState &state)
     state.relaxation.state_generation = 0;
     state.relaxation.nonlinear_cg_direction_valid = false;
     state.relaxation.accepted_evaluation = {};
+    state.relaxation.pgbb_accepted_field = {};
     state.demag_poisson.scalar_dof_count = 0;
     state.demag_poisson.full_scalar_dof_count = 0;
     state.demag_poisson.hybrid_stage_m_xyz.clear();
@@ -99,6 +101,7 @@ void reset_metadata(FemGpuState &state)
 
 void invalidate_rk_endpoint(FemGpuState &state)
 {
+    gpu_relax_note_external_state_change(state.relaxation);
     state.rk.endpoint_valid = false;
     state.rk.endpoint_consumed = true;
     state.rk.endpoint_operator_signature = 0;
@@ -129,6 +132,7 @@ bool gpu_state_upload_magnetization_aos(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if (!state.lifecycle.allocated) {
         return true;
     }
@@ -199,6 +203,36 @@ bool gpu_state_download_component_aos(
     return gpu_component_download_aos(state.lifecycle, field, out_xyz, audit, label, error);
 }
 
+bool gpu_state_download_component_aos_packed(
+    FemGpuState &state,
+    const FemGpuComponentField &field,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    void *raw_stream,
+    const char *label,
+    std::string &error)
+{
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+    if (state.packed_field_download.aos_device == nullptr ||
+        state.packed_field_download.dof_len != state.lifecycle.dof_len) {
+        error = std::string("FemGpuState ") + label +
+            " packed download buffer is missing or has the wrong capacity";
+        return false;
+    }
+    return gpu_component_download_aos_packed(
+        state.lifecycle,
+        field,
+        state.packed_field_download.aos_device,
+        state.packed_field_download.dof_len,
+        raw_stream,
+        out_xyz,
+        audit,
+        label,
+        error);
+}
+
 bool gpu_state_upload_effective_fields_aos(
     FemGpuState &state,
     const double *h_ex_xyz,
@@ -209,6 +243,7 @@ bool gpu_state_upload_effective_fields_aos(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if (!gpu_field_buffers_upload_effective_fields_aos(
             state.lifecycle,
             state.fields,
@@ -235,6 +270,7 @@ bool gpu_state_upload_demag_field_aos(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     const bool uploaded = gpu_field_buffers_upload_demag_field_aos(
         state.lifecycle,
         state.fields,
@@ -263,6 +299,7 @@ bool gpu_state_upload_local_vector_fields_aos(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if (!gpu_field_buffers_upload_local_vector_fields_aos(
             state.lifecycle,
             state.fields,
@@ -292,6 +329,7 @@ bool gpu_state_upload_magnetoelastic_strain(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     const bool uploaded = gpu_magnetoelastic_upload_strain(
         state.lifecycle,
         state.magnetoelastic,
@@ -317,6 +355,7 @@ bool gpu_state_upload_mesh_geometry(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     const bool uploaded = gpu_mesh_geometry_upload(
         state.lifecycle,
         state.mesh_geometry,
@@ -380,6 +419,7 @@ bool gpu_state_upload_runtime_coefficients(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     state.legacy_exchange.row_scale_ready = false;
     const bool uploaded = gpu_runtime_coefficients_upload(
         state.lifecycle,
@@ -443,6 +483,7 @@ bool gpu_state_upload_stt_target_mask(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if ((active_node_mask == nullptr) != (active_node_mask_len == 0)) {
         error = "FEM GPU STT target mask requires a pointer and non-zero length together";
         return false;
@@ -518,6 +559,7 @@ bool gpu_state_upload_stt_element_mask(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if ((active_element_mask == nullptr) != (active_element_mask_len == 0)) {
         error = "FEM GPU Zhang-Li target element mask requires a pointer and non-zero length together";
         return false;
@@ -595,6 +637,7 @@ bool gpu_state_upload_frozen_spins(
     TransferAudit &audit,
     std::string &error)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     if ((magnetic_node_mask == nullptr) != (magnetic_node_mask_len == 0)) {
         error = "FEM GPU Frozen Spins free-node mask requires a magnetic mask pointer and non-zero length together";
         return false;
@@ -753,6 +796,7 @@ bool gpu_state_upload_exchange_legacy_sparse(
     uint64_t periodic_representative_nodes_len,
     uint64_t periodic_reduced_node_count)
 {
+    gpu_relax_invalidate_accepted_evaluation(state.relaxation);
     const bool uploaded = gpu_exchange_upload_legacy_sparse(
         state.lifecycle,
         state.legacy_exchange,
@@ -848,6 +892,28 @@ bool gpu_state_initialize(
         gpu_state_destroy(state);
         return false;
     }
+
+    if (state.lifecycle.dof_len > std::numeric_limits<uint64_t>::max() / sizeof(double)) {
+        error = "FemGpuState packed field-download buffer size overflows device byte accounting";
+        gpu_state_destroy(state);
+        return false;
+    }
+    const uint64_t packed_field_download_bytes =
+        state.lifecycle.dof_len * static_cast<uint64_t>(sizeof(double));
+    if (packed_field_download_bytes > std::numeric_limits<uint64_t>::max() - device_bytes) {
+        error = "FemGpuState packed field-download buffer overflows aggregate device byte accounting";
+        gpu_state_destroy(state);
+        return false;
+    }
+    if (!gpu_device_allocate_double(
+            state.packed_field_download.aos_device,
+            state.lifecycle.dof_len,
+            device_bytes,
+            error)) {
+        gpu_state_destroy(state);
+        return false;
+    }
+    state.packed_field_download.dof_len = state.lifecycle.dof_len;
 
     if (allocate_demag_workspace &&
         (!gpu_device_allocate_double(
@@ -963,6 +1029,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_device_free_double(state.mesh_geometry.nodes_xyz);
     gpu_device_free_u32(state.mesh_geometry.elements);
     gpu_device_free_u8(state.mesh_geometry.magnetic_element_mask);
+    gpu_device_free_double(state.packed_field_download.aos_device);
     gpu_device_free_double(state.demag_poisson.poisson_rhs);
     gpu_device_free_double(state.demag_poisson.poisson_solution);
     gpu_device_free_double(state.demag_poisson.poisson_solution_full);

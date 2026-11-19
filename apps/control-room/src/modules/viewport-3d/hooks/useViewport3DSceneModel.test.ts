@@ -13,6 +13,7 @@ import {
   ObjectVisualizationController,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
+  targetForFdmNativeLayer,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
@@ -48,6 +49,7 @@ import {
   resolveViewport3DDomainRenderLane,
   hasActiveViewport3DTargetQuantityDemand,
   resolveViewport3DFdmFieldIdentityCompatible,
+  resolveFdmNativeLayerFieldVector,
   resolveViewport3DFieldRenderModelBuildOptions,
   resolveViewport3DSelectedSnapshotId,
   resolveViewport3DSelectedSnapshotQuery,
@@ -57,6 +59,7 @@ import {
   resolveViewport3DMeshBackedRegionOverlays,
   resolveViewport3DPrimitiveVisualizationSettings,
   resolveViewport3DPartVisualizationSettings,
+  resolveAirboxManualColorRange,
   resolveViewport3DPartScalarRangeRequests,
   mergeViewport3DPartScalarRanges,
   resolveViewport3DRegionMembershipIds,
@@ -68,6 +71,7 @@ import {
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DFdmTargetVisualization,
+  resolveViewport3DFdmNativeLayerSettings,
   resolveViewport3DAirboxFieldVectorDemandPlan,
   resolveViewport3DAirboxVectorSampleBudget,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
@@ -94,7 +98,10 @@ import {
 import {
   resolveHysteresisStepViewportTarget,
 } from "../model/viewport3DTargets";
-import { summarizeViewport3DFieldDemandDiagnostics } from "../model/viewport3DFieldDataPlan";
+import {
+  resolveViewport3DFdmNativeLayerFieldRequests,
+  summarizeViewport3DFieldDemandDiagnostics,
+} from "../model/viewport3DFieldDataPlan";
 import { resolveViewport3DFieldVectorResourceKey } from "../viewport3dResources";
 import {
   buildViewport3DFieldRenderModel,
@@ -592,6 +599,57 @@ describe("FDM Airbox mesh demand", () => {
       "fdmAirboxFieldBuffer && fdmAirboxVectorSegments",
     );
   });
+
+  it("keeps authored Airbox preview geometry independent from unavailable field data", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const domainAdapterStart = source.indexOf(
+      "const fdmMultilayerAirboxDomain = useMemo(",
+    );
+    const fieldCatalogStart = source.indexOf("const fieldCatalog", domainAdapterStart);
+    const fieldRequestStart = source.indexOf(
+      "const fdmMultilayerAirboxFieldRequest = useMemo(",
+    );
+    const fieldRequestEnd = source.indexOf(
+      "const magneticPartFieldVectors =",
+      fieldRequestStart,
+    );
+    const membershipStart = source.indexOf("const fdmMultilayerAirboxRegionIds = useMemo(");
+    const membershipEnd = source.indexOf("const fdmMultilayerCuboidBuildEntries", membershipStart);
+    const geometryEntryStart = source.indexOf(
+      "if (fdmMultilayerAirboxDomain && airboxSettings.visible)",
+    );
+    const geometryEntryEnd = source.indexOf("return entries;", geometryEntryStart);
+    const diagnosticStart = source.indexOf(
+      'id: "fdm-multilayer-airbox-field"',
+    );
+    const diagnosticEnd = source.indexOf(
+      'id: "fdm-multilayer-airbox-build"',
+      diagnosticStart,
+    );
+
+    expect(source.slice(domainAdapterStart, fieldCatalogStart)).toContain(
+      "authoredUniverseBounds",
+    );
+    expect(source.slice(fieldRequestStart, fieldRequestEnd)).toContain(
+      "return request ?? EMPTY_FDM_MULTILAYER_AIRBOX_FIELD_REQUEST",
+    );
+    expect(source.slice(fieldRequestStart, fieldRequestEnd)).toContain(
+      "fdmMultilayerAirboxDomain,\n        ),",
+    );
+    const membershipSource = source.slice(membershipStart, membershipEnd);
+    expect(membershipSource).toContain("buildFdmMultilayerAirboxRegionIds");
+    expect(membershipSource).not.toContain("fdmMultilayerAirboxField");
+    const geometryEntry = source.slice(geometryEntryStart, geometryEntryEnd);
+    expect(geometryEntry).toContain('cellSelection: airboxCellGeometryReady ? "inactive" : "all"');
+    expect(geometryEntry).toContain("enabled: airboxCellGeometryReady ||");
+    expect(geometryEntry).toContain("realizedRegionIds: fdmMultilayerAirboxRegionIds");
+    expect(source.slice(diagnosticStart, diagnosticEnd)).toContain(
+      "!fdmMultilayerAirboxDomain?.geometryOnly",
+    );
+    expect(source.slice(diagnosticStart, diagnosticEnd)).toContain(
+      'status:\n        fdmLaneActive && !fdmMultilayerAirboxDomain?.geometryOnly',
+    );
+  });
 });
 const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",
@@ -601,6 +659,28 @@ const visualizationStateResourceSourceUrl = new URL(
 type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
 >[0];
+
+describe("Airbox manual color range", () => {
+  const quantity = {
+    active_quantity_id: "H_demag",
+    field_component: "magnitude",
+    colormap: "viridis",
+    auto_contrast: false,
+    contrast_min: 0,
+    contrast_max: 256_618.6,
+  } as const;
+
+  it("uses the manual range only for the same field and component", () => {
+    expect(resolveAirboxManualColorRange(quantity, "H_demag", "magnitude"))
+      .toEqual({ min: 0, max: 256_618.6 });
+    expect(resolveAirboxManualColorRange(quantity, "m", "magnitude")).toBeNull();
+    expect(resolveAirboxManualColorRange(quantity, "H_demag", "z")).toBeNull();
+    expect(resolveAirboxManualColorRange({ ...quantity, auto_contrast: true }, "H_demag", "magnitude"))
+      .toBeNull();
+    expect(resolveAirboxManualColorRange({ ...quantity, contrast_max: 0 }, "H_demag", "magnitude"))
+      .toBeNull();
+  });
+});
 
 describe("airbox vector sample budget", () => {
   it("clamps to the effective air-only carrier, not legacy or session limits", () => {
@@ -755,6 +835,141 @@ function fieldVectorFixture(
   };
 }
 
+function nativeLayerFieldDomainFixture() {
+  return {
+    activeCellCount: 8,
+    activeMaskPresent: false,
+    bounds: null,
+    displayCellBudget: 8,
+    displayCellCount: 8,
+    gridFingerprint: "a".repeat(64),
+    inactiveCellCount: 0,
+    kind: "fdm-native-layer" as const,
+    layerId: "film",
+    magnetName: "film",
+    objectId: "object-film",
+    origin: [0, 0, 0] as [number, number, number],
+    shape: [2, 2, 2] as [number, number, number],
+    spacing: [1, 1, 1] as [number, number, number],
+    stride: 1,
+    totalCells: 8,
+    transferKind: "native",
+  };
+}
+
+describe("resolveFdmNativeLayerFieldVector", () => {
+  const domain = nativeLayerFieldDomainFixture();
+
+  it.each(["explicit_node_indices", "sampled_node_indices"] as const)(
+    "accepts native-local fields using %s when the FMVP grid describes only the samples",
+    (indexing) => {
+      const fieldVector = fieldVectorFixture({
+        domainGenerationId: "layout-7",
+        formatVersion: 3,
+        grid: [3, 1, 1],
+        indexing,
+        meshTopologyHash: domain.gridFingerprint,
+        nodeIndices: Uint32Array.from([0, 4, 7]),
+        pointCount: 3,
+        scopeId: domain.layerId,
+        scopeKind: "layer",
+      });
+
+      expect(
+        resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+      ).toBe(fieldVector);
+    },
+  );
+
+  it.each([
+    {
+      label: "a different layer scope",
+      overrides: { scopeId: "cylinder", scopeKind: "layer" as const },
+    },
+    {
+      label: "a different carrier fingerprint",
+      overrides: { meshTopologyHash: "b".repeat(64) },
+    },
+    {
+      label: "a different layout generation",
+      overrides: { domainGenerationId: "layout-8" },
+    },
+  ])("rejects sampled fields with $label", ({ overrides }) => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [2, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: domain.gridFingerprint,
+      nodeIndices: Uint32Array.from([0, 7]),
+      pointCount: 2,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+      ...overrides,
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it.each([
+    { label: "missing", nodeIndices: null },
+    { label: "out-of-range", nodeIndices: Uint32Array.from([0, 8]) },
+    { label: "duplicated", nodeIndices: Uint32Array.from([0, 0]) },
+  ])("rejects $label native-local sample indices", ({ nodeIndices }) => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [2, 1, 1],
+      indexing: "sampled_node_indices",
+      meshTopologyHash: domain.gridFingerprint,
+      nodeIndices,
+      pointCount: 2,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it("keeps dense native-layer payloads on the exact full-domain shape", () => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: [8, 1, 1],
+      indexing: "full_domain",
+      meshTopologyHash: domain.gridFingerprint,
+      pointCount: domain.totalCells,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+
+  it("keeps dense native-layer payloads at the full-domain point count", () => {
+    const fieldVector = fieldVectorFixture({
+      domainGenerationId: "layout-7",
+      formatVersion: 3,
+      grid: domain.shape,
+      indexing: "full_domain",
+      meshTopologyHash: domain.gridFingerprint,
+      pointCount: domain.totalCells - 1,
+      scopeId: domain.layerId,
+      scopeKind: "layer",
+    });
+
+    expect(
+      resolveFdmNativeLayerFieldVector(domain, "layout-7", fieldVector),
+    ).toBeNull();
+  });
+});
+
 describe("useViewport3DSceneModel", () => {
   it("surfaces target-vector status only for current resolved-lane demand", () => {
     expect(hasActiveViewport3DTargetQuantityDemand("fdm", 1)).toBe(true);
@@ -783,7 +998,7 @@ describe("useViewport3DSceneModel", () => {
     ).toHaveLength(2);
   });
 
-  it("resolves FDM native layers from canonical state and pending local target edits", () => {
+  it("resolves FDM native layers through their canonical object owner", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const nativeLayerSettingsBlock = source.slice(
       source.indexOf("const fdmNativeLayerSettingsById = useMemo"),
@@ -791,11 +1006,194 @@ describe("useViewport3DSceneModel", () => {
     );
 
     expect(nativeLayerSettingsBlock).toContain(
-      "resolveViewport3DFdmTargetVisualization({",
+      "resolveViewport3DFdmNativeLayerSettings({",
     );
+    expect(nativeLayerSettingsBlock).toContain(
+      "objectContext: getObjectContext(domain.objectId)",
+    );
+    expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings");
     expect(nativeLayerSettingsBlock).toContain("snapshot: objectVisualizationSnapshot");
-    // FDM native layers use canonical local targets; the FEM registry must not override them.
-    expect(nativeLayerSettingsBlock).not.toContain("visualizationState: renderingState");
+    expect(nativeLayerSettingsBlock).toContain("visualizationState: renderingState");
+    expect(nativeLayerSettingsBlock).toContain("getObjectContext,");
+    expect(nativeLayerSettingsBlock).toContain("globalObjectBaseSettings,");
+    expect(nativeLayerSettingsBlock).toContain("renderingState,");
+    expect(nativeLayerSettingsBlock).not.toContain("fdmTargetSettingsById");
+
+    const helperStart = source.indexOf(
+      "export function resolveViewport3DFdmNativeLayerSettings(",
+    );
+    const helperBlock = source.slice(
+      helperStart,
+      source.indexOf("\nfunction viewport3DObjectVisualizationSnapshotEquals", helperStart),
+    );
+    expect(helperBlock).toContain("canonicalVisualizationSceneObjectId(domain.objectId)");
+    expect(helperBlock).toContain("id: `object:${canonicalObjectId}`");
+    expect(helperBlock).toContain("inheritedSettings: globalObjectBaseSettings");
+    expect(helperBlock).toContain("inheritedSettings: owner.effectiveSettings");
+    expect(helperBlock).toContain("resolveFdmViewportVisualizationSettings(");
+  });
+
+  it("keeps native-layer ownership keyed by object id when layer ids and names differ", () => {
+    const visualization = new ObjectVisualizationController();
+    const layerA = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "native-layer-a",
+      magnetName: "display-name-a",
+      objectId: "canonical-object-a",
+    };
+    const layerB = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "native-layer-b",
+      magnetName: "display-name-b",
+      objectId: "canonical-object-b",
+    };
+    visualization.patchTarget(
+      { id: "object:canonical-object-a", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_x", visible: true },
+    );
+    visualization.patchTarget(
+      { id: "object:canonical-object-b", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_y", visible: true },
+    );
+
+    const resolve = (domain: typeof layerA) =>
+      resolveViewport3DFdmNativeLayerSettings({
+        activeMaskReady: true,
+        domain,
+        globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+        objectContext: undefined,
+        snapshot: visualization.getSnapshot(),
+        target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+        visualizationState: null,
+      });
+
+    expect(resolve(layerA).surfaceColorSource).toBe("component_x");
+    expect(resolve(layerB).surfaceColorSource).toBe("component_y");
+  });
+
+  it("lets native-layer overrides win over inherited object settings", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "layer-id-is-independent",
+      magnetName: "not-the-owner-id",
+      objectId: "owner-id",
+    };
+    const target = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
+    visualization.patchTarget(
+      { id: "object:owner-id", kind: "object" },
+      { shaderVisible: true, surfaceColorSource: "component_x", visible: true },
+    );
+    visualization.patchTarget(target, {
+      shaderVisible: true,
+      surfaceColorSource: "component_z",
+      visible: true,
+    });
+
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target,
+      visualizationState: null,
+    });
+
+    expect(settings.surfaceColorSource).toBe("component_z");
+  });
+
+  it("does not request native-layer fields when the owning object is hidden", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "hidden-owner-layer",
+      objectId: "hidden-owner",
+    };
+    visualization.patchTarget(
+      { id: "object:hidden-owner", kind: "object" },
+      { shaderVisible: true, vectorsVisible: true, visible: false },
+    );
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: true,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+      visualizationState: null,
+    });
+
+    expect(settings).toMatchObject({
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+    });
+    expect(
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [{ layerId: domain.layerId, settings }],
+        maxSamples: 8,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("keeps a native layer geometry-only while its declared active mask is unavailable", () => {
+    const visualization = new ObjectVisualizationController();
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      activeMaskPresent: true,
+      layerId: "layer-with-missing-mask",
+      objectId: "owner-with-mask",
+    };
+    visualization.patchTarget(
+      { id: "object:owner-with-mask", kind: "object" },
+      { shaderVisible: true, vectorsVisible: true, visible: true },
+    );
+    const settings = resolveViewport3DFdmNativeLayerSettings({
+      activeMaskReady: false,
+      domain,
+      globalObjectBaseSettings: resolveGlobalObjectVisualizationSettings(null),
+      objectContext: undefined,
+      snapshot: visualization.getSnapshot(),
+      target: targetForFdmNativeLayer(domain.layerId, domain.magnetName),
+      visualizationState: null,
+    });
+
+    expect(settings).toMatchObject({ shaderVisible: false, vectorsVisible: false });
+    expect(
+      resolveViewport3DFdmNativeLayerFieldRequests({
+        available: true,
+        layers: [{ layerId: domain.layerId, settings }],
+        maxSamples: 8,
+      }).size,
+    ).toBe(0);
+  });
+
+  it("preserves native-layer field scope identity", () => {
+    const domain = {
+      ...nativeLayerFieldDomainFixture(),
+      layerId: "layout-layer-identity",
+      magnetName: "different-display-name",
+      objectId: "different-object-identity",
+    };
+    const requests = resolveViewport3DFdmNativeLayerFieldRequests({
+      available: true,
+      layers: [{
+        layerId: domain.layerId,
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          shaderVisible: true,
+          visible: true,
+        },
+      }],
+      maxSamples: 8,
+    });
+
+    expect(requests.get(domain.layerId)?.query).toMatchObject({
+      scope_id: domain.layerId,
+      scope_kind: "layer",
+    });
   });
 
   it("uses canonical Airbox settings only when the multilayer layout is unavailable", () => {
@@ -1078,7 +1476,7 @@ describe("useViewport3DSceneModel", () => {
       "fdmSettings: fdmDomain ? fdmSettings : null,",
     );
     expect(source).toContain(
-      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+      "const tet4FmmqQualitySupported = useMemo(\n    () => topologySupportsTet4FmmqQuality(topology.data),\n    [topology.data],\n  );",
     );
     expect(source).toContain(
       "useViewport3DMeshQualityData(\n    Boolean(\n      liveViewportResourcesEnabled &&\n        fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
@@ -1366,6 +1764,30 @@ describe("useViewport3DSceneModel", () => {
         scope_kind: "part",
       }),
     });
+  });
+
+  it.each([undefined, null])("uses the Airbox H_demag target field when its quantity is %s", (airboxQuantityId) => {
+    const query = { component: "full", scope_id: "airbox", scope_kind: "airbox" } as const;
+    const requestId = fieldVectorResourceKey("H_demag", query);
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      airboxQuantityCompatible: true,
+      airboxQuantityId,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      targetQuantityFieldRequests: new Map([[requestId, {
+        consumers: ["airbox:surface"],
+        quantityId: "H_demag",
+        query,
+        requestId,
+      }]]),
+      targetQuantityFieldVectors: new Map([[requestId, fieldVectorFixture({ quantityId: "H_demag" })]]),
+      topology: {
+        airboxParts: [{ part: { id: "airbox", label: "Airbox", role: "air" } }],
+        magneticParts: [],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partTargetFieldBuffers.get("airbox")).toMatchObject({ quantityId: "H_demag", scopeKind: "airbox" });
   });
 
   it("keeps synthetic airbox vectors as target buffers instead of legacy fields", () => {
@@ -2542,12 +2964,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
-    expect(source).toContain('(pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
+    expect(source).toContain('(pinnedObservationActive || preparedSource ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
-    expect(source).toContain("visualizationPhaseRad:");
-    expect(source).toContain("analysisOverlay?.visualizationPhaseRad ??");
+    // The phase reaches materials through the clock's shared uniform, never
+    // through React state or render options.
+    expect(source).toContain("complexPhaseUniform: analysisOverlayPhaseUniform,");
+    expect(source).toContain("analysisFieldOverlay.phaseClock.uniform");
+    expect(source).not.toContain("analysisOverlay?.visualizationPhaseRad");
+    expect(source).toContain("{ ignorePhase: true },");
     expect(source).toContain("resolveViewport3DAnalysisComplexFieldQuery");
     expect(source).toContain("asDecodedComplexFieldVector");
     expect(source).toContain("Boolean(analysisOverlay) ||");
@@ -4958,7 +5384,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(
-      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest)",
+      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest, preparedSource)",
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
@@ -5538,15 +5964,15 @@ describe("useViewport3DSceneModel", () => {
       notifyOnError: false,
     });
     expect(source).toMatch(
-      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
+      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{\s*\.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\s*pauseLoad: waitingForAuthoredFieldCatalog,\s*preparedSource,?\s*\},\s*\);/,
     );
     expect(source).toMatch(
       /const observationFieldVector = useViewport3DObservationFrameMagnetization\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
     );
     // Other field-vector consumers have no banner and keep the default toast.
     expect(
-      source.match(/VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n/g),
-    ).toHaveLength(2);
+      source.match(/\bVIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS\b/g),
+    ).toHaveLength(3);
     expect(source).toContain(": hudStatus,");
   });
 
@@ -5774,7 +6200,10 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useFdmCuboidBuildResult");
     expect(source).toContain("modelFieldVector: fdmInstanceModelFieldVector");
     expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
-    expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
+    expect(source).toContain("membership=${fdmRegionMembershipDataRevision ?? \"none\"}");
+    // A1: FDM build keys use the settled payload identity, not the pending revision.
+    expect(source).toContain("const fdmRegionMembershipDataRevision =");
+    expect(source).not.toContain("domainMeta.revision == null ? null : String(domainMeta.revision)");
     expect(source).toContain("const fdmRealizedRegionIds = useMemo");
     expect(source).toContain("adaptDomainPresentation({");
     expect(source).toContain("expectedFdmGridFingerprint:");

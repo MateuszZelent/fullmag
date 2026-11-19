@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 690" role="img" aria-labelledby="title desc">
+  <title id="title">Oersted field families: analytic infinite cylinder vs solved-current Biot-Savart and vector potential</title>
+  <desc id="desc">Panel (a) shows the OerstedCylinder geometry of radius R carrying signed current I along unit axis a_hat, with azimuthal direction phi_hat = a_hat x rho_hat and the exact piecewise radial profile H_oe(rho). Panel (b) traces the OerstedField(source=...) pipeline from CurrentTransport and circuit closure through Biot-Savart and H(curl) vector potential formulations, separating bounded FEM CPU support from unsupported FDM solved-current lanes.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#1d5fa7"/></marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b8392b"/></marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#b86b11"/></marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#147d75"/></marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6f3cc4"/></marker>
+    <marker id="arrow-steel" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#246b8e"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#6e7b91"/></marker>
+    <marker id="arrow-axis" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1.2 L 9.5 5 L 0 8.8 z" fill="#3b4252"/></marker>
+    <style>
+      .title-main { font: 700 20px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .title-sub { font: 400 13.5px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .panel-badge { font: 700 13px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #17467a; }
+      .panel-title { font: 700 15px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .sec-head { font: 700 12.8px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .body { font: 400 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #4c566a; }
+      .body-bold { font: 600 12px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .small { font: 400 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #667085; }
+      .small-bold { font: 600 11px 'Segoe UI', 'Inter', Arial, sans-serif; fill: #1e2430; }
+      .math { font: italic 13.8px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .math-sm { font: italic 12.2px 'Cambria Math', 'Times New Roman', Georgia, serif; fill: #1e2430; }
+      .code { font: 600 11.2px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #1e2430; }
+      .code-sm { font: 400 10.6px 'Cascadia Mono', 'Consolas', 'Courier New', monospace; fill: #4c566a; }
+    </style>
+  </defs>
+  <rect x="8" y="8" width="1344" height="674" rx="10" fill="#fbfcfe" stroke="#ccd0da" stroke-width="1.5"/>
+  <text x="28" y="37" class="title-main">Oersted Field Families: Analytic Cylinder vs Solved-Current Realizations</text>
+  <text x="28" y="57" class="title-sub">Two distinct Fullmag physical contracts: OerstedCylinder (infinite wire) vs OerstedField(source=...) (closed current transport)</text>
+  <line x1="26" y1="68" x2="1334" y2="68" stroke="#d7dce5" stroke-width="1"/>
+  <rect x="26" y="82" width="650" height="566" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="38" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="52" y="107.5" text-anchor="middle" class="panel-badge">(a)</text>
+  <text x="74" y="108" class="panel-title">OerstedCylinder: Infinite Conductor Geometry &amp; Exact Radial Profile</text>
+  <line x1="38" y1="121" x2="664" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="42" y="134" width="306" height="178" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="56" y="154" class="sec-head">Right-Hand Rule Geometry</text>
+  <path d="M 104.0 196.0 L 104.0 272.0 A 36.0 12.0 0 0 0 176.0 272.0 L 176.0 196.0 Z" fill="#e4eff5" stroke="#4d8098" stroke-width="1.6"/>
+  <ellipse cx="140.0" cy="196.0" rx="36.0" ry="12.0" fill="#d2e6f0" stroke="#4d8098" stroke-width="1.5"/>
+  <line x1="140.0" y1="282.0" x2="140.0" y2="174.0" stroke="#246b8e" stroke-width="2.6" marker-end="url(#arrow-steel)"/>
+  <text x="150.0" y="186.0" class="math" fill="#246b8e">I, â</text>
+  <line x1="140.0" y1="230.0" x2="176.0" y2="230.0" stroke="#3b4252" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <text x="154.0" y="225.0" class="math-sm">R</text>
+  <line x1="140.0" y1="250.0" x2="216.0" y2="250.0" stroke="#6e7b91" stroke-width="1.6" marker-end="url(#arrow-gray)"/>
+  <text x="186.0" y="265.0" class="math-sm">ρ</text>
+  <path d="M 84.0 254.0 A 56 17 0 0 0 212.0 254.0" fill="none" stroke="#1d5fa7" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+  <text x="222.0" y="252.0" class="math" fill="#1d5fa7">H<tspan baseline-shift="sub" font-size="74%">oe</tspan></text>
+  <text x="222.0" y="270.0" class="small">along φ̂ = â × ρ̂</text>
+  <rect x="360" y="134" width="300" height="178" rx="6" fill="#e7f0fa" stroke="#1d5fa7" stroke-width="1.2"/>
+  <text x="374" y="156" class="sec-head" fill="#1d5fa7">Analytic Ampère Law (Infinite Wire)</text>
+  <text x="374" y="182" class="math-sm">0 ≤ ρ &lt; R:   H<tspan baseline-shift="sub" font-size="74%">oe</tspan>(ρ) = I ρ / (2π R<tspan baseline-shift="super" font-size="74%">2</tspan>) φ̂</text>
+  <text x="374" y="206" class="math-sm">ρ ≥ R:       H<tspan baseline-shift="sub" font-size="74%">oe</tspan>(ρ) = I / (2π ρ) φ̂</text>
+  <text x="374" y="232" class="small-bold">Peak at ρ = R: H<tspan baseline-shift="sub" font-size="74%">peak</tspan> = |I| / (2π R)</text>
+  <text x="374" y="256" class="small">• H<tspan baseline-shift="sub" font-size="74%">oe</tspan>(0) = 0 by axis continuity; no end effects.</text>
+  <text x="374" y="274" class="small">• Scaled at runtime by envelope f(t): Constant,</text>
+  <text x="382" y="290" class="small">Sinusoidal, or Pulse (FDM CUDA: +z, Constant).</text>
+  <rect x="42" y="324" width="618" height="308" rx="6" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <text x="58" y="346" class="sec-head">Exact Normalized Radial Profile |H<tspan baseline-shift="sub" font-size="74%">oe</tspan>(ρ)| / H<tspan baseline-shift="sub" font-size="74%">peak</tspan> vs ρ / R</text>
+  <rect x="114.0" y="368.0" width="128.0" height="208.0" fill="#e4eff5" fill-opacity="0.72"/>
+  <rect x="242.0" y="368.0" width="384.0" height="208.0" fill="#fafbfd"/>
+  <line x1="114.0" y1="576.0" x2="626.0" y2="576.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="106.0" y="580.0" text-anchor="end" class="small">0</text>
+  <line x1="114.0" y1="483.0" x2="626.0" y2="483.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="106.0" y="487.0" text-anchor="end" class="small">0.5</text>
+  <line x1="114.0" y1="390.0" x2="626.0" y2="390.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="106.0" y="394.0" text-anchor="end" class="small">1.0</text>
+  <text x="114.0" y="592.0" text-anchor="middle" class="small">0</text>
+  <line x1="242.0" y1="368.0" x2="242.0" y2="576.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="242.0" y="592.0" text-anchor="middle" class="small">1</text>
+  <line x1="370.0" y1="368.0" x2="370.0" y2="576.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="370.0" y="592.0" text-anchor="middle" class="small">2</text>
+  <line x1="498.0" y1="368.0" x2="498.0" y2="576.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="498.0" y="592.0" text-anchor="middle" class="small">3</text>
+  <line x1="626.0" y1="368.0" x2="626.0" y2="576.0" stroke="#e5e9f0" stroke-width="1"/>
+  <text x="626.0" y="592.0" text-anchor="middle" class="small">4</text>
+  <line x1="242.0" y1="368.0" x2="242.0" y2="576.0" stroke="#4d8098" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <line x1="114.0" y1="576.0" x2="626.0" y2="576.0" stroke="#3b4252" stroke-width="1.4"/>
+  <line x1="114.0" y1="368.0" x2="114.0" y2="576.0" stroke="#3b4252" stroke-width="1.4"/>
+  <polyline points="114.0,576.0 117.2,571.4 120.4,566.7 123.6,562.0 126.8,557.4 130.0,552.8 133.2,548.1 136.4,543.5 139.6,538.8 142.8,534.1 146.0,529.5 149.2,524.9 152.4,520.2 155.6,515.5 158.8,510.9 162.0,506.2 165.2,501.6 168.4,496.9 171.6,492.3 174.8,487.6 178.0,483.0 181.2,478.4 184.4,473.7 187.6,469.1 190.8,464.4 194.0,459.8 197.2,455.1 200.4,450.4 203.6,445.8 206.8,441.1 210.0,436.5 213.2,431.9 216.4,427.2 219.6,422.6 222.8,417.9 226.0,413.2 229.2,408.6 232.4,403.9 235.6,399.3 238.8,394.6 242.0,390.0" fill="none" stroke="#246b8e" stroke-width="2.8"/>
+  <polyline points="242.0,390.0 245.2,394.5 248.4,398.9 251.6,403.0 254.8,406.9 258.0,410.7 261.2,414.3 264.4,417.7 267.6,421.0 270.8,424.2 274.0,427.2 277.2,430.1 280.4,432.9 283.6,435.6 286.8,438.2 290.0,440.7 293.2,443.1 296.4,445.5 299.6,447.7 302.8,449.9 306.0,452.0 309.2,454.0 312.4,456.0 315.6,457.9 318.8,459.8 322.0,461.5 325.2,463.3 328.4,465.0 331.6,466.6 334.8,468.2 338.0,469.7 341.2,471.2 344.4,472.7 347.6,474.1 350.8,475.5 354.0,476.8 357.2,478.1 360.4,479.4 363.6,480.6 366.8,481.8 370.0,483.0 373.2,484.1 376.4,485.3 379.6,486.4 382.8,487.4 386.0,488.5 389.2,489.5 392.4,490.5 395.6,491.5 398.8,492.4 402.0,493.3 405.2,494.2 408.4,495.1 411.6,496.0 414.8,496.9 418.0,497.7 421.2,498.5 424.4,499.3 427.6,500.1 430.8,500.8 434.0,501.6 437.2,502.3 440.4,503.1 443.6,503.8 446.8,504.5 450.0,505.1 453.2,505.8 456.4,506.5 459.6,507.1 462.8,507.7 466.0,508.4 469.2,509.0 472.4,509.6 475.6,510.2 478.8,510.7 482.0,511.3 485.2,511.9 488.4,512.4 491.6,512.9 494.8,513.5 498.0,514.0 501.2,514.5 504.4,515.0 507.6,515.5 510.8,516.0 514.0,516.5 517.2,517.0 520.4,517.4 523.6,517.9 526.8,518.3 530.0,518.8 533.2,519.2 536.4,519.6 539.6,520.1 542.8,520.5 546.0,520.9 549.2,521.3 552.4,521.7 555.6,522.1 558.8,522.5 562.0,522.9 565.2,523.2 568.4,523.6 571.6,524.0 574.8,524.3 578.0,524.7 581.2,525.0 584.4,525.4 587.6,525.7 590.8,526.1 594.0,526.4 597.2,526.7 600.4,527.1 603.6,527.4 606.8,527.7 610.0,528.0 613.2,528.3 616.4,528.6 619.6,528.9 622.8,529.2 626.0,529.5" fill="none" stroke="#1d5fa7" stroke-width="2.8"/>
+  <circle cx="242.0" cy="390.0" r="4.8" fill="#b8392b"/>
+  <text x="54" y="436.0" class="math-sm">|H<tspan baseline-shift="sub" font-size="74%">oe</tspan>|/H<tspan baseline-shift="sub" font-size="74%">pk</tspan></text>
+  <text x="370.0" y="610.0" text-anchor="middle" class="small">Normalized radial distance ρ / R</text>
+  <text x="178.0" y="406.0" text-anchor="middle" class="small-bold" fill="#4d8098">Inside wire</text>
+  <text x="178.0" y="422.0" text-anchor="middle" class="small">∝ ρ</text>
+  <text x="256.0" y="394.0" class="small-bold" fill="#b8392b">Peak at ρ = R: I / (2π R)</text>
+  <text x="411.0" y="486.7" class="small-bold" fill="#1d5fa7">Exterior decay ∝ 1 / ρ</text>
+  <rect x="690" y="82" width="644" height="566" rx="8" fill="#ffffff" stroke="#d7dce5" stroke-width="1.2"/>
+  <rect x="702" y="92" width="28" height="22" rx="6" fill="#dce7f7" stroke="#1d5fa7" stroke-width="0.9"/>
+  <text x="716" y="107.5" text-anchor="middle" class="panel-badge">(b)</text>
+  <text x="738" y="108" class="panel-title">OerstedField(source=...): Solved-Current Pipeline &amp; Lane Boundaries</text>
+  <line x1="702" y1="121" x2="1322" y2="121" stroke="#e5e9f0" stroke-width="1"/>
+  <rect x="706" y="134" width="612" height="108" rx="6" fill="#e6f2f7" stroke="#246b8e" stroke-width="1.2"/>
+  <text x="722" y="155" class="sec-head" fill="#246b8e">1. Charge Transport Source &amp; Circuit-Closure Contract</text>
+  <text x="722" y="175" class="code">CurrentTransport(model="ohmic_poisson" | "magnetoresistive_poisson")</text>
+  <text x="722" y="194" class="body">• Supplies conservative ∇·J<tspan baseline-shift="sub" font-size="74%">c</tspan> = 0 via RT0 flux view (ConservativeCurrentView /</text>
+  <text x="732" y="210" class="body">StructuredCurrentClosure / ExternalLeadCurrentSource) with SHA-256 revision digest.</text>
+  <text x="722" y="229" class="small" fill="#b8392b">Guard: A local two-electrode bar without closure is NOT globally closed for general Oersted.</text>
+  <line x1="1012" y1="242" x2="1012" y2="260" stroke="#3b4252" stroke-width="1.8" marker-end="url(#arrow-axis)"/>
+  <rect x="706" y="264" width="300" height="206" rx="6" fill="#ffffff" stroke="#1d5fa7" stroke-width="1.2"/>
+  <text x="720" y="285" class="sec-head" fill="#1d5fa7">2A. Direct Biot-Savart (OE-F1)</text>
+  <text x="720" y="312" class="math-sm">H<tspan baseline-shift="sub" font-size="74%">oe</tspan>(x) = (4π)<tspan baseline-shift="super" font-size="74%">−1</tspan> ∫<tspan baseline-shift="sub" font-size="74%">Ωc</tspan> [J<tspan baseline-shift="sub" font-size="74%">c</tspan>(x′)×(x−x′)]/|x−x′|<tspan baseline-shift="super" font-size="74%">3</tspan> dV′</text>
+  <text x="720" y="336" class="small-bold" fill="#147d75">No μ<tspan baseline-shift="sub" font-size="74%">0</tspan> inside H<tspan baseline-shift="sub" font-size="74%">oe</tspan> (B<tspan baseline-shift="sub" font-size="74%">oe</tspan> = μ<tspan baseline-shift="sub" font-size="74%">0</tspan> H<tspan baseline-shift="sub" font-size="74%">oe</tspan>)</text>
+  <text x="720" y="359" class="small">• OE-F1 (FEM CPU): DirectTetraQuadrature</text>
+  <text x="728" y="375" class="small">on affine RT0 flux; pair-budget preflight.</text>
+  <text x="720" y="397" class="small">• Uniform non-cylindrical fallback:</text>
+  <text x="728" y="413" class="small">BiotSavartMidpoint (FDM ≤ 4096 cells;</text>
+  <text x="728" y="429" class="small">FEM tet4 centroid with R<tspan baseline-shift="sub" font-size="74%">reg</tspan> cutoff).</text>
+  <text x="720" y="453" class="small">No user-facing OE-F1/OE-F2 method flag.</text>
+  <rect x="1018" y="264" width="300" height="206" rx="6" fill="#ffffff" stroke="#6f3cc4" stroke-width="1.2"/>
+  <text x="1032" y="285" class="sec-head" fill="#6f3cc4">2B. Vector Potential H(curl) (OE-F2)</text>
+  <text x="1032" y="312" class="math-sm">∇ × (μ<tspan baseline-shift="sub" font-size="74%">0</tspan><tspan baseline-shift="super" font-size="74%">−1</tspan> ∇ × A) = J<tspan baseline-shift="sub" font-size="74%">c</tspan>   in Ω<tspan baseline-shift="sub" font-size="74%">m</tspan> ∪ Ω<tspan baseline-shift="sub" font-size="74%">air</tspan></text>
+  <text x="1032" y="336" class="math-sm">B<tspan baseline-shift="sub" font-size="74%">oe</tspan> = ∇ × A,    H<tspan baseline-shift="sub" font-size="74%">oe</tspan> = B<tspan baseline-shift="sub" font-size="74%">oe</tspan> / μ<tspan baseline-shift="sub" font-size="74%">0</tspan></text>
+  <text x="1032" y="359" class="small">• Compatible H<tspan baseline-shift="sub" font-size="74%">0</tspan>(curl) × H<tspan baseline-shift="sub" font-size="74%">0</tspan><tspan baseline-shift="super" font-size="74%">1</tspan> mixed</text>
+  <text x="1040" y="375" class="small">gauge formulation enforces ∇·B = 0.</text>
+  <text x="1032" y="397" class="small">• Requires exterior airbox closure (Ω<tspan baseline-shift="sub" font-size="74%">air</tspan>)</text>
+  <text x="1040" y="413" class="small">and nodal projection onto magnetic mesh.</text>
+  <text x="1032" y="435" class="small">• Converges toward OE-F1 under mesh &amp;</text>
+  <text x="1040" y="451" class="small">airbox refinement (bounded FEM CPU).</text>
+  <rect x="706" y="484" width="612" height="148" rx="6" fill="#eef2f8" stroke="#6e7b91" stroke-width="1.2"/>
+  <text x="722" y="505" class="sec-head">Capability &amp; Fail-Closed Realization Separation</text>
+  <line x1="720" y1="514" x2="1304" y2="514" stroke="#ccd0da" stroke-width="1"/>
+  <text x="724" y="531" class="small-bold">Lane</text>
+  <text x="830" y="531" class="small-bold">OerstedCylinder</text>
+  <text x="1032" y="531" class="small-bold">OerstedField(source) Solved Current</text>
+  <line x1="720" y1="538" x2="1304" y2="538" stroke="#ccd0da" stroke-width="1"/>
+  <text x="724" y="556" class="small-bold">FDM CPU</text>
+  <text x="830" y="556" class="small" fill="#147d75">Reference analytic path</text>
+  <text x="1032" y="556" class="small" fill="#b8392b">UNSUPPORTED (canonical OE-F1/OE-F2 is FEM)</text>
+  <text x="724" y="576" class="small-bold">FDM GPU</text>
+  <text x="830" y="576" class="small" fill="#1d5fa7">Precomputed (+z, Constant only)</text>
+  <text x="1032" y="576" class="small" fill="#b8392b">UNSUPPORTED (no FDM solved-current operator)</text>
+  <text x="724" y="596" class="small-bold">FEM CPU</text>
+  <text x="830" y="596" class="small" fill="#1d5fa7">Bounded analytic nodal sampling</text>
+  <text x="1032" y="596" class="small" fill="#b86b11">Bounded / Reference (Double, Steady only)</text>
+  <text x="724" y="616" class="small-bold">FEM GPU</text>
+  <text x="830" y="616" class="small" fill="#b86b11">Partial / lane-dependent</text>
+  <text x="1032" y="616" class="small" fill="#b8392b">UNSUPPORTED / Semantic-only (no device lane)</text>
+  <text x="28" y="672" class="small">Fullmag limits at most one Oersted energy term per problem and rejects stale current-view digests or unsupported GPU lanes fail-closed.</text>
+</svg>

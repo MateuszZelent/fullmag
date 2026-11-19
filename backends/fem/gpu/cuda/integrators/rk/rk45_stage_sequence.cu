@@ -11,6 +11,7 @@
 #include "gpu/cuda/integrators/rk/rk45_stage_sequence.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_dp54_accept_kernel.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_control_kernels.hpp"
@@ -76,6 +77,16 @@ bool gpu_rk_run_rk45_stage_sequence(
     if (!cuda_launch_ok("launch GPU RK45 stage-2/normalize", reason)) {
         return false;
     }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
+    }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx, gpu.rk.m_stage, gpu.rk.k[2], stream, n, ctx.state.current_time + 0.3 * active_dt,
             "launch GPU RK45 stage-2 h_eff accumulation", reason)) {
@@ -107,6 +118,16 @@ bool gpu_rk_run_rk45_stage_sequence(
         &ctx.gpu_state.performance_counters);
     if (!cuda_launch_ok("launch GPU RK45 stage-3/normalize", reason)) {
         return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx, gpu.rk.m_stage, gpu.rk.k[3], stream, n, ctx.state.current_time + 0.8 * active_dt,
@@ -141,6 +162,16 @@ bool gpu_rk_run_rk45_stage_sequence(
     if (!cuda_launch_ok("launch GPU RK45 stage-4/normalize", reason)) {
         return false;
     }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
+    }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx, gpu.rk.m_stage, gpu.rk.k[4], stream, n, ctx.state.current_time + (8.0 / 9.0) * active_dt,
             "launch GPU RK45 stage-4 h_eff accumulation", reason)) {
@@ -174,6 +205,16 @@ bool gpu_rk_run_rk45_stage_sequence(
     if (!cuda_launch_ok("launch GPU RK45 stage-5/normalize", reason)) {
         return false;
     }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
+    }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx, gpu.rk.m_stage, gpu.rk.k[5], stream, n, ctx.state.current_time + active_dt,
             "launch GPU RK45 stage-5 h_eff accumulation", reason)) {
@@ -206,6 +247,16 @@ bool gpu_rk_run_rk45_stage_sequence(
         &ctx.gpu_state.performance_counters);
     if (!cuda_launch_ok("launch GPU RK45 stage-6/normalize", reason)) {
         return false;
+    }
+    if (ctx.frozen_spins.enabled()) {
+        gpu_project_frozen_reference(
+            gpu.rk.m_stage,
+            gpu.mesh_regions.frozen_mask,
+            gpu.mesh_regions.frozen_reference_x,
+            gpu.mesh_regions.frozen_reference_y,
+            gpu.mesh_regions.frozen_reference_z,
+            n,
+            stream);
     }
     if (!gpu_rk_compute_rhs_for_magnetization(
             ctx, gpu.rk.m_stage, gpu.rk.k[6], stream, n, ctx.state.current_time + active_dt,

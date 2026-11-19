@@ -769,6 +769,7 @@ function airboxQuantityIsAvailable({
 
 export function resolveViewport3DScopedPartVectorFieldDemandPlan({
   getPartSettings,
+  liveMagnetizationAvailable = true,
   maxVectorGlyphs,
   magneticParts,
   selectedSnapshotQuery,
@@ -778,6 +779,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     part: Viewport3DPlanMeshPart,
   ) => Viewport3DScopedPartFieldSettingsForPlanning;
   maxVectorGlyphs: number;
+  liveMagnetizationAvailable?: boolean;
   magneticParts: readonly Viewport3DPlanPartModel[];
   selectedSnapshotQuery?: FieldVectorQuery | null;
   vectorDomain: string;
@@ -795,6 +797,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     const settings = getPartSettings(partModel.part);
     if (!settings.visible) continue;
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (quantityId === "m" && !liveMagnetizationAvailable) continue;
     visiblePartsByQuantity.set(
       quantityId,
       (visiblePartsByQuantity.get(quantityId) ?? 0) + 1,
@@ -816,6 +819,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
     const settings = getPartSettings(partModel.part);
     if (!settings.visible) continue;
     const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
+    if (quantityId === "m" && !liveMagnetizationAvailable) continue;
     const surfaceColorMode = settings.shaderVisible
       ? surfaceColorSourceToColorMode(settings.surfaceColorSource)
       : null;

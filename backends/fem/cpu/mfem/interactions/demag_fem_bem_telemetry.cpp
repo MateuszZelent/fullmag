@@ -22,6 +22,10 @@ void publish_demag_fem_bem_solver_stats(
     const DemagFemBemSolveTelemetry &solve)
 {
     ctx.poisson_demag.solves_current_step += 2u;
+    note_successful_demag_linear_iterations(ctx.poisson_demag,
+        static_cast<uint64_t>(std::max(0, solve.u1_iterations)));
+    note_successful_demag_linear_iterations(ctx.poisson_demag,
+        static_cast<uint64_t>(std::max(0, solve.u2_iterations)));
     ctx.poisson_demag.last_iterations =
         std::max(0, solve.u1_iterations) +
         std::max(0, solve.u2_iterations);

@@ -140,6 +140,15 @@ FullMag reports the first expression from the magnetization and recovered field.
 second explicit Robin surface energy after that reduction. Adding the surface term again would
 double-count the boundary contribution already represented by the Robin-conditioned solution.
 
+```{figure} /_static/diagrams/demag-fem-poisson-airbox-closures.svg
+:alt: Two-panel diagram of FEM Poisson airbox demagnetization: (a) conforming shared-domain tetrahedral topology Omega_m subset Omega_a with geometrically graded airbox layers, outer boundary marker Gamma_a, and Robin versus Dirichlet weak-form closures; (b) numerically computed normalized potential u(r)/(M_s a) for a uniformly magnetized sphere in a finite airbox R_box = 2.4 a comparing exact 1/r^2 open decay with Dirichlet u=0 and first-order Robin closures.
+:width: 100%
+:name: fig-demag-fem-poisson-airbox-closures
+:figclass: fm-physics-figure
+
+Conforming graded shared-domain airbox mesh ($\Omega_m \subset \Omega_a$) with outer marker $\Gamma_a$ in panel (a) and analytical truncation behavior of Dirichlet ($u=0$) versus first-order Robin ($\partial_n u + \beta u = 0$, $\beta = c/R_\star$) closures in panel (b) (Fredkin & Koehler 1990; Exl & Schrefl 2014; Abert *et al.* 2013).
+```
+
 (demag-poisson-symbols-and-si-units)=
 ## 3. Symbols and SI units
 
@@ -440,6 +449,10 @@ The boundary source computes the effective Robin coefficient, excludes periodic 
 from the Robin mass, and rejects a missing Dirichlet boundary marker. The energy source explicitly
 uses the negative $\mu_0/2$ magnetization-field product and does not add a second surface term.
 
+### Control Room support
+
+When `PhysicsInteractionPanel` exposes FEM airbox demagnetization under `Model Explorer -> Objects -> <object> -> Physics`, browser support is partial: physical and solver parameters without a matching UI control must be configured via the Python API or `ProblemIR`. See {doc}`/frontend/capability-register` for current Control Room coverage.
+
 (demag-poisson-validation)=
 ## 10. Validation and qualification
 
@@ -476,11 +489,12 @@ execution, never hidden behind a GPU request.
 (demag-poisson-scientific-bibliography)=
 ## 12. Scientific bibliography
 
-1. D. R. Fredkin and T. R. Koehler, “A boundary-element method for computing the magnetostatic
-   energy of domain walls,” *IEEE Transactions on Magnetics*, 26, 4154–4156 (1990).
-2. W. F. Brown, *Micromagnetics*, Wiley, 1963.
-3. FullMag implementation references: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
-   and `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`.
+1. D. R. Fredkin and T. R. Koehler, “Hybrid method for computing demagnetizing fields,” *IEEE Transactions on Magnetics* **26**(2), 415–417 (1990), [doi:10.1109/20.106342](https://doi.org/10.1109/20.106342).
+2. L. Exl and T. Schrefl, “Non-uniform FFT for the finite element computation of the micromagnetic scalar potential,” *Journal of Computational Physics* **270**, 490–505 (2014), [doi:10.1016/j.jcp.2014.04.013](https://doi.org/10.1016/j.jcp.2014.04.013), [arXiv:1305.3162](https://arxiv.org/abs/1305.3162).
+3. C. Abert, L. Exl, F. Bruckner, A. Drews, and D. Suess, “magnum.fe: A micromagnetic finite-element simulation code based on FEniCS,” *Journal of Magnetism and Magnetic Materials* **345**, 29–35 (2013), [doi:10.1016/j.jmmm.2013.05.051](https://doi.org/10.1016/j.jmmm.2013.05.051), [arXiv:1301.3061](https://arxiv.org/abs/1301.3061).
+4. L. Körber, G. Quasebarth, A. Otto, and A. Kákay, “Finite-element dynamic-matrix approach for spin-wave dispersions in magnonic waveguides with arbitrary cross section,” *AIP Advances* **11**(9), 095006 (2021), [doi:10.1063/5.0054169](https://doi.org/10.1063/5.0054169) (Gold OA CC-BY; [arXiv:2104.06943](https://arxiv.org/abs/2104.06943)).
+5. L. Körber, A. Hempel, A. Otto, R. Gallardo, Y. Henry, J. Lindner, and A. Kákay, “Finite-element dynamic-matrix approach for propagating spin waves: Extension to mono- and multi-layers of arbitrary spacing and thickness,” *AIP Advances* **12**(11), 115206 (2022), [doi:10.1063/5.0107457](https://doi.org/10.1063/5.0107457) (Gold OA CC-BY; [arXiv:2207.01519](https://arxiv.org/abs/2207.01519)).
+6. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York, 1963 ([WorldCat record](https://search.worldcat.org/title/536451)).
 
 (demag-poisson-source-code-index)=
 ## 13. Source-code index
@@ -504,18 +518,4 @@ execution, never hidden behind a GPU request.
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `initialize_demag_poisson_hypre_device_solver` | Device Hypre solver and preconditioner setup. | FEM GPU |
 | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_device_stage_impl` | Device-stage demag orchestration and timings. | FEM GPU |
 | `backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu` | `gpu_rk_reduce_final_demag_energy_terms` | Device demag energy reduction and ownership checks. | FEM GPU |
-## Control Room crosswalk
-
-Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}`/frontend/capability-register`; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is not applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-## Source-code index
-
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
 

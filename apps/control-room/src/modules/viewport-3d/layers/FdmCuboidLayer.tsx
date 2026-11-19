@@ -11,6 +11,7 @@ import {
   useEffect,
   useId,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -27,6 +28,7 @@ import {
   InstancedMesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
+  MeshStandardMaterial,
   Raycaster,
   Vector2,
   Vector3,
@@ -48,6 +50,7 @@ import {
 } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   buildViewport3DFdmInspectSample,
   type Viewport3DInspectSample,
@@ -1133,35 +1136,73 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     colors.mesh,
     usesInstanceColors,
   );
-  const litSurface = !usesInstanceColors && materialProfile.uniformGeometry.lit;
+  const surfaceMaterialPlan = resolveFdmCuboidSurfaceMaterialPlan(
+    materialProfile,
+    usesInstanceColors,
+  );
+  const materialMetalness = surfaceMaterialPlan.kind === "standard" ? surfaceMaterialPlan.metalness : undefined;
+  const materialRoughness = surfaceMaterialPlan.kind === "standard" ? surfaceMaterialPlan.roughness : undefined;
+  // Only parameters that change the shader program (material kind, vertex
+  // colours, transparency/depth policy) create a new material. Colour,
+  // opacity and PBR scalars are applied in place below, so dragging an
+  // opacity slider no longer disposes the material and recompiles the
+  // program on every tick (audit 2026-11-19).
+  const surfacePolicyKey = JSON.stringify(surfaceMaterialPolicyProps(surfaceOpacity));
+  // The layout effect below writes colour, opacity and PBR scalars before
+  // the first frame of a new material is drawn.
   const surfaceMaterial = useMemo(
     () => {
-      const MaterialConstructor = litSurface
-        ? MeshLambertMaterial
-        : MeshBasicMaterial;
-      return tracker.track(
-        "material",
-        new MaterialConstructor({
-          color: surfaceMaterialColor,
-          opacity: surfaceOpacity,
-          vertexColors: usesInstanceColors,
-          toneMapped: materialProfile.magneticSurface.toneMapped,
-          ...surfaceMaterialPolicyProps(surfaceOpacity),
-        }),
-      );
+      const materialParameters = {
+        toneMapped: surfaceMaterialPlan.toneMapped,
+        vertexColors: surfaceMaterialPlan.vertexColors,
+        ...(JSON.parse(surfacePolicyKey) as ReturnType<
+          typeof surfaceMaterialPolicyProps
+        >),
+      };
+      if (surfaceMaterialPlan.kind === "standard") {
+        return tracker.track(
+          "material",
+          new MeshStandardMaterial(materialParameters),
+        );
+      }
+      if (surfaceMaterialPlan.kind === "lambert") {
+        return tracker.track(
+          "material",
+          new MeshLambertMaterial(materialParameters),
+        );
+      }
+      return tracker.track("material", new MeshBasicMaterial(materialParameters));
     },
     [
-      litSurface,
-      materialProfile.magneticSurface.toneMapped,
-      surfaceMaterialColor,
-      surfaceOpacity,
+      surfaceMaterialPlan.kind,
+      surfaceMaterialPlan.toneMapped,
+      surfaceMaterialPlan.vertexColors,
+      surfacePolicyKey,
       tracker,
-      usesInstanceColors,
     ],
   );
   const surfaceMaterialRef = useRef<
-    MeshBasicMaterial | MeshLambertMaterial
+    MeshBasicMaterial | MeshLambertMaterial | MeshStandardMaterial
   >(null);
+  // Runs after the <primitive> ref is attached and before the frame is drawn.
+  useLayoutEffect(() => {
+    const material = surfaceMaterialRef.current;
+    if (!material) return;
+    material.color.set(surfaceMaterialColor);
+    material.opacity = surfaceOpacity;
+    if (material instanceof MeshStandardMaterial) {
+      if (materialMetalness !== undefined) material.metalness = materialMetalness;
+      if (materialRoughness !== undefined) material.roughness = materialRoughness;
+    }
+    invalidate();
+  }, [
+    invalidate,
+    materialMetalness,
+    materialRoughness,
+    surfaceMaterial,
+    surfaceMaterialColor,
+    surfaceOpacity,
+  ]);
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
   const wireframeOpacity = renderPlan.wireframe.opacity;
@@ -1170,8 +1211,6 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: wireframeColor,
-          opacity: wireframeOpacity,
           transparent: wireframePolicy.transparent,
           depthWrite: wireframePolicy.depthWrite,
           depthTest: wireframePolicy.depthTest,
@@ -1179,8 +1218,16 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
           wireframe: true,
         }),
       ),
-    [tracker, wireframeColor, wireframeOpacity, wireframePolicy],
+    [tracker, wireframePolicy],
   );
+  const wireframeMaterialRef = useRef<MeshBasicMaterial>(null);
+  useLayoutEffect(() => {
+    const material = wireframeMaterialRef.current;
+    if (!material) return;
+    material.color.set(wireframeColor);
+    material.opacity = wireframeOpacity;
+    invalidate();
+  }, [invalidate, wireframeColor, wireframeMaterial, wireframeOpacity]);
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
     () => () => tracker.release("material", surfaceMaterial),
@@ -1236,7 +1283,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       if (
         mountedSurfaceMaterial === surfaceMaterial &&
         (mountedSurfaceMaterial instanceof MeshBasicMaterial ||
-          mountedSurfaceMaterial instanceof MeshLambertMaterial)
+          mountedSurfaceMaterial instanceof MeshLambertMaterial ||
+          mountedSurfaceMaterial instanceof MeshStandardMaterial)
       ) {
         mountedSurfaceMaterial.needsUpdate = true;
       }
@@ -1339,9 +1387,11 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     <>
       <instancedMesh
         args={[geometry, undefined, renderCount]}
+        castShadow={surfaceMaterialPlan.castShadow}
         frustumCulled={false}
         onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}
         onPointerOut={renderPlan.surface.visible ? onPointerOut : undefined}
+        receiveShadow={surfaceMaterialPlan.receiveShadow}
         ref={surfaceRef}
         renderOrder={surfacePolicy.renderOrder}
         visible={renderPlan.surface.visible}
@@ -1361,7 +1411,11 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         renderOrder={wireframePolicy.renderOrder}
         visible={renderPlan.wireframe.visible}
       >
-        <primitive attach="material" object={wireframeMaterial} />
+        <primitive
+          ref={wireframeMaterialRef}
+          attach="material"
+          object={wireframeMaterial}
+        />
       </instancedMesh>
     </>
   );

@@ -1280,8 +1280,13 @@ export function VectorFieldLayer({
 
   return (
     <>
+      {/* A capacity change mounts a new InstancedMesh whose constructor sets
+          count = capacity with identity matrices. Start at count 0 so no
+          frame draws `capacity` glyphs collapsed at the origin; the upload's
+          onVisible sets the real count once the matrices are written. */}
       <instancedMesh
         args={[shaftGeometry, material, capacity]}
+        count={0}
         material-depthTest={depthPolicy.depthTest}
         material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}
@@ -1291,6 +1296,7 @@ export function VectorFieldLayer({
       />
       <instancedMesh
         args={[headGeometry, material, capacity]}
+        count={0}
         material-depthTest={depthPolicy.depthTest}
         material-depthWrite={depthPolicy.depthWrite}
         frustumCulled={false}

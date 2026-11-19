@@ -91,6 +91,9 @@ pub(super) fn field_point_count_matches_current_domain(
     if point_count == 0 || mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return false;
     }
+    if current_fem_damping_uses_nodes(snapshot, quantity_id) {
+        return point_count == mesh.nodes.len();
+    }
     match quantity_spec(quantity_id).map(|spec| spec.location) {
         Some(QuantityLocation::Node) => {
             resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
@@ -100,6 +103,30 @@ pub(super) fn field_point_count_matches_current_domain(
                 || fem_nodal_visualization_projection_allowed(snapshot, quantity_id, point_count)
         }
         Some(QuantityLocation::Global) | None => false,
+    }
+}
+
+/// Live Gilbert damping is a nodal coefficient on the canonical FEM plan.
+pub(crate) fn current_fem_damping_uses_nodes(snapshot: &SessionStateResponse, quantity: &str) -> bool {
+    if quantity != "mat_alpha" || snapshot.fem_mesh.is_none() || is_fdm_snapshot(snapshot) {
+        return false;
+    }
+    let Some(raw) = snapshot.latest_fields.get(quantity) else { return false; };
+    if crate::live_authored_damping::publication_revision(snapshot).is_some() {
+        return raw["layout"]["backend"] == "fem"
+            && crate::live_authored_damping::matches_publication(snapshot, raw);
+    }
+    if !snapshot.metadata.as_ref().is_some_and(|meta| meta["execution_plan"]["backend_plan"]["kind"] == "fem") {
+        return false;
+    }
+    match raw.get("sample_location").and_then(serde_json::Value::as_str) {
+        Some("node") => latest_field_source_is_qualified(snapshot, quantity, raw),
+        // Earlier captures and terminal solver frames may omit the location.
+        // Recognize only samples equal to the nodal coefficient in the plan.
+        None if raw.get("spatial_kind").is_none() => {
+            crate::session::authored_material_field_matches_memoized(snapshot, quantity, raw)
+        }
+        _ => false,
     }
 }
 
@@ -362,12 +389,6 @@ pub(crate) fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
                 None
             }
         })
-}
-
-pub(crate) fn live_magnetization_values(
-    snapshot: &SessionStateResponse,
-) -> Option<(Vec<f64>, [u32; 3])> {
-    live_magnetization_values_ref(snapshot).map(|(values, grid)| (values.to_vec(), grid))
 }
 
 pub(crate) fn live_magnetization_values_ref(

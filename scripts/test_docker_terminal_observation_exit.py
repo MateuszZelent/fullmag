@@ -1,7 +1,10 @@
 """Fixture-only terminal observation exit checks; no Docker, native CLI or HTTP."""
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
+from email.message import Message
 import hashlib
+import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -36,6 +39,53 @@ def guard(*, recreate=False, restart=False, stop=False, fresh=False, proof=None,
            "BuildControlError": dev.BuildControlError}
     exec(compile(ast.Module(body=statements, type_ignores=[]), "<candidate-exit-guard>", "exec"), env)
     return env["terminal_observation_exit"]
+
+
+class LiveTerminalPreflight(unittest.TestCase):
+    def probe(self, queue_items):
+        api = "01234567-89ab-4def-8123-0123456789ab"
+        headers = Message()
+        headers["x-fullmag-api-instance"] = api
+        run = {"run_id": "relax-b", "session_id": "session-a", "status": "completed", "revision": 3}
+        endpoints = {
+            "/v2/sessions/current/status": {
+                "session": {"session_id": "session-a", "session_epoch": "session-a@1000",
+                            "request_scope_epoch": f"{api}:1"},
+                "run": {"run_id": "relax-b"}, "solver": {"state": "awaiting_command"},
+                "resources": {"scene_revision": 7},
+            },
+            "/v2/sessions/current/simulation/runs/current": run,
+            "/v2/platform/compute/queue": {
+                "schema_version": "compute_queue.v1", "next_cursor": None, "items": queue_items,
+            },
+            "/v2/platform/runtime-service": {"configured": True, "state": "ready"},
+        }
+
+        def open_response(request, *, timeout):
+            path = request.full_url.removeprefix("http://127.0.0.1:8081")
+            stream = io.BytesIO(json.dumps(endpoints[path]).encode())
+            stream.headers = headers
+            stream.status = 200
+            return stream
+
+        def capture(*args):
+            output = io.StringIO()
+            with patch("urllib.request.urlopen", side_effect=open_response), redirect_stdout(output):
+                exec(compile(args[-1], "<terminal-drain-fixture>", "exec"), {})
+            return output.getvalue()
+
+        with patch.object(dev, "docker_text", side_effect=capture):
+            return dev._terminal_session_restart_probe("fixture-backend")
+
+    def test_completed_ui_run_in_commandable_session_can_enter_drain(self):
+        probe = self.probe([])
+        self.assertEqual(probe["schema"], "fullmag.docker-terminal-session-drain-preflight.v1")
+        self.assertEqual(probe["run"]["run_id"], "relax-b")
+        self.assertEqual(probe["scene_revision"], 7)
+
+    def test_runnable_queue_prevents_terminal_ui_drain(self):
+        with self.assertRaisesRegex(RuntimeError, "no running or released computation"):
+            self.probe([{"run_id": "next-run", "state": "running"}])
 
 
 class ExitRoute(unittest.TestCase):
@@ -117,6 +167,39 @@ class ManagedStop(unittest.TestCase):
                 terminal.assert_called_once_with(existing.BACKEND_ID, allow_prepared=True)
                 entered[-1].assert_not_called()  # _finish
                 entered[-2].assert_not_called()  # recreate
+
+    def test_capture_archives_native_evidence_before_the_backend_stops(self):
+        import docker_volume_terminal_observation as observation
+        fixture = self.fixture()
+        fixture.args.capture_terminal_observation = True
+        probe = {"schema": "fullmag.docker-terminal-session-drain-preflight.v1",
+                 "run": {"run_id": "fixture-run", "status": "completed"}}
+        capture = {"schema": observation.NATIVE_CAPTURE_SCHEMA, "run_id": "fixture-run"}
+        fixture.control.write_bytes.side_effect = lambda path, raw: fixture.events.append(("capture", (path, raw)))
+        with patch.object(existing, "dev", dev), ExitStack() as stack:
+            for patcher in existing.DockerVolumeIdleStopTests()._patches(
+                fixture, (b'{"state":"drained"}\n', {"state": "drained"}),
+            ):
+                stack.enter_context(patcher)
+            stack.enter_context(patch.object(dev, "_retained_startup_enabled", return_value=True))
+            preflight = stack.enter_context(patch.object(dev, "_terminal_session_restart_probe", return_value=probe))
+            native = stack.enter_context(patch.object(observation, "capture_terminal_observation", return_value=capture))
+            dev.stop_idle(fixture.args)
+        self.assertEqual(preflight.call_count, 2)
+        self.assertEqual(native.call_args.args[0], existing.BACKEND_ID)
+        archived = next(event for event in fixture.events if event[0] == "capture")
+        backend_stop = next(event for event in fixture.events if event[0] == "stop" and event[1][-1] == existing.BACKEND_ID)
+        self.assertLess(fixture.events.index(archived), fixture.events.index(backend_stop))
+        receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+        self.assertEqual(receipt["terminal_native_observation_sha256"], hashlib.sha256(archived[1][1]).hexdigest())
+        self.assertTrue(receipt["idle_backend_stopped"])
+        self.assertFalse(any(event[0] in {"start", "rm"} for event in fixture.events))
+
+    def test_capture_without_stop_only_is_rejected_before_docker(self):
+        with patch.object(dev, "require_host") as host:
+            with self.assertRaisesRegex(dev.BuildControlError, "requires a plain managed stop-only"):
+                dev.restart_idle(SimpleNamespace(capture_terminal_observation=True))
+        host.assert_not_called()
 
     def test_failed_current_terminal_env_stops_without_restart_or_replay(self):
         fixture = self.fixture()

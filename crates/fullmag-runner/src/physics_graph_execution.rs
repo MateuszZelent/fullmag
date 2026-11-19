@@ -14,7 +14,7 @@ use crate::types::{ExecutedRun, ExecutionProvenance, RunError};
 pub(crate) struct PhysicsGraphExecutionContext {
     energy_module_ids: Vec<String>,
     workflow_module_ids: Vec<String>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     steady_transport_module_ids: Vec<String>,
 }
 
@@ -35,7 +35,7 @@ impl PhysicsGraphExecutionContext {
         }
         let mut energy = BTreeSet::new();
         let mut workflow = BTreeSet::new();
-        #[cfg(feature = "fem-gpu")]
+        #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
         let mut steady_transport = BTreeSet::new();
         match backend_plan {
             BackendPlanIR::AntennaFieldOnly(_) => {}
@@ -63,13 +63,13 @@ impl PhysicsGraphExecutionContext {
                     append_authored_spin_torque_ids(problem, &mut workflow)?;
                 }
                 append_field_drive_ids(problem, &fem.field_drives, &mut energy)?;
-                #[cfg(feature = "fem-gpu")]
+                #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
                 append_charge_transport_plan_ids(
                     problem,
                     &fem.charge_transport_plans,
                     &mut steady_transport,
                 )?;
-                #[cfg(feature = "fem-gpu")]
+                #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
                 append_transport_plan_ids(
                     problem,
                     &fem.spin_transport_plans,
@@ -88,7 +88,7 @@ impl PhysicsGraphExecutionContext {
         Ok(Self {
             energy_module_ids: energy.into_iter().collect(),
             workflow_module_ids: workflow.into_iter().collect(),
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
             steady_transport_module_ids: steady_transport.into_iter().collect(),
         })
     }
@@ -101,7 +101,7 @@ impl PhysicsGraphExecutionContext {
         merge_observed_module_ids(provenance, &self.energy_module_ids);
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     pub(crate) fn observe_steady_transport(&self, provenance: &mut ExecutionProvenance) {
         merge_observed_module_ids(provenance, &self.steady_transport_module_ids);
     }
@@ -117,7 +117,7 @@ impl PhysicsGraphExecutionContext {
         Self {
             energy_module_ids: module_ids.clone(),
             workflow_module_ids: module_ids,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
             steady_transport_module_ids: Vec::new(),
         }
     }
@@ -287,7 +287,7 @@ fn append_transport_plan_ids(
     Ok(())
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn append_charge_transport_plan_ids(
     problem: &fullmag_ir::ProblemIR,
     plans: &[fullmag_ir::ResolvedChargeTransportPlanIR],

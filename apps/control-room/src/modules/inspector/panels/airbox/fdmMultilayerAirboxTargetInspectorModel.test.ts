@@ -41,10 +41,10 @@ describe("FDM multilayer Airbox target inspector model", () => {
     if (model.status !== "ready") throw new Error("Expected a published target-only Airbox carrier");
     expect(model.targetGridRows).toEqual([
       { label: "Target-only", value: "yes" },
-      { label: "Cells", value: "[5, 4, 3]" },
+      { label: "Grid shape", value: "[5, 4, 3]" },
       { label: "Origin", value: "[-4e-9, -6e-9, -8e-9]", unit: "m" },
       { label: "Cell size", value: "[2e-9, 3e-9, 4e-9]", unit: "m" },
-      { label: "Samples", value: "60" },
+      { label: "Total cells", value: "60" },
       { label: "Values", value: "180" },
     ]);
     expect(model.fieldCapabilityRows).toEqual([

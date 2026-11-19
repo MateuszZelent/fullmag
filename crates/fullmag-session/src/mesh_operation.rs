@@ -53,6 +53,23 @@ pub fn mesh_command_outcome(workspace: &Value, command_id: &str) -> Option<MeshC
         .and_then(|entry| serde_json::from_value(entry.clone()).ok())
 }
 
+/// Transient marker carried only by the original remesh publication and its retries.
+pub const MESH_REINITIALIZATION_EVENT: &str = "mesh_reinitialization_command_id";
+
+/// A model reinitialization requires a completed command bound to this mesh.
+pub fn completed_mesh_reinitialization(workspace: &Value) -> Option<MeshCommandOutcome> {
+    let summary = workspace.get("last_build_summary")?;
+    let command_id = workspace.get(MESH_REINITIALIZATION_EVENT)?.as_str()?;
+    let outcome = mesh_command_outcome(workspace, command_id)?;
+    (summary["command_id"].as_str() == Some(command_id)
+        && summary["status"] == "completed"
+        && summary["state_policy"] == MESH_STATE_POLICY
+        && outcome.status == MeshCommandStatus::Completed
+        && outcome.state_policy == MESH_STATE_POLICY
+        && outcome.mesh_generation_id.as_deref()? == summary["mesh_generation_id"].as_str()?)
+        .then_some(outcome)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

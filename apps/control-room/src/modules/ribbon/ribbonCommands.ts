@@ -21,6 +21,7 @@ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import { cycleRibbonDensity } from "./ribbonPreference";
 import {
   BACKEND_INTERACTION_IDS,
@@ -69,6 +70,8 @@ export const RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND =
   "ribbon.physics.select-interaction";
 export const RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND =
   "ribbon.physics.create-field-drive";
+export const RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND =
+  "ribbon.physics.create-mask-antenna";
 export const RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND =
   "ribbon.physics.create-spin-transport";
 export const RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND =
@@ -318,6 +321,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     scope: "workspace",
     run: beginCrossSectionDraftFromCommand,
   },
+  addAbsorbingBoundaryCommand,
   {
     id: RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
     title: "Create Frozen Spins",
@@ -339,6 +343,18 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
       ? null
       : "Selection controller is not available.",
     run: createFieldDriveFromCommand,
+  },
+  {
+    id: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
+    title: "Create Mask Antenna",
+    group: "ribbon-physics",
+    category: "Physics",
+    scope: "selection",
+    isEnabled: (context) => Boolean(context.selection),
+    disabledReason: (context) => context.selection
+      ? null
+      : "Selection controller is not available.",
+    run: createMaskAntennaFromCommand,
   },
   {
     id: RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
@@ -912,6 +928,33 @@ function createFieldDriveFromCommand(context: CommandContext): CommandResult {
       objectId: null,
       ref: {
         draft: true,
+        kind: "physics.field-drive",
+        nodeId,
+        type: "physics-field-drive",
+      },
+    },
+    context.source,
+  );
+  return { status: "completed" };
+}
+
+function createMaskAntennaFromCommand(context: CommandContext): CommandResult {
+  if (!context.selection) {
+    return {
+      message: "Selection controller is not available.",
+      status: "failed",
+    };
+  }
+  const nodeId = "model:physics:mask-antenna:draft";
+  context.selection.set(
+    {
+      kind: "physics.field-drive",
+      label: "New mask antenna",
+      nodeId,
+      objectId: null,
+      ref: {
+        draft: true,
+        fieldDriveKind: "mask",
         kind: "physics.field-drive",
         nodeId,
         type: "physics-field-drive",

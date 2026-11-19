@@ -7,6 +7,7 @@
  */
 
 #include "fullmag_fem.h"
+#include "core/fem_marker_map.hpp"
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -741,8 +742,26 @@ std::unique_ptr<mfem::Mesh> import_mesh(
     const fullmag_fem_mesh_desc &descriptor,
     const MeshView &view,
     bool accepted_geometry_preflight = false,
-    bool coincident_geometry_preflight = false)
+    bool coincident_geometry_preflight = false,
+    fullmag::fem::FemMarkerMaps *out_maps = nullptr)
 {
+    if (out_maps != nullptr) *out_maps = {};
+    if (view.n_nodes > static_cast<uint32_t>(INT_MAX) ||
+        view.n_elements > static_cast<uint32_t>(INT_MAX) ||
+        view.boundary_markers.size() > static_cast<size_t>(INT_MAX)) {
+        throw std::invalid_argument("transport mesh cardinality exceeds MFEM int range");
+    }
+    fullmag::fem::FemMarkerMaps maps;
+    std::string marker_error;
+    const bool compact_domain = accepted_geometry_preflight && descriptor.cell_markers_len != 0;
+    if (compact_domain && !maps.domain.assign(descriptor.cell_markers,
+            descriptor.cell_markers + descriptor.cell_markers_len,
+            [](uint32_t marker) { return marker; }, marker_error)) {
+        throw std::invalid_argument(marker_error);
+    }
+    if (!maps.boundary.assign(view.boundary_markers, marker_error)) {
+        throw std::invalid_argument(marker_error);
+    }
     auto mesh = std::make_unique<mfem::Mesh>(
         3,
         static_cast<int>(view.n_nodes),
@@ -760,8 +779,8 @@ std::unique_ptr<mfem::Mesh> import_mesh(
         }
         // Legacy material coefficients index unique attributes. The accepted
         // scalar workflow indexes ElementNo and preserves explicit markers.
-        const int attribute = accepted_geometry_preflight && descriptor.cell_markers_len != 0
-            ? static_cast<int>(descriptor.cell_markers[element]) : static_cast<int>(element + 1u);
+        const int attribute = compact_domain
+            ? maps.domain.attribute(descriptor.cell_markers[element]) : static_cast<int>(element + 1u);
         mesh->AddTet(tetrahedron, attribute);
     }
     for (uint32_t boundary = 0; boundary < view.boundary_markers.size(); ++boundary) {
@@ -770,8 +789,8 @@ std::unique_ptr<mfem::Mesh> import_mesh(
         for (int local = 0; local < 3; ++local) {
             triangle[local] = static_cast<int>(indices[local]);
         }
-        const uint32_t attribute = view.boundary_markers[boundary];
-        mesh->AddBdrTriangle(triangle, static_cast<int>(attribute));
+        const int attribute = maps.boundary.attribute(view.boundary_markers[boundary]);
+        mesh->AddBdrTriangle(triangle, attribute);
     }
     if (accepted_geometry_preflight) {
         fullmag::fem::transport::validate_terminal_current_mesh(*mesh);
@@ -779,6 +798,7 @@ std::unique_ptr<mfem::Mesh> import_mesh(
     if (coincident_geometry_preflight) fullmag::fem::transport::coincident_cut_v2::validate_mesh(*mesh);
     mesh->FinalizeTopology();
     mesh->Finalize(false, true);
+    if (out_maps != nullptr) *out_maps = std::move(maps);
     return mesh;
 }
 
@@ -900,8 +920,8 @@ MeshView validate_accepted_charge_input_mesh(const fullmag_fem_mesh_desc &mesh)
         rt0_require(std::isfinite(mesh.nodes_xyz[index]), "accepted charge coordinates must be finite");
     }
     for (std::uint64_t index = 0; index < mesh.cell_markers_len; ++index) {
-        rt0_require(mesh.cell_markers[index] > 0 && mesh.cell_markers[index] <= static_cast<std::uint32_t>(INT_MAX),
-            "accepted charge cell markers must be positive and representable");
+        rt0_require(mesh.cell_markers[index] > 0,
+            "accepted charge cell markers must be positive");
     }
     using LocalFace = std::array<std::uint32_t, 3>;
     std::map<LocalFace, unsigned> incidence;
@@ -940,9 +960,8 @@ MeshView validate_accepted_charge_input_mesh(const fullmag_fem_mesh_desc &mesh)
         rt0_require(declared.insert(key).second && incidence.count(key) == 1,
             "accepted charge facet is repeated or not an actual tetrahedral face");
         if (role == FULLMAG_FEM_FACET_ROLE_EXTERIOR) {
-            rt0_require(incidence.at(key) == 1 && mesh.facet_markers[facet] > 0 &&
-                    mesh.facet_markers[facet] <= static_cast<std::uint32_t>(INT_MAX),
-                "accepted charge exterior facet is interior or has an invalid marker");
+            rt0_require(mesh.facet_markers[facet] > 0, "accepted charge facet markers must be positive");
+            rt0_require(incidence.at(key) == 1, "accepted charge exterior facet is interior");
             exterior.insert(key);
         } else {
             rt0_require(incidence.at(key) == 2, "accepted charge material interface must be an interior face");
@@ -960,6 +979,7 @@ void copy_rt0_text(char *destination, std::size_t capacity, const std::string &v
 struct ResolvedAcceptedChargeRequest {
     std::unique_ptr<mfem::Mesh> mesh;
     fullmag::fem::antenna_field_solve::AcceptedTerminalChargeRequest charge;
+    std::unique_ptr<fullmag::fem::FemMarkerMaps> marker_maps;
 };
 
 ResolvedAcceptedChargeRequest resolve_accepted_charge_request(
@@ -1026,9 +1046,11 @@ ResolvedAcceptedChargeRequest resolve_accepted_charge_request(
         }
         charge.interface_pairs.push_back(std::move(pair));
     }
-    auto mesh = import_mesh(request.mesh, view, true);
+    auto marker_maps = std::make_unique<fullmag::fem::FemMarkerMaps>();
+    auto mesh = import_mesh(request.mesh, view, true, false, marker_maps.get());
+    charge.canonical_marker_maps = marker_maps.get();
     charge.mesh = mesh.get();
-    return {std::move(mesh), std::move(charge)};
+    return {std::move(mesh), std::move(charge), std::move(marker_maps)};
 }
 
 int solve_accepted_terminal_charge(const fullmag_fem_accepted_terminal_charge_request_v1 &request,
@@ -1471,15 +1493,25 @@ fullmag::fem::transport::ExternalLeadExtensionCurrentClosure rt0_external_closur
     return closure;
 }
 
+int native_boundary_attribute(const fullmag::fem::CompactMarkerMap &markers, uint32_t canonical)
+{
+    const int attribute = canonical == 0u ? 0 : markers.attribute(canonical);
+    if (attribute == 0) {
+        throw std::invalid_argument("canonical boundary marker is not present in the transport mesh");
+    }
+    return attribute;
+}
+
 class BoundaryScalarCoefficient final : public mfem::Coefficient {
 public:
-    BoundaryScalarCoefficient(const uint32_t *attributes, const double *values, uint64_t count)
+    BoundaryScalarCoefficient(const uint32_t *attributes, const double *values, uint64_t count,
+                              const fullmag::fem::CompactMarkerMap &markers)
     {
         for (uint64_t i = 0; i < count; ++i) {
             if (attributes[i] == 0 || !std::isfinite(values[i])) {
                 throw std::invalid_argument("charge boundary attributes must be positive and finite");
             }
-            entries_.push_back({attributes[i], values[i]});
+            entries_.push_back({native_boundary_attribute(markers, attributes[i]), values[i]});
         }
     }
 
@@ -1487,7 +1519,7 @@ public:
                 const mfem::IntegrationPoint &) override
     {
         for (const auto &entry : entries_) {
-            if (static_cast<uint32_t>(transformation.Attribute) == entry.first) {
+            if (transformation.Attribute == entry.first) {
                 return entry.second;
             }
         }
@@ -1495,12 +1527,13 @@ public:
     }
 
 private:
-    std::vector<std::pair<uint32_t, double>> entries_;
+    std::vector<std::pair<int, double>> entries_;
 };
 
 class BoundaryVectorCoefficient final : public mfem::VectorCoefficient {
 public:
-    BoundaryVectorCoefficient(const uint32_t *attributes, const double *values, uint64_t count)
+    BoundaryVectorCoefficient(const uint32_t *attributes, const double *values, uint64_t count,
+                              const fullmag::fem::CompactMarkerMap &markers)
         : mfem::VectorCoefficient(3)
     {
         for (uint64_t i = 0; i < count; ++i) {
@@ -1514,7 +1547,7 @@ public:
                     throw std::invalid_argument("spin boundary potential must be finite");
                 }
             }
-            entries_.push_back({attributes[i], value});
+            entries_.push_back({native_boundary_attribute(markers, attributes[i]), value});
         }
     }
 
@@ -1524,7 +1557,7 @@ public:
         value.SetSize(3);
         value = 0.0;
         for (const auto &entry : entries_) {
-            if (static_cast<uint32_t>(transformation.Attribute) == entry.first) {
+            if (transformation.Attribute == entry.first) {
                 for (int component = 0; component < 3; ++component) {
                     value[component] = entry.second[component];
                 }
@@ -1534,21 +1567,23 @@ public:
     }
 
 private:
-    std::vector<std::pair<uint32_t, std::array<double, 3>>> entries_;
+    std::vector<std::pair<int, std::array<double, 3>>> entries_;
 };
 
 mfem::Array<int> boundary_marker(
     const mfem::Mesh &mesh,
     const uint32_t *attributes,
-    uint64_t count)
+    uint64_t count,
+    const fullmag::fem::CompactMarkerMap &markers)
 {
     mfem::Array<int> marker(mesh.bdr_attributes.Max());
     marker = 0;
     for (uint64_t i = 0; i < count; ++i) {
-        if (attributes[i] == 0 || attributes[i] > static_cast<uint32_t>(marker.Size())) {
+        const int attribute = native_boundary_attribute(markers, attributes[i]);
+        if (attribute > marker.Size()) {
             throw std::invalid_argument("boundary attribute is not present in the MFEM mesh");
         }
-        marker[static_cast<int>(attributes[i] - 1u)] = 1;
+        marker[attribute - 1] = 1;
     }
     return marker;
 }
@@ -1586,7 +1621,8 @@ int solve(
     validate_request_header(request, result);
     const MeshView mesh_view = make_mesh_view(request.mesh);
     validate_request(request, result, mesh_view);
-    auto mesh = import_mesh(request.mesh, mesh_view);
+    fullmag::fem::FemMarkerMaps marker_maps;
+    auto mesh = import_mesh(request.mesh, mesh_view, false, false, &marker_maps);
 
     mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
     for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
@@ -1629,11 +1665,11 @@ int solve(
     const auto charge_marker = boundary_marker(
         *mesh,
         request.charge_dirichlet_boundary_attributes,
-        request.charge_dirichlet_count);
+        request.charge_dirichlet_count, marker_maps.boundary);
     BoundaryScalarCoefficient charge_boundary(
         request.charge_dirichlet_boundary_attributes,
         request.charge_dirichlet_values_v,
-        request.charge_dirichlet_count);
+        request.charge_dirichlet_count, marker_maps.boundary);
     const auto charge_gauge =
         request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL
             ? fullmag::fem::transport::ChargeGauge::ZeroMeanPotential
@@ -1646,13 +1682,13 @@ int solve(
     const auto spin_marker = boundary_marker(
         *mesh,
         request.spin_dirichlet_boundary_attributes,
-        request.spin_dirichlet_count);
+        request.spin_dirichlet_count, marker_maps.boundary);
     std::unique_ptr<BoundaryVectorCoefficient> spin_boundary;
     if (request.spin_dirichlet_count > 0) {
         spin_boundary = std::make_unique<BoundaryVectorCoefficient>(
             request.spin_dirichlet_boundary_attributes,
             request.spin_dirichlet_values_v,
-            request.spin_dirichlet_count);
+            request.spin_dirichlet_count, marker_maps.boundary);
     }
     const auto spin = oracle.solve_spin(spin_marker, spin_boundary.get());
     if (!spin.converged) {
@@ -1758,6 +1794,8 @@ int solve_charge(
     if (dirichlet_boundary_currents_a_len != nullptr) {
         validate_disjoint_charge_terminal_nodes(request, mesh_view);
     }
+    fullmag::fem::FemMarkerMaps marker_maps;
+    auto mesh = import_mesh(request.mesh, mesh_view, false, false, &marker_maps);
     std::vector<std::vector<int>> terminal_groups;
     std::vector<double> requested_currents;
     if (prescribed_currents) {
@@ -1792,17 +1830,16 @@ int solve_charge(
             std::vector<int> group;
             for (uint64_t index = offsets[terminal]; index < offsets[terminal + 1]; ++index) {
                 const uint32_t attribute = current_request->terminal_boundary_attributes[index];
-                if (attribute == 0 || attribute > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+                if (attribute == 0) {
                     throw std::invalid_argument("terminal boundary attribute is invalid");
                 }
-                group.push_back(static_cast<int>(attribute));
+                group.push_back(native_boundary_attribute(marker_maps.boundary, attribute));
             }
             terminal_groups.push_back(std::move(group));
             requested_currents.push_back(
                 current_request->requested_outward_currents_a[terminal]);
         }
     }
-    auto mesh = import_mesh(request.mesh, mesh_view);
 
     mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
     for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
@@ -1827,11 +1864,11 @@ int solve_charge(
     const auto charge_marker = boundary_marker(
         *mesh,
         request.dirichlet_boundary_attributes,
-        request.dirichlet_boundary_count);
+        request.dirichlet_boundary_count, marker_maps.boundary);
     BoundaryScalarCoefficient charge_boundary(
         request.dirichlet_boundary_attributes,
         request.dirichlet_boundary_values_v,
-        request.dirichlet_boundary_count);
+        request.dirichlet_boundary_count, marker_maps.boundary);
     const auto charge_gauge =
         request.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL
             ? fullmag::fem::transport::ChargeGauge::ZeroMeanPotential
@@ -1856,7 +1893,7 @@ int solve_charge(
         }
         for (uint64_t index = 0; index < request.dirichlet_boundary_count; ++index) {
             dirichlet_boundary_currents_a[index] = oracle.boundary_weak_current_a(
-                static_cast<int>(request.dirichlet_boundary_attributes[index]));
+                native_boundary_attribute(marker_maps.boundary, request.dirichlet_boundary_attributes[index]));
         }
         *dirichlet_boundary_currents_a_len = request.dirichlet_boundary_count;
     }
@@ -1955,7 +1992,8 @@ int solve_m2(
             throw std::invalid_argument("reciprocal spin material violates the positive Schur complement");
         }
     }
-    auto mesh = import_mesh(base.mesh, mesh_view);
+    fullmag::fem::FemMarkerMaps marker_maps;
+    auto mesh = import_mesh(base.mesh, mesh_view, false, false, &marker_maps);
 
     mfem::Vector conductivity_values(static_cast<int>(mesh_view.n_elements));
     for (uint32_t i = 0; i < mesh_view.n_elements; ++i) {
@@ -2002,22 +2040,22 @@ int solve_m2(
     fullmag::fem::transport::SteadyTransportOracle oracle(
         *mesh, conductivity, magnetization, parameters);
     const auto charge_marker = boundary_marker(
-        *mesh, base.charge_dirichlet_boundary_attributes, base.charge_dirichlet_count);
+        *mesh, base.charge_dirichlet_boundary_attributes, base.charge_dirichlet_count, marker_maps.boundary);
     BoundaryScalarCoefficient charge_boundary(
         base.charge_dirichlet_boundary_attributes,
         base.charge_dirichlet_values_v,
-        base.charge_dirichlet_count);
+        base.charge_dirichlet_count, marker_maps.boundary);
     if (base.charge_gauge == FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL) {
         throw std::domain_error("reciprocal FEM reference lane requires a Dirichlet charge reference");
     }
     const auto spin_marker = boundary_marker(
-        *mesh, base.spin_dirichlet_boundary_attributes, base.spin_dirichlet_count);
+        *mesh, base.spin_dirichlet_boundary_attributes, base.spin_dirichlet_count, marker_maps.boundary);
     std::unique_ptr<BoundaryVectorCoefficient> spin_boundary;
     if (base.spin_dirichlet_count > 0) {
         spin_boundary = std::make_unique<BoundaryVectorCoefficient>(
             base.spin_dirichlet_boundary_attributes,
             base.spin_dirichlet_values_v,
-            base.spin_dirichlet_count);
+            base.spin_dirichlet_count, marker_maps.boundary);
     }
     const auto diagnostics = oracle.solve_reciprocal(
         charge_marker, charge_boundary, spin_marker, spin_boundary.get(),

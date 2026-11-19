@@ -4,14 +4,13 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0600-fem-eigenmodes-linearized-llg.md
+source_of_truth: packages/fullmag-py/src/fullmag/model/study.py, crates/fullmag-plan/src/fem.rs, backends/fem/src/frequency_domain/modal_eigen_solver.cpp
 ---
 
 (public-docs-python-api-studies-eigenmodes)=
 # Eigenmodes
 
 (python-api-studies-eigenmodes-problem-statement)=
-<!-- (problem-statement)= -->
 ## 1. Contract and scope
 
 `fm.Eigenmodes` and `study.stages.add_eigenmodes(...)` define the public Python authoring contract
@@ -27,7 +26,6 @@ branch tracking are given in {doc}`/numerical-methods/eigensolvers/linearized-ll
 {doc}`/numerical-methods/eigensolvers/modal-validation`.
 
 (python-api-studies-eigenmodes-governing-equations)=
-<!-- (governing-equations)= -->
 ## 2. Governing equations
 
 The modal study solves the tangent-projected generalized eigenvalue problem around $\mathbf m_0$:
@@ -48,7 +46,6 @@ precession, coupled Poisson-airbox magnetostatics (`include_demag=True`), and no
 vectors ($\mathbf k \neq \mathbf 0$).
 
 (python-api-studies-eigenmodes-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## 3. Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -62,7 +59,6 @@ vectors ($\mathbf k \neq \mathbf 0$).
 | $f$ | eigenfrequency | $\mathrm{Hz}$ |
 
 (python-api-studies-eigenmodes-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## 4. Assumptions and validity
 
 * `count` must be a positive integer ($K \ge 1$).
@@ -73,7 +69,6 @@ vectors ($\mathbf k \neq \mathbf 0$).
   or `SaveEigenDiagnostics`); driven `SaveResponse` outputs are rejected on `Eigenmodes`.
 
 (python-api-studies-eigenmodes-python-api)=
-<!-- (python-api)= -->
 ## 5. Python API and complete parameter reference
 
 ### Complete stage-first example
@@ -176,7 +171,6 @@ study.stages.add_eigenmodes(
 | `ModeTracking` | `degeneracy_tolerance` | `float` | `1e6` | $\mathrm{Hz}$ | Frequency window for SVD Procrustes degenerate-subspace transport |
 
 (python-api-studies-eigenmodes-problem-ir)=
-<!-- (problem-ir)= -->
 ## 6. ProblemIR
 
 `Eigenmodes.to_ir()` emits `{"kind": "eigenmodes", ...}` with `operator`, `equilibrium`, `target`,
@@ -184,7 +178,6 @@ study.stages.add_eigenmodes(
 `spin_wave_bc`, `spatial_representation`, `fem_solver_policy`, and `sampling`.
 
 (python-api-studies-eigenmodes-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## 7. Round-trip and failure semantics
 
 Requested intent is the value authored by Python and preserved in `ProblemIR`; resolved execution is
@@ -192,7 +185,6 @@ the planner or realization result (`FemEigenPlanIR`). Validation errors identify
 rule, and unsupported combinations are rejected explicitly rather than silently substituted.
 
 (python-api-studies-eigenmodes-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## 8. Discrete realization
 
 Solver execution follows {doc}`/numerical-methods/eigensolvers/linearized-llg`: `plan_fem_eigen`
@@ -203,7 +195,6 @@ complement, `evaluate_poisson_airbox_modal_residuals` certifies coupled $(q,\phi
 sweeps.
 
 (python-api-studies-eigenmodes-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 ## 9. Implementation mapping
 
 | Layer | Owner | Responsibility |
@@ -214,7 +205,6 @@ sweeps.
 | Native C++ solver | `solve_modal_eigen_contract`, `assemble_poisson_airbox_shared_domain`, `solve_poisson_airbox_modal_eigen_cpu_schur`, `evaluate_poisson_airbox_modal_residuals` | Shared-domain $(q,\phi)$ assembly, Schur shift-and-invert, and residual certification |
 
 (python-api-studies-eigenmodes-validation)=
-<!-- (validation)= -->
 ## 10. Validation
 
 Constructor and round-trip tests verify `Eigenmodes`, `FemEigenSolverPolicy`, `KPath`,
@@ -222,32 +212,45 @@ Constructor and round-trip tests verify `Eigenmodes`, `FemEigenSolverPolicy`, `K
 {doc}`/numerical-methods/eigensolvers/modal-validation`.
 
 (python-api-studies-eigenmodes-limitations)=
-<!-- (limitations)= -->
 ## 11. Limitations
 
 Authoring support is broader than any single backend's resolved modal capability; the planner rejects
 unsupported combinations (`plan_fem_eigen`) without silent fallback.
 
 (python-api-studies-eigenmodes-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 12. Scientific bibliography
 
 1. C. Herring and C. Kittel, “On the theory of spin waves in ferromagnetic media,” *Physical Review*, 81, 869–880 (1951).
 2. M. d'Aquino, C. Serpico, G. Miano, and C. Forestiere, “A novel formulation for the numerical computation of magnetization modes in complex micromagnetic systems,” *Journal of Computational Physics*, 228, 6130–6149 (2009).
 
-(python-api-studies-eigenmodes-source-code-index)=
-## 13. Source-code index
+## Control Room support
 
-### Control Room crosswalk
+Status: Eigenmode stage creation, dispersion inspection, and 3D spatial mode playback are `partial`; low-level `FemEigenSolverPolicy` matrix-free/Schur solver tuning and arbitrary $k$-path builders without matching fields remain Python-only.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `not implemented` | Python-only until implemented |
+| Stage mode count, shift/target, & basic $k$-sampling | `Model Explorer -> Stages -> Add stage -> Eigenmodes` (`EigenmodesStageInspector`, `StudyStageDraftEditor`) | `partial` | Submit stage draft via `executeStageAfterApply`; stage and downstream result resources are invalidated |
+| Tracked $\omega(k)$ dispersion plot & branch table | `Analysis Plots` (`EigenDispersionInspectorPanel`, `FrequencyDomainDispersionChart`, `FrequencyDomainBranchTable`) | `inspection-only` | Selecting a dispersion point or branch synchronizes explorer, inspector, and 3D target |
+| Spatial eigenmode profile, phase slider ($0\text{–}2\pi$), & complex projection | `3D Viewport` + `ModeVisualizationInspectorPanel` (`real`, `imag`, `magnitude`, `phase_rotated_real`) | `inspection-only` | UI visualization commands (`analysis.eigen.set-mode-3d-phase`); visual playback rate does not alter physical eigenfrequencies |
+| Advanced `FemEigenSolverPolicy` / Bloch parameters without UI fields | `Model Explorer -> Stages -> Add stage -> Eigenmodes` | `Python-only` | Authored in Python |
 
-See {doc}`/frontend/capability-register` for the support matrix and not implemented policy.
+```{image} /_static/images/ui/charts-dispersion-and-fmr-spectrum.png
+:alt: Control Room eigenmode dispersion plot and branch table alongside inspection readouts
+:align: center
+:width: 100%
+```
 
-### Source-code index
+```{image} /_static/images/ui/viewport-3d-eigenmode-spatial-profile.png
+:alt: 3D spatial eigenmode profile rendered via ModeVisualizationInspectorPanel with phase projection controls
+:align: center
+:width: 100%
+```
+
+See {doc}`/frontend/capability-register`, {doc}`/frontend/inspectors/studies-and-stages`, and {doc}`/frontend/inspectors/analysis-and-frequency-domain`.
+Frontend source owners: `EigenmodesStageInspector`, `EigenDispersionInspectorPanel`, `ModeVisualizationInspectorPanel`, and `StudyStageDraftEditor`.
+
+(python-api-studies-eigenmodes-source-code-index)=
+## 13. Source-code index
 
 | Repository path | Stable symbol | Responsibility |
 |---|---|---|

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::sync::Mutex;
 
 pub(crate) const HEADER_NAME: &str = "x-fullmag-session-scope";
@@ -53,8 +54,18 @@ impl LivePublisherScope {
             scope.validate(session_id)?;
             request = request.header(HEADER_NAME, scope.header());
         }
-        let response = request.send().context("failed to publish current live frame")?
-            .error_for_status().context("current live frame rejected its publisher scope")?;
+        let response = request.send().context("failed to publish current live frame")?;
+        let status = response.status();
+        if !status.is_success() {
+            let mut bytes = Vec::new();
+            response.take(4096).read_to_end(&mut bytes)
+                .with_context(|| format!("could not read live publication error (HTTP {status})"))?;
+            let body = String::from_utf8_lossy(&bytes);
+            let document = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+            let reason = document.as_ref().and_then(|value| value["message"].as_str())
+                .unwrap_or(body.trim());
+            bail!("current live frame rejected (HTTP {status}): {reason}");
+        }
         let accepted = response.json::<PublicationAcknowledgement>()
             .context("API does not acknowledge publisher session scope")
             .and_then(|ack| {

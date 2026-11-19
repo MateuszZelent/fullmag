@@ -414,7 +414,7 @@
         "fem_gpu_public": "production_executable"
       },
       "validated_workloads": [],
-      "notes": "Current public executable subset supports a single Slonczewski module at a time, with either inline current_density or a named CurrentTransport prescribed_density source. Native FEM CPU/GPU execute this subset; the Rust FEM reference runner still does not."
+      "notes": "Current public executable subset supports one Slonczewski module at a time, with either inline current_density or a named CurrentTransport prescribed_density source. Canonical single-grid FDM time_expression is source-implemented on CPU reference and CUDA in extended FP64 RK45, requires declared event_times_s for Heaviside discontinuities, and rejects strict/FP32/non-RK45/multilayer/active-relaxation/coupled-transport plans. Managed and scientific qualification for this expression lane is not established. Native FEM CPU/GPU execute the existing constant-current subset; the Rust FEM reference runner still does not."
     },
     {
       "id": "zhang_li_stt",

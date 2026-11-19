@@ -1,0 +1,1 @@
+{"state": "passed", "checks": ["initialize roles", "reopen stable owner", "preserve unknown results", "reject foreign marker"], "docker_started": false}

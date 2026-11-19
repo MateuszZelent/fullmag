@@ -181,45 +181,10 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
     HYPRE_CONFIGURE_FLAGS="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${configure_flags[@]}")" \
     python3 -c 'import hashlib,json,os,re; from pathlib import Path; p=Path(os.environ["INSTALL_PREFIX"])/"include/HYPRE_config.h"; s=p.read_text(); names=("HYPRE_USING_UMPIRE","HYPRE_USING_UMPIRE_DEVICE","HYPRE_USING_DEVICE_MALLOC_ASYNC","HYPRE_USING_THRUST_ASYNC"); macros={n: bool(re.search(r"^#define\s+"+re.escape(n)+r"\s+1(?:\s|$)",s,re.M)) for n in names}; out={"hypre_gpu_architectures":os.environ["HYPRE_GPU_ARCHITECTURES"],"hypre_memory_variant":os.environ["HYPRE_MEMORY_VARIANT"],"hypre_configure_flags":json.loads(os.environ["HYPRE_CONFIGURE_FLAGS"]),"hypre_config_macros":macros,"hypre_config_header_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}; q=Path(os.environ["INSTALL_PREFIX"])/"share/fullmag/hypre-build-metadata.json"; q.write_text(json.dumps(out,indent=2,sort_keys=True)+chr(10))'
 
-# Task 9 modal GPU contract: PETSc and SLEPc must use the same CUDA-enabled
-# real/double dependency stack as MFEM and hypre.  Ubuntu's distro packages
-# are CPU-only and bind a second, incompatible hypre, so build the qualified
-# pair from source into the shared managed prefix.
-COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
-ARG FULLMAG_PETSC_CUDA_ARCHITECTURES="80,89,90"
-RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
-    test "$(git -C /tmp/build/petsc rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
-    cd /tmp/build/petsc && \
-    git apply /tmp/build/petsc-3.24.6-multiarch-nvcc.diff && \
-    python3 ./configure \
-      PETSC_ARCH=arch-linux-cuda \
-      --prefix=${INSTALL_PREFIX} \
-      --with-cc=mpicc \
-      --with-cxx=mpicxx \
-      --with-fc=mpifort \
-      COPTFLAGS=-O3 \
-      CXXOPTFLAGS=-O3 \
-      FOPTFLAGS=-O3 \
-      CUDAOPTFLAGS="-O3 -lineinfo" \
-      --with-debugging=0 \
-      --with-shared-libraries=1 \
-      --with-scalar-type=real \
-      --with-precision=double \
-      --with-cuda=1 \
-      --with-cuda-dir=${CUDA_HOME} \
-      --with-cuda-arch="${FULLMAG_PETSC_CUDA_ARCHITECTURES}" \
-      --with-hypre=1 \
-      --with-hypre-dir=${INSTALL_PREFIX} && \
-    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
-    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install
-
-RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
-    test "$(git -C /tmp/build/slepc rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
-    cd /tmp/build/slepc && \
-    PETSC_DIR=${INSTALL_PREFIX} python3 ./configure --prefix=${INSTALL_PREFIX} && \
-    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
-    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} install
-
+# Layer order follows build cost and dependency edges, not topic.  Neither
+# MFEM installation uses PETSc or SLEPc (MFEM_USE_PETSC/SLEPC stay off), so
+# both MFEM prefixes are built before PETSc: a PETSc/SLEPc configuration
+# change then reuses the cached MFEM CUDA layer, which is the slowest step.
 ARG FULLMAG_MFEM_BUILD_JOBS=1
 # Opt-in DEV tradeoff: faster MFEM GPU compilation may reduce kernel performance.
 # Keep 0 compatible with the default/release CUDA toolchain.
@@ -260,12 +225,18 @@ RUN [[ "${FULLMAG_MFEM_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] && \
     cmake --build /tmp/build/mfem/build --target mfem -j"${FULLMAG_MFEM_BUILD_JOBS}" && \
     cmake --install /tmp/build/mfem/build
 
+# CPU-prefix compilation (HYPRE, libCEED, MFEM, PETSc, SLEPc) needs far less
+# memory per job than MFEM CUDA templates, so it has its own bound.
+ARG FULLMAG_CPU_DEPENDENCY_BUILD_JOBS=2
+RUN [[ "${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || \
+    { echo "FULLMAG_CPU_DEPENDENCY_BUILD_JOBS must be a positive integer" >&2; exit 2; }
+
 # CUDA-free MFEM requires a matching CUDA-free HYPRE; retain the GPU prefix.
 RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/fullmag-mfem-cpu \
       -DBUILD_SHARED_LIBS=ON -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_OPENMP=ON \
       -DHYPRE_ENABLE_CUDA=OFF -DHYPRE_BUILD_TESTS=OFF -DHYPRE_BUILD_EXAMPLES=OFF && \
-    cmake --build /tmp/build/hypre/build-cpu -j2 && \
+    cmake --build /tmp/build/hypre/build-cpu -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     cmake --install /tmp/build/hypre/build-cpu
 
 # Keep the complete CPU dependency closure separate, including PETSc/SLEPc.
@@ -273,36 +244,9 @@ RUN cmake -S /tmp/build/hypre/src -B /tmp/build/hypre/build-cpu -G Ninja \
 # Separate source trees avoid reusing GPU objects or generated configuration.
 RUN git clone --no-hardlinks /tmp/build/libCEED /tmp/build/libCEED-cpu && \
     test "$(git -C /tmp/build/libCEED-cpu rev-parse HEAD)" = "${LIBCEED_SOURCE_COMMIT}" && \
-    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j2 && \
+    make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     make -C /tmp/build/libCEED-cpu CUDA_DIR= ROCM_DIR= SYCL_DIR= MAGMA_DIR= \
       install prefix=/opt/fullmag-mfem-cpu
-
-RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
-    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
-    cd /tmp/build/petsc-cpu && \
-    PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu \
-    python3 ./configure \
-      PETSC_ARCH=arch-linux-cpu \
-      --prefix=/opt/fullmag-mfem-cpu \
-      --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpifort \
-      COPTFLAGS=-O3 CXXOPTFLAGS=-O3 FOPTFLAGS=-O3 \
-      --with-debugging=0 --with-shared-libraries=1 \
-      --with-scalar-type=real --with-precision=double \
-      --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
-      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu && \
-    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j2 all && \
-    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install
-
-RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
-    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
-    cd /tmp/build/slepc-cpu && \
-    unset PETSC_ARCH && \
-    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
-      python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
-    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
-      make -j2 all && \
-    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
-      make install
 
 # The CPU FEM client is compiled with the host C++ compiler. Keep its MFEM
 # headers and library in a separate, CUDA-free prefix so SparseMatrix has the
@@ -322,8 +266,88 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build-cpu -G Ninja \
       -DCEED_DIR=/opt/fullmag-mfem-cpu \
       -DHYPRE_DIR=/opt/fullmag-mfem-cpu \
       -DMFEM_ENABLE_TESTING=OFF && \
-    cmake --build /tmp/build/mfem/build-cpu --target mfem -j2 && \
+    cmake --build /tmp/build/mfem/build-cpu --target mfem -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" && \
     cmake --install /tmp/build/mfem/build-cpu
+
+# Task 9 modal GPU contract: PETSc and SLEPc must use the same CUDA-enabled
+# real/double dependency stack as MFEM and hypre.  Ubuntu's distro packages
+# are CPU-only and bind a second, incompatible hypre, so build the qualified
+# pair from source into the shared managed prefix.
+COPY docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff /tmp/build/petsc-3.24.6-multiarch-nvcc.diff
+ARG FULLMAG_PETSC_CUDA_ARCHITECTURES="80,89,90"
+# Sparse direct and dense kernels for both PETSc installations: MUMPS (with
+# ScaLAPACK) and METIS ordering for the exact modal Poisson LU, and OpenBLAS
+# instead of the reference netlib BLAS/LAPACK.  PETSc pins the downloaded
+# package versions for this PETSC_SOURCE_COMMIT; the resolved macros are
+# recorded in share/fullmag/petsc-build-metadata.json of each prefix.
+ARG FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS="--download-openblas --download-metis --download-scalapack --download-mumps"
+ENV FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS=${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS}
+COPY --chmod=755 docker/fem-gpu/write_petsc_build_metadata.py /usr/local/sbin/fullmag-write-petsc-build-metadata.py
+RUN git clone --depth 1 --branch ${PETSC_REF} https://gitlab.com/petsc/petsc.git /tmp/build/petsc && \
+    test "$(git -C /tmp/build/petsc rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
+    cd /tmp/build/petsc && \
+    git apply /tmp/build/petsc-3.24.6-multiarch-nvcc.diff && \
+    python3 ./configure \
+      PETSC_ARCH=arch-linux-cuda \
+      --prefix=${INSTALL_PREFIX} \
+      --with-cc=mpicc \
+      --with-cxx=mpicxx \
+      --with-fc=mpifort \
+      COPTFLAGS=-O3 \
+      CXXOPTFLAGS=-O3 \
+      FOPTFLAGS=-O3 \
+      CUDAOPTFLAGS="-O3 -lineinfo" \
+      --with-debugging=0 \
+      --with-shared-libraries=1 \
+      --with-scalar-type=real \
+      --with-precision=double \
+      --with-cuda=1 \
+      --with-cuda-dir=${CUDA_HOME} \
+      --with-cuda-arch="${FULLMAG_PETSC_CUDA_ARCHITECTURES}" \
+      --with-hypre=1 \
+      --with-hypre-dir=${INSTALL_PREFIX} \
+      ${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS} && \
+    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda -j"$(nproc)" all && \
+    make PETSC_DIR=/tmp/build/petsc PETSC_ARCH=arch-linux-cuda install && \
+    python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
+      --prefix "${INSTALL_PREFIX}" --require MUMPS METIS SCALAPACK OPENBLAS
+
+RUN git clone --depth 1 --branch ${SLEPC_REF} https://gitlab.com/slepc/slepc.git /tmp/build/slepc && \
+    test "$(git -C /tmp/build/slepc rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
+    cd /tmp/build/slepc && \
+    PETSC_DIR=${INSTALL_PREFIX} python3 ./configure --prefix=${INSTALL_PREFIX} && \
+    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} -j"$(nproc)" all && \
+    make SLEPC_DIR=/tmp/build/slepc PETSC_DIR=${INSTALL_PREFIX} install
+
+RUN git clone --no-hardlinks /tmp/build/petsc /tmp/build/petsc-cpu && \
+    test "$(git -C /tmp/build/petsc-cpu rev-parse HEAD)" = "${PETSC_SOURCE_COMMIT}" && \
+    cd /tmp/build/petsc-cpu && \
+    PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu \
+    python3 ./configure \
+      PETSC_ARCH=arch-linux-cpu \
+      --prefix=/opt/fullmag-mfem-cpu \
+      --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpifort \
+      COPTFLAGS=-O3 CXXOPTFLAGS=-O3 FOPTFLAGS=-O3 \
+      --with-debugging=0 --with-shared-libraries=1 \
+      --with-scalar-type=real --with-precision=double \
+      --with-cuda=0 --with-hip=0 --with-sycl=0 --with-opencl=0 \
+      --with-hypre=1 --with-hypre-dir=/opt/fullmag-mfem-cpu \
+      ${FULLMAG_PETSC_EXTERNAL_PACKAGE_FLAGS} && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" all && \
+    make PETSC_DIR=/tmp/build/petsc-cpu PETSC_ARCH=arch-linux-cpu install && \
+    python3 /usr/local/sbin/fullmag-write-petsc-build-metadata.py \
+      --prefix /opt/fullmag-mfem-cpu --require MUMPS METIS SCALAPACK OPENBLAS
+
+RUN git clone --no-hardlinks /tmp/build/slepc /tmp/build/slepc-cpu && \
+    test "$(git -C /tmp/build/slepc-cpu rev-parse HEAD)" = "${SLEPC_SOURCE_COMMIT}" && \
+    cd /tmp/build/slepc-cpu && \
+    unset PETSC_ARCH && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      python3 ./configure --prefix=/opt/fullmag-mfem-cpu && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make -j"${FULLMAG_CPU_DEPENDENCY_BUILD_JOBS}" all && \
+    env -u PETSC_ARCH SLEPC_DIR=/tmp/build/slepc-cpu PETSC_DIR=/opt/fullmag-mfem-cpu \
+      make install
 
 RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps --source-root /tmp/build --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json" && \
     python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["declared"].setdefault("mfem", {})["cuda_fast_compile"]=os.environ["FULLMAG_MFEM_CUDA_FAST_COMPILE"]; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
@@ -465,6 +489,43 @@ RUN apt-get update && \
 
 RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase runtime --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 RUN python3 -c 'import json,subprocess,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["actual"].setdefault("system_packages", {}).update({name:subprocess.check_output(["dpkg-query","-W","-f=${Version}",name],text=True).strip() for name in ("libgmp-dev","libgmp10","libmpfr-dev","libmpfr6","libboost-dev")}); p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+
+# Keep this CUPTI redistributable isolated from the CUDA toolkit and native FEM dependencies.
+ENV FULLMAG_CUPTI_ROOT=/opt/fullmag-cupti/12.9.79
+RUN set -eu; \
+    cupti_version=12.9.79; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) cupti_relative_path=cuda_cupti/linux-x86_64/cuda_cupti-linux-x86_64-12.9.79-archive.tar.xz; cupti_sha256=f779a24e8f0177b4ce45cbf118cb470139fb5107858df96689d0a0aa01f0fba1 ;; \
+      arm64) cupti_relative_path=cuda_cupti/linux-sbsa/cuda_cupti-linux-sbsa-12.9.79-archive.tar.xz; cupti_sha256=84f8657375c23a425b2d107c3cde1ce75777bff9798b744b78e146fdc02d2de0 ;; \
+      *) echo "Unsupported CUPTI architecture: $(dpkg --print-architecture)" >&2; exit 2 ;; \
+    esac; \
+    cupti_url="https://developer.download.nvidia.com/compute/cuda/redist/${cupti_relative_path}"; \
+    cupti_filename="${cupti_relative_path##*/}"; \
+    cupti_archive="/tmp/${cupti_filename}"; \
+    curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused \
+      -o "${cupti_archive}" "${cupti_url}"; \
+    echo "${cupti_sha256}  ${cupti_archive}" | sha256sum -c -; \
+    mkdir -p "${FULLMAG_CUPTI_ROOT}"; \
+    tar -xJf "${cupti_archive}" -C "${FULLMAG_CUPTI_ROOT}" --strip-components=1; \
+    rm -f "${cupti_archive}"; \
+    test -f "${FULLMAG_CUPTI_ROOT}/LICENSE" || { echo "CUPTI archive lacks LICENSE" >&2; exit 2; }; \
+    test -f "${FULLMAG_CUPTI_ROOT}/include/cupti_version.h"; \
+    grep -Eq '^[[:space:]]*#[[:space:]]*define[[:space:]]+CUPTI_API_VERSION[[:space:]]+28([[:space:]]|$)' \
+      "${FULLMAG_CUPTI_ROOT}/include/cupti_version.h"; \
+    cupti_library="${FULLMAG_CUPTI_ROOT}/lib/libcupti.so"; \
+    test -f "${cupti_library}"; \
+    cupti_library="$(readlink -f "${cupti_library}")"; \
+    test -f "${cupti_library}"; \
+    cupti_library_sha256="$(sha256sum "${cupti_library}")"; \
+    cupti_library_sha256="${cupti_library_sha256%% *}"; \
+    FULLMAG_CUPTI_VERSION="${cupti_version}" \
+    FULLMAG_CUPTI_API_VERSION=28 \
+    FULLMAG_CUPTI_REDIST_URL="${cupti_url}" \
+    FULLMAG_CUPTI_REDIST_SHA256="${cupti_sha256}" \
+    FULLMAG_CUPTI_LIBRARY_PATH="${cupti_library}" \
+    FULLMAG_CUPTI_LIBRARY_SHA256="${cupti_library_sha256}" \
+    python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); declared=value.setdefault("declared", {}); actual=value.setdefault("actual", {}); declared["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"redistribution_url":os.environ["FULLMAG_CUPTI_REDIST_URL"],"redistribution_archive_sha256":os.environ["FULLMAG_CUPTI_REDIST_SHA256"]}; actual["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"library_path":os.environ["FULLMAG_CUPTI_LIBRARY_PATH"],"library_sha256":os.environ["FULLMAG_CUPTI_LIBRARY_SHA256"]}; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' \
+      "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

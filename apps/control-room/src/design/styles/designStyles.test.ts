@@ -8,10 +8,13 @@ const locallyScopedCssVars = new Set([
   "--depth",
   "--fm-results-navigator-depth",
   "--fm-mesh-build-progress",
+  // Set inline by useBalancedMetricRows; CSS falls back to --fm-metric-basis.
+  "--fm-metric-width",
   "--fm-planar-aspect",
   "--fm-refresh-progress",
   "--pct",
   "--radix-accordion-content-height",
+  "--radix-popover-content-available-height",
   "--radix-select-content-available-height",
   "--radix-select-trigger-width",
 ]);

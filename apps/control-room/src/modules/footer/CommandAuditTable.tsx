@@ -13,29 +13,31 @@ export function CommandAuditTable({
   }
 
   return (
-    <section className="fm-footer-command-audit" aria-label="Command audit">
-      <div
-        className="fm-footer-command-audit__row fm-footer-command-audit__row--header"
-        role="row"
-      >
-        <span role="columnheader">Command</span>
-        <span role="columnheader">Source</span>
-        <span role="columnheader">Status</span>
-        <span role="columnheader">Detail</span>
+    <details className="fm-footer-command-audit" aria-label="Command audit">
+      <summary>Recent commands <span>{latestEntries.length} of {entries.length}</span></summary>
+      <div className="fm-footer-command-audit__table">
+        <table aria-label="Recent command audit">
+          <thead>
+            <tr className="fm-footer-command-audit__row fm-footer-command-audit__row--header">
+              <th scope="col">Command</th>
+              <th scope="col">Source</th>
+              <th scope="col">Status</th>
+              <th scope="col">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {latestEntries.map((entry) => (
+              <tr className="fm-footer-command-audit__row" key={entry.id}>
+                <td title={formatTransportTimestampSignature(entry.timestampMs)}>{entry.commandId}</td>
+                <td>{formatCommandSource(entry)}</td>
+                <td data-status={entry.status}>{entry.status}</td>
+                <td>{entry.disabledReason ?? entry.message ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      {latestEntries.map((entry) => (
-        <div className="fm-footer-command-audit__row" role="row" key={entry.id}>
-          <span role="cell" title={formatTransportTimestampSignature(entry.timestampMs)}>
-            {entry.commandId}
-          </span>
-          <span role="cell">{formatCommandSource(entry)}</span>
-          <span role="cell" data-status={entry.status}>
-            {entry.status}
-          </span>
-          <span role="cell">{entry.disabledReason ?? entry.message ?? "-"}</span>
-        </div>
-      ))}
-    </section>
+    </details>
   );
 }
 

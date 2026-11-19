@@ -12,8 +12,6 @@ use std::os::raw::c_char;
 
 // ── Constants ──
 
-pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
-pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1: u32 = 1;
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2: u32 = 2;
 pub const FULLMAG_FDM_CHECKPOINT_BACKEND_FDM: u32 = 1;
@@ -21,8 +19,10 @@ pub const FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED: u32 = 1;
 pub const FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM: u32 = 1;
 pub const FULLMAG_FDM_FROZEN_SPINS_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1: u64 = 1_u64 << 0;
+pub const FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1: u64 = 1_u64 << 1;
 pub const FULLMAG_FDM_PLAN_DESC_ABI_V2: u32 = 2;
 pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_LAYERS_ABI_V1: u32 = 1;
 
 // ── Return codes ──
 
@@ -55,6 +55,7 @@ pub enum fullmag_fdm_plan_kind {
 pub enum fullmag_fdm_transfer_kind {
     FULLMAG_FDM_TRANSFER_IDENTITY = 0,
     FULLMAG_FDM_TRANSFER_PUSH_PULL = 1,
+    FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED = 2,
 }
 
 #[repr(C)]
@@ -325,6 +326,25 @@ pub struct fullmag_fdm_rotated_interfacial_dmi_desc_v1 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_rotated_interfacial_dmi_layer_v1 {
+    pub layer_index: u32,
+    pub has_rotated_interfacial_dmi: i32,
+    pub reserved0: u32,
+    pub dmi_d_rotated_interfacial: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub layers: *const fullmag_fdm_rotated_interfacial_dmi_layer_v1,
+    pub entry_count: u32,
+    pub reserved0: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 #[allow(non_snake_case)]
 pub struct fullmag_fdm_plan_desc {
     pub grid: fullmag_fdm_grid_desc,
@@ -521,10 +541,23 @@ pub struct fullmag_fdm_plan_desc_v2 {
     pub time_policy: fullmag_fdm_time_policy_desc_v2,
     pub has_rotated_interfacial_dmi: i32,
     pub dmi_D_rotated_interfacial: f64,
+    pub exchange_operator_mode: u32,
+    pub reserved_exchange_operator: u32,
+    pub exchange_face_x_plus: *const f64,
+    pub exchange_face_y_plus: *const f64,
+    pub exchange_face_z_plus: *const f64,
+    pub exchange_face_len: u64,
 }
+
+pub const FULLMAG_FDM_EXCHANGE_OPERATOR_UNIFORM: u32 = 0;
+pub const FULLMAG_FDM_EXCHANGE_OPERATOR_FACES: u32 = 1;
 
 pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2: u32 = 2;
+pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3: u32 = 3;
+pub const FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES: u32 = 8;
+/// `FULLMAG_TIME_EXPRESSION_VERSION` of `native/include/fullmag_time_expression.h`.
+pub const FULLMAG_TIME_EXPRESSION_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -534,6 +567,7 @@ pub enum fullmag_fdm_regional_field_drive_waveform {
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
     FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER = 5,
 }
 
 #[repr(C)]
@@ -570,6 +604,15 @@ pub struct fullmag_fdm_regional_field_drive_desc_v1 {
 pub struct fullmag_fdm_regional_field_drive_desc_v2 {
     pub drive: fullmag_fdm_regional_field_drive_desc_v1,
     pub waveform_origin_time_s: f64,
+}
+
+/// v3: the time program (`fullmag_time_expr.v1`) of a HOST_MULTIPLIER drive.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_regional_field_drive_desc_v3 {
+    pub drive: fullmag_fdm_regional_field_drive_desc_v2,
+    pub time_program: *const f64,
+    pub time_program_len: u64,
 }
 
 #[repr(C)]
@@ -1951,9 +1994,17 @@ extern "C" {
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
+    pub fn fullmag_fdm_backend_set_multilayer_xy_periodic_v1(
+        handle: *mut fullmag_fdm_backend,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         handle: *mut fullmag_fdm_backend,
         descriptor: *const fullmag_fdm_rotated_interfacial_dmi_desc_v1,
+    ) -> i32;
+    pub fn fullmag_fdm_backend_set_rotated_interfacial_dmi_layers_v1(
+        handle: *mut fullmag_fdm_backend,
+        descriptor: *const fullmag_fdm_rotated_interfacial_dmi_layers_desc_v1,
     ) -> i32;
 
     pub fn fullmag_fdm_backend_set_stats_policy_v1(
@@ -1977,6 +2028,12 @@ extern "C" {
         drives: *const fullmag_fdm_regional_field_drive_desc_v2,
         drive_count: u32,
     ) -> i32;
+    pub fn fullmag_fdm_backend_set_regional_field_drives_v3(
+        handle: *mut fullmag_fdm_backend,
+        drives: *const fullmag_fdm_regional_field_drive_desc_v3,
+        drive_count: u32,
+    ) -> i32;
+    pub fn fullmag_fdm_time_expression_eval_v1(code: *const f64, len: u64, t_s: f64) -> f64;
 
     pub fn fullmag_fdm_backend_step(
         handle: *mut fullmag_fdm_backend,
@@ -2173,6 +2230,11 @@ extern "C" {
         len: u64,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_multilayer_bb(
+        handle: *mut fullmag_fdm_backend, op: u32, lambda: f64,
+        layer_scalars: *mut f64, scalar_count: u64,
+    ) -> ::std::os::raw::c_int;
+
     pub fn fullmag_fdm_backend_refresh_multilayer_demag(handle: *mut fullmag_fdm_backend) -> i32;
 
     pub fn fullmag_fdm_backend_refresh_observables(handle: *mut fullmag_fdm_backend) -> i32;
@@ -2291,6 +2353,14 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_adaptive_numerics_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+        handle: *mut fullmag_fdm_backend,
+        program: *const f64,
+        program_words: u64,
+        stage_origin_s: f64,
+        events_s: *const f64,
+        event_count: u64,
+    ) -> i32;
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
@@ -2370,6 +2440,28 @@ mod tests {
             *const fullmag_fdm_regional_field_drive_desc_v2,
             u32,
         ) -> i32 = fullmag_fdm_backend_set_regional_field_drives_v2;
+    }
+
+    #[test]
+    fn regional_field_drive_v3_appends_the_time_program() {
+        assert_eq!(FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3, 3);
+        assert_eq!(size_of::<fullmag_fdm_regional_field_drive_desc_v3>(), 144);
+        assert_eq!(
+            offset_of!(fullmag_fdm_regional_field_drive_desc_v3, time_program),
+            128
+        );
+        assert_eq!(
+            fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER
+                as u32,
+            5
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *const fullmag_fdm_regional_field_drive_desc_v3,
+            u32,
+        ) -> i32 = fullmag_fdm_backend_set_regional_field_drives_v3;
+        let _eval: unsafe extern "C" fn(*const f64, u64, f64) -> f64 =
+            fullmag_fdm_time_expression_eval_v1;
     }
 
     #[test]

@@ -1,27 +1,61 @@
+/* Column flex: the status strip is optional (it moves to the dock header), so
+ * the metrics must own the remaining height whatever comes before them. */
 .fm-footer-telemetry {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-width: 0;
-  min-height: 0;
+  min-height: 64px;
   overflow: hidden;
   background: var(--fm-bg-panel);
   color: var(--fm-text-primary);
 }
 
-/* ── Compact status strip ── */
+/* ── Status summary (dock header slot, or in-panel fallback) ── */
 
 .fm-footer-telemetry__strip {
   display: flex;
   align-items: center;
-  gap: var(--fm-space-2);
-  height: 28px;
+  gap: var(--fm-space-3);
+  min-height: 24px;
   min-width: 0;
   flex-shrink: 0;
-  overflow: hidden;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
-  padding-inline: var(--fm-inspector-padding-inline);
+  padding: 2px var(--fm-space-3);
+}
+
+.fm-footer-telemetry__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.fm-footer-telemetry__status-title {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+  text-overflow: ellipsis;
+}
+
+.fm-footer-telemetry__status-online {
+  overflow: hidden;
+  color: var(--fm-text-tertiary);
+  text-overflow: ellipsis;
+}
+
+.fm-footer-telemetry__notice {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-footer-telemetry__strip-dot {
@@ -30,27 +64,21 @@
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--fm-text-muted);
-  transition:
-    background-color var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
+  transition: background-color var(--fm-transition-fast);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="running"] {
   background: var(--fm-success);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--fm-success) 12%, transparent),
-    0 0 8px color-mix(in srgb, var(--fm-success) 50%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-success) 22%, transparent);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="paused"] {
   background: var(--fm-warning);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-warning) 12%, transparent);
 }
 
 .fm-footer-telemetry__strip-dot[data-state="error"],
 .fm-footer-telemetry__strip-dot[data-state="failed"] {
   background: var(--fm-danger);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fm-danger) 12%, transparent);
 }
 
 /* ── Inline frequency progress strip ── */
@@ -77,10 +105,10 @@
 .fm-footer-telemetry__freq-strip-chip {
   overflow: hidden;
   max-width: 80px;
-  border: 1px solid color-mix(in srgb, var(--fm-accent) 22%, var(--fm-border-subtle));
+  border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-xs);
-  background: color-mix(in srgb, var(--fm-bg-canvas) 75%, var(--fm-accent));
-  color: var(--fm-text-secondary);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-primary);
   font-size: var(--fm-font-size-2xs);
   font-weight: 650;
   line-height: 1;
@@ -105,11 +133,7 @@
   inset-block: 0;
   left: 0;
   border-radius: inherit;
-  background: linear-gradient(
-    90deg,
-    var(--fm-accent),
-    color-mix(in srgb, var(--fm-success) 70%, var(--fm-accent))
-  );
+  background: var(--fm-accent);
 }
 
 .fm-footer-telemetry__freq-strip-track--indeterminate
@@ -119,7 +143,7 @@
 }
 
 .fm-footer-telemetry__freq-strip-percent {
-  color: var(--fm-accent);
+  color: var(--fm-accent-text);
   font-size: var(--fm-font-size-2xs);
   font-weight: 700;
   white-space: nowrap;
@@ -132,234 +156,207 @@
   100% { transform: translateX(240%); }
 }
 
-/* ── Metrics container ──
-   Flexbox with wrap: each row sizes independently.
-   Cards in a sparse last row expand to fill the available width
-   instead of being locked to the column track width from full rows above
-   (which is the limitation of CSS Grid auto-fit). */
+@media (prefers-reduced-motion: reduce) {
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-footer-telemetry__freq-strip-track--indeterminate
+    .fm-footer-telemetry__freq-strip-bar {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(70%);
+  }
+}
+
+/* ── Metrics readouts ──
+ * One continuous grid: groups flow into each other instead of spending a row
+ * per heading. Group identity is the 2px leading marker; names and method
+ * notes are in the tooltip. Density follows the dock height. */
 
 .fm-footer-telemetry__metrics {
   container-type: size;
   container-name: footer-metrics;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
 }
 
 .fm-footer-telemetry__metrics-grid {
   box-sizing: border-box;
-  height: 100%;
+  /* Wrapping flex instead of an auto-fill grid: every row, including the
+   * last one, grows its readouts to the full dock width, so no empty tracks
+   * are left at the end of a row. --fm-metric-basis follows dock density. */
+  --fm-metric-basis: 136px;
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
-  gap: var(--fm-space-2);
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--fm-space-2) var(--fm-space-3);
+  overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--fm-border-default) transparent;
+  scrollbar-color: var(--fm-scrollbar-thumb) var(--fm-scrollbar-track);
 }
 
-/* ── Metric card ──
-   flex: 1 0 155px → basis 155px, grows to fill row, never shrinks below basis.
-   At 1000px container: 6 cards per row ≈ 160px each — comfortably fits
-   monospace "0.000000e+0" (≈117px at 15px font) plus padding and unit. */
+.fm-footer-telemetry__group {
+  display: contents;
+}
 
 .fm-footer-telemetry__metric {
-  --fm-metric-color: var(--fm-accent); /* overridden per data-group */
+  --fm-metric-color: var(--fm-accent);
+  position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  flex: 1 0 200px;
-  min-width: 0;
-  min-height: 64px;
-  max-height: 144px;
-  overflow: hidden;
-  border: 1px solid var(--fm-border-subtle);
-  border-top: 2px solid color-mix(in srgb, var(--fm-metric-color) 55%, var(--fm-border-subtle));
-  border-radius: var(--fm-radius-md);
-  background: linear-gradient(
-    160deg,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 94%, var(--fm-metric-color)) 0%,
-    var(--fm-bg-panel-raised) 100%
-  );
-  padding: var(--fm-space-2) var(--fm-space-3);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
-    0 1px 2px color-mix(in srgb, #000 18%, transparent);
-  transition:
-    border-color var(--fm-transition-fast),
-    background var(--fm-transition-fast),
-    transform var(--fm-transition-fast),
-    box-shadow var(--fm-transition-fast);
+  justify-content: center;
+  gap: 1px;
+  /* --fm-metric-width is the balanced share set by useBalancedMetricRows. */
+  flex: 1 1 var(--fm-metric-width, var(--fm-metric-basis));
+  box-sizing: border-box;
+  min-width: min(100%, var(--fm-metric-basis));
+  min-height: 38px;
+  /* Hairline cell edges instead of a gap over a filled grid background: the
+   * unused part of the last row and the area below it stay panel-coloured. */
+  border-block-end: 1px solid var(--fm-border-subtle);
+  border-inline-end: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+  padding: 3px var(--fm-space-2) 3px calc(var(--fm-space-2) + 2px);
+  cursor: default;
+  outline: none;
+}
+
+.fm-footer-telemetry__metric::before {
+  content: "";
+  position: absolute;
+  inset-block: 5px;
+  inset-inline-start: 0;
+  width: 2px;
+  border-radius: 0 var(--fm-radius-pill) var(--fm-radius-pill) 0;
+  background: var(--fm-metric-color);
 }
 
 .fm-footer-telemetry__metric:hover {
-  border-color: color-mix(in srgb, var(--fm-metric-color) 55%, var(--fm-border-default));
-  background: linear-gradient(
-    160deg,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 92%, var(--fm-metric-color)) 0%,
-    color-mix(in srgb, var(--fm-bg-panel-raised) 97%, var(--fm-metric-color)) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--fm-metric-color) 22%, transparent),
-    var(--fm-shadow-md);
+  background: var(--fm-bg-hover);
 }
 
-/* ── Card internals ── */
+.fm-footer-telemetry__metric:focus-visible {
+  outline: 2px solid var(--fm-accent);
+  outline-offset: -2px;
+}
 
 .fm-footer-telemetry__metric-label {
-  display: flex;
-  align-items: center;
-  gap: var(--fm-space-1);
   min-width: 0;
   overflow: hidden;
-  /* Bumped from 2xs (10px) to xs (11px) for better readability */
   color: var(--fm-text-secondary);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 700;
-  text-transform: none;
-  letter-spacing: 0;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.fm-footer-telemetry__metric-label > span {
-  min-width: 0;
-  overflow: hidden;
+  font-size: var(--fm-font-size-help);
+  font-weight: var(--fm-font-weight-medium);
+  line-height: 1.3;
   text-overflow: ellipsis;
-}
-
-.fm-footer-telemetry__metric-label svg {
-  flex-shrink: 0;
-  color: var(--fm-metric-color);
-  opacity: 0.9;
+  white-space: nowrap;
 }
 
 .fm-footer-telemetry__metric-value {
   display: flex;
   align-items: baseline;
+  gap: 3px;
   min-width: 0;
-  gap: var(--fm-space-1);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-lg);
-  font-weight: 600;
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-semibold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.015em;
-  line-height: 1.15;
-  margin-block: var(--fm-space-1);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   white-space: nowrap;
-  overflow: visible;
-  flex-shrink: 0;
 }
 
-.fm-footer-telemetry__metric-unit {
-  color: var(--fm-text-tertiary);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
-  flex-shrink: 0;
-  letter-spacing: 0;
-}
-
-.fm-footer-telemetry__metric-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  color: var(--fm-text-tertiary);
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
-  line-height: 1.35;
-}
-
-.fm-footer-telemetry__metric-detail span {
+.fm-footer-telemetry__metric-number {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* ── Container-query responsive tiers ──
-   Thresholds are relative to the metrics container height (total footer - 28px strip).
-   68px total → 40px container · 140px total → 112px container · 200px total → 172px container  */
-
-/* Tier 0: container too small to be useful */
-@container footer-metrics (height <= 40px) {
-  .fm-footer-telemetry__metrics-grid {
-    display: none;
-  }
+.fm-footer-telemetry__metric-unit {
+  flex-shrink: 0;
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: var(--fm-font-weight-medium);
+  letter-spacing: 0;
 }
 
-/* Tier 1: compact horizontal chips — label + value on one line, no detail */
-@container footer-metrics (40px < height <= 112px) {
-  .fm-footer-telemetry__metrics-grid {
-    gap: var(--fm-space-1);
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
+/* Category color is limited to the marker; surfaces remain neutral. */
+.fm-footer-telemetry__metric[data-group="runtime"],
+.fm-footer-telemetry__tooltip[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
+.fm-footer-telemetry__metric[data-group="solver"],
+.fm-footer-telemetry__tooltip[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
+.fm-footer-telemetry__metric[data-group="magnetization"],
+.fm-footer-telemetry__tooltip[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
+.fm-footer-telemetry__metric[data-group="energy"],
+.fm-footer-telemetry__tooltip[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
+
+/* Low dock: one line per readout, label left and value right. */
+@container footer-metrics (height < 84px) {
+  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 176px; }
 
   .fm-footer-telemetry__metric {
-    flex: 1 0 260px;
     flex-direction: row;
-    align-items: center;
-    min-height: 0;
-    max-height: none;
-    padding: 3px var(--fm-space-2);
+    align-items: baseline;
+    justify-content: space-between;
     gap: var(--fm-space-2);
-    border-radius: var(--fm-radius-sm);
+    min-height: 24px;
+    padding-block: 2px;
   }
 
-  .fm-footer-telemetry__metric-label {
-    font-size: var(--fm-font-size-control);
-  }
-
-  .fm-footer-telemetry__metric-value {
-    font-size: var(--fm-font-size-control);
-    flex: none;
-    margin-block: 0;
-  }
-
-  .fm-footer-telemetry__metric-detail {
-    display: none;
-  }
+  .fm-footer-telemetry__metric::before { inset-block: 4px; }
+  .fm-footer-telemetry__metric-label { flex: 0 1 auto; }
+  .fm-footer-telemetry__metric-value { flex: 0 1 auto; font-size: var(--fm-font-size-sm); }
 }
 
-/* Tier 2: compact stacked cards — subdetail hidden, tighter padding */
-@container footer-metrics (112px < height <= 172px) {
-  .fm-footer-telemetry__metrics-grid {
-    gap: var(--fm-space-1);
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
+/* Tall dock: readouts gain size instead of stretching empty cards. */
+@container footer-metrics (height >= 168px) and (width >= 640px) {
+  .fm-footer-telemetry__metrics-grid { --fm-metric-basis: 168px; }
 
-  .fm-footer-telemetry__metric {
-    flex: 1 0 190px;
-    min-height: 48px;
-    max-height: 96px;
-    padding: var(--fm-space-1) var(--fm-space-2);
-  }
-
-  .fm-footer-telemetry__metric-value {
-    font-size: var(--fm-font-size-sm);
-    margin-block: 2px;
-  }
-
-  .fm-footer-telemetry__metric-detail span + span {
-    display: none;
-  }
+  .fm-footer-telemetry__metric { min-height: 48px; gap: 2px; }
+  .fm-footer-telemetry__metric-value { font-size: var(--fm-font-size-lg); }
 }
 
-/* Group hues are semantic UI categories, defined per theme in theme.css. */
-.fm-footer-telemetry__metric[data-group="runtime"] { --fm-metric-color: var(--fm-category-runtime); }
-.fm-footer-telemetry__metric[data-group="solver"] { --fm-metric-color: var(--fm-category-solver); }
-.fm-footer-telemetry__metric[data-group="magnetization"] { --fm-metric-color: var(--fm-category-magnetization); }
-.fm-footer-telemetry__metric[data-group="energy"] { --fm-metric-color: var(--fm-category-energy); }
+/* ── Contextual tooltip ── */
 
-/* Compact tiers: reduce the 2px accent top border to 1px to keep chips tight */
-@container footer-metrics (height <= 112px) {
-  .fm-footer-telemetry__metric {
-    border-top-width: 1px;
-  }
+.fm-footer-telemetry__tooltip {
+  --fm-metric-color: var(--fm-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 320px;
+  border-top: 2px solid var(--fm-metric-color);
+}
+
+.fm-footer-telemetry__tooltip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-3);
+}
+
+.fm-footer-telemetry__tooltip-label {
+  color: var(--fm-text-primary);
+  font-weight: var(--fm-font-weight-semibold);
+}
+
+.fm-footer-telemetry__tooltip-group {
+  color: var(--fm-text-tertiary);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-footer-telemetry__tooltip-value {
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.fm-footer-telemetry__tooltip-detail {
+  color: var(--fm-text-secondary);
+  overflow-wrap: anywhere;
 }
 
 /* Field samples describe only numerical field evaluation, not publication. */
@@ -410,9 +407,15 @@
 
 @media (prefers-reduced-motion: reduce) {
   .fm-footer-telemetry__antenna-progress .fm-progress__indicator {
-    animation: none !important;
     transition: none;
   }
+
+  /* Busy state stays visible: static bar with an opacity pulse instead of sliding. */
+  .fm-footer-telemetry__antenna-progress[data-active="true"] .fm-progress[data-state="indeterminate"] .fm-progress__indicator {
+    animation: fm-reduced-busy-pulse 2s ease-in-out infinite;
+    transform: translateX(140%);
+  }
+
 }
 
 .fm-footer-telemetry-tabs {
@@ -427,8 +430,9 @@
 .fm-footer-telemetry-tabs__list {
   flex: 0 0 auto;
   min-height: 24px;
-  padding-inline: var(--fm-space-2);
-  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: 0;
+  border: 1px solid var(--fm-border-default);
+  font-size: var(--fm-font-size-control);
 }
 
 .fm-footer-telemetry-tabs__content {
@@ -436,7 +440,7 @@
   min-height: 0;
   min-width: 0;
   margin: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .fm-footer-telemetry-tabs__content > .fm-footer-telemetry {

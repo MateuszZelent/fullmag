@@ -5,13 +5,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
+pub const MATERIAL_CATALOG_UNAVAILABLE: &[u8] = br#"{"unavailable":true}"#;
 
 pub struct CapturedScriptSource {
     pub config: Option<ScriptExecutionConfig>,
@@ -229,6 +231,8 @@ pub struct CaptureOptions<'a> {
     pub mode: Option<&'a str>,
     pub precision: Option<&'a str>,
     pub scene_only: bool,
+    pub include_run_config: bool,
+    pub material_catalog: Option<&'a [u8]>,
 }
 fn display_path(path: &Path) -> String {
     let text = path.display().to_string();
@@ -245,19 +249,75 @@ fn helper_arguments(script: &Path, fullmag: &Path, phase: &str, options: &Captur
         if let Some(value)=value { args.extend([key.into(),value.into()]); }
     }
     if options.scene_only { args.push("--scene-only".into()); }
+    if options.include_run_config { args.push("--include-run-config".into()); }
+    if phase == "export" && options.material_catalog.is_some() {
+        args.push("--material-catalog-stdin".into());
+    }
     args
 }
-fn response(args: &[String], run: &mut impl FnMut(&[String],usize)->Result<std::process::Output>) -> Result<CaptureEnvelope> {
-    let output=run(args,METADATA_LIMIT)?;
+/// Internal helper operations that execute handwritten Python.
+pub fn runtime_helper_loads_authored_script(args: &[String]) -> bool {
+    matches!(args, [flag, module, operation, ..]
+        if flag == "-m" && module == "fullmag.runtime.helper" && matches!(
+            operation.as_str(),
+            "export-ir" | "export-run-config" | "rewrite-script" | "export-builder-draft"
+                | "export-scene-document" | "rewrite-scene-document"
+        ))
+}
+
+/// Pass a bounded catalog view to a child without a named file or writable pipe.
+pub fn material_catalog_input(snapshot: &[u8]) -> Result<File> {
+    if snapshot.len() > METADATA_LIMIT {
+        bail!("material catalog snapshot exceeds the 8 MiB capture limit");
+    }
+    let mut input = tempfile::tempfile().context("create material catalog input")?;
+    input.write_all(snapshot).context("write material catalog input")?;
+    input.rewind().context("rewind material catalog input")?;
+    Ok(input)
+}
+
+fn material_catalog_lookup_error(stderr: &[u8]) -> Option<(&str, bool)> {
+    let line = std::str::from_utf8(stderr).ok()?.lines().last()?;
+    let (code, key) = line.split_once(": ")?;
+    let unavailable = match code {
+        "source_capture_missing_material_version" => false,
+        "source_capture_material_catalog_unavailable" => true,
+        _ => return None,
+    };
+    let (family, version) = key.split_once('.')?;
+    let valid = |part: &str| {
+        part.len() <= 48
+            && part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && part.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+    };
+    (valid(family) && valid(version)).then_some((key, unavailable))
+}
+
+fn response(
+    args: &[String],
+    input: Option<File>,
+    run: &mut impl FnMut(&[String], usize, Option<File>) -> Result<std::process::Output>,
+) -> Result<CaptureEnvelope> {
+    let output = run(args, METADATA_LIMIT, input)?;
     if output.stdout.len()>METADATA_LIMIT || output.stderr.len()>METADATA_LIMIT { bail!("accepted source capture metadata bound"); }
-    if !output.status.success() { bail!("accepted source capture helper refused export"); }
+    if !output.status.success() {
+        if output.status.code() == Some(27) {
+            if let Some((key, unavailable)) = material_catalog_lookup_error(&output.stderr) {
+                if unavailable {
+                    bail!("the shared material catalog is unavailable for {key}");
+                }
+                bail!("material version {key} was not found in the shared catalog");
+            }
+        }
+        bail!("accepted source capture helper refused export");
+    }
     let stdout=String::from_utf8(output.stdout)?;
     let value=stdout.lines().rev().find(|line| {let value=line.trim();value.starts_with('{') && value.ends_with('}')})
         .context("could not find valid JSON object in python helper stdout")?;
     serde_json::from_str(value).context("invalid accepted source capture response")
 }
 pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureOptions<'_>,
-    mut run: impl FnMut(&[String],usize)->Result<std::process::Output>) -> Result<CapturedScriptSource> {
+    mut run: impl FnMut(&[String], usize, Option<File>) -> Result<std::process::Output>) -> Result<CapturedScriptSource> {
     let absolute = if script.is_absolute() {
         script.to_path_buf()
     } else {
@@ -265,7 +325,7 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
     };
     let script = absolute.as_path();
     regular_file(script)?;
-    let first = response(&helper_arguments(script, fullmag, "inventory", options, None), &mut run)?;
+    let first = response(&helper_arguments(script, fullmag, "inventory", options, None), None, &mut run)?;
     if first.config.is_some() || first.scene.is_some() {
         bail!("inventory must not execute authored script");
     }
@@ -280,11 +340,15 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
         "export",
         options,
         Some(&first.capture.inventory_sha256),
-    ), &mut run)?;
+    ), options.material_catalog.map(material_catalog_input).transpose()?, &mut run)?;
     validate_capture(&second.capture, script, fullmag)?;
-    if options.scene_only {
-        if second.config.is_some() || !second.scene.as_ref().is_some_and(Value::is_object) { bail!("source scene capture authoring shape"); }
-    } else if second.config.is_none() || second.scene.is_some() { bail!("source config capture authoring shape"); }
+    let expects_config = !options.scene_only || options.include_run_config;
+    if second.config.is_some() != expects_config
+        || (options.scene_only && !second.scene.as_ref().is_some_and(Value::is_object))
+        || (!options.scene_only && second.scene.is_some())
+    {
+        bail!("source capture returned an unexpected authoring shape");
+    }
     if second.capture.inventory_sha256 != first.capture.inventory_sha256
         || serde_json::to_value(&second.capture.runtime)?
             != serde_json::to_value(&first.capture.runtime)?
@@ -364,6 +428,41 @@ fn record_identity(record: &FileRecord) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn passes_a_rewound_snapshot_only_to_the_export_phase() {
+        let payload = br#"[{"source":{"version":{"family":"yig","version":"sample"}}}]"#;
+        let mut input = material_catalog_input(payload).unwrap();
+        let mut read = Vec::new();
+        input.read_to_end(&mut read).unwrap();
+        assert_eq!(read, payload);
+        assert!(material_catalog_input(&vec![0; METADATA_LIMIT + 1]).is_err());
+
+        let options = CaptureOptions {
+            material_catalog: Some(payload),
+            ..Default::default()
+        };
+        for (phase, expected) in [("inventory", false), ("export", true)] {
+            let args = helper_arguments(Path::new("study.py"), Path::new("fullmag"), phase, &options, None);
+            assert_eq!(args.iter().any(|arg| arg == "--material-catalog-stdin"), expected);
+        }
+    }
+
+    #[test]
+    fn forwards_only_the_bounded_material_alias_from_a_lookup_failure() {
+        for bad in ["yig", "yig.a.b", "YIG.test", "yig._hidden", "yig.sample extra"] {
+            let message = format!("source_capture_missing_material_version: {bad}\n");
+            assert_eq!(material_catalog_lookup_error(message.as_bytes()), None);
+        }
+        assert_eq!(
+            material_catalog_lookup_error(b"source_capture_missing_material_version: yig.sample_1\n"),
+            Some(("yig.sample_1", false))
+        );
+        assert_eq!(
+            material_catalog_lookup_error(b"source_capture_material_catalog_unavailable: yig.sample_1\n"),
+            Some(("yig.sample_1", true))
+        );
+    }
+
     #[test]
     fn normal_and_verbatim_windows_spellings_share_identity() {
         assert!(
