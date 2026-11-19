@@ -564,10 +564,81 @@ pub struct MagnetIR {
     pub material: String,
     pub initial_magnetization: Option<InitialMagnetizationIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<AbsorbingBoundaryIR>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AbsorbingBoundaryIR {
+    Legacy(AbsorbingBoundaryLayerIR),
+    Layers(AbsorbingBoundaryLayersIR),
+}
+
+impl From<AbsorbingBoundaryLayerIR> for AbsorbingBoundaryIR {
+    fn from(layer: AbsorbingBoundaryLayerIR) -> Self {
+        Self::Legacy(layer)
+    }
+}
+
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AbsorbingBoundaryLayersIR {
+    pub layers: Vec<SpatialAbsorbingLayerIR>,
+}
+
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SpatialAbsorbingLayerIR {
+    pub layer_id: String,
+    pub name: String,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+    pub frame: AbsorbingBoundaryFrameIR,
+    pub total_width_m: f64,
+    pub ramp_width_m: f64,
+    pub max_damping: f64,
+    pub profile: AbsorbingBoundaryProfileIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    pub geometry: SpatialAbsorbingGeometryIR,
+}
+
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SpatialAbsorbingGeometryIR {
+    Faces { faces: Vec<AbsorbingBoundaryFaceIR> },
+    Plane { origin: [f64; 3], normal: [f64; 3] },
+    Cylinder {
+        center: [f64; 3],
+        axis: [f64; 3],
+        radius_m: f64,
+        direction: AbsorbingBoundaryDirectionIR,
+    },
+    Sphere {
+        center: [f64; 3],
+        radius_m: f64,
+        direction: AbsorbingBoundaryDirectionIR,
+    },
+    RegionBoundary { region_id: String },
+    Expression { expression: String },
+}
+
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AbsorbingBoundaryDirectionIR {
+    Outward,
+    Inward,
+}
+
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AbsorbingBoundaryLayerIR {
     pub total_width_m: f64,
     pub ramp_width_m: f64,
@@ -579,6 +650,7 @@ pub struct AbsorbingBoundaryLayerIR {
     pub expression: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AbsorbingBoundaryFaceIR {
     #[serde(rename = "x+")]
@@ -595,6 +667,7 @@ pub enum AbsorbingBoundaryFaceIR {
     ZMinus,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AbsorbingBoundaryProfileIR {
@@ -606,6 +679,7 @@ pub enum AbsorbingBoundaryProfileIR {
     Custom,
 }
 
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AbsorbingBoundaryFrameIR {

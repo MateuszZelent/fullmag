@@ -2,6 +2,8 @@
 
 import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { Button } from "@/shared/ui/Button";
+import { SpatialAbsorbingLayerEditor } from "./SpatialAbsorbingLayerEditor";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import { SCENE_RESOURCE_KEY, useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -19,9 +21,9 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 import { DedicatedInspectorRouteFrame } from "./DedicatedInspectorRouteFrame";
 import { sceneResourceRevision } from "./ObjectMaterialPanelModel";
 import {
-  ABSORBING_BOUNDARY_FACES,
-  ABSORBING_BOUNDARY_FRAMES,
-  ABSORBING_BOUNDARY_PROFILES,
+  createLayerDraft,
+  rebaseAbsorbingBoundaryDraft,
+  type LayerDraft,
   absorbingBoundaryDraftFromObject,
   absorbingBoundaryDraftKey,
   buildAbsorbingBoundaryPatch,
@@ -77,6 +79,12 @@ export function ObjectAbsorbingBoundaryPanel({
     () => scene?.objects?.find((candidate) => candidate.id === objectId) ?? null,
     [objectId, scene?.objects],
   );
+  const regions = (object?.regions ?? []).flatMap(region => region.region_id ? [{
+    id: region.region_id,
+    label: (region.name && region.name !== region.region_id ? region.name + " (" + region.region_id + ")" : region.region_id)
+      + (region.enabled === false ? " (disabled)" : ""),
+  }] : []);
+  const regionIds = regions.map(region => region.id);
   const baseDraft = useMemo(
     () => absorbingBoundaryDraftFromObject(object),
     [object],
@@ -98,7 +106,11 @@ export function ObjectAbsorbingBoundaryPanel({
     key: baseKey,
     draft: effectiveBaseDraft,
   });
-  const draft = draftState.key === baseKey ? draftState.draft : effectiveBaseDraft;
+  const localKey = objectId + ":" + absorbingBoundaryDraftKey(draftState.draft);
+  const conflict = effectiveBaseDraft.enabled && draftState.key !== localKey &&
+    draftState.key !== baseKey && localKey !== baseKey;
+  const conflictMessage = "The absorbing boundary changed in another edit. Revert to load its saved layers before applying.";
+  const draft = draftState.key === baseKey || conflict ? draftState.draft : effectiveBaseDraft;
   const draftRef = useRef(draft);
   useLayoutEffect(() => {
     draftRef.current = draft;
@@ -116,16 +128,19 @@ export function ObjectAbsorbingBoundaryPanel({
   const update = (patch: Partial<AbsorbingBoundaryDraft>) => {
     const next = { ...draftRef.current, ...patch };
     draftRef.current = next;
-    setDraftState({ key: baseKey, draft: next });
+    setDraftState({ key: conflict ? draftState.key : baseKey, draft: next });
   };
   const dirty =
     absorbingBoundaryDraftKey(draft) !==
     absorbingBoundaryDraftKey(effectiveBaseDraft);
-  const validation = buildAbsorbingBoundaryPatch(draft, baseRevision);
-  const fieldError = (field: keyof AbsorbingBoundaryDraft) =>
-    dirty && "error" in validation && validation.field === field ? validation.error : undefined;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = draft.layers.find(layer => layer.id === selectedId) ?? draft.layers[0];
+  const validation = buildAbsorbingBoundaryPatch(draft, baseRevision, regionIds);
+  const fieldError = (field: keyof LayerDraft) =>
+    dirty && "error" in validation && validation.layerId === selected?.id && validation.field === field
+      ? validation.error : undefined;
   const editable = object !== null && (view === "activation" || effectiveBaseDraft.enabled);
-  const valid = editable && baseRevision !== null && !("error" in validation);
+  const valid = editable && !conflict && baseRevision !== null && !("error" in validation);
 
   const acknowledgeAppliedDraft = useRegisterInspectorEditSession(
     editable ? "staged" : null,
@@ -136,7 +151,7 @@ export function ObjectAbsorbingBoundaryPanel({
     apply,
     resetDraft,
     {
-      applyBlockReason:
+      applyBlockReason: conflict ? conflictMessage :
         object && baseRevision === null
           ? "The canonical scene revision is unavailable. Refetch the scene before applying."
           : dirty && "error" in validation ? validation.error : undefined,
@@ -157,12 +172,27 @@ export function ObjectAbsorbingBoundaryPanel({
     };
   }
 
-  const toggleFace = (face: string) =>
-    update({
-      faces: draft.faces.includes(face)
-        ? draft.faces.filter((current) => current !== face)
-        : [...draft.faces, face],
-    });
+  function updateLayer(patch: Partial<LayerDraft>) {
+    if (!selected) return;
+    const layers = draftRef.current.layers.map(layer => layer.id === selected.id ? { ...layer, ...patch } : layer);
+    const needsCollection = Boolean(patch.name !== undefined || patch.enabled !== undefined ||
+      patch.region !== undefined || (patch.kind && patch.kind !== "faces"));
+    update({ layers, legacy: draft.legacy && !needsCollection });
+  }
+
+  function addLayer(copy?: LayerDraft) {
+    const id = crypto.randomUUID();
+    const layer = copy ? { ...copy, id, name: copy.name + " copy" }
+      : createLayerDraft(id, "Layer " + (draft.layers.length + 1));
+    update({ enabled: true, legacy: false, layers: [...draftRef.current.layers, layer] });
+    setSelectedId(id);
+  }
+
+  function removeLayer(id: string) {
+    const layers = draftRef.current.layers.filter(layer => layer.id !== id);
+    update({ enabled: layers.length > 0, legacy: false, layers });
+    setSelectedId(layers[0]?.id ?? null);
+  }
 
   function resetDraft(): void {
     const active = mutationCoordinator.getActive(mutationScopeKey);
@@ -179,9 +209,9 @@ export function ObjectAbsorbingBoundaryPanel({
   }
 
   async function apply(): Promise<boolean> {
-    if (applyInFlight.current || !editable || !dirty) return false;
+    if (applyInFlight.current || !editable || !dirty || conflict) return false;
     const submittedDraft = draft;
-    const result = buildAbsorbingBoundaryPatch(submittedDraft, baseRevision);
+    const result = buildAbsorbingBoundaryPatch(submittedDraft, baseRevision, regionIds);
     if ("error" in result) {
       setFeedback({ kind: "error", message: result.error });
       return false;
@@ -220,16 +250,19 @@ export function ObjectAbsorbingBoundaryPanel({
           if (typeof commitRevision !== "number" || !Number.isFinite(commitRevision)) {
             throw new Error("The canonical scene revision is unavailable. Refetch the scene before applying.");
           }
+          let commitRegionIds = regionIds;
           if (before && capturedRevision !== baseRevision) {
             const current = before.objects?.find((candidate) => candidate.id === objectId);
             const currentKey = absorbingBoundaryDraftKey(absorbingBoundaryDraftFromObject(current));
             if (!current || currentKey !== absorbingBoundaryDraftKey(effectiveBaseDraft)) {
               throw new Error("Absorbing boundary changed. Refresh the scene before applying your draft.");
             }
+            commitRegionIds = (current.regions ?? []).flatMap(region => region.region_id ? [region.region_id] : []);
           }
           const next = buildAbsorbingBoundaryPatch(
             submittedDraft,
             commitRevision,
+            commitRegionIds,
           );
           if ("error" in next) throw new Error(next.error);
           return api.model.patchObject(
@@ -245,12 +278,7 @@ export function ObjectAbsorbingBoundaryPanel({
       const acknowledgedDraft = absorbingBoundaryDraftFromObject(savedObject ?? result.patch);
       setAcknowledgedBase({ objectId, revision, draft: acknowledgedDraft });
       const latestDraft = draftRef.current;
-      const rebasedDraft = { ...acknowledgedDraft };
-      for (const field of Object.keys(submittedDraft) as (keyof AbsorbingBoundaryDraft)[]) {
-        if (latestDraft[field] !== submittedDraft[field]) {
-          Object.assign(rebasedDraft, { [field]: latestDraft[field] });
-        }
-      }
+      const rebasedDraft = rebaseAbsorbingBoundaryDraft(acknowledgedDraft, submittedDraft, latestDraft);
       draftRef.current = rebasedDraft;
       setDraftState({
         key: `${objectId}:${absorbingBoundaryDraftKey(acknowledgedDraft)}`,
@@ -274,7 +302,7 @@ export function ObjectAbsorbingBoundaryPanel({
     }
   }
 
-  const feedbackBanner = feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null;
+  const feedbackBanner = conflict ? <FeedbackBanner kind="error" message={conflictMessage} /> : feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null;
   if (view === "activation") {
     return (
       <>
@@ -294,79 +322,26 @@ export function ObjectAbsorbingBoundaryPanel({
   }
 
   return (
-    <InspectorGroup title="Absorbing Boundary" description="Adds object-owned Gilbert damping toward selected faces.">
-      <FormField
-        label="Total width"
-        error={fieldError("totalWidth")}
-        type="number"
-        unit="m"
-        value={draft.totalWidth}
-        onChange={(event) => update({ totalWidth: event.target.value })}
-      />
-      <FormField
-        label="Ramp width"
-        error={fieldError("rampWidth")}
-        type="number"
-        unit="m"
-        value={draft.rampWidth}
-        onChange={(event) => update({ rampWidth: event.target.value })}
-      />
-      <FormField
-        label="Maximum damping"
-        error={fieldError("maxDamping")}
-        type="number"
-        value={draft.maxDamping}
-        onChange={(event) => update({ maxDamping: event.target.value })}
-      />
-      <FormField
-        label="Profile"
-        error={fieldError("profile")}
-        type="select"
-        value={draft.profile}
-        onChange={(event) => update({ profile: event.target.value })}
-      >
-        {ABSORBING_BOUNDARY_PROFILES.map((profile) => (
-          <option key={profile} value={profile}>{profile}</option>
-        ))}
-      </FormField>
-      {draft.profile === "custom" ? (
-        <FormField
-          label="Expression"
-          error={fieldError("expression")}
-          type="text"
-          mono
-          value={draft.expression}
-          maxLength={256}
-          placeholder="u**3"
-          hint="u runs from 0 at the start of the ramp to 1 at the plateau."
-          help="Use u, decimal numbers, +, -, *, /, **, parentheses, and abs, sqrt, exp, log, log1p, tanh, sin, or cos. The result must stay in [0, 1] and equal 0 and 1 at the respective endpoints."
-          onChange={(event) => update({ expression: event.target.value })}
-        />
-      ) : null}
-      <FormField
-        label="Frame"
-        error={fieldError("frame")}
-        type="select"
-        value={draft.frame}
-        onChange={(event) => update({ frame: event.target.value })}
-      >
-        {ABSORBING_BOUNDARY_FRAMES.map((frame) => (
-          <option key={frame} value={frame}>{frame}</option>
-        ))}
-      </FormField>
-      <div className="grid gap-fm-inspector-control">
-        <span className="text-fm-xs font-medium text-fm-secondary">Faces</span>
-        {ABSORBING_BOUNDARY_FACES.map((face) => (
-          <FormField
-            key={face}
-            label={face}
-            error={face === ABSORBING_BOUNDARY_FACES[0] ? fieldError("faces") : undefined}
-            type="checkbox"
-            checked={draft.faces.includes(face)}
-            onChange={() => toggleFace(face)}
-          />
-        ))}
+    <InspectorGroup title="Absorbing Boundary">
+      {draft.layers.length > 0 && (
+        <FormField label="Layer" type="select" value={selected?.id ?? ""} onChange={event => setSelectedId(event.target.value)}>
+          {draft.layers.map(layer => <option key={layer.id} value={layer.id}>
+            {layer.name || "Unnamed layer"}{layer.enabled ? "" : " (disabled)"}
+          </option>)}
+        </FormField>
+      )}
+      <div className="flex flex-wrap gap-1">
+        <Button type="button" variant="secondary" onClick={() => addLayer()}>Add layer</Button>
+        {selected && <>
+          <Button type="button" variant="ghost" onClick={() => addLayer(selected)}>Duplicate layer</Button>
+          <Button type="button" variant="ghost" onClick={() => removeLayer(selected.id)}>Remove layer</Button>
+        </>}
       </div>
+      {selected ? <SpatialAbsorbingLayerEditor draft={selected} update={updateLayer} fieldError={fieldError} regions={regions} />
+        : <p>Apply to remove the absorbing boundary, or add another layer.</p>}
+      {dirty && "error" in validation && validation.layerId !== selected?.id && (
+        <FeedbackBanner kind="error" message={(draft.layers.find(layer => layer.id === validation.layerId)?.name ?? "Layer") + " — " + validation.error} />
+      )}
       {feedbackBanner}
     </InspectorGroup>
   );

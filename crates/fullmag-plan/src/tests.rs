@@ -3714,7 +3714,7 @@ fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Smootherstep,
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
         expression: None,
-    });
+    }.into());
 
     let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
@@ -3766,7 +3766,7 @@ fn fdm_absorbing_boundary_uses_magnetic_support() {
                 profile: AbsorbingBoundaryProfileIR::Custom,
                 frame,
                 expression: Some("u**3".into()),
-            });
+            }.into());
             if explicit_universe {
                 // x+ is 2 nm beyond the rightmost magnetic cell centre.
                 ir.problem_meta.runtime_metadata.insert(

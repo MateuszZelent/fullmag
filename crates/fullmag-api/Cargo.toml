@@ -97,7 +97,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 fullmag-authoring = { path = "../fullmag-authoring" }
 fullmag-application = { path = "../fullmag-application" }
 fullmag-antenna-artifacts = { path = "../fullmag-antenna-artifacts" }
-fullmag-ir = { path = "../fullmag-ir" }
+fullmag-ir = { path = "../fullmag-ir", features = ["openapi"] }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 fullmag-runner = { path = "../fullmag-runner" }

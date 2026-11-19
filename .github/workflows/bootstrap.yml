@@ -116,6 +116,10 @@ jobs:
           cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
           cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
           RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+          cargo test --locked -p fullmag-ir --lib absorbing_boundary::tests
+          cargo test --locked -p fullmag-plan --lib spatial_
+          cargo test --locked -p fullmag-authoring --lib spatial_absorbers_reference_owned_regions_by_stable_id
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api overlapping_csg_boundary_is_rejected_before_mesh_build
 
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
@@ -689,6 +693,8 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+            packages/fullmag-py/src/fullmag/client/_generated/*.py
           if-no-files-found: error
 
   api-hygiene-rg13:

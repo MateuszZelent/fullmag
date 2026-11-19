@@ -369,7 +369,10 @@ mod tests {
             "faces": ["x+"], "frame": "object", "profile": "linear",
         })).unwrap());
         let mut edited = added.clone();
-        edited.objects[0].absorbing_boundary.as_mut().unwrap().max_damping = 0.8;
+        let Some(fullmag_ir::AbsorbingBoundaryIR::Legacy(layer)) = &mut edited.objects[0].absorbing_boundary else {
+            panic!("expected legacy face configuration");
+        };
+        layer.max_damping = 0.8;
         for (old, new) in [(&before, &added), (&added, &edited), (&edited, &before)] {
             assert_eq!(classify_region_realization_impact(old, new), RegionRealizationImpact {
                 coefficients: true, ..Default::default()

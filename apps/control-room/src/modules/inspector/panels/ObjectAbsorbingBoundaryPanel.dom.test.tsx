@@ -1,3 +1,4 @@
+import type { SceneResource } from "@/kernel/api/apiTypes";
 import { MESHING_SHARED_DOMAIN_MANIFEST_PATH } from "@/kernel/api/apiPaths";
 import { act, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   readScene: vi.fn(),
   recordHistory: vi.fn(),
   sceneData: {
-    objects: [] as Array<{ id: string; absorbing_boundary?: Record<string, unknown> }>,
+    objects: [] as NonNullable<SceneResource["objects"]>,
     revision: 10,
   },
 }));
@@ -426,11 +427,13 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       rampWidth.value = "2e-7";
       await act(async () => rampWidth.dispatchEvent(new TestEvent("input", { bubbles: true })));
 
+      const current = mocks.sceneData.objects[0].absorbing_boundary;
+      if (!current || !("faces" in current)) throw new Error("Expected the legacy fixture");
       const committed = {
         objects: [{
           id: "object-a",
           absorbing_boundary: {
-            ...mocks.sceneData.objects[0].absorbing_boundary as Record<string, unknown>,
+            ...current,
             total_width_m: 5e-7,
           },
         }],
@@ -473,6 +476,55 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     }
   });
 
+  it("creates and duplicates a curved layer, targets a region by ID, and saves independent layer states", async () => {
+    mocks.sceneData.objects[0].regions = [
+      { region_id: "core-17", name: "Core", shape: { kind: "sphere", center: [0, 0, 0], radius: 1e-6 } },
+      { region_id: "shell-21", name: "Shell", shape: { kind: "sphere", center: [0, 0, 0], radius: 1e-6 } },
+    ];
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const change = async (label: string, value: string) => {
+      const control = findControl(container, label);
+      control.value = value;
+      await act(async () => control.dispatchEvent(new TestEvent(control.tagName === "SELECT" ? "change" : "input", { bubbles: true })));
+    };
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      await act(async () => findButton(container, "Add layer").click());
+      await change("Layer name", "Curved shell");
+      await change("Target material", "core-17");
+      await change("Geometry", "expression");
+      await change("Distance d(x,y,z)", "u+1");
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      await change("Distance d(x,y,z)", "4e-7 - sqrt((x-y)**2 + z**2)");
+      await change("Profile", "custom");
+      await change("Expression", "u+z");
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      await change("Expression", "u**3");
+      await act(async () => findButton(container, "Duplicate layer").click());
+      await change("Geometry", "region_boundary");
+      await change("Boundary of region", "shell-21");
+      const enabled = findControl(container, "Layer enabled");
+      Object.assign(enabled, { checked: false });
+      await act(async () => enabled.click());
+      expect(findButton(container, "Apply").disabled).toBe(false);
+      await act(async () => findButton(container, "Apply").click());
+      const { layers } = mocks.patchObject.mock.calls[0][1].absorbing_boundary;
+      expect(layers).toHaveLength(3);
+      expect(new Set(layers.map((layer: { layer_id: string }) => layer.layer_id)).size).toBe(3);
+      expect(layers[0]).toMatchObject({ geometry: { kind: "faces", faces: ["y-"] }, expression: "u**2" });
+      expect(layers[1]).toMatchObject({ name: "Curved shell", enabled: true, region_id: "core-17",
+        geometry: { kind: "expression", expression: "4e-7 - sqrt((x-y)**2 + z**2)" }, expression: "u**3" });
+      expect(layers[2]).toMatchObject({ name: "Curved shell copy", enabled: false, region_id: "core-17",
+        geometry: { kind: "region_boundary", region_id: "shell-21" }, expression: "u**3" });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("preserves a child draft when the history read observes a newer boundary configuration", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -493,6 +545,31 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
     }
   });
 
+  it("preserves dirty fields on a conflicting scene refresh and lets Revert accept the new revision", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      await act(async () => editWidth(container));
+      const config = mocks.sceneData.objects[0].absorbing_boundary;
+      if (!config || !("faces" in config)) throw new Error("Expected a legacy fixture");
+      mocks.sceneData = { objects: [{ id: "object-a", absorbing_boundary: { ...config, max_damping: 0.9 } }], revision: 11 };
+      await act(async () => root.render(<BoundaryEditorHarness />));
+      expect(findControl(container, "Total width").value).toBe("5e-7");
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      expect(container.textContent).toContain("changed in another edit");
+      await act(async () => findButton(container, "Revert").click());
+      expect(findControl(container, "Maximum damping").value).toBe("0.9");
+      expect(findControl(container, "Total width").value).toBe("4e-7");
+      expect(mocks.patchObject).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("shows saved settings in the dedicated editor and drops the edit session when disabled externally", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -502,6 +579,8 @@ describe("ObjectAbsorbingBoundaryPanel session fence", () => {
       await act(async () => root.render(<BoundaryEditorHarness />));
       expect(findControl(container, "Expression").value).toBe("u**2");
       expect(findControl(container, "Maximum damping").value).toBe("0.6");
+      expect(container.textContent).toContain("Added to the local material damping");
+      expect(container.textContent).toContain("Plateau width 1e-7 m (100 nm)");
       expect(findControl(container, "y-")).toHaveProperty("checked", true);
       expect(findButton(container, "Apply").disabled).toBe(true);
       expect(() => findControl(container, "Absorbing Boundary")).toThrow();

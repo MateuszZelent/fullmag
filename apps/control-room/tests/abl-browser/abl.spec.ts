@@ -3,11 +3,13 @@ import { readFile } from "node:fs/promises";
 import { test, expect, type Response } from "playwright/test";
 import { scalarColorRgb } from "../../src/shared/visualization/scalarColorPalette";
 import { installFdmColorProbe } from "./renderedFdmColors";
+import { installInspectorCommitTrace } from "../../scripts/lib/inspector-commit-trace.mjs";
 import { decodeFieldVector } from "../../src/kernel/api/codecs/fieldVectorCodec";
 
 type Profile = "logarithmic" | "tanh" | "custom";
 type Face = "x+" | "x-";
-type Layer = { profile: Profile; face: Face; amplitude: number };
+type Layer = { profile: Profile; face: Face; amplitude: number; boundaryNm?: number };
+type FieldCase = Layer | Layer[] | null;
 
 test.use({
   browserName: "chromium",
@@ -18,9 +20,13 @@ test.use({
   },
 });
 
-function expectedAlpha(x: number, layer: Layer | null): number {
+function expectedAlpha(x: number, layer: FieldCase): number {
   if (!layer) return 0.01;
-  const distanceNm = ((layer.face === "x-" ? x : 31 - x) + 0.5) * 5;
+  if (Array.isArray(layer)) return Math.max(0.01, ...layer.map(item => expectedAlpha(x, item)));
+  const xNm = -80 + (x + 0.5) * 5;
+  const boundary = layer.boundaryNm ?? (layer.face === "x-" ? -80 : 80);
+  const distanceNm = layer.face === "x-" ? xNm - boundary : boundary - xNm;
+  if (distanceNm < 0 || distanceNm > 40) return 0.01;
   const u = Math.max(0, Math.min(1, (40 - distanceNm) / 20));
   const weight = {
     logarithmic: Math.log1p(9 * u) / Math.log(10),
@@ -80,7 +86,7 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   const viewport = page.locator(".fm-viewport-3d");
   const canvas = viewport.locator("canvas").first();
   const label = viewport.locator('[data-quantity-id="mat_alpha"][data-field-state="data-ready"]');
-  const inspectField = async (response: Response, layer: Layer | null) => {
+  const inspectField = async (response: Response, layer: FieldCase) => {
     const bytes = await response.body();
     const packet = decodeFieldVector(Uint8Array.from(bytes).buffer);
     expect(packet.quantityId).toBe("mat_alpha");
@@ -94,8 +100,9 @@ test("ABL editor updates the live FDM damping field and canonical script", async
       firstRow: Array.from(packet.values.slice(0, 32)) };
   };
   await page.addInitScript(installFdmColorProbe);
+  await installInspectorCommitTrace(page);
   const evidence: unknown[] = [];
-  const observeChange = async (step: string, layer: Layer | null, action: () => Promise<void>) => {
+  const observeChange = async (step: string, layer: FieldCase, action: () => Promise<void>) => {
     // Only traffic issued by this page after the edit counts. A separate API
     // poll could otherwise make a stale viewport look like an updated field.
     const issued = new WeakSet();
@@ -253,6 +260,92 @@ test("ABL editor updates the live FDM damping field and canonical script", async
   await field("Profile").selectOption("custom");
   await field("Expression").fill("u**3");
   await apply("custom", { profile: "custom", face: "x-", amplitude: 0.8 });
+  const left: Layer = { profile: "custom", face: "x-", amplitude: 0.8, boundaryNm: -80 };
+  const right: Layer = { profile: "custom", face: "x+", amplitude: 0.3, boundaryNm: 40 };
+  await field("Geometry").selectOption("plane");
+  await field("Origin X").fill("-8e-8");
+  await page.getByRole("button", { name: "Reverse normal" }).click();
+  await field("Layer name").fill("Left plane");
+  await page.getByRole("button", { name: "Duplicate layer" }).click();
+  await field("Layer name").fill("Interior plane");
+  await field("Origin X").fill("4e-8");
+  await page.getByRole("button", { name: "Reverse normal" }).click();
+  await field("Maximum damping").fill("0.3");
+  // Hold the first collection PATCH to exercise draft focus and structural stability across pending and ACK.
+  const inspectorSnapshot = () => group.evaluate(root => {
+    const scrollArea = root.closest(".fm-scroll-area__viewport");
+    if (!scrollArea) throw new Error("Missing Inspector scroll viewport");
+    return {
+      fields: [...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input,select")].map(control => ({
+        label: control.getAttribute("aria-label"), disabled: control.disabled, opacity: getComputedStyle(control).opacity,
+      })),
+      animations: root.getAnimations({ subtree: true }).filter(a =>
+        a.effect instanceof KeyframeEffect && a.effect.getKeyframes().some(frame => "opacity" in frame)).length,
+      scroll: scrollArea.scrollTop, focus: document.activeElement?.getAttribute("aria-label"),
+    };
+  });
+  const commitCount = () => page.evaluate(() => {
+    const trace = (window as Window & {
+      __FULLMAG_INSPECTOR_COMMIT_TRACE__?: { commits: unknown[]; dropped: number; errors: number };
+    }).__FULLMAG_INSPECTOR_COMMIT_TRACE__;
+    if (!trace || trace.errors) throw new Error("Inspector render trace is unavailable");
+    return trace.commits.length + trace.dropped;
+  });
+  const saveLayers = async (step: string, expected: Layer[], expectedCount: number) => {
+    await verifyIdentity();
+    await observeChange(step, expected, async () => {
+      const [response] = await Promise.all([
+        page.waitForResponse(r => r.url() === objectUrl && r.request().method() === "PATCH"),
+        save.evaluate((button: HTMLButtonElement) => button.click()),
+      ]);
+      expect(response.status()).toBe(200);
+      const scene = await readScene();
+      expect(scene.revision).toBeGreaterThan(revision);
+      revision = scene.revision;
+      const layers = scene.objects[0].absorbing_boundary.layers;
+      expect(layers).toEqual(response.request().postDataJSON().absorbing_boundary.layers);
+      expect(new Set(layers.map((item: { layer_id: string }) => item.layer_id)).size).toBe(expectedCount);
+      expect(layers[0]).toMatchObject({ name: "Left plane", geometry: { kind: "plane", normal: [-1, 0, 0], origin: [expectedCount === 2 ? -8e-8 : -6e-8, 0, 0] } });
+      if (expectedCount === 2) {
+        expect(layers[1]).toMatchObject({ name: "Interior plane", enabled: expected.length === 2,
+          geometry: { kind: "plane", normal: [1, 0, 0], origin: [4e-8, 0, 0] } });
+      }
+    });
+    expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
+  };
+  await field("Origin X").focus();
+  const baseline = await inspectorSnapshot();
+  expect(baseline.focus).toBe("Origin X");
+  expect(baseline.animations).toBe(0);
+  const beforeCommits = await commitCount();
+  let patchCount = 0;
+  await page.route(objectUrl, async route => {
+    if (route.request().method() === "PATCH") {
+      patchCount++;
+      try {
+        expect(await inspectorSnapshot()).toEqual(baseline);
+        expect(await group.evaluate((element, original) => element === original, panel)).toBe(true);
+      } finally {
+        await route.continue();
+      }
+    } else {
+      await route.continue();
+    }
+  });
+  try {
+    await saveLayers("two-distinct-planes", [left, right], 2);
+    expect(await inspectorSnapshot()).toEqual(baseline);
+    expect(patchCount).toBe(1);
+    expect(await commitCount() - beforeCommits).toBeLessThanOrEqual(48);
+  } finally {
+    await page.unroute(objectUrl);
+  }
+  await field("Layer enabled").uncheck();
+  await saveLayers("interior-plane-disabled", [left], 2);
+  await page.getByRole("button", { name: "Remove layer" }).click();
+  // Reposition the remaining plane so its field changes after removal as well.
+  await field("Origin X").fill("-6e-8");
+  await saveLayers("interior-plane-removed", [{ ...left, boundaryNm: -60 }], 1);
   await parent.click();
   await enabled.uncheck();
   await apply("removed", null);
