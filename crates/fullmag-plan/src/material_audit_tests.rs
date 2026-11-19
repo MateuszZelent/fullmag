@@ -85,7 +85,7 @@ fn spatial_parameter_uses_each_samples_local_transition_width() {
         MaterialParameterNameIR::Ms,
         800000.0,
         &points,
-        MaterialSampleSpacing::PerPoint(&[1.0, 0.1]),
+        MaterialSampling::Nodes { spacings: &[1.0, 0.1] },
         [0.0; 3],
     )
     .unwrap();

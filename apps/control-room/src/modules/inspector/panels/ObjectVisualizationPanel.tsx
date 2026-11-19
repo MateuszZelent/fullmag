@@ -1631,6 +1631,7 @@ function ObjectVisualizationPanelView({
                 />
                 <VisualizationRenderModeSection
               artifactInspection={panel.artifactInspection}
+              settings={settings}
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               isFieldPending={isFieldPending}

@@ -2,6 +2,14 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod absorbing_boundary;
+pub use absorbing_boundary::{
+    validate_absorbing_boundary, validate_absorbing_boundary_config, AbsorbingBoundaryCoordinate,
+    ResolvedAbsorbingBoundaryProfile,
+};
+mod time_expression;
+pub use time_expression::TimeExpressionIR;
+
 pub mod antenna;
 pub mod antenna_current_source;
 pub mod constraint;
@@ -14,6 +22,7 @@ pub mod execution_profile;
 pub mod execution_profile_materialization;
 pub mod field_drive_validation;
 pub mod frequency_response_contract;
+pub mod mask_field_drive;
 pub mod mechanics;
 pub mod mesh_assets;
 pub mod mesh_hints;
@@ -65,6 +74,7 @@ pub use execution_profile_materialization::{
 };
 pub use field_drive_validation::*;
 pub use frequency_response_contract::*;
+pub use mask_field_drive::*;
 pub use mechanics::*;
 pub use mesh_assets::*;
 pub use mesh_hints::*;
@@ -441,6 +451,9 @@ pub struct ProblemIR {
     pub current_modules: Vec<CurrentModuleIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_drives: Vec<RegionalFieldDriveIR>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_field_drives: Vec<MaskFieldDriveIR>,
     /// Typed composition-first microwave antenna resources.  These fields
     /// are additive to the 0.3 wire contract so existing scenes remain
     /// readable while antenna authoring can already use the canonical
@@ -571,6 +584,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             field_drives: Vec<RegionalFieldDriveIR>,
             #[serde(default)]
+            mask_field_drives: Vec<MaskFieldDriveIR>,
+            #[serde(default)]
             antenna_port_modes: Vec<AntennaPortModeIR>,
             #[serde(default)]
             antenna_field_solve_stages: Vec<AntennaFieldSolveStageIR>,
@@ -645,6 +660,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             validation_profile: wire.validation_profile,
             current_modules: wire.current_modules,
             field_drives: wire.field_drives,
+            mask_field_drives: wire.mask_field_drives,
             antenna_port_modes: wire.antenna_port_modes,
             antenna_field_solve_stages: wire.antenna_field_solve_stages,
             antenna_target_projections: wire.antenna_target_projections,
@@ -802,6 +818,7 @@ impl ProblemIR {
             },
             current_modules: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),
             antenna_target_projections: Vec::new(),
@@ -903,6 +920,7 @@ impl ProblemIR {
         validate_current_modules(self, &mut errors);
         validate_antenna_composition_v03(self, &mut errors);
         validate_field_drives(self, &mut errors);
+        crate::mask_field_drive::validate_mask_field_drives(self, &mut errors);
         validate_planar_monitors(self, &mut errors);
         validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
@@ -947,7 +965,8 @@ impl ProblemIR {
                 errors.push("field_only requires explicitly authored geometry".into());
             }
             if !self.magnets.is_empty() || !self.materials.is_empty() || !self.energy_terms.is_empty()
-                || !self.field_drives.is_empty() || !self.solved_antenna_drives.is_empty()
+                || !self.field_drives.is_empty() || !self.mask_field_drives.is_empty()
+                || !self.solved_antenna_drives.is_empty()
                 || !self.spin_torque_modules.is_empty() || !self.spin_transport_modules.is_empty()
                 || !self.magnetization_constraints.is_empty() || self.temperature.is_some()
                 || self.current_density.is_some() || !self.couplings.is_empty()
@@ -1353,11 +1372,19 @@ impl ProblemIR {
                 );
             }
             if let Some(layer) = &magnet.absorbing_boundary {
-                validate_absorbing_boundary(
+                validate_absorbing_boundary_config(
                     &format!("magnet '{}'.absorbing_boundary", magnet.name),
                     layer,
                     &mut errors,
                 );
+                let owner = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+                for region_id in layer.referenced_regions() {
+                    if !self.object_regions.iter().any(|region| {
+                        region.region_id == region_id && region.owner_object == owner
+                    }) {
+                        errors.push(format!("magnet '{owner}'.absorbing_boundary references missing region '{region_id}' on this object"));
+                    }
+                }
             }
         }
 
@@ -1510,41 +1537,40 @@ impl ProblemIR {
     }
 }
 
-fn validate_absorbing_boundary(
-    path: &str,
-    layer: &AbsorbingBoundaryLayerIR,
-    errors: &mut Vec<String>,
-) {
-    if !layer.total_width_m.is_finite() || layer.total_width_m <= 0.0 {
-        errors.push(format!("{path}.total_width_m must be finite and > 0"));
-    }
-    if !layer.ramp_width_m.is_finite() || layer.ramp_width_m <= 0.0 {
-        errors.push(format!("{path}.ramp_width_m must be finite and > 0"));
-    }
-    if layer.total_width_m.is_finite()
-        && layer.ramp_width_m.is_finite()
-        && layer.ramp_width_m > layer.total_width_m
-    {
-        errors.push(format!("{path}.ramp_width_m must be <= total_width_m"));
-    }
-    if !layer.max_damping.is_finite() || layer.max_damping < 0.0 {
-        errors.push(format!("{path}.max_damping must be finite and >= 0"));
-    }
-    if layer.faces.is_empty() {
-        errors.push(format!("{path}.faces must contain at least one face"));
-    }
-    let mut faces = BTreeSet::new();
-    for face in &layer.faces {
-        if !faces.insert(*face) {
-            errors.push(format!("{path}.faces must not contain duplicates"));
-            break;
-        }
-    }
-}
-
 #[cfg(test)]
 mod absorbing_boundary_tests {
     use super::*;
+
+    #[test]
+    fn custom_absorbing_boundary_round_trips_and_rejects_invalid_weights() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let legacy = serde_json::json!({
+            "total_width_m": 4.0,
+            "ramp_width_m": 2.0,
+            "max_damping": 0.8,
+            "faces": ["x-"],
+            "profile": "linear",
+            "frame": "object"
+        });
+        let mut layer: AbsorbingBoundaryLayerIR = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&layer).unwrap(), legacy);
+        layer.profile = AbsorbingBoundaryProfileIR::Custom;
+        layer.expression = Some("u**3".into());
+        let serialized = serde_json::to_value(&layer).unwrap();
+        assert_eq!(serialized["profile"], "custom");
+        assert_eq!(serialized["expression"], "u**3");
+        problem.magnets[0].absorbing_boundary = Some(serde_json::from_value(serialized).unwrap());
+        problem.validate().expect("custom ramp is valid");
+
+        for expression in [None, Some("u+1"), Some("u/(u-0.5)"), Some("2*u-u**4")] {
+            let Some(AbsorbingBoundaryIR::Legacy(layer)) = &mut problem.magnets[0].absorbing_boundary
+            else { panic!("expected legacy layer") };
+            layer.expression = expression.map(str::to_string);
+            let errors = problem.validate().expect_err("invalid custom ramp should fail");
+            assert!(errors.iter().any(|error| error.contains("absorbing_boundary")
+                && error.contains("expression")), "{expression:?}: {errors:?}");
+        }
+    }
 
     #[test]
     fn invalid_absorbing_boundary_is_rejected_by_problem_validation() {
@@ -1559,7 +1585,8 @@ mod absorbing_boundary_tests {
             ],
             profile: AbsorbingBoundaryProfileIR::Smootherstep,
             frame: AbsorbingBoundaryFrameIR::Object,
-        });
+            expression: None,
+        }.into());
 
         let errors = problem
             .validate()

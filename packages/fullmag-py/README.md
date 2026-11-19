@@ -58,6 +58,32 @@ Needs a Fullmag runtime (the Docker Compose DEV group in the repository):
 - the Control Room UI and Docker DEV script runner (`just docker-dev`, `just docker-dev-script`,
   `just fullmag-dev-container`).
 
+## Published material versions
+
+Use a published catalog key to copy a material into a geometry:
+
+```python
+import fullmag as fm
+
+disc = fm.geometry(fm.Box(100e-9, 100e-9, 10e-9), name="disc")
+disc.material = fm.materials.yig.kuswik
+```
+
+The key must exist in the selected Fullmag instance. Managed script execution
+supplies a catalog snapshot. In standalone Python, bind a snapshot explicitly
+while authoring or loading the script:
+
+```python
+from fullmag.client import Client
+
+with Client("http://127.0.0.1:3197") as client, client.bind_material_catalog():
+    loaded = fm.load_problem_from_script("disc.py")
+```
+
+Archived versions resolve by key. Assigning a version preserves the geometry's
+DMI activation and leaves its coefficients editable. Canonical export embeds
+the effective coefficients and source snapshot for offline replay.
+
 ## Interactive Live Python (`fm.connect()`)
 
 Start a Fullmag Docker Compose DEV group from a repository checkout (see

@@ -72,6 +72,42 @@ function fieldVectorResourceKey(
     : `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", fieldId)}?${query}`;
 }
 
+describe("frequencyDomainChartModels memoization", () => {
+  it("reuses the spectrum model for the same unchanged resource object", () => {
+    const resource = jsonResource({ modes: [{ frequency_hz: 1e9, raw_mode_index: 0 }] });
+
+    const first = buildEigenSpectrumChartModel(resource);
+
+    expect(buildEigenSpectrumChartModel(resource)).toBe(first);
+    expect(buildEigenSpectrumChartModel({ ...resource })).not.toBe(first);
+  });
+
+  it("recomputes the spectrum model after an in-place resource field change", () => {
+    const resource = jsonResource({ modes: [{ frequency_hz: 1e9, raw_mode_index: 0 }] });
+    const first = buildEigenSpectrumChartModel(resource);
+
+    resource.payload = { modes: [{ frequency_hz: 2e9, raw_mode_index: 0 }] };
+    const second = buildEigenSpectrumChartModel(resource);
+
+    expect(second).not.toBe(first);
+    expect(second.points[0]?.frequencyHz).toBe(2e9);
+  });
+
+  it("keys branch and dispersion models by both resources", () => {
+    const branches = jsonResource({ branches: [] });
+    const dispersionA = textResource("sample_index,frequency_hz\n0,1e9\n");
+    const dispersionB = textResource("sample_index,frequency_hz\n0,2e9\n");
+
+    const withA = buildEigenBranchesModel(branches, dispersionA);
+
+    expect(buildEigenBranchesModel(branches, dispersionA)).toBe(withA);
+    expect(buildEigenBranchesModel(branches, dispersionB)).not.toBe(withA);
+    expect(buildEigenBranchesModel(branches)).not.toBe(withA);
+    const dispersionModel = buildEigenDispersionChartModel(dispersionA, withA);
+    expect(buildEigenDispersionChartModel(dispersionA, withA)).toBe(dispersionModel);
+  });
+});
+
 describe("frequencyDomainChartModels", () => {
   it("maps eigen spectrum rows into finite Hz chart points with mode identity", () => {
     const model = buildEigenSpectrumChartModel(

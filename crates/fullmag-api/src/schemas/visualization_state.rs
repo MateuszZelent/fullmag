@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::common::deserialize_double_option;
 use crate::schemas::status::{DisplayViewMode, FieldComponent};
 
 /// Default vector budget for airbox visualization (glyph count, not stride).
@@ -459,14 +460,6 @@ pub(crate) fn default_planar_color_range_state() -> PlanarColorRangeState {
 
 fn default_planar_raster_opacity() -> f64 {
     1.0
-}
-
-fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]

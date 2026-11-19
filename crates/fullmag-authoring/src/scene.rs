@@ -158,6 +158,9 @@ pub struct ScenePostprocessingDataRef {
 pub struct SceneFieldDrivesState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -219,7 +222,7 @@ pub struct SceneObject {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default = "default_true")]
@@ -325,11 +328,13 @@ pub struct SceneMaterialAsset {
     pub id: String,
     pub name: String,
     pub properties: ScriptBuilderMaterialState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::SceneMaterialSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<SceneMaterialReference>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, utoipa::ToSchema)]
 pub struct SceneMaterialReference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,

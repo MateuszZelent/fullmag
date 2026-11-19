@@ -69,6 +69,21 @@ pub struct HysteresisExecutionTreeQuery {
     pub include_snapshots: Option<bool>,
 }
 
+fn current_preparation_receipt_for_read(
+    snapshot: &SessionStateResponse,
+    preparation_id: &str,
+    receipt: Option<fullmag_session::FmsPreparationReceipt>,
+) -> Option<fullmag_session::FmsPreparationReceipt> {
+    let current_run_id = snapshot
+        .run
+        .as_ref()
+        .map(|run| run.run_id.as_str())
+        .unwrap_or(snapshot.session.run_id.as_str());
+    receipt.filter(|receipt| {
+        receipt.run_id == current_run_id && receipt.preparation_id == preparation_id
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/simulation/preparation",
@@ -185,12 +200,11 @@ pub async fn get_simulation_preparation(
             })
         })
         .transpose()?;
-    let receipt = state
-        .current_live_preparation_receipt
-        .read()
-        .await
-        .clone()
-        .filter(|receipt| receipt.run_id == snapshot.session.run_id)
+    let receipt = current_preparation_receipt_for_read(
+        snapshot,
+        &preparation.preparation_id,
+        state.current_live_preparation_receipt.read().await.clone(),
+    )
         .map(|receipt| PreparationReceiptResource {
             schema_version: bounded_preparation_string(&receipt.schema_version, 64),
             preparation_id: bounded_preparation_string(&receipt.preparation_id, 128),
@@ -244,6 +258,53 @@ pub async fn get_simulation_preparation(
         failure,
         receipt,
     }))
+}
+
+#[cfg(test)]
+mod current_preparation_receipt_tests {
+    use super::current_preparation_receipt_for_read;
+    use crate::types::CurrentLiveSnapshotRequest;
+
+    fn receipt(preparation_id: &str, run_id: &str, marker: &str) -> fullmag_session::FmsPreparationReceipt {
+        fullmag_session::FmsPreparationReceipt::new(
+            preparation_id,
+            run_id,
+            format!("sha256:{}", marker.repeat(64)),
+            serde_json::json!({"marker": marker}),
+        )
+    }
+
+    #[test]
+    fn live_view_continuity_receipt_read_requires_the_snapshot_run_and_preparation_id() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "receipt-read",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.session.run_id = "run-a".into();
+
+        assert!(current_preparation_receipt_for_read(
+            &snapshot,
+            "prep-b",
+            Some(receipt("prep-a", "run-a", "a")),
+        )
+        .is_none());
+        assert_eq!(
+            current_preparation_receipt_for_read(
+                &snapshot,
+                "prep-b",
+                Some(receipt("prep-b", "run-a", "b")),
+            )
+            .map(|receipt| receipt.preparation_id),
+            Some("prep-b".into()),
+        );
+        assert!(current_preparation_receipt_for_read(
+            &snapshot,
+            "prep-b",
+            Some(receipt("prep-b", "run-old", "c")),
+        )
+        .is_none());
+    }
 }
 
 #[utoipa::path(

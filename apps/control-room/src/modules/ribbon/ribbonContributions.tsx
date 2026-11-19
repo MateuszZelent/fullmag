@@ -124,6 +124,7 @@ import {
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
 
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
@@ -139,6 +140,7 @@ import {
   RIBBON_ANALYSIS_SHOW_FIELD_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
+  RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
   RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_INTERFACE_COMMAND,
   RIBBON_PHYSICS_CREATE_SPIN_TRANSPORT_COMMAND,
@@ -204,6 +206,12 @@ function physicsInteractionMenu(
     label: "Field Drive",
     commandId: RIBBON_PHYSICS_CREATE_FIELD_DRIVE_COMMAND,
   };
+  const createMaskAntennaItem: RibbonMenuNode = {
+    type: "item",
+    id: "physics-global:add-mask-antenna",
+    label: "Mask Antenna",
+    commandId: RIBBON_PHYSICS_CREATE_MASK_ANTENNA_COMMAND,
+  };
   const spinAuthoringItems: RibbonMenuNode[] = scope === "all" &&
     (discretization === "fdm" || discretization === "fem")
     ? [
@@ -240,7 +248,7 @@ function physicsInteractionMenu(
         value: "Discretization unresolved; FDM/FEM controls are unavailable",
         tone: "warning",
       },
-      ...(scope === "global" ? [createFieldDriveItem] : []),
+      ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
     ];
   }
   return [
@@ -262,7 +270,7 @@ function physicsInteractionMenu(
         commandInput: { interactionId: spec.id, ...(scope === "global" ? { scope: "global" } : {}) },
       };
     }),
-    ...(scope === "global" ? [createFieldDriveItem] : []),
+    ...(scope === "global" ? [createFieldDriveItem, createMaskAntennaItem] : []),
   ];
 }
 
@@ -477,6 +485,14 @@ const physicsTab: RibbonTabContent = {
       subtitle: "add physics",
       tone: "compose",
       actions: [
+        {
+          id: addAbsorbingBoundaryCommand.id,
+          icon: icon(Waves),
+          label: "Add ABL",
+          iconColor: "text-teal-400",
+          commandId: addAbsorbingBoundaryCommand.id,
+          tooltip: "Add or open the selected magnetic object's absorbing boundary",
+        },
         {
           id: "physics-add-frozen-spins",
           icon: icon(Magnet),

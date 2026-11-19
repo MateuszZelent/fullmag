@@ -795,7 +795,12 @@ export function installSimulationPreparationTestDom({
       return [];
     }
   }
-  const getComputedStyle = () => ({ direction: "ltr" });
+  // Mirror the CSSStyleDeclaration read API used by layout hooks; unset custom
+  // properties resolve to the empty string as in browsers.
+  const getComputedStyle = () => ({
+    direction: "ltr",
+    getPropertyValue: (_name: string) => "",
+  });
   const requestAnimationFrame = (callback: FrameRequestCallback) => {
     callback(0);
     return 1;

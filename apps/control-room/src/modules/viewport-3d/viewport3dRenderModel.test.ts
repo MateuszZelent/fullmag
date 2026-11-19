@@ -1679,6 +1679,12 @@ describe("viewport3dRenderModel", () => {
       0, 0, 4,
     ]);
     expect(glyphPass?.glyphs.magnitudeEnvelopeMax).toBeCloseTo(5);
+    const numericPass = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      ...options,
+      vectorColorMode: "z",
+    })?.targetPasses.get("full")?.vectors;
+    expect(numericPass?.complexGlyphs?.colorRange).toEqual({ min: -5, max: 5 });
+    expect(numericPass?.colorScale?.range).toEqual(numericPass?.complexGlyphs?.colorRange);
     phaseUniform.value = 1.5;
     expect(
       buildViewport3DFieldRenderModel(topologyModel, null, 0.5, options)

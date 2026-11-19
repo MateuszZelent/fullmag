@@ -431,14 +431,18 @@ fn grid_sample_points(
     points
 }
 
-fn fdm_material_sample_spacing(
+fn fdm_material_sampling(
     cell_size: [f64; 3],
-) -> crate::material::MaterialSampleSpacing<'static> {
+    active_mask: Option<&[bool]>,
+) -> crate::material::MaterialSampling<'_> {
     let minimum_positive_cell_size = cell_size
         .into_iter()
         .filter(|value| value.is_finite() && *value > 0.0)
         .fold(f64::INFINITY, f64::min);
-    crate::material::MaterialSampleSpacing::Uniform(minimum_positive_cell_size)
+    crate::material::MaterialSampling::Cells {
+        spacing: minimum_positive_cell_size,
+        active_mask,
+    }
 }
 
 /// Validate the exchange stiffness used by the rotated-interfacial-DMI
@@ -2046,7 +2050,7 @@ mod region_shape_bounds_tests {
     }
 }
 
-fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
+pub(crate) fn top_level_geometry_translation(entry: &GeometryEntryIR) -> [f64; 3] {
     match entry {
         GeometryEntryIR::Translate { base, by, .. } => {
             let nested = top_level_geometry_translation(base);
@@ -2774,7 +2778,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
-        !problem.field_drives.is_empty(),
+        !problem.field_drives.is_empty() || !problem.mask_field_drives.is_empty(),
         // Transport field outputs are study-level declarations.  A stage may
         // deliberately disable the complete charge->spin->torque pipeline
         // (for example during zero-current relaxation), so validation must
@@ -3052,6 +3056,13 @@ pub(crate) fn plan_fdm(
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
+    if spin_torque.slonczewski_time_expression.is_some() {
+        if integrator != Some(IntegratorChoice::Rk45) {
+            errors.push(
+                "Slonczewski time_expression requires the resolved FDM RK45 integrator".into(),
+            );
+        }
+    }
     if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
         errors.push(
             "RegionalFieldDrive is not executable with ABM3 because the multistep history has no qualified discontinuity/event restart contract; use heun, rk4, rk23, or rk45"
@@ -3176,7 +3187,7 @@ pub(crate) fn plan_fdm(
         active_mask.as_ref(),
     );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
-    let material_sample_spacing = fdm_material_sample_spacing(cell_size);
+    let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
 
@@ -3187,7 +3198,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Ms,
         material.saturation_magnetisation,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let ms_field_opt = match ms_field_resolved {
@@ -3214,7 +3225,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Aex,
         material.exchange_stiffness,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let aex_field_opt = match aex_field_resolved {
@@ -3259,7 +3270,7 @@ pub(crate) fn plan_fdm(
         fullmag_ir::MaterialParameterNameIR::Alpha,
         material.damping,
         &point_coords,
-        material_sample_spacing,
+        material_sampling,
         top_level_translation,
     );
     let alpha_field_opt = match alpha_field_resolved {
@@ -3393,6 +3404,19 @@ pub(crate) fn plan_fdm(
             cell_size,
             &problem.geometry.entries,
         )?;
+    let time_stage = crate::util::time_stage_context(problem);
+    let mask_field_term_bases = crate::mask_field::resolve_fdm_mask_field_terms(
+        problem,
+        &crate::mask_field::FdmMaskFieldDomain {
+            cell_centres_m: &point_coords,
+            active_mask: active_mask.as_deref(),
+            region_mask: &region_mask,
+            region_legend: &grid_certificate.region_legend,
+            target_aliases: &owner_names,
+            object_translation_m: top_level_translation,
+            stage_start_time_s: time_stage.start_time_s,
+        },
+    )?;
 
     let mut resolved_ms_for_transport = ms_field_opt
         .clone()
@@ -3425,12 +3449,28 @@ pub(crate) fn plan_fdm(
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some() && !spin_transport_plans.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
     let fdm_gpu_charge_transports = resolve_fdm_gpu_charge_transports_with_active_graph(
         problem,
         resolved_backend,
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some()
+        && !fdm_gpu_charge_transports.is_empty()
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -3468,8 +3508,9 @@ pub(crate) fn plan_fdm(
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         regional_field_drive_bases,
+        mask_field_term_bases,
         solved_antenna_drive_bases: Vec::new(),
-        time_stage: crate::util::time_stage_context(problem),
+        time_stage,
         inter_region_exchange,
         region_owner: Vec::new(),
         gyromagnetic_ratio,
@@ -3519,6 +3560,7 @@ pub(crate) fn plan_fdm(
         slonczewski_stack_normal: spin_torque.slonczewski_stack_normal,
         slonczewski_target: spin_torque.slonczewski_target.clone(),
         slonczewski_active_mask,
+        slonczewski_time_expression: spin_torque.slonczewski_time_expression.clone(),
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
@@ -4575,6 +4617,12 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
+    if !crate::mask_field::active_mask_field_drives(problem).is_empty() {
+        errors.push(
+            "mask_field_drive_unsupported_lane:fdm_multilayer: mask antennas are realized on a single FDM grid (one magnet) only"
+                .to_string(),
+        );
+    }
     if let Some(pbc) = problem.pbc.as_ref() {
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
@@ -4680,7 +4728,6 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
-        let material_sample_spacing = fdm_material_sample_spacing(cell_size);
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -4768,6 +4815,7 @@ pub(crate) fn plan_fdm_multilayer(
             .iter()
             .map(|point| point.position_world)
             .collect::<Vec<_>>();
+        let material_sampling = fdm_material_sampling(cell_size, active_mask.as_deref());
         let resolve_material_field = |parameter, base_value, label: &str| {
             let values = crate::material::resolve_spatial_parameter(
                 problem,
@@ -4775,7 +4823,7 @@ pub(crate) fn plan_fdm_multilayer(
                 parameter,
                 base_value,
                 &point_coords,
-                material_sample_spacing,
+                material_sampling,
                 placed.translation,
             )?;
             if values.len() != n_cells {

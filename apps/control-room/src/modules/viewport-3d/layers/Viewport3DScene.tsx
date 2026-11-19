@@ -1524,7 +1524,7 @@ function Viewport3DModelLayerStack({
               onInspectSample={onInspectSample}
               onSelectDomain={onSelectDomain}
               onSelectTarget={() => onSelectFdmTarget(view.target)}
-              onSelectFdmCell={onSelectFdmCell}
+              onSelectFdmCell={view.target.kind === "object" && !inspectEnabled ? undefined : onSelectFdmCell}
               onSelectRegion={onSelectRegion}
               regionOverlays={
                 authoredRegionOverlaysVisible

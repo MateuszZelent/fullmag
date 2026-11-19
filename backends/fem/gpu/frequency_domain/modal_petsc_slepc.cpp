@@ -583,6 +583,7 @@ struct GpuSolveControlArm {
 struct GpuKspConvergenceContext {
     GpuSolveControl *solve_control = nullptr;
     void *default_context = nullptr;
+    PoissonAirboxModalProgressThrottle progress_throttle{};
 };
 
 PetscErrorCode gpu_modal_ksp_convergence_test(
@@ -716,6 +717,9 @@ PetscErrorCode gpu_modal_ksp_convergence_test(
     }
     PetscCall(KSPConvergedDefault(
         ksp, iteration, residual_norm, reason, context->default_context));
+    if (!context->progress_throttle.should_emit()) {
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
     gpu_modal_emit_progress(
         *control,
         "solving_shift_invert",
@@ -953,6 +957,15 @@ bool configure_schur_context(
     return true;
 }
 
+// apply_schur runs twice per shell matvec; read the debug switch once per
+// process instead of scanning the environment on every Poisson solve.
+bool gpu_k0_petsc_debug_enabled() noexcept
+{
+    static const bool enabled =
+        std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr;
+    return enabled;
+}
+
 PetscErrorCode apply_schur(GpuSchurContext *context, Vec q, Vec y, Vec phi_output = nullptr)
 {
     PetscFunctionBeginUser;
@@ -962,7 +975,7 @@ PetscErrorCode apply_schur(GpuSchurContext *context, Vec q, Vec y, Vec phi_outpu
     PetscCall(MatMult(context->a_qq, q, y));
     PetscCall(MatMult(context->a_phiq, q, context->phi_rhs));
     PetscCall(VecScale(context->phi_rhs, -1.0));
-    if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr) {
+    if (gpu_k0_petsc_debug_enabled()) {
         PetscReal rhs_norm = 0.0;
         (void)VecNorm(context->phi_rhs, NORM_2, &rhs_norm);
         std::fprintf(
@@ -974,7 +987,7 @@ PetscErrorCode apply_schur(GpuSchurContext *context, Vec q, Vec y, Vec phi_outpu
     // Never let that path expose phi from the preceding persistent solve.
     PetscCall(VecSet(context->phi_solution, 0.0));
     PetscCall(KSPSolve(context->poisson_ksp, context->phi_rhs, context->phi_solution));
-    if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr) {
+    if (gpu_k0_petsc_debug_enabled()) {
         PetscReal solution_norm = 0.0;
         (void)VecNorm(context->phi_solution, NORM_2, &solution_norm);
         std::fprintf(
@@ -990,7 +1003,7 @@ PetscErrorCode apply_schur(GpuSchurContext *context, Vec q, Vec y, Vec phi_outpu
     }
     KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
     PetscCall(KSPGetConvergedReason(context->poisson_ksp, &reason));
-    if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr) {
+    if (gpu_k0_petsc_debug_enabled()) {
         PetscInt poisson_iterations_debug = 0;
         PetscReal poisson_residual_debug = 0.0;
         (void)KSPGetIterationNumber(context->poisson_ksp, &poisson_iterations_debug);
@@ -4215,7 +4228,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 poisson_solve_before;
             out_result->poisson_iteration_count = schur->poisson_iteration_count -
                 poisson_iteration_before;
-            if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr) {
+            if (gpu_k0_petsc_debug_enabled()) {
                 std::fprintf(
                     stderr,
                     "GPU K0 EPSSolve failure: eps_status=%d st_ksp_reason=%d "
@@ -4446,7 +4459,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 apply_schur(schur, split->q_imag, split->y_imag, split->phi_imag) != PETSC_SUCCESS) {
                 continue;
             }
-            if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_DEBUG") != nullptr) {
+            if (gpu_k0_petsc_debug_enabled()) {
                 PetscReal q_real_norm = 0.0;
                 PetscReal q_imag_norm = 0.0;
                 PetscReal phi_real_norm = 0.0;

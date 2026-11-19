@@ -602,6 +602,107 @@ study.stages.add_run(stage_id="run-after-enable", until=1e-12)
         self.assertEqual(reloaded.stages[0].action, disabled.action)
         self.assertEqual(reloaded.stages[2].action, enabled.action)
 
+    def test_scene_export_preserves_torque_and_sampling_switches_with_storage(self) -> None:
+        from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
+
+        source = _PREAMBLE + """
+study.storage(output_dir="result.zarr")
+study.spin_torque(fm.ZhangLiSTT(
+    current_density=(1e10, 0.0, 0.0), id="stt", target=fm.RegionRef("film"),
+    lande_g=2.0, operator_version="zl_mumax3_central_v1",
+))
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=False)
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(1e-13, quantities=["t", "my"])
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=True)
+study.stages.add_run(stage_id="pulse", until=2e-12)
+study.stages.tableautosave(enabled=False)
+study.stages.set_spin_torque_enabled(module_id="stt", enabled=False)
+study.stages.add_run(stage_id="after", until=1e-12)
+"""
+        loaded = _load(source)
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        reloaded = _load(render_scene_document_as_script(scene))
+        self.assertEqual(
+            [s.action for s in reloaded.stages], [s.action for s in loaded.stages]
+        )
+        config = export_run_config(
+            reloaded,
+            reloaded.to_ir(requested_backend=None, execution_mode=None, execution_precision=None),
+            options=RunConfigExportOptions(include_geometry_assets=False),
+        )
+        physical = [s["ir"] for s in config["stages"] if s["entrypoint_kind"] == "flat_run"]
+        self.assertEqual(
+            [next(m["activation"] for m in ir["physics_graph"]["modules"] if m["id"] == "stt")
+             for ir in physical],
+            ["inactive", "active", "inactive"],
+        )
+        self.assertEqual(
+            [bool(ir["study"]["sampling"].get("table_autosave")) for ir in physical],
+            [False, True, False],
+        )
+
+    def test_run_export_replays_damping_changes_between_preparation_and_pulse(self) -> None:
+        loaded = _load(_PREAMBLE + """
+body.alpha = 1.0
+study.stages.add_run(stage_id="prepare", until=20e-9)
+body.alpha = 0.045
+study.stages.add_run(stage_id="pulse", until=200e-9)
+""")
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        config = scene_document_to_execution_config(
+            scene, requested_backend="fem", requested_device="cpu",
+            requested_precision="double", requested_mode="strict",
+        )
+        first, second = config["study_pipeline"]["nodes"]
+        self.assertEqual(first["payload"]["gilbert_damping_by_object"], {"film": 1.0})
+        self.assertNotIn("gilbert_damping_by_object", second["payload"])
+        for script in (render_scene_document_as_script(scene),
+                       rewrite_loaded_problem_script(loaded)["rendered_source"]):
+            reloaded = _load(script)
+            self.assertEqual(
+                [s.problem.magnets[0].material.alpha for s in reloaded.stages],
+                [1.0, 0.045],
+            )
+            self.assertEqual(reloaded.workspace_problem.magnets[0].material.alpha, 0.045)
+
+    def test_global_table_override_only_applies_until_the_first_local_change(self) -> None:
+        loaded = _load(_PREAMBLE + """
+study.stages.add_run(stage_id="initial", until=1e-12)
+study.tableautosave(1e-12, quantities=["t", "mx"])
+study.stages.add_run(stage_id="local", until=1e-12)
+study.tableautosave(enabled=False)
+study.stages.add_run(stage_id="off", until=1e-12)
+""")
+        overrides = {"table_autosave": fm.TableAutosave(t_sampl=2e-12, quantities=["t", "mx"]).to_ir()}
+        script = rewrite_loaded_problem_script(loaded, overrides=overrides)["rendered_source"]
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        scene["study"]["table_autosave"] = overrides["table_autosave"]
+        for rendered in (script, render_scene_document_as_script(scene)):
+            reloaded = _load(rendered)
+            self.assertEqual(
+                [(s.problem.study.to_ir()["sampling"].get("table_autosave") or {}).get("sample_period_s")
+                 for s in reloaded.stages],
+                [2e-12, 1e-12, None],
+            )
+
+    def test_renamed_object_replays_run_damping_by_immutable_id(self) -> None:
+        loaded = _load(_PREAMBLE + """
+body.alpha = 1.0
+study.stages.add_run(stage_id="prepare", until=1e-12)
+body.alpha = 0.045
+study.stages.add_run(stage_id="pulse", until=1e-12)
+""")
+        geometry, = export_builder_draft(loaded)["geometries"]
+        geometry["name"] = "Renamed film"
+        result = rewrite_loaded_problem_script(loaded, overrides={"geometries": [geometry]})
+        reloaded = _load(result["rendered_source"])
+        self.assertEqual(
+            [(s.problem.magnets[0].object_id, s.problem.magnets[0].name, s.problem.magnets[0].material.alpha)
+             for s in reloaded.stages],
+            [("film", "Renamed film", 1.0), ("film", "Renamed film", 0.045)],
+        )
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE

@@ -905,17 +905,29 @@ pub(crate) fn capabilities_for_fdm_engine_with_precision(
 }
 
 /// Return the planner capability profile used while a blank scratch session is
-/// being authored.  Scratch sessions have an explicit CPU/double lane before
-/// a ProblemIR plan exists, so this profile describes the selected lane without
-/// claiming scientific qualification or a managed-runtime receipt.
-pub fn scratch_authoring_capabilities(backend: &str) -> Option<BackendCapabilities> {
-    match backend {
-        "fdm" => Some(capabilities_for_fdm_engine_with_precision(
+/// being authored. This is the requested lane's capability preview, not proof
+/// of runtime availability, execution or scientific qualification.
+pub fn scratch_authoring_capabilities(
+    backend: &str,
+    device: &str,
+    precision: &str,
+) -> Option<BackendCapabilities> {
+    match (backend, device, precision) {
+        ("fdm", "cpu", "double") => Some(capabilities_for_fdm_engine_with_precision(
             FdmEngine::CpuReference,
             FdmCapabilityProfile::SingleGrid,
             fullmag_ir::ExecutionPrecision::Double,
         )),
-        "fem" => Some(capabilities_for_fem_engine(FemEngine::CpuNative)),
+        ("fdm", "gpu", "single" | "double") => Some(capabilities_for_fdm_engine_with_precision(
+            FdmEngine::CudaFdm,
+            FdmCapabilityProfile::SingleGrid,
+            if precision == "single" {
+                fullmag_ir::ExecutionPrecision::Single
+            } else {
+                fullmag_ir::ExecutionPrecision::Double
+            },
+        )),
+        ("fem", "cpu", "double") => Some(capabilities_for_fem_engine(FemEngine::CpuNative)),
         _ => None,
     }
 }

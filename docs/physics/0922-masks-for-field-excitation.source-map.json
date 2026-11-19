@@ -1,0 +1,830 @@
+{
+  "document": {
+    "path": "docs/physics/0922-masks-for-field-excitation.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "realized",
+      "reason": "Runtime evidence through the managed API: a mask term equals the built-in sinusoidal regional drive bit for bit."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "realized",
+      "reason": "Runtime evidence through the managed API on CUDA: agreement with the built-in drive to 2.2e-16 in m; at most 8 mask terms per stage."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "realized",
+      "reason": "Runtime evidence through the managed API: a uniform mask term equals the built-in regional drive bit for bit; not on the Rust reference reduction of statically periodic plans."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "realized",
+      "reason": "Runtime evidence through the managed API on CUDA: agreement with FEM CPU to 1.4e-15 in m; at most 8 mask terms per stage."
+    }
+  ],
+  "equations": [
+    {
+      "id": "mask-support",
+      "symbols": [
+        "Omega_S",
+        "Omega_m",
+        "G"
+      ],
+      "sources": [
+        "plan-support"
+      ]
+    },
+    {
+      "id": "mask-field",
+      "symbols": [
+        "mathbf_B_mathrm_mask",
+        "mathbf_H_mathrm_mask",
+        "mathbf_B_i",
+        "f_i",
+        "tau",
+        "N",
+        "mu_0",
+        "Omega_S"
+      ],
+      "sources": [
+        "python-antenna",
+        "ir-drive",
+        "plan-basis"
+      ]
+    },
+    {
+      "id": "mask-clock",
+      "symbols": [
+        "tau",
+        "t",
+        "t_mathrm_stage"
+      ],
+      "sources": [
+        "runner-clock"
+      ]
+    },
+    {
+      "id": "mask-effective-field",
+      "symbols": [
+        "mathbf_H_mathrm_eff",
+        "mathbf_H_mathrm_mask"
+      ],
+      "sources": [
+        "fdm-cpu-multiplier",
+        "fem-cpu-time"
+      ]
+    },
+    {
+      "id": "mask-energy",
+      "symbols": [
+        "E_mathrm_drive",
+        "mu_0",
+        "M_s",
+        "mathbf_m",
+        "mathbf_H_mathrm_mask",
+        "Omega_S"
+      ],
+      "sources": [
+        "fdm-cpu-energy",
+        "fdm-cuda-energy",
+        "fem-cpu-energy"
+      ]
+    },
+    {
+      "id": "mask-local-frame",
+      "symbols": [
+        "mathbf_B_i",
+        "boldsymbol_beta_i",
+        "mathbf_r_0"
+      ],
+      "sources": [
+        "plan-frame"
+      ]
+    },
+    {
+      "id": "mask-space-time-split",
+      "symbols": [
+        "a",
+        "b",
+        "tau"
+      ],
+      "sources": [
+        "python-space-time"
+      ]
+    },
+    {
+      "id": "mask-fdm-basis",
+      "symbols": [
+        "mathbf_h_i_c",
+        "mathbf_B_i",
+        "mathbf_r_c",
+        "mu_0",
+        "Omega_S"
+      ],
+      "sources": [
+        "plan-basis"
+      ]
+    },
+    {
+      "id": "mask-fdm-array",
+      "symbols": [
+        "mathbf_h_i_c",
+        "mathbf_A_ijk",
+        "mathbf_r_c",
+        "mathbf_o",
+        "Delta",
+        "mu_0"
+      ],
+      "sources": [
+        "plan-array"
+      ]
+    },
+    {
+      "id": "mask-fdm-update",
+      "symbols": [
+        "mathbf_H_c",
+        "f_i",
+        "tau",
+        "mathbf_h_i_c",
+        "N"
+      ],
+      "sources": [
+        "fdm-cpu-multiplier",
+        "fdm-cuda-host-multipliers",
+        "host-interpreter",
+        "expr-bytecode"
+      ]
+    },
+    {
+      "id": "mask-fdm-energy",
+      "symbols": [
+        "E_mathrm_drive",
+        "mu_0",
+        "V_c",
+        "M_s_c",
+        "mathbf_m_c",
+        "f_i",
+        "mathbf_h_i_c"
+      ],
+      "sources": [
+        "fdm-cpu-energy",
+        "fdm-cuda-energy"
+      ]
+    },
+    {
+      "id": "mask-fem-basis",
+      "symbols": [
+        "mathbf_h_i_h",
+        "mathbf_B_i",
+        "mathbf_r_n",
+        "varphi_n",
+        "mu_0",
+        "Omega_S"
+      ],
+      "sources": [
+        "plan-fem-basis"
+      ]
+    },
+    {
+      "id": "mask-fem-energy",
+      "symbols": [
+        "E_mathrm_drive",
+        "mu_0",
+        "w_n",
+        "M_s_n",
+        "mathbf_m_n",
+        "f_i",
+        "mathbf_h_i_n"
+      ],
+      "sources": [
+        "fem-cpu-energy",
+        "fem-gpu-upload",
+        "fem-runner"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "mathbf_r_x_y_z",
+      "latex": "$\\mathbf r=(x,y,z)$",
+      "meaning": "position in the world frame",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "mathbf_r_0",
+      "latex": "$\\mathbf r_0$",
+      "meaning": "position of the support shape",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "t",
+      "latex": "$t$",
+      "meaning": "physical simulation time",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "t_mathrm_stage",
+      "latex": "$t_{\\mathrm{stage}}$",
+      "meaning": "simulation time at the start of the current run stage",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "tau",
+      "latex": "$\\tau$",
+      "meaning": "drive clock",
+      "si_unit": "$\\mathrm{s}$"
+    },
+    {
+      "id": "Omega_m",
+      "latex": "$\\Omega_m$",
+      "meaning": "magnetic domain of the target object",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "G",
+      "latex": "$G$",
+      "meaning": "support shape (box, cylinder, sphere) placed at $\\mathbf r_0$",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Omega_S",
+      "latex": "$\\Omega_S$",
+      "meaning": "support of the drive",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "N",
+      "latex": "$N$",
+      "meaning": "number of terms, $1\\le N\\le 8$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mathbf_B_i",
+      "latex": "$\\mathbf B_i$",
+      "meaning": "mask of term $i$",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "boldsymbol_beta_i",
+      "latex": "$\\boldsymbol\\beta_i$",
+      "meaning": "authored mask function of term $i$",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "f_i",
+      "latex": "$f_i$",
+      "meaning": "time function of term $i$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mathbf_B_mathrm_mask",
+      "latex": "$\\mathbf B_{\\mathrm{mask}}$",
+      "meaning": "flux density of the drive",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "mathbf_H_mathrm_mask",
+      "latex": "$\\mathbf H_{\\mathrm{mask}}$",
+      "meaning": "field of the drive",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_H_mathrm_eff",
+      "latex": "$\\mathbf H_{\\mathrm{eff}}$",
+      "meaning": "effective field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mu_0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{T\\,m\\,A^{-1}}$"
+    },
+    {
+      "id": "M_s",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_m",
+      "latex": "$\\mathbf m$",
+      "meaning": "unit magnetization",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "E_mathrm_drive",
+      "latex": "$E_{\\mathrm{drive}}$",
+      "meaning": "Zeeman energy of prescribed drives",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "mathbf_r_c",
+      "latex": "$\\mathbf r_c$",
+      "meaning": "centre of FDM cell $c$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "V_c",
+      "latex": "$V_c$",
+      "meaning": "volume of FDM cell $c$",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "mathbf_h_i_c",
+      "latex": "$\\mathbf h_{i,c}$",
+      "meaning": "stored basis of term $i$ at cell $c$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_L_ijk",
+      "latex": "$\\mathbf L_{ijk}$",
+      "meaning": "lattice point $(i,j,k)$ of an array mask",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "mathbf_A_ijk",
+      "latex": "$\\mathbf A_{ijk}$",
+      "meaning": "array-mask value at lattice point $(i,j,k)$",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "mathbf_H_c",
+      "latex": "$\\mathbf H_c$",
+      "meaning": "effective field at FDM cell $c$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "M_s_c",
+      "latex": "$M_{s,c}$",
+      "meaning": "saturation magnetization of FDM cell $c$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_m_c",
+      "latex": "$\\mathbf m_c$",
+      "meaning": "unit magnetization of FDM cell $c$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mathbf_o",
+      "latex": "$\\mathbf o$",
+      "meaning": "lower corner of the array-mask lattice",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Delta",
+      "latex": "$\\Delta$",
+      "meaning": "spacing of the array-mask lattice",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "mathbf_r_n",
+      "latex": "$\\mathbf r_n$",
+      "meaning": "position of FEM node $n$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "varphi_n",
+      "latex": "$\\varphi_n$",
+      "meaning": "P1 shape function of FEM node $n$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "mathbf_h_i_h",
+      "latex": "$\\mathbf h_i^h$",
+      "meaning": "nodal interpolant of the basis of term $i$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_h_i_n",
+      "latex": "$\\mathbf h_{i,n}$",
+      "meaning": "stored basis of term $i$ at FEM node $n$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "w_n",
+      "latex": "$w_n$",
+      "meaning": "lumped nodal weight of FEM node $n$",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "M_s_n",
+      "latex": "$M_{s,n}$",
+      "meaning": "saturation magnetization at FEM node $n$",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mathbf_m_n",
+      "latex": "$\\mathbf m_n$",
+      "meaning": "unit magnetization at FEM node $n$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "a",
+      "latex": "$a$",
+      "meaning": "part of a function argument that depends on position only",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "b",
+      "latex": "$b$",
+      "meaning": "part of a function argument that depends on the drive clock only",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "B",
+      "latex": "$B$",
+      "meaning": "amplitude of the travelling-wave example",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "k",
+      "latex": "$k$",
+      "meaning": "wave number of the travelling-wave example",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "omega",
+      "latex": "$\\omega$",
+      "meaning": "angular frequency of the travelling-wave example",
+      "si_unit": "$\\mathrm{s^{-1}}$"
+    },
+    {
+      "id": "v",
+      "latex": "$v$",
+      "meaning": "velocity of the moving-Gaussian example",
+      "si_unit": "$\\mathrm{m\\,s^{-1}}$"
+    },
+    {
+      "id": "s",
+      "latex": "$s$",
+      "meaning": "width of the moving-Gaussian example",
+      "si_unit": "$\\mathrm{m}$"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-functions",
+      "path": "packages/fullmag-py/src/fullmag/model/mask_function.py",
+      "symbol": "_transpile",
+      "responsibility": "Translate a restricted Python mask or time function to field_expr.v1 equations."
+    },
+    {
+      "id": "python-antenna",
+      "path": "packages/fullmag-py/src/fullmag/model/mask_field_drive.py",
+      "symbol": "class MaskAntenna",
+      "responsibility": "Hold target, support shape, frame, clock and terms; apply parameter updates; serialize the drive."
+    },
+    {
+      "id": "python-space-time",
+      "path": "packages/fullmag-py/src/fullmag/model/space_time.py",
+      "symbol": "space_time",
+      "responsibility": "Split one function of position and time into mask and time functions."
+    },
+    {
+      "id": "python-vector-mask",
+      "path": "packages/fullmag-py/src/fullmag/model/vector_mask.py",
+      "symbol": "class VectorMask",
+      "responsibility": "Hold and serialize an array mask filled by ordinary Python."
+    },
+    {
+      "id": "python-ready-antenna",
+      "path": "packages/fullmag-py/src/fullmag/antennas.py",
+      "symbol": "gaussian_k_source",
+      "responsibility": "Return the terms of the ready Gaussian wave-vector source and record the call."
+    },
+    {
+      "id": "python-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "class _MaskAntennaRenderer",
+      "responsibility": "Write a mask antenna of a scene as script functions, calls and stage actions."
+    },
+    {
+      "id": "ir-drive",
+      "path": "crates/fullmag-ir/src/mask_field_drive.rs",
+      "symbol": "MaskFieldDriveIR",
+      "responsibility": "Define the drive, its terms and its target in ProblemIR."
+    },
+    {
+      "id": "ir-validation",
+      "path": "crates/fullmag-ir/src/mask_field_drive.rs",
+      "symbol": "validate_mask_field_drives",
+      "responsibility": "Validate drives against the problem: ids, targets, shapes, functions, arrays and stage use."
+    },
+    {
+      "id": "ir-update",
+      "path": "crates/fullmag-ir/src/mask_field_drive.rs",
+      "symbol": "with_updated_parameters",
+      "responsibility": "Replace parameter values of one term for an Update stage action."
+    },
+    {
+      "id": "expr-function",
+      "path": "crates/fullmag-expr/src/function.rs",
+      "symbol": "compile_function",
+      "responsibility": "Parse and compile a function of field_expr.v1 with parameters, locals and outputs."
+    },
+    {
+      "id": "expr-bytecode",
+      "path": "crates/fullmag-expr/src/bytecode.rs",
+      "symbol": "eval_time_program",
+      "responsibility": "Evaluate a fullmag_time_expr.v1 program at one time."
+    },
+    {
+      "id": "plan-support",
+      "path": "crates/fullmag-plan/src/mask_field.rs",
+      "symbol": "shape_support",
+      "responsibility": "Select the cells or nodes of the target that lie inside the support shape."
+    },
+    {
+      "id": "plan-frame",
+      "path": "crates/fullmag-plan/src/mask_field.rs",
+      "symbol": "frame_origin",
+      "responsibility": "Resolve the origin of mask coordinates for the local and the world frame."
+    },
+    {
+      "id": "plan-basis",
+      "path": "crates/fullmag-plan/src/mask_field.rs",
+      "symbol": "resolve_drive_terms",
+      "responsibility": "Evaluate every term on the support and store one basis and one time program per term."
+    },
+    {
+      "id": "plan-array",
+      "path": "crates/fullmag-plan/src/mask_field.rs",
+      "symbol": "value_at",
+      "responsibility": "Give the array-mask value of the lattice cell that contains a point."
+    },
+    {
+      "id": "plan-fem-basis",
+      "path": "crates/fullmag-plan/src/mask_field.rs",
+      "symbol": "resolve_fem_mask_field_terms",
+      "responsibility": "Resolve the support nodes of a FEM plan, check periodic node pairs and store the nodal bases."
+    },
+    {
+      "id": "runner-clock",
+      "path": "crates/fullmag-runner/src/mask_time.rs",
+      "symbol": "mask_term_local_time",
+      "responsibility": "Convert the stage time to the clock of a term for its time origin."
+    },
+    {
+      "id": "runner-time-check",
+      "path": "crates/fullmag-runner/src/mask_time.rs",
+      "symbol": "check_mask_time_programs",
+      "responsibility": "Check every time program on the stage horizon before stepping."
+    },
+    {
+      "id": "fdm-cpu-multiplier",
+      "path": "crates/fullmag-engine/src/fdm/shared/terms.rs",
+      "symbol": "multiplier_at",
+      "responsibility": "Evaluate the time factor of a drive term at a Runge-Kutta stage time on FDM CPU."
+    },
+    {
+      "id": "fdm-cpu-drive-field",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "resolved_drive_field_for_count",
+      "responsibility": "Publish the summed drive field H_drive on FDM CPU."
+    },
+    {
+      "id": "fdm-cpu-energy",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "regional_drive_energy",
+      "responsibility": "Sum the Zeeman energy of the prescribed drives on FDM CPU."
+    },
+    {
+      "id": "fdm-cuda-host-multipliers",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs",
+      "symbol": "check_native_host_multipliers",
+      "responsibility": "Compare the native interpreter with the Rust interpreter before host-evaluated factors are used on FDM CUDA."
+    },
+    {
+      "id": "fdm-cuda-energy",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs",
+      "symbol": "apply_regional_drive_energy",
+      "responsibility": "Report the drive energy of an FDM CUDA step."
+    },
+    {
+      "id": "host-interpreter",
+      "path": "native/include/fullmag_time_expression.h",
+      "symbol": "fullmag_time_expression_eval",
+      "responsibility": "Evaluate a fullmag_time_expr.v1 program in host C and C++ code."
+    },
+    {
+      "id": "fem-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_time_expression_eval_v1",
+      "responsibility": "Expose the native interpreter to the runner for the parity check."
+    },
+    {
+      "id": "fem-cpu-time",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_time_dependence.cpp",
+      "symbol": "evaluate_time_dependence",
+      "responsibility": "Evaluate the time factor of a FEM drive, including host expressions."
+    },
+    {
+      "id": "fem-cpu-energy",
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "symbol": "regional_field_drive_energy",
+      "responsibility": "Sum the drive energy with lumped nodal weights on FEM CPU."
+    },
+    {
+      "id": "fem-gpu-upload",
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu",
+      "symbol": "gpu_regional_field_drive_upload",
+      "responsibility": "Upload nodal bases and assign host-expression slots on FEM GPU."
+    },
+    {
+      "id": "fem-runner",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "check_native_fem_time_programs",
+      "responsibility": "Check FEM time programs on the stage horizon and against the native interpreter."
+    },
+    {
+      "id": "stage-add",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "materialize_pipeline_add_mask_field_drive",
+      "responsibility": "Apply the stage action that adds a mask drive."
+    },
+    {
+      "id": "stage-update",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "update_mask_field_drive",
+      "responsibility": "Apply the stage action that updates parameter values of an active mask drive."
+    },
+    {
+      "id": "stage-remove",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "remove_field_drive",
+      "responsibility": "Apply the stage action that removes a drive."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "`study.add_simpleantenna.arbitrary_mask(target, …)`, `magnet.add_simpleantenna.arbitrary_mask(…)`, `region.add_simpleantenna.arbitrary_mask(…)`",
+        "type": "magnet, region of a magnet, or `\"global\"`",
+        "default": "required (bound by a scoped factory)",
+        "si_unit": "$1$",
+        "validation": "an existing magnet or region; `target=` on a scoped factory raises `scoped_target_override_not_allowed`",
+        "meaning": "cells (FDM) or nodes (FEM) the drive may act on",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].target` (`global`, `object`, `region`)"
+      },
+      {
+        "python": "`…mask.shape`",
+        "type": "`fm.Box`, `fm.Cylinder`, sphere",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive sizes",
+        "meaning": "support shape $G$",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].shape`"
+      },
+      {
+        "python": "`…mask.position`",
+        "type": "3 floats",
+        "default": "`(0, 0, 0)`",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "finite",
+        "meaning": "$\\mathbf r_0$",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].position_m`"
+      },
+      {
+        "python": "`…mask.frame`",
+        "type": "`\"local\"`, `\"world\"`",
+        "default": "`\"local\"`",
+        "si_unit": "$1$",
+        "validation": "one of the two",
+        "meaning": "frame of $\\mathbf r_0$ and of mask coordinates, {eq}`mask-local-frame`",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].frame`"
+      },
+      {
+        "python": "`…mask.time_origin`",
+        "type": "`\"stage_local\"`, `\"absolute\"`",
+        "default": "`\"stage_local\"`",
+        "si_unit": "$1$",
+        "validation": "one of the two",
+        "meaning": "clock of {eq}`mask-clock`",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].time_origin`"
+      },
+      {
+        "python": "`…mask.name`, `…mask.id`",
+        "type": "`str`",
+        "default": "derived",
+        "si_unit": "$1$",
+        "validation": "non-empty, unique id",
+        "meaning": "display name, stable id",
+        "backend_support": "all",
+        "problem_ir": "`mask_field_drives[].name`, `.id`"
+      },
+      {
+        "python": "`antenna.add(mask, time, name=None)`",
+        "type": "`MaskFunction` or `VectorMask`; `TimeFunction` or `None`; `str`",
+        "default": "`time=None`",
+        "si_unit": "$\\mathrm{T}$, $1$",
+        "validation": "at most 8 terms; bare callables rejected; names unique within the antenna",
+        "meaning": "one term of {eq}`mask-field`",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[].terms[]` (`name`)"
+      },
+      {
+        "python": "`fm.mask(function, **values)`",
+        "type": "restricted function + numbers",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "rules of `mask-function-v1`; every parameter needs a value",
+        "meaning": "function mask $\\boldsymbol\\beta_i$",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`terms[].mask` (`kind: function`)"
+      },
+      {
+        "python": "`fm.time(function, **values)`",
+        "type": "restricted function + numbers",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "rules of `mask-function-v1`",
+        "meaning": "time function $f_i$",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`terms[].time`"
+      },
+      {
+        "python": "`fm.space_time(function, **values)`, `antenna.add_space_time(function, **values)`",
+        "type": "restricted function of `x, y, z, t` + numbers",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "rules of `mask-function-v1` section 7; `mask_not_separable`, `mask_too_many_terms`",
+        "meaning": "the terms of {eq}`mask-space-time-split`, as `(mask, time)` pairs or added to the antenna",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`terms[]` (ordinary function terms)"
+      },
+      {
+        "python": "`study.new_vector_mask(size, cell, origin)`",
+        "type": "3 ints, 3 floats, 3 floats",
+        "default": "the FDM grid of the study",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "positive size and cell; a lattice is required when the study has no FDM cell",
+        "meaning": "array mask $\\mathbf A_{ijk}$",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`terms[].mask` (`kind: sampled`)"
+      },
+      {
+        "python": "`VectorMask.set_vector(i, j, k, value)`",
+        "type": "ints, 3 floats",
+        "default": "—",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "indices in range, finite values",
+        "meaning": "one lattice value",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "array file"
+      },
+      {
+        "python": "`study.stages.add_field_drive(antenna, stage_id)`",
+        "type": "`MaskAntenna`, `str`",
+        "default": "generated id",
+        "si_unit": "$1$",
+        "validation": "unique stage id",
+        "meaning": "adds the drive from this pipeline point on",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "stage action `add_mask_field_drive`"
+      },
+      {
+        "python": "`study.field_drives.add(antenna)`",
+        "type": "`MaskAntenna`",
+        "default": "—",
+        "si_unit": "$1$",
+        "validation": "unique id",
+        "meaning": "adds the drive for the whole study",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "`mask_field_drives[]`"
+      },
+      {
+        "python": "`study.stages.update_field_drive(antenna, mask_parameters, time_parameters, term, stage_id)`",
+        "type": "`MaskAntenna` or id; `{name: float}`; term name or index",
+        "default": "generated id",
+        "si_unit": "units of the parameters",
+        "validation": "the id is active; known names; finite values; `term` required for several terms (`mask_update_invalid`)",
+        "meaning": "replaces parameter values of the active instance from this point on; the antenna's definition is unchanged",
+        "backend_support": "FDM and FEM, CPU/GPU",
+        "problem_ir": "stage action `update_mask_field_drive`"
+      },
+      {
+        "python": "`study.stages.remove_field_drive(id, stage_id)`",
+        "type": "`str`, `str`",
+        "default": "generated id",
+        "si_unit": "$1$",
+        "validation": "the id is active",
+        "meaning": "removes the drive from this point on",
+        "backend_support": "all lanes",
+        "problem_ir": "stage action `remove_field_drive`"
+      }
+    ]
+  }
+}

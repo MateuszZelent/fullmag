@@ -200,6 +200,8 @@ import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
 import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./maskFieldDriveStageSummary";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -466,6 +468,43 @@ describe("Study stage inspectors", () => {
     expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
       "Unsupported Stage",
     );
+    const addAntenna = summarizeMaskFieldDriveStage({
+      kind: "add_mask_field_drive",
+      drive: {
+        id: "antenna",
+        name: "Antenna",
+        target: { kind: "object", object_id: "sample" },
+        shape: { kind: "box", size: [6e-6, 1e-6, 4.5e-8] },
+        frame: "world",
+        time_origin: "absolute",
+        terms: [{
+          mask: { kind: "function", function: {
+            name: "antenna_mask", parameters: [{ name: "B01", value: 0.0002 }],
+            outputs: ["B01 * sin(k * x)", "0.0", "0.0"],
+          } },
+          time: { name: "antenna_time", parameters: [{ name: "frequency", value: 3.6e9 }],
+            outputs: ["sin(2 * pi * frequency * t)"] },
+        }],
+      },
+    })!;
+    const addAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={addAntenna} />,
+    );
+    expect(addAntennaHtml).toContain("Add Antenna");
+    expect(addAntennaHtml).toContain("antenna_mask(B01 = 0.0002)");
+    expect(addAntennaHtml).toContain("sin(2 * pi * frequency * t)");
+    expect(addAntennaHtml).not.toContain("Unsupported Stage");
+    const updateAntenna = summarizeMaskFieldDriveStage({
+      kind: "update_mask_field_drive",
+      drive_id: "antenna",
+      term: null,
+      mask_parameters: { B01: 0.0004 },
+    })!;
+    const updateAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={updateAntenna} />,
+    );
+    expect(updateAntennaHtml).toContain("Antenna Update");
+    expect(updateAntennaHtml).toContain("B01 = 0.0004");
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
     ).toContain("Execution Device");

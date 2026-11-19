@@ -452,13 +452,12 @@ void main() {
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
-  // The fragment shader expects [0, 1]. Real scalar paths normalize on the
-  // CPU; the complex path projects per vertex here, so it normalizes with the
-  // phase-independent range uniforms.
+  vScalarValue = scalarFromVector(projected);
   float scalarSpan = fmScalarMax - fmScalarMin;
-  vScalarValue = scalarSpan > 0.0
-    ? (scalarFromVector(projected) - fmScalarMin) / scalarSpan
-    : 0.5;
+  // Leave invalid samples for the fragment's diagnostic color.
+  if (vScalarValue == vScalarValue && abs(vScalarValue) <= 3.0e38) {
+    vScalarValue = scalarSpan > 0.0 ? (vScalarValue - fmScalarMin) / scalarSpan : 0.5;
+  }
   vNormalView = normalize(normalMatrix * normal);
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
   #include <clipping_planes_vertex>
@@ -555,10 +554,8 @@ void main() {
   float v = vScalarValue;
   bool bad = !(v == v) || abs(v) > 3.0e38;
 
-  // fmScalarValue is normalized to [0, 1] in float64 precision before upload
-  // (see viewport3dFieldMapping.ts). Do not normalize it a second time with
-  // the raw range uniforms; that made component changes look like shading
-  // changes instead of changing the surface texture.
+  // CPU-uploaded scalars are already normalized. The complex vertex shader
+  // normalizes after projection so both paths supply palette coordinates.
   float t = bad ? 0.5 : clamp(v, 0.0, 1.0);
   vec3 base = bad ? vec3(0.85, 0.0, 0.85) : paletteColor(t);
   vec3 shaded = base;

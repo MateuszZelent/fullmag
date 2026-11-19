@@ -15,6 +15,35 @@ SOURCE_LIMIT = 8 * 1024 * 1024
 RUNTIME_LIMIT = 128 * 1024 * 1024
 FILE_LIMIT = 32 * 1024 * 1024
 FILE_COUNT_LIMIT = 8192
+MATERIAL_CATALOG_LIMIT = 8 * 1024 * 1024
+MISSING_MATERIAL_VERSION_STATUS = 27
+
+
+def read_material_catalog(stream):
+    payload = stream.read(MATERIAL_CATALOG_LIMIT + 1)
+    if len(payload) > MATERIAL_CATALOG_LIMIT:
+        raise RuntimeError("source_capture_material_catalog_budget")
+    try:
+        records = json.loads(payload)
+    except (UnicodeError, ValueError) as error:
+        raise RuntimeError("source_capture_material_catalog_invalid") from error
+    if isinstance(records, dict) and len(records) == 1 and records.get("unavailable") is True:
+        return None
+    if not isinstance(records, list):
+        raise RuntimeError("source_capture_material_catalog_invalid")
+    return records
+
+
+
+def read_material_catalog_stdin():
+    stream = sys.stdin.buffer
+    descriptor = stream.fileno()
+    try:
+        return read_material_catalog(stream)
+    finally:
+        # CPython's standard stream wrappers leave their inherited native descriptor open.
+        stream.close()
+        os.close(descriptor)
 
 
 def regular(path: Path) -> Path:
@@ -281,27 +310,43 @@ def exported_config(script: Path, options: dict, pins: dict, captured_code: dict
         ctypes_bootstrap = False
     # Import the canonical runtime before admitting local authored imports.
     sys.path[:] = [str(fullmag_root.parent), *runtime_paths, str(site)]
+    from fullmag._material_versions import MaterialCatalogUnavailableError, MaterialVersionLookupError
     from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
     from fullmag.runtime.loader import load_problem_from_script
     from fullmag.runtime.run_config_export import export_run_config, RunConfigExportOptions
     scene_only = options.pop("scene_only", False)
+    include_run_config = options.pop("include_run_config", False)
     sys.path.insert(0, str(script.parent))
-    loaded = load_problem_from_script(script, lightweight_assets=scene_only)
+    material_catalog = options["material_catalog"]
+    try:
+        loaded = load_problem_from_script(
+            script, lightweight_assets=scene_only, material_catalog=material_catalog,
+            material_catalog_unavailable=material_catalog is None,
+        )
+    except MaterialVersionLookupError as error:
+        if violations:
+            raise RuntimeError("source_capture_observed_violation") from error
+        code = ("source_capture_material_catalog_unavailable"
+                if isinstance(error, MaterialCatalogUnavailableError)
+                else "source_capture_missing_material_version")
+        print(f"{code}: {error.key}", file=sys.stderr)
+        raise SystemExit(MISSING_MATERIAL_VERSION_STATUS) from None
     backend = BackendTarget(options["backend"]) if options.get("backend") else None
     mode = ExecutionMode(options["mode"]) if options.get("mode") else None
     precision = ExecutionPrecision(options["precision"]) if options.get("precision") else None
+    authoring = {}
     if scene_only:
         from fullmag.runtime.script_builder import export_builder_draft
         from fullmag.runtime.scene_document import build_scene_document_from_builder
-        authoring = {"scene": build_scene_document_from_builder(export_builder_draft(loaded))}
-    else:
+        authoring["scene"] = build_scene_document_from_builder(export_builder_draft(loaded))
+    if not scene_only or include_run_config:
         ir = loaded.to_ir(requested_backend=backend, execution_mode=mode, execution_precision=precision,
                           asset_cache=loaded.problem.geometry_asset_cache, include_geometry_assets=True,
                           _copy_cached_geometry_assets=False)
         config = export_run_config(loaded, ir, options=RunConfigExportOptions(
             requested_backend=backend, execution_mode=mode, execution_precision=precision,
             include_geometry_assets=True, source_root=loaded.source_path.parent, source_stem=loaded.source_path.stem))
-        authoring = {"config": config}
+        authoring["config"] = config
     # A known refusal never needs further work to decide acceptance. Successful
     # exports still undergo both complete independent post-export checks below.
     if violations:
@@ -335,6 +380,8 @@ def main() -> None:
     parser.add_argument("--expected-inventory")
     parser.add_argument("--backend"); parser.add_argument("--mode"); parser.add_argument("--precision")
     parser.add_argument("--scene-only", action="store_true")
+    parser.add_argument("--include-run-config", action="store_true")
+    parser.add_argument("--material-catalog-stdin", action="store_true")
     args = parser.parse_args()
     script = regular(Path(args.script))
     captured_code = {} if args.phase == "export" else None
@@ -344,8 +391,13 @@ def main() -> None:
         return
     if not args.expected_inventory or pins["inventory_sha256"] != args.expected_inventory:
         raise RuntimeError("source_capture_inventory_changed_before_export")
+    material_catalog = []
+    if args.material_catalog_stdin:
+        material_catalog = read_material_catalog_stdin()
     authoring = exported_config(script, {"fullmag_root": args.fullmag_root, "backend": args.backend,
-                                      "mode": args.mode, "precision": args.precision, "scene_only": args.scene_only}, pins, captured_code)
+                                      "mode": args.mode, "precision": args.precision, "scene_only": args.scene_only,
+                                      "include_run_config": args.include_run_config,
+                                      "material_catalog": material_catalog}, pins, captured_code)
     print(json.dumps({**authoring, "capture": pins}, separators=(",", ":")))
 
 

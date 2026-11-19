@@ -977,6 +977,9 @@ pub(crate) struct SessionStateResponse {
     /// runner bridge. It is internal state, not a browser resource payload.
     #[serde(skip, default)]
     pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
+    /// Remesh events already consumed by this publisher/session incarnation.
+    #[serde(skip, default)]
+    pub accepted_mesh_reinitializations: std::collections::BTreeSet<String>,
     /// Highest accepted terminal generation per run. Retained durably so a
     /// restarted bridge can begin a new run at sequence 1 without admitting a
     /// delayed terminal frame from an earlier run.
@@ -1144,6 +1147,16 @@ impl LatestFields {
         self.1.remove(quantity);
     }
 
+    pub(crate) fn retain_quantity_from(&mut self, previous: &Self, quantity: &str) {
+        self.remove(quantity);
+        if let Some(value) = previous.0.get(quantity) {
+            self.0.insert(quantity.to_string(), value.clone());
+        }
+        if let Some(reader) = previous.1.get(quantity) {
+            self.1.insert(quantity.to_string(), Arc::clone(reader));
+        }
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter().map(|(quantity, value)| (quantity, &**value))
     }
@@ -1223,6 +1236,12 @@ impl CachedPreviewFields {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+
+    pub(crate) fn forget_quantity(&mut self, quantity: &str) {
+        self.fields.remove(quantity);
+        self.accepted_latest_source_frames.remove(quantity);
+        self.accepted_preview_source_frames.retain(|(id, _, _, _, _), _| id != quantity);
     }
 
     pub(crate) fn clear_fields(&mut self) {
@@ -2259,6 +2278,7 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            material_assets: None,
             revision: 3,
             compute_resources: None,
             execution_profile: None,
@@ -2383,6 +2403,7 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: Vec::new(),
             current_transports: Vec::new(),
@@ -2477,6 +2498,7 @@ mod tests {
             field_quantity_revisions: BTreeMap::new(),
             accepted_terminal_field_generation: None,
             terminal_field_generations: BTreeMap::new(),
+            accepted_mesh_reinitializations: Default::default(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

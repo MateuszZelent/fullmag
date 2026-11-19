@@ -146,6 +146,15 @@ export class AnalysisFieldOverlayController {
     );
   }
 
+  /** Reads the display phase without attributing a different field's clock to this overlay. */
+  getDisplayedPhaseRadForOverlay(overlay: AnalysisFieldOverlayState): number {
+    return analysisFieldOverlayStateEquals(this.getRenderableSnapshot(), overlay, {
+      ignorePhase: true,
+    })
+      ? this.getDisplayedPhaseRad()
+      : committedAnalysisFieldOverlayPhaseRad(overlay);
+  }
+
   /** Stores the running animation phase as the overlay's committed phase. */
   commitLivePhase(): void {
     const livePhaseRad = this.phaseClock.getLivePhaseRad();
@@ -192,6 +201,12 @@ export class AnalysisFieldOverlayController {
   update(next: Partial<AnalysisFieldOverlayState>): void {
     if (this.snapshot === null) {
       return;
+    }
+    const phaseRad = next.visualizationPhaseRad;
+    // A manual reset can match the committed phase while the clock is ahead.
+    // Clear it before a simultaneous pause can commit the previous live phase.
+    if (phaseRad === committedAnalysisFieldOverlayPhaseRad(this.snapshot)) {
+      this.phaseClock.clearLivePhase(phaseRad);
     }
     this.set({
       ...this.snapshot,

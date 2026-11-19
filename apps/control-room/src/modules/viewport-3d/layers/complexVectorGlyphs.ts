@@ -47,6 +47,8 @@ export type ComplexVectorGlyphAnchorMode = "center" | "tail";
 export interface Viewport3DComplexVectorGlyphs {
   /** Glyph anchor: segment midpoint for "center", glyph tail for "tail". */
   readonly anchors: Float32Array;
+  /** Physical sample positions, before any glyph display offset. */
+  readonly phasePositions: Float32Array;
   readonly anchorMode: ComplexVectorGlyphAnchorMode;
   readonly buildKey: string;
   /** Real part per glyph, already multiplied by the amplitude scale. */
@@ -78,6 +80,8 @@ export function buildComplexVectorGlyphsFromSegments({
   anchorMode,
   buildKey,
   complexField,
+  nodeIndices,
+  positions,
   representation = "phase_rotated_real",
   sampleIndices,
   segments,
@@ -85,6 +89,8 @@ export function buildComplexVectorGlyphsFromSegments({
   anchorMode: ComplexVectorGlyphAnchorMode;
   buildKey: string;
   complexField: DecodedComplexFieldVector;
+  nodeIndices: ArrayLike<number>;
+  positions: ArrayLike<number>;
   representation?: ComplexVectorGlyphRepresentation;
   sampleIndices: ArrayLike<number> | null | undefined;
   segments: Float32Array | null | undefined;
@@ -106,6 +112,8 @@ export function buildComplexVectorGlyphsFromSegments({
     anchorMode,
     buildKey,
     complexField,
+    nodeIndices,
+    positions,
     representation,
     sampleIndices,
     segments,
@@ -118,6 +126,8 @@ function buildGlyphsFromSegments({
   anchorMode,
   buildKey,
   complexField,
+  nodeIndices,
+  positions,
   representation,
   sampleIndices,
   segments,
@@ -125,6 +135,8 @@ function buildGlyphsFromSegments({
   anchorMode: ComplexVectorGlyphAnchorMode;
   buildKey: string;
   complexField: DecodedComplexFieldVector;
+  nodeIndices: ArrayLike<number>;
+  positions: ArrayLike<number>;
   representation: ComplexVectorGlyphRepresentation;
   sampleIndices: ArrayLike<number>;
   segments: Float32Array;
@@ -133,8 +145,11 @@ function buildGlyphsFromSegments({
     return null;
   }
   const segmentCount = segments.length / SEGMENT_STRIDE;
-  if (segmentCount === 0 || sampleIndices.length < segmentCount) return null;
+  if (segmentCount === 0 || sampleIndices.length < segmentCount || nodeIndices.length < segmentCount) {
+    return null;
+  }
   const anchors = new Float32Array(segmentCount * 3);
+  const phasePositions = new Float32Array(segmentCount * 3);
   const complexReal = new Float32Array(segmentCount * 3);
   const complexImag = new Float32Array(segmentCount * 3);
   let glyphLength = 0;
@@ -160,6 +175,13 @@ function buildGlyphsFromSegments({
     ) {
       return null;
     }
+    const node = nodeIndices[glyph]!;
+    if (!Number.isInteger(node) || node < 0 || node * 3 + 2 >= positions.length) {
+      return null;
+    }
+    for (let axis = 0; axis < 3; axis += 1) {
+      phasePositions[target + axis] = positions[node * 3 + axis]!;
+    }
     copyComplexPoint(complexField, point, 1, complexReal, complexImag, target);
   }
   if (!(glyphLength > 0)) return null;
@@ -171,6 +193,7 @@ function buildGlyphsFromSegments({
     complexReal,
     count: segmentCount,
     glyphLength,
+    phasePositions,
     representation,
   });
 }
@@ -228,6 +251,7 @@ export function buildComplexVectorGlyphsAtNodes({
   return finalizeGlyphs({
     anchorMode: "center",
     anchors,
+    phasePositions: anchors,
     buildKey,
     complexImag,
     complexReal,
@@ -330,6 +354,7 @@ export function projectComplexVectorGlyph(
 }
 
 export const COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE = "fmGlyphAnchor";
+export const COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE = "fmGlyphPhasePosition";
 export const COMPLEX_VECTOR_GLYPH_REAL_ATTRIBUTE = "fmGlyphReal";
 export const COMPLEX_VECTOR_GLYPH_IMAG_ATTRIBUTE = "fmGlyphImag";
 const COMPLEX_VECTOR_GLYPH_PART_ATTRIBUTE = "fmGlyphPart";
@@ -356,9 +381,13 @@ export function createComplexVectorGlyphGeometry(
     new BufferAttribute(new Float32Array(vertexCount).fill(part === "head" ? 1 : 0), 1),
   );
   base.dispose();
+  const anchors = new InstancedBufferAttribute(glyphs.anchors, 3);
+  geometry.setAttribute(COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE, anchors);
   geometry.setAttribute(
-    COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE,
-    new InstancedBufferAttribute(glyphs.anchors, 3),
+    COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE,
+    glyphs.phasePositions === glyphs.anchors
+      ? anchors
+      : new InstancedBufferAttribute(glyphs.phasePositions, 3),
   );
   geometry.setAttribute(
     COMPLEX_VECTOR_GLYPH_REAL_ATTRIBUTE,
@@ -515,6 +544,7 @@ const COMPLEX_VECTOR_GLYPH_VERTEX_SHADER = `
 #include <clipping_planes_pars_vertex>
 
 attribute vec3 ${COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE};
+attribute vec3 ${COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE};
 attribute vec3 ${COMPLEX_VECTOR_GLYPH_REAL_ATTRIBUTE};
 attribute vec3 ${COMPLEX_VECTOR_GLYPH_IMAG_ATTRIBUTE};
 attribute float ${COMPLEX_VECTOR_GLYPH_PART_ATTRIBUTE};
@@ -544,7 +574,7 @@ vec3 projectGlyph(vec3 complexReal, vec3 complexImag, float theta) {
 void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
-    theta += fmSpatialPhaseSign * dot(fmWavevectorKf, ${COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE} - fmCellOrigin);
+    theta += fmSpatialPhaseSign * dot(fmWavevectorKf, ${COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE} - fmCellOrigin);
     theta = mod(theta + FM_GLYPH_PI, FM_GLYPH_TWO_PI) - FM_GLYPH_PI;
   }
   vec3 value = projectGlyph(

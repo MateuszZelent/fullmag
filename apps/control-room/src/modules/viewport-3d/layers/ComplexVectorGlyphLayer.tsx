@@ -172,18 +172,21 @@ export function ComplexVectorGlyphLayer({
     return () => adoptionRegistry.clearAdoption(adoptionOwnerId, adoption);
   }, [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, glyphs, invalidate, sessionIdentity]);
 
+  // CPU raycasting does not see the shader's per-instance transforms.
   return (
     <>
       <mesh
         frustumCulled={false}
         geometry={shaftGeometry}
         material={material}
+        raycast={() => null}
         renderOrder={glyphPolicy.renderOrder}
       />
       <mesh
         frustumCulled={false}
         geometry={headGeometry}
         material={material}
+        raycast={() => null}
         renderOrder={glyphPolicy.renderOrder}
       />
     </>

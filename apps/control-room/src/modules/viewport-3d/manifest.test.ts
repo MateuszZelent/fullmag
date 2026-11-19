@@ -57,6 +57,16 @@ describe("viewport3dManifest", () => {
     );
   });
 
+  it("opens the active 3D model export dialog through the command registry", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    await expect(registry.execute("viewport-3d.export-model", { source: "menu" }))
+      .resolves.toMatchObject({ status: "completed" });
+    expect(viewport3dStore.getSnapshot().widgets.export3dDialogOpen).toBe(true);
+    viewport3dStore.resetForTest();
+  });
+
   it("opens viewport settings and resets appearance sections through commands", async () => {
     viewport3dStore.resetForTest();
     const registry = registerViewportCommands();

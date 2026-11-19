@@ -77,6 +77,7 @@ interface TorqueDraft {
   spinPolarization: string;
   stackNormal: string;
   target: string;
+  timeExpression: string;
   xiDl: string;
   xiFl: string;
 }
@@ -115,6 +116,7 @@ const DEFAULT_TORQUE: TorqueDraft = {
   spinPolarization: "0, 0, 1",
   stackNormal: "",
   target: "",
+  timeExpression: "",
   xiDl: "0",
   xiFl: "0",
 };
@@ -205,6 +207,7 @@ function torqueDraft(
     spinPolarization: vectorText(record.spin_polarization),
     stackNormal: vectorText(record.stack_normal),
     target: jsonText(record.target),
+    timeExpression: jsonText(record.time_expression),
     xiDl: text(record.xi_dl),
     xiFl: text(record.xi_fl),
   };
@@ -269,6 +272,11 @@ export function buildTorque(draft: TorqueDraft): SceneSpinTorque {
     spin_polarization: parseVector(draft.spinPolarization, "Spin polarization"),
     stack_normal: optionalVector(draft.stackNormal, "Stack normal"),
     target: optionalJson(draft.target) as never,
+    ...(draft.formulaVersion !== "slonczewski.fullmag.v2"
+      || draft.currentSource.trim()
+      || !draft.timeExpression.trim()
+      ? {}
+      : { time_expression: optionalJson(draft.timeExpression) as Record<string, unknown> }),
   };
   return {
     kind: draft.kind,
@@ -567,6 +575,17 @@ function TorqueFields({ currentTransports, draft, identityReadOnly, patch }: { c
       <FormField label="Schema version" value={draft.schemaVersion} onChange={field("schemaVersion")} />
     </> : null}
     {draft.kind === "slonczewski" ? <>
+      {currentBinding === "prescribed_density" && draft.formulaVersion === "slonczewski.fullmag.v2" ? (
+        <FormField
+          label="Current time expression"
+          type="textarea"
+          rows={4}
+          spellCheck={false}
+          hint='Current density multiplier in JSON with "source", optional "constants" and "event_times_s" in seconds. Leave blank for constant current.'
+          value={draft.timeExpression}
+          onChange={field("timeExpression")}
+        />
+      ) : null}
       <FormField label="Spin polarization orientation" value={draft.spinPolarization} onChange={field("spinPolarization")} />
       <FormField label="Epsilon prime" value={draft.epsilonPrime} onChange={field("epsilonPrime")} />
       <FormField label="Lambda asymmetry" value={draft.lambdaAsymmetry} onChange={field("lambdaAsymmetry")} />

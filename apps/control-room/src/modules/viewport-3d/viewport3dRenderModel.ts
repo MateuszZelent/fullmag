@@ -1,6 +1,7 @@
 import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import {
   buildComplexVectorGlyphsFromSegments,
+  complexVectorGlyphColorRange,
   type Viewport3DComplexVectorGlyphs,
 } from "./layers/complexVectorGlyphs";
 import type {
@@ -1268,6 +1269,8 @@ export function buildViewport3DFieldRenderModel(
             buildKey:
               partVectorBuildReference?.buildKey ?? `${partId}:complex-glyphs`,
             complexField: options.complexFieldVector,
+            nodeIndices: partSegmentBuild.nodeIndices,
+            positions: topology.positions,
             sampleIndices:
               partSegmentBuild.valueIndices ?? partSegmentBuild.nodeIndices,
             segments: partSegmentBuild.segments,
@@ -1277,13 +1280,13 @@ export function buildViewport3DFieldRenderModel(
       partComplexGlyphData && complexPhaseBinding
         ? {
             colorMode: glyphColorMode,
-            // Explicit (manual or symmetric) ranges only; otherwise the
-            // glyph layer uses the glyphs' cycle envelope.
             colorRange:
               (options.analysisFieldIntentActive
                 ? scalarRangesByMode
                 : options.partScalarRangesByMode?.get(partId) ?? scalarRangesByMode
-              )?.get(glyphColorMode) ?? null,
+              )?.get(glyphColorMode) ??
+              partScalarColorsByMode?.get(glyphColorMode)?.range ??
+              complexVectorGlyphColorRange(partComplexGlyphData, glyphColorMode),
             glyphs: partComplexGlyphData,
             palette: partScalarColorPalette ?? null,
             phase: complexPhaseBinding,
@@ -1328,7 +1331,8 @@ export function buildViewport3DFieldRenderModel(
         segments: partSegments,
         nodeIndices: partSegmentBuild?.nodeIndices ?? null,
         glyphColors: physicalGlyphColors?.colors ?? null,
-        colorScale: physicalGlyphColors?.scale ?? null,
+        colorScale: visibleComplexGlyphScale(partComplexGlyphs, partFieldVector?.quantityId) ??
+          physicalGlyphColors?.scale ?? null,
         complexGlyphs: partComplexGlyphs,
       },
     });
@@ -1411,6 +1415,8 @@ export function buildViewport3DFieldRenderModel(
       anchorMode: fullVectorAnchorMode,
       buildKey: fullVectorBuild?.buildKey ?? "full:complex-glyphs",
       complexField: options.complexFieldVector,
+      nodeIndices: fullSegmentBuild.nodeIndices,
+      positions: topology.positions,
       sampleIndices: fullSegmentBuild.valueIndices ?? fullSegmentBuild.nodeIndices,
       segments: fullSegmentBuild.segments,
     });
@@ -1418,7 +1424,9 @@ export function buildViewport3DFieldRenderModel(
     return glyphs
       ? {
           colorMode,
-          colorRange: scalarRangesByMode?.get(colorMode) ?? null,
+          colorRange: scalarRangesByMode?.get(colorMode) ??
+            (fullScalarColors?.colorMode === colorMode ? fullScalarColors.range : null) ??
+            complexVectorGlyphColorRange(glyphs, colorMode),
           glyphs,
           palette: fullScalarColorPalette ?? null,
           phase: complexPhaseBinding,
@@ -1426,6 +1434,7 @@ export function buildViewport3DFieldRenderModel(
       : null;
   };
   if (fullScalarColorMode || fullTargetVectorsRequested) {
+    const fullComplexGlyphs = resolveFullComplexGlyphPass();
     targetPasses.set(FULL_VIEWPORT_3D_TARGET_ID, {
       fieldBuffer: null,
       fieldBufferState: fullFieldVector ? "derived-global" : "missing",
@@ -1451,7 +1460,8 @@ export function buildViewport3DFieldRenderModel(
         passId: `${FULL_VIEWPORT_3D_TARGET_ID}:vector-glyph`,
         segments: fullTargetVectorsRequested ? fullVectorSegments : null,
         nodeIndices: fullTargetVectorsRequested ? fullSegmentBuild?.nodeIndices ?? null : null,
-        complexGlyphs: resolveFullComplexGlyphPass(),
+        complexGlyphs: fullComplexGlyphs,
+        colorScale: visibleComplexGlyphScale(fullComplexGlyphs, renderFieldVector?.quantityId),
       },
     });
   }
@@ -1485,6 +1495,21 @@ export function buildViewport3DFieldRenderModel(
     targetDiagnostics,
     targetPasses,
     visualizationPhaseRad,
+  };
+}
+
+function visibleComplexGlyphScale(
+  pass: Viewport3DComplexGlyphPass | null,
+  quantityId: string | undefined,
+): Viewport3DVisibleColorScale | null {
+  if (!pass?.colorRange || !quantityId || !["magnitude", "x", "y", "z"].includes(pass.colorMode)) {
+    return null;
+  }
+  return {
+    colorMode: pass.colorMode,
+    colorPalette: pass.palette ?? "viridis",
+    quantityId,
+    range: pass.colorRange,
   };
 }
 

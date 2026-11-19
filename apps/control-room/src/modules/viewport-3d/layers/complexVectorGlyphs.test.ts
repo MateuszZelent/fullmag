@@ -14,6 +14,7 @@ import {
   buildComplexVectorGlyphsFromSegments,
   COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE,
   COMPLEX_VECTOR_GLYPH_IMAG_ATTRIBUTE,
+  COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE,
   COMPLEX_VECTOR_GLYPH_REAL_ATTRIBUTE,
   complexVectorGlyphColorRange,
   createComplexVectorGlyphGeometry,
@@ -47,6 +48,8 @@ function segments(): Float32Array {
   ]);
 }
 
+const samplePositions = new Float32Array([2, 3, 4, 5, 0, 0]);
+
 function glyphOptions(phase: ReturnType<typeof createLivePhaseUniform> | number) {
   return {
     colorMode: "orientation",
@@ -67,6 +70,8 @@ describe("complex vector glyphs", () => {
       anchorMode: "center",
       buildKey: "glyphs:test",
       complexField: complexField(),
+      nodeIndices: new Uint32Array([0, 1]),
+      positions: samplePositions,
       sampleIndices: new Uint32Array([0, 1]),
       segments: segments(),
     });
@@ -83,6 +88,8 @@ describe("complex vector glyphs", () => {
       anchorMode: "tail",
       buildKey: "glyphs:test",
       complexField: complexField(),
+      nodeIndices: new Uint32Array([0, 1]),
+      positions: samplePositions,
       sampleIndices: new Uint32Array([0, 1]),
       segments: segments(),
     });
@@ -96,6 +103,8 @@ describe("complex vector glyphs", () => {
       anchorMode: "center" as const,
       buildKey: "glyphs:cached",
       complexField: field,
+      nodeIndices: new Uint32Array([0, 1]),
+      positions: samplePositions,
       sampleIndices: new Uint32Array([0, 1]),
       segments: segmentBuild,
     };
@@ -109,6 +118,8 @@ describe("complex vector glyphs", () => {
       anchorMode: "center",
       buildKey: "glyphs:projection",
       complexField: complexField(),
+      nodeIndices: new Uint32Array([0, 1]),
+      positions: samplePositions,
       sampleIndices: new Uint32Array([0, 1]),
       segments: segments(),
     })!;
@@ -126,12 +137,16 @@ describe("complex vector glyphs", () => {
       anchorMode: "center",
       buildKey: "glyphs:gpu",
       complexField: complexField(),
+      nodeIndices: new Uint32Array([0, 1]),
+      positions: samplePositions,
       sampleIndices: new Uint32Array([0, 1]),
       segments: segments(),
     })!;
     const geometry = createComplexVectorGlyphGeometry(glyphs, "head");
     expect(geometry.instanceCount).toBe(2);
     expect(geometry.getAttribute(COMPLEX_VECTOR_GLYPH_ANCHOR_ATTRIBUTE).array).toBe(glyphs.anchors);
+    expect(geometry.getAttribute(COMPLEX_VECTOR_GLYPH_PHASE_POSITION_ATTRIBUTE).array).toEqual(samplePositions);
+    expect(glyphs.phasePositions[0]).not.toBe(glyphs.anchors[0]);
     expect(geometry.getAttribute(COMPLEX_VECTOR_GLYPH_REAL_ATTRIBUTE).array).toBe(glyphs.complexReal);
     expect(geometry.getAttribute(COMPLEX_VECTOR_GLYPH_IMAG_ATTRIBUTE).array).toBe(glyphs.complexImag);
 
@@ -145,6 +160,7 @@ describe("complex vector glyphs", () => {
     expect(material).toBeInstanceOf(ShaderMaterial);
     expect(material.uniforms.fmPhaseRad).toBe(uniform);
     expect(material.vertexShader).toContain("complexReal * cos(theta) - complexImag * sin(theta)");
+    expect(material.vertexShader).toContain("dot(fmWavevectorKf, fmGlyphPhasePosition - fmCellOrigin)");
 
     // A phase step only writes the shared cell; the material sees it as-is.
     uniform.value = 2.5;

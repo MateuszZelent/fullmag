@@ -73,6 +73,7 @@ import { MaterializedDatasetInspectorPanel } from "./panels/MaterializedDatasetI
 import { FrozenSpinsInspectorPanel } from "./panels/constraint/FrozenSpinsInspectorPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
+import { ObjectAbsorbingBoundaryInspectorPanel } from "./panels/ObjectAbsorbingBoundaryPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
 import { TopologicalChargeExtensionPanel } from "./extensions/topological-charge/TopologicalChargeExtensionPanel";
@@ -1127,6 +1128,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Magnetic Parameters",
     selectionKinds: ["object.magnetic-parameters"],
     component: ObjectMagneticParametersInspectorPanel,
+  },
+  {
+    id: "object-absorbing-boundary",
+    title: "Absorbing Boundary",
+    selectionKinds: ["object.absorbing-boundary"],
+    component: ObjectAbsorbingBoundaryInspectorPanel,
   },
   {
     id: "object-material-assignment",

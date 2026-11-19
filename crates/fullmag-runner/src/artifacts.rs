@@ -8485,6 +8485,7 @@ mod tests {
                 solved_antenna_drive_bases: Vec::new(),
                 field_drives: Vec::new(),
                 field_drive_geometry_masks: Vec::new(),
+                mask_field_term_bases: Vec::new(),
                 time_stage: Default::default(),
                 current_modules: Vec::new(),
                 charge_transport_plans: Vec::new(),
@@ -10417,6 +10418,7 @@ mod tests {
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
+            time_expression: None,
         }];
         let mut plan = test_fem_execution_plan();
         plan.common.execution_mode = ExecutionMode::Extended;

@@ -119,6 +119,36 @@ describe("AnalysisFieldOverlayPhaseClock", () => {
     handle.stop();
   });
 
+  it("resets to an unchanged committed phase without rebuilding the overlay", () => {
+    const frames = stubFrames();
+    const controller = new AnalysisFieldOverlayController();
+    setAnimatedOverlay(controller);
+    const snapshot = controller.getSnapshot();
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+    frames.run(1_000);
+    frames.run(1_100);
+    expect(controller.getDisplayedPhaseRad()).not.toBe(0.5);
+
+    controller.update({ visualizationPhaseRad: 0.5 });
+
+    expect(controller.getSnapshot()).toBe(snapshot);
+    expect(listener).not.toHaveBeenCalled();
+    expect(controller.phaseClock.getLivePhaseRad()).toBeNull();
+    expect(controller.phaseClock.uniform.value).toBe(0.5);
+    frames.run(1_200);
+    expect(controller.getDisplayedPhaseRad()).toBeCloseTo(0.5 + 0.2 * Math.PI);
+
+    controller.update({
+      animation: { animatePhase: false, animationRateHz: 1 },
+      visualizationPhaseRad: 0.5,
+    });
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBe(0.5);
+    expect(controller.getDisplayedPhaseRad()).toBe(0.5);
+    handle.stop();
+  });
+
   it("keeps phase-ignoring subscribers on the same snapshot when only the phase changes", async () => {
     const controller = new AnalysisFieldOverlayController();
     setAnimatedOverlay(controller);
