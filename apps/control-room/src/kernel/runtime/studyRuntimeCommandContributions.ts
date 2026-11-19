@@ -143,9 +143,6 @@ const SOLVER_PROFILE_DEFAULT_MAX_SAMPLES = 256;
 const SOLVER_PROFILE_DEFAULT_SAMPLE_INTERVAL_WALL_MS = 5_000;
 
 interface RuntimePreconditionRefreshApi {
-  commands?: {
-    list?: (options?: RequestOptions) => Promise<CommandQueueStatusResource>;
-  };
   sessions?: {
     current?: {
       status?: (options?: RequestOptions) => Promise<LiveStatusResource>;
@@ -967,14 +964,20 @@ function runtimeState(context: CommandContext): string | null {
   return stage?.runtime_state ?? null;
 }
 
-function commandRevisionPrecondition(
-  context: CommandContext,
+function commandAdmissionRevision(
+  status: LiveStatusResource | null | undefined,
 ): number | undefined {
-  const queue = resourceData<CommandQueueStatusResource>(
-    context,
-    SIMULATION_COMMANDS_PATH,
+  // The durable command journal can advance without growing the visible queue.
+  const revision = status?.resources?.commands_revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : undefined;
+}
+
+function commandRevisionPrecondition(context: CommandContext): number | undefined {
+  return commandAdmissionRevision(
+    resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY),
   );
-  return queue ? queue.commands.length : undefined;
 }
 
 function activeStageId(stage: StageExecutionResource | null | undefined): string | null {
@@ -1790,15 +1793,15 @@ async function refreshRuntimeCommandPrecondition(
   const requestOptions = sessionRequestOptions(context);
   const pinsComputeInput = isStudyCompute(command.kind);
   const readsStatus = pinsComputeInput ||
+    original.command_revision !== undefined ||
     original.region_topology_revision !== undefined ||
     original.region_membership_revision !== undefined ||
     original.region_coefficients_revision !== undefined ||
     original.region_initial_state_revision !== undefined;
-  const [solverResult, stageResult, queueResult, sessionStatusResult] =
+  const [solverResult, stageResult, sessionStatusResult] =
     await Promise.allSettled([
       api.simulation?.solver?.status?.(requestOptions),
       api.simulation?.stages?.execution?.(requestOptions),
-      api.commands?.list?.(requestOptions),
       readsStatus ? api.sessions?.current?.status?.(requestOptions) : undefined,
     ]);
   const status = sessionStatusResult.status === "fulfilled" ? sessionStatusResult.value : undefined;
@@ -1840,14 +1843,9 @@ async function refreshRuntimeCommandPrecondition(
       precondition.stage_execution_revision = revision;
     }
   }
-  if (queueResult.status === "fulfilled") {
-    const queue = queueResult.value;
-    const commandRevision = Array.isArray(queue?.commands)
-      ? queue.commands.length
-      : null;
-    if (commandRevision !== null && Number.isFinite(commandRevision)) {
-      precondition.command_revision = commandRevision;
-    }
+  const commandRevision = commandAdmissionRevision(status);
+  if (commandRevision !== undefined) {
+    precondition.command_revision = commandRevision;
   }
   if (!pinsComputeInput && status) {
     const resources = status.resources;

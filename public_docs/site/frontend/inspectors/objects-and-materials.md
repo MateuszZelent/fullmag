@@ -32,7 +32,8 @@ composites), rigid translation (`translation`, also interactively via Ribbon **M
 
 ## Materials, Absorbing Boundaries, and Regions (`ObjectMaterialPanel`, `ObjectRegionsPanel`)
 
-- **Materials (`ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel`)**: Edits scalar magnetic parameters ($M_{\text{sat}}$, exchange stiffness $A_{\text{ex}}$, Gilbert damping $\alpha$, uniaxial anisotropy $K_{u1}$ and easy axis), creates or assigns library/session materials (`createMaterialThenAssign`), and configures `ObjectAbsorbingBoundaryPanel` damping ramps on outer boundary faces (`faces`, `frame`, `profile`).
+- **Materials (`ObjectMaterialPanel`, `ObjectAbsorbingBoundaryPanel`)**: Edits scalar magnetic parameters ($M_{\text{sat}}$, exchange stiffness $A_{\text{ex}}$, Gilbert damping $\alpha$, uniaxial anisotropy $K_{u1}$ and easy axis), creates or assigns library/session materials (`createMaterialThenAssign`).
+- **Absorbing boundaries**: Select a magnet and choose **Physics → Add ABL**. Its **Magnetic Parameters → Absorbing Boundary** inspector edits independently positioned layers, region targets, frame, widths, peak contribution and profile. See {doc}`/frontend/inspectors/absorbing-boundaries` for a strip and a region-clipped half-ring.
 - **Spatial Regions (`ObjectRegionsPanel`, `RegionsListPanel`)**: Organizes sub-panels under `inspector/panels/region/` (`ObjectRegionOverviewPanel`, `ObjectRegionGeometryPanel`, `ObjectRegionMagneticParametersPanel`, `ObjectRegionMeshPanel`, `ObjectRegionTexturePanel`, `ObjectRegionVisualizationPanel`, `ObjectRegionDiagnosticsPanel`, and `ObjectRegionNestedRegionsPanel`). Raw SI entries are staged in a `QuantityFieldDraftScope` and validated against owning object bounds (`clampObjectRegionDraftShapeToOwnerBounds`) before commit.
 
 ```{image} /_static/images/ui/inspector-material-and-regions.png
@@ -67,7 +68,7 @@ invalidation (`returnToCurrentFieldView`) once `commitMagneticTextureApply` comp
 
 - **Selection routes**: `object` / `object.geometry` / `object.general` / `object.placement` (`GeometryObjectPanel`, `ObjectGeneralPanel`, `ObjectPlacementPanel`), `object.material` / `material` (`ObjectMaterialPanel`), `object.region` / `region` (`ObjectRegionsPanel`, `RegionsListPanel`), and `object.magnetization` (`ObjectMagneticTexturePanel`).
 - **Transaction boundary**: Changes stay staged in local draft stores until **Apply** commits with `runAuthoringMutationWithHistory`.
-- **Python-only features**: Boolean CSG authoring, rigid `Rotate`/`Scale` authoring, and arbitrary spatially varying functional expressions remain `Python-only` (see {doc}`/frontend/capability-register`).
+- **Python-only features**: Boolean CSG authoring, rigid `Rotate`/`Scale` authoring, and general spatial material callbacks remain `Python-only` (see {doc}`/frontend/capability-register`).
 - **Python alignment**: Geometry primitives, CSG compositions, materials, absorbing boundary frames, region overrides, and initial magnetization fields are constructed in `packages/fullmag-py` and preserved verbatim during live `fm.connect()` sessions; script export preserves authored region IDs and material assignments.
 
 ## Source-code index

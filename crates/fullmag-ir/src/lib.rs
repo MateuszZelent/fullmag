@@ -851,6 +851,20 @@ impl ProblemIR {
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
+        self.validate_with_execution_selection(true)
+    }
+
+    /// Validate authored input before binding a pinned execution profile.
+    /// An authored `auto` device with single precision can be resolved by the
+    /// profile. The bound input must pass [`Self::validate`] before planning.
+    pub fn validate_before_execution_profile_binding(&self) -> Result<(), Vec<String>> {
+        self.validate_with_execution_selection(false)
+    }
+
+    fn validate_with_execution_selection(
+        &self,
+        require_qualified_execution: bool,
+    ) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
         if self.ir_version.trim().is_empty() {
@@ -888,7 +902,7 @@ impl ProblemIR {
                 )),
             }
         }
-        validate_runtime_selection(self, &mut errors);
+        validate_runtime_selection(self, require_qualified_execution, &mut errors);
         match ComputeResourcesIR::from_problem(self) {
             Ok(Some(resources)) => {
                 if let Err(resource_errors) = resources.validate() {
@@ -3583,6 +3597,30 @@ match &study {
                 errors.extend(validate_eigenmodes_k0_root_context(root_context));
             }
         }
+        if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::OpenAirboxK0 {
+            if !operator.include_demag {
+                errors.push("eigenmodes.open_airbox_k0_requires_demag".to_string());
+            }
+            if spin_wave_bc.kind() != SpinWaveBoundaryKindIR::Free {
+                errors.push(
+                    "eigenmodes.open_airbox_k0_requires_free_spin_wave_bc".to_string(),
+                );
+            }
+            if !matches!(
+                k_sampling,
+                Some(KSamplingIR::Single {
+                    k_vector: [0.0, 0.0, 0.0]
+                })
+            ) {
+                errors.push("eigenmodes.open_airbox_k0_requires_exact_zero_k".to_string());
+            }
+            if *damping_policy != EigenDampingPolicyIR::Ignore {
+                errors.push("eigenmodes.open_airbox_k0_requires_alpha_zero".to_string());
+            }
+            if let Some(root_context) = root_context {
+                errors.extend(validate_eigenmodes_open_airbox_k0_root_context(root_context));
+            }
+        }
         let has_mode_output = study
             .sampling()
             .outputs
@@ -3969,6 +4007,35 @@ pub(crate) fn validate_study_root_context_contracts(
         if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
             errors.extend(validate_eigenmodes_k0_root_context(root_context));
         }
+        if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::OpenAirboxK0 {
+            errors.extend(validate_eigenmodes_open_airbox_k0_root_context(root_context));
+        }
+    }
+    errors
+}
+
+/// Root checks for the isolated open-airbox K0 lane: double precision, a
+/// Demag energy term and no periodic axes (the Robin condition covers the
+/// whole outer boundary).
+fn validate_eigenmodes_open_airbox_k0_root_context(
+    root_context: &StudyRootValidationContext<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if root_context.backend_policy.execution_precision != ExecutionPrecision::Double {
+        errors.push("eigenmodes.open_airbox_k0_requires_double_precision".to_string());
+    }
+    if !root_context
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+    {
+        errors.push("eigenmodes.open_airbox_k0_requires_demag_energy".to_string());
+    }
+    if root_context
+        .pbc
+        .is_some_and(|periodicity| periodicity.axes.iter().any(|axis| *axis == AxisBoundary::Periodic))
+    {
+        errors.push("eigenmodes.open_airbox_k0_rejects_periodic_axes".to_string());
     }
     errors
 }

@@ -1439,6 +1439,16 @@ fn materialize_pipeline_primitive(
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
     let normalized_kind = stage_kind.trim().to_ascii_lowercase();
+    let captured_base = if let Some(field) = payload.get("external_field") {
+        if source != Some("script_imported") || !matches!(normalized_kind.as_str(), "run" | "relax") {
+            bail!("stage external_field requires a script-imported Run or Relax");
+        }
+        let mut ir = current_ir.clone();
+        apply_stage_external_field(&mut ir, field)?;
+        Some(ir)
+    } else {
+        None
+    };
     match normalized_kind.as_str() {
         "antenna_field_solve" => {
             materialize_pipeline_antenna_field_solve(current_ir, payload, antenna_inventory).map(Some)
@@ -1452,13 +1462,17 @@ fn materialize_pipeline_primitive(
         "run" => {
             let script_imported = source == Some("script_imported");
             validate_pipeline_run_primitive_payload(payload, script_imported)?;
-            let mut stage = materialize_pipeline_run(current_ir, payload, default_until_seconds)?;
+            let base = captured_base.as_ref().unwrap_or(current_ir);
+            let mut stage = materialize_pipeline_run(base, payload, default_until_seconds)?;
             if script_imported {
                 apply_imported_run_capture(&mut stage.ir, payload)?;
             }
             Ok(Some(stage))
         }
-        "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
+        "relax" => {
+            let base = captured_base.as_ref().unwrap_or(current_ir);
+            materialize_pipeline_relax(base, payload).map(Some)
+        }
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
         "frequency_response" => {
             materialize_pipeline_frequency_response(current_ir, payload).map(Some)
@@ -2573,6 +2587,7 @@ fn validate_pipeline_run_primitive_payload(
                         | "sampling"
                         | "spin_wave_response"
                         | "gilbert_damping_by_object"
+                        | "external_field"
                 ) || (matches!(
                     key,
                     "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps"
@@ -2690,9 +2705,10 @@ fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Val
             _ => bail!("script-imported Run spin_wave_response must be an object"),
         }
     }
-    ir.validate().map_err(|errors| anyhow::anyhow!(
-        "script-imported Run IR validation failed: {}", errors.join("; ")
-    ))?;
+    ir.validate_before_execution_profile_binding()
+        .map_err(|errors| anyhow::anyhow!(
+            "script-imported Run IR validation failed: {}", errors.join("; ")
+        ))?;
     Ok(())
 }
 
@@ -2735,12 +2751,10 @@ pub fn materialize_pipeline_relax(
         sampling,
     };
     attach_stage_autosave_from_payload(&mut ir, payload, "relax")?;
-    ir.validate().map_err(|errors| {
-        anyhow::anyhow!(
-            "relax stage IR validation failed: {}",
-            errors.join("; ")
-        )
-    })?;
+    ir.validate_before_execution_profile_binding()
+        .map_err(|errors| anyhow::anyhow!(
+            "relax stage IR validation failed: {}", errors.join("; ")
+        ))?;
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
     Ok(ResolvedScriptStage::solver(
         ir,
@@ -5073,6 +5087,22 @@ pub fn propagate_disabled_transport_pipeline(
             .expect("physics graph edge must be an object")
             .insert("status".to_string(), Value::String(status.clone()));
     }
+    Ok(())
+}
+
+fn apply_stage_external_field(problem: &mut ProblemIR, value: &Value) -> Result<()> {
+    if value.is_null() {
+        problem
+            .energy_terms
+            .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Zeeman { .. }));
+        return Ok(());
+    }
+    let field: [f64; 3] = serde_json::from_value(value.clone())
+        .context("stage external_field must be a 3-component finite vector in tesla")?;
+    if !field.iter().all(|component| component.is_finite()) {
+        bail!("stage external_field must be a 3-component finite vector in tesla");
+    }
+    apply_pipeline_external_field(problem, field);
     Ok(())
 }
 

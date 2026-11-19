@@ -289,6 +289,7 @@ def export_builder_draft(
     )
     authored_problem = loaded.workspace_problem or loaded.problem
     base_damping = _object_damping(base_problem)
+    base_field = _problem_external_field(base_problem)
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
@@ -392,7 +393,7 @@ def export_builder_draft(
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [
-            _export_stage_draft_with_identity(stage, base_damping)
+            _export_stage_draft_with_identity(stage, base_damping, base_field)
             for stage in _builder_stage_sequence(loaded)
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
@@ -561,7 +562,6 @@ def render_loaded_problem_as_script(
 ) -> str:
     overrides = _normalize_mapping(overrides)
     actual_stages = loaded.stages
-    _validate_stage_compatibility(actual_stages)
     stages = actual_stages or (
         ()
         if loaded.entrypoint_kind == "flat_workspace"
@@ -575,6 +575,11 @@ def render_loaded_problem_as_script(
     )
 
     base_problem = _builder_base_problem(loaded)
+    base_field = _problem_external_field(base_problem)
+    rendered_field, explicit_field_override = _rendered_external_field(base_field, overrides)
+    _validate_stage_compatibility(
+        actual_stages, base_field=base_field, explicit_field_override=explicit_field_override,
+    )
     surface = _script_api_surface(base_problem, overrides=overrides)
     if any(getattr(loaded.antenna_inventory, name) for name in _ANTENNA_SCENE_COLLECTIONS[1:]):
         surface = "study"
@@ -638,14 +643,12 @@ def render_loaded_problem_as_script(
     if geom_viz_lines:
         lines.extend(geom_viz_lines)
 
-    external_field_lines = _render_external_field(
-        base_problem,
-        overrides=overrides,
-        surface=surface,
+    stage_fields = _external_field_stage_overrides(
+        stages, base_field, overrides.get("study_pipeline"), explicit_field_override,
     )
-    if external_field_lines:
-        lines.append("")
-        lines.extend(external_field_lines)
+    initial_field = None if None in stage_fields.values() else rendered_field
+    if initial_field is not None:
+        lines.extend(["", "# External field", _render_external_field_call(initial_field, surface)])
 
     current_module_lines = _render_current_modules(
         base_problem,
@@ -789,6 +792,9 @@ def render_loaded_problem_as_script(
         initial_outputs=_study_outputs(base_problem.study),
         initial_table=_study_table_autosave(base_problem.study),
         base_damping=_object_damping(base_problem),
+        stage_fields=stage_fields,
+        base_field=rendered_field,
+        initial_field=initial_field,
         magnet_names=magnet_names,
         region_vars=region_vars,
         source_root=source_root,
@@ -1513,13 +1519,26 @@ def _render_scene_document_bootstrap(
             args.append(f"seed={int(thermal_noise['seed'])}")
         lines.append(f"study.thermal_noise({', '.join(args)})")
 
+    raw_stages = builder.get("stages") or []
+    authored_stages = []
+    if include_authored_stages:
+        if not isinstance(raw_stages, list):
+            raise ValueError("SceneDocument stages must be a list")
+        authored_stages = _scene_antenna_stage_sequence(builder)
+    enabled_stages = cast(list[dict[str, object]], _enabled_scene_stages(authored_stages))
     external_field = builder.get("external_field")
+    base_field = None
     if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
-        values = tuple(_finite_number(value) for value in external_field)
+        values = [_finite_number(value) for value in external_field]
         if all(value is not None for value in values):
-            lines.append(
-                "fm.b_ext(" + ", ".join(_python_literal(value) for value in values) + ")"
-            )
+            base_field = cast(list[float], values)
+    defer_base_field = any(
+        "external_field" in stage and stage["external_field"] is None
+        for stage in enabled_stages
+    )
+    active_field = None if defer_base_field else base_field
+    if active_field is not None:
+        lines.append("fm.b_ext(" + ", ".join(_python_literal(value) for value in active_field) + ")")
 
     universe = builder.get("universe")
     if isinstance(universe, Mapping):
@@ -1550,12 +1569,7 @@ def _render_scene_document_bootstrap(
         objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
     )
     lines.extend(region_lines)
-    authored_stages = []
-    raw_stages = builder.get("stages") or []
     if include_authored_stages:
-        if not isinstance(raw_stages, list):
-            raise ValueError("SceneDocument stages must be a list")
-        authored_stages = _scene_antenna_stage_sequence(builder)
         if any(stage.get("kind") == "set_spin_torque_enabled" for stage in authored_stages):
             for torque in builder.get("spin_torques") or []:
                 lines.append(f"study.spin_torque({_render_spin_torque_override(torque)})")
@@ -1564,10 +1578,14 @@ def _render_scene_document_bootstrap(
             source_root=Path.cwd(),
         )
         lines.extend(_render_mask_field_drives(whole_study_mask_payloads, mask_renderer))
-        for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
-            if not isinstance(stage, Mapping):
-                raise ValueError(f"SceneDocument stages[{index}] must be an object")
+        for index, stage in enumerate(enabled_stages):
             payload = dict(stage)
+            kind = payload.get("kind")
+            if "external_field" in payload and kind not in {"relax", "run"}:
+                raise ValueError("stage external_field requires Run or Relax")
+            if kind in {"relax", "run", "minimize", "eigenmodes", "frequency_response", "hysteresis"}:
+                field = _parse_stage_external_field(payload.pop("external_field", base_field))
+                active_field = _render_external_field_change(lines, active_field, field, "legacy")
             batch = payload.pop("magnetization_assignments", None)
             # The canonical pipeline metadata owns these stage-local resets.
             # Rendering a setter would also change all later Python captures.
@@ -1586,6 +1604,7 @@ def _render_scene_document_bootstrap(
                 mask_renderer=mask_renderer,
             )
             lines.extend(_with_run_damping(stage_lines, damping, snapshot_handles_by_id))
+        _render_external_field_change(lines, active_field, base_field, "legacy")
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1726,6 +1745,8 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
                             del stage[key]
                     if not enabled:
                         continue
+                    if "external_field" in stage and (not physical or node.get("source") != "script_imported"):
+                        raise ValueError("stage external_field requires a script-imported Run or Relax")
                     if physical and pending_assignments:
                         stage["magnetization_assignments"] = {
                             "schema_version": "fullmag.magnetization-assignments.v1",
@@ -3165,7 +3186,9 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
-    base_damping = _object_damping(_builder_base_problem(loaded))
+    base_problem = _builder_base_problem(loaded)
+    base_damping = _object_damping(base_problem)
+    base_field = _problem_external_field(base_problem)
     return {
         "version": (
             "study_pipeline.v2"
@@ -3173,7 +3196,7 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
             else "study_pipeline.v1"
         ),
         "nodes": [
-            _export_study_pipeline_node(stage, index=index, base_damping=base_damping)
+            _export_study_pipeline_node(stage, index=index, base_damping=base_damping, base_field=base_field)
             for index, stage in enumerate(stages)
         ],
     }
@@ -3208,8 +3231,18 @@ def _with_run_damping(
     return [*setters, *calls, *restores]
 
 
-def _export_stage_draft_with_identity(stage: LoadedStage, base_damping: Mapping[str, float]) -> dict[str, object]:
+def _has_captured_uniform_field(stage: LoadedStage) -> bool:
+    return stage.action is None and isinstance(stage.problem.study, (TimeEvolution, Relaxation))
+
+
+def _export_stage_draft_with_identity(
+    stage: LoadedStage, base_damping: Mapping[str, float], base_field: list[float] | None,
+) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    if _has_captured_uniform_field(stage):
+        field = _problem_external_field(stage.problem)
+        if field != base_field:
+            payload["external_field"] = field
     damping = _run_damping(stage, base_damping)
     if damping:
         payload["gilbert_damping_by_object"] = damping
@@ -3238,9 +3271,10 @@ def _export_stage_draft_with_identity(stage: LoadedStage, base_damping: Mapping[
 
 
 def _export_study_pipeline_node(
-    stage: LoadedStage, *, index: int, base_damping: Mapping[str, float]
+    stage: LoadedStage, *, index: int, base_damping: Mapping[str, float],
+    base_field: list[float] | None,
 ) -> dict[str, object]:
-    draft = _export_stage_draft_with_identity(stage, base_damping)
+    draft = _export_stage_draft_with_identity(stage, base_damping, base_field)
     stage_kind = _infer_pipeline_stage_kind(draft)
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
@@ -5398,27 +5432,87 @@ def _physics_stack_uniaxial_params(
     return None
 
 
-def _render_external_field(
-    problem: Problem,
-    *,
-    overrides: dict[str, object],
-    surface: str,
-) -> list[str]:
+def _rendered_external_field(
+    base_field: list[float] | None, overrides: Mapping[str, object],
+) -> tuple[list[float] | None, bool]:
     explicit_override = _override_external_field(overrides.get("external_field"))
     if explicit_override is not None:
-        return [
-            "# External field",
-            f"{_surface_call(surface, 'b_ext')}({_py_number(explicit_override[0])}, {_py_number(explicit_override[1])}, {_py_number(explicit_override[2])})",
-        ]
-    if "external_field" in overrides and overrides.get("external_field") is None:
-        return []
-    field = _problem_external_field(problem)
-    if field is None:
-        return []
-    return [
-        "# External field",
-        f"{_surface_call(surface, 'b_ext')}({_py_number(field[0])}, {_py_number(field[1])}, {_py_number(field[2])})",
-    ]
+        return list(explicit_override), True
+    if "external_field" in overrides and overrides["external_field"] is None:
+        return None, True
+    return base_field, False
+
+
+def _pipeline_external_fields(nodes: object) -> dict[str, list[float] | None]:
+    fields = {}
+    if not isinstance(nodes, list):
+        return fields
+    for node in nodes:
+        if not isinstance(node, Mapping) or not node.get("enabled", True):
+            continue
+        if node.get("node_kind") == "group":
+            fields.update(_pipeline_external_fields(node.get("children")))
+        elif node.get("node_kind") == "primitive":
+            payload = node.get("payload")
+            if not isinstance(payload, Mapping) or "external_field" not in payload:
+                continue
+            if node.get("source") != "script_imported" or node.get("stage_kind") not in {"run", "relax"}:
+                raise ValueError("stage external_field requires a script-imported Run or Relax")
+            stage_id = payload.get("stage_id", node.get("id"))
+            if isinstance(stage_id, str):
+                fields[stage_id] = _parse_stage_external_field(payload["external_field"])
+    return fields
+
+
+def _external_field_stage_overrides(
+    stages: Sequence[LoadedStage], base_field: list[float] | None,
+    pipeline: object, explicit_field_override: bool,
+) -> dict[int, list[float] | None]:
+    if isinstance(pipeline, Mapping):
+        fields = _pipeline_external_fields(pipeline.get("nodes"))
+        result = {}
+        for index, stage in enumerate(stages):
+            if _has_captured_uniform_field(stage):
+                kind = "relax" if isinstance(stage.problem.study, Relaxation) else "run"
+                stage_id = stage.stage_id or f"stage_{index + 1}_{kind}"
+                if stage_id in fields:
+                    result[index] = fields[stage_id]
+        return result
+    if explicit_field_override:
+        return {}
+    return {
+        index: field
+        for index, stage in enumerate(stages)
+        if _has_captured_uniform_field(stage)
+        and (field := _problem_external_field(stage.problem)) != base_field
+    }
+
+
+def _parse_stage_external_field(value: object) -> list[float] | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, (list, tuple))
+        or len(value) != 3
+        or any(type(component) not in (float, int) or not math.isfinite(component) for component in value)
+    ):
+        raise ValueError("stage external_field must be a 3-component finite vector in tesla")
+    return [float(component) for component in value]
+
+
+def _render_external_field_call(field: list[float], surface: str) -> str:
+    values = ", ".join(_py_float_roundtrip(component) for component in field)
+    return f"{_surface_call(surface, 'b_ext')}({values})"
+
+
+def _render_external_field_change(
+    lines: list[str], active: list[float] | None, field: list[float] | None, surface: str,
+) -> list[float] | None:
+    if active != field:
+        if field is None:
+            raise ValueError("canonical Python DSL cannot clear the external field after it has been set")
+        lines.append(_render_external_field_call(field, surface))
+    return field
 
 
 def _render_region_ref_payload(payload: object) -> str:
@@ -9340,6 +9434,9 @@ def _render_stages(
     initial_outputs: Sequence[object],
     initial_table: TableAutosave | None,
     base_damping: Mapping[str, float],
+    stage_fields: Mapping[int, list[float] | None],
+    base_field: list[float] | None,
+    initial_field: list[float] | None,
     magnet_names: dict[str, str],
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
@@ -9365,6 +9462,7 @@ def _render_stages(
         if name in magnet_vars
     }
     previous_dynamics_signature: dict[str, object] | None = None
+    active_field = initial_field
     for index, stage in enumerate(stages):
         for assignment in stage.magnetization_assignments:
             initializer = assignment.initializer
@@ -9670,6 +9768,9 @@ def _render_stages(
         if stage.problem.study is None:
             continue
         study = stage.problem.study
+        active_field = _render_external_field_change(
+            lines, active_field, stage_fields.get(index, base_field), surface,
+        )
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
         if isinstance(study, Hysteresis):
             if not is_study_surface:
@@ -10144,6 +10245,7 @@ def _render_stages(
         lines.extend(_with_run_damping(
             [run_call], _run_damping(stage, base_damping), magnet_vars_by_id
         ))
+    _render_external_field_change(lines, active_field, base_field, surface)
     return lines
 
 
@@ -13305,13 +13407,21 @@ def _render_preset_texture_expr(
     )
 
 
-def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:
+def _validate_stage_compatibility(
+    stages: Sequence[LoadedStage], *, base_field: list[float] | None,
+    explicit_field_override: bool,
+) -> None:
     solver_stages = [stage for stage in stages if stage.action is None]
     if len(solver_stages) <= 1:
         return
-    baseline = _stage_signature(solver_stages[0].problem)
+    if not explicit_field_override and any(
+        not _has_captured_uniform_field(stage) and _problem_external_field(stage.problem) != base_field
+        for stage in solver_stages
+    ):
+        raise ValueError("canonical rewrite supports stage-local external fields only for Run or Relax")
+    baseline = _stage_signature(solver_stages[0].problem, ignore_uniform_field=True)
     for stage in solver_stages[1:]:
-        signature = _stage_signature(stage.problem)
+        signature = _stage_signature(stage.problem, ignore_uniform_field=True)
         if stage.magnetization_assignments:
             names = {
                 magnet.object_id or magnet.name: magnet.name for magnet in stage.problem.magnets
@@ -13337,7 +13447,7 @@ def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:
             )
 
 
-def _stage_signature(problem: Problem) -> dict[str, object]:
+def _stage_signature(problem: Problem, *, ignore_uniform_field: bool = False) -> dict[str, object]:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     return {
         "name": problem.name,
@@ -13360,7 +13470,11 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             }
             for magnet in problem.magnets
         ],
-        "energy_terms": [term.to_ir() for term in problem.energy],
+        "energy_terms": [
+            term.to_ir()
+            for term in problem.energy
+            if not (ignore_uniform_field and isinstance(term, Zeeman))
+        ],
         "current_modules": _stage_current_module_signatures(problem),
         "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()

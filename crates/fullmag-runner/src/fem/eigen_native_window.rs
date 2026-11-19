@@ -39,7 +39,8 @@ use super::eigen_policy::{
     native_modal_equilibrium_source_kind, native_modal_floquet_periodic_pairs,
     native_modal_frequency_max_hz, native_modal_frequency_min_hz, native_modal_k_vector,
     native_modal_solver_policy, native_modal_spin_wave_bc_kind, native_modal_target_frequency_hz,
-    native_modal_target_kind, resolved_demag_realization, shared_domain_k0_modal_requested,
+    native_modal_target_kind, open_airbox_k0_modal_requested, resolved_demag_realization,
+    shared_domain_k0_modal_requested,
 };
 use super::eigen_progress::{
     emit_fem_eigen_progress, native_modal_progress_event, FemEigenProgress,
@@ -749,7 +750,13 @@ pub(super) fn execute_native_modal_window(
             let operator_input_signature = serde_json::json!({
                 "schema_version": "frequency_domain_operator_input_signature.v1",
                 "assembly_kind": "mfem_weak_form_shared_domain",
-                "demag_kind": if reduction.complex_reduction { "floquet_airbox" } else { "periodic_airbox_k0" },
+                "demag_kind": if reduction.complex_reduction {
+                    "floquet_airbox"
+                } else if open_airbox_k0_modal_requested(plan) {
+                    "open_airbox_k0"
+                } else {
+                    "periodic_airbox_k0"
+                },
                 "matrix_equation": "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
                 "physics_contract_version": "micromagnetics_frequency_domain_v5",
                 "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
@@ -1483,6 +1490,8 @@ pub(super) fn planned_magnetostatic_bc(plan: &FemEigenPlanIR) -> &'static str {
         || native_cpu_modal_window_has_floquet_dynamic_demag_path(plan)
     {
         "floquet_airbox"
+    } else if open_airbox_k0_modal_requested(plan) {
+        "open_airbox_k0"
     } else if shared_domain_k0_modal_requested(plan) {
         "periodic_airbox_k0"
     } else {
@@ -2787,6 +2796,18 @@ fn native_poisson_airbox_execution_contract(
             });
         }
         let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
+        if open_airbox_k0_modal_requested(plan) {
+            if gpu || !cpu_schur {
+                return Err(RunError {
+                    message: "native_open_airbox_k0_requires_cpu_schur_adapter".to_string(),
+                });
+            }
+            return Ok(NativePoissonAirboxExecutionContract {
+                magnetostatic_bc: "open_airbox_k0",
+                production_periodic_airbox_claim: false,
+                validated_scope: None,
+            });
+        }
         return Ok(NativePoissonAirboxExecutionContract {
             magnetostatic_bc: "periodic_airbox_k0",
             production_periodic_airbox_claim: true,

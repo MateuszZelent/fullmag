@@ -750,13 +750,26 @@ def potential_build_client(argv):
         for argument in args)
 
 
-def _windows_process_rows(request):
+WINDOWS_PROCESS_NAMES = frozenset({
+    "docker.exe", "docker-compose.exe", "docker-buildx.exe", "just.exe",
+    "python.exe", "python3.exe", "dockerd.exe", "buildkitd.exe",
+})
+MAX_WINDOWS_PROCESS_RECHECKS = 8
+
+
+def _windows_process_rows_query(request, *, process_id=None):
+    query = "Get-CimInstance Win32_Process"
+    if process_id is not None:
+        require(type(process_id) is int and process_id > 0,
+                "Windows PID recheck requires a positive process ID")
+        query += f" -Filter 'ProcessId = {process_id}'"
+    else:
+        query += " | Where-Object {$names -contains $_.Name}"
     script = (
         "$ErrorActionPreference='Stop'; "
         "$names=@('docker.exe','docker-compose.exe','docker-buildx.exe','just.exe',"
         "'python.exe','python3.exe','dockerd.exe','buildkitd.exe'); "
-        "$rows=@(Get-CimInstance Win32_Process | Where-Object {$names -contains $_.Name} "
-        "| Select-Object ProcessId,CreationDate,Name,ExecutablePath,CommandLine); "
+        f"$rows=@({query} | Select-Object ProcessId,CreationDate,Name,ExecutablePath,CommandLine); "
         "ConvertTo-Json -InputObject $rows -Compress"
     )
     output = windows_powershell_capture(request, script)
@@ -771,14 +784,77 @@ def _windows_process_rows(request):
         windows = [windows]
     require(isinstance(windows, list) and all(isinstance(row, dict) for row in windows),
             "Windows CIM process census is malformed")
-    allowed = {"docker.exe", "docker-compose.exe", "docker-buildx.exe", "just.exe",
-               "python.exe", "python3.exe", "dockerd.exe", "buildkitd.exe"}
+    return windows
+
+
+def _windows_process_identity_gaps(row):
+    gaps = []
+    if row.get("Name") not in WINDOWS_PROCESS_NAMES:
+        gaps.append("Name")
+    if type(row.get("ProcessId")) is not int or row["ProcessId"] <= 0:
+        gaps.append("ProcessId")
+    if not isinstance(row.get("CreationDate"), str) or not row["CreationDate"]:
+        gaps.append("CreationDate")
+    if not isinstance(row.get("CommandLine"), str) or not row["CommandLine"]:
+        gaps.append("CommandLine")
+    return gaps
+
+
+def _windows_process_identity_error(row, gaps, *, stage):
+    process_id = row.get("ProcessId")
+    if type(process_id) is not int or process_id <= 0:
+        process_id = "unknown"
+    name = row.get("Name")
+    if not isinstance(name, str) or name not in WINDOWS_PROCESS_NAMES:
+        name = "unknown"
+    missing = ",".join(gaps)
+    return BuildControlError(
+        f"Windows process identity is incomplete {stage}: PID {process_id} ({name}), missing {missing}"
+    )
+
+
+def _windows_process_rows(request):
+    windows = _windows_process_rows_query(request)
+    incomplete = [(row, _windows_process_identity_gaps(row)) for row in windows]
+    incomplete = [(row, gaps) for row, gaps in incomplete if gaps]
+    if not incomplete:
+        return windows
+
+    require(len(incomplete) <= MAX_WINDOWS_PROCESS_RECHECKS,
+            "Too many Windows CIM rows have incomplete process identity")
+    for row, gaps in incomplete:
+        if row.get("Name") not in WINDOWS_PROCESS_NAMES or "ProcessId" in gaps:
+            raise _windows_process_identity_error(row, gaps, stage="in CIM snapshot")
+        process_id = row["ProcessId"]
+        rechecked = _windows_process_rows_query(request, process_id=process_id)
+        require(len(rechecked) <= 1,
+                f"Windows PID recheck returned multiple rows for PID {process_id}")
+        if rechecked:
+            current = rechecked[0]
+            require(current.get("ProcessId") == process_id,
+                    f"Windows PID recheck returned a different identity for PID {process_id}")
+            current_name = current.get("Name")
+            require(isinstance(current_name, str) and current_name,
+                    f"Windows PID recheck returned an incomplete name for PID {process_id}")
+            if current_name not in WINDOWS_PROCESS_NAMES:
+                # The original process exited and Windows has reused its PID
+                # for an unrelated process; the complete full recensus below
+                # still classifies every currently relevant client.
+                continue
+            current_gaps = _windows_process_identity_gaps(current)
+            if current_gaps:
+                raise _windows_process_identity_error(
+                    current, current_gaps, stage="after PID recheck"
+                )
+
+    # A missing PID confirms only that the sampled process exited. A complete
+    # PID recheck does not replace the host census either: rerun the full query
+    # so any surviving or newly started client remains visible to classification.
+    windows = _windows_process_rows_query(request)
     for row in windows:
-        require(row.get("Name") in allowed and type(row.get("ProcessId")) is int
-                and row["ProcessId"] > 0
-                and isinstance(row.get("CreationDate"), str) and row["CreationDate"]
-                and isinstance(row.get("CommandLine"), str) and row["CommandLine"],
-                "Windows process identity is incomplete")
+        gaps = _windows_process_identity_gaps(row)
+        if gaps:
+            raise _windows_process_identity_error(row, gaps, stage="after full refresh")
     return windows
 
 

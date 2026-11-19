@@ -1,4 +1,5 @@
 import type {
+  Viewport3DComplexGlyphPass,
   Viewport3DFieldRenderModel,
   Viewport3DVectorBuildReference,
 } from "../viewport3dRenderModel";
@@ -76,6 +77,7 @@ export function resolveViewport3DTargetVectorLayerInput({
   segments: Float32Array | null;
   glyphColors?: Float32Array | null;
   colorScale?: Viewport3DVisibleColorScale | null;
+  complexGlyphs?: Viewport3DComplexGlyphPass | null;
 } {
   if (!fieldModel) {
     return {
@@ -91,6 +93,7 @@ export function resolveViewport3DTargetVectorLayerInput({
       segments: targetVectors.segments,
       ...(targetVectors.glyphColors ? { glyphColors: targetVectors.glyphColors } : {}),
       ...(targetVectors.colorScale ? { colorScale: targetVectors.colorScale } : {}),
+      ...(targetVectors.complexGlyphs ? { complexGlyphs: targetVectors.complexGlyphs } : {}),
     };
   }
   if (fieldModel.targetPasses && fieldModel.targetPasses.size > 0) {

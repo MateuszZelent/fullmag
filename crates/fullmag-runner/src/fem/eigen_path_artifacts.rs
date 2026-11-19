@@ -282,6 +282,7 @@ mod output_publication_tests {
             dispersion_validation: None,
             k0_kittel_validation: None,
             solver_policy: None,
+            magnetostatic_bc: Default::default(),
         }
     }
 

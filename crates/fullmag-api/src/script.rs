@@ -1023,7 +1023,7 @@ fn study_execution_inputs_from_stages(
                     step.step_id
                 )));
             };
-            stage.ir.validate().map_err(|errors| {
+            stage.ir.validate_before_execution_profile_binding().map_err(|errors| {
                 ApiError::unprocessable(format!(
                     "accepted study step `{}` produced invalid ProblemIR: {}",
                     step.step_id,
@@ -2376,6 +2376,106 @@ study.stages.add_run(stage_id="after", until=1e-12)
         assert!(study_execution_inputs_from_stages(
             std::slice::from_ref(only_before), &scene, &study,
         ).is_err());
+    }
+
+    #[test]
+    fn accepted_run_and_relax_bind_auto_single_to_pinned_gpu() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("auto_single.py");
+        std::fs::write(
+            &path,
+            r#"import fullmag as fm
+study = fm.study("accepted_gpu_profile")
+study.engine("fdm")
+study.device("auto", precision="single")
+study.mode("strict")
+study.universe(mode="manual", size=(20e-9, 20e-9, 5e-9))
+study.cell(5e-9, 5e-9, 5e-9)
+body = study.geometry(fm.Box(20e-9, 20e-9, 5e-9), name="body")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.5
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.solver(fix_dt=1e-13)
+study.stages.add_relax(algorithm="llg_overdamped", dt=1e-13, tolA=1e-5, max_steps=4, stage_id="relax")
+study.stages.add_run(1e-12, stage_id="run")
+"#,
+        )
+        .unwrap();
+        let scene = load_scene_document_state(&root, workspace.path(), &path).unwrap();
+        let profile: fullmag_ir::ExecutionProfileIR = serde_json::from_value(serde_json::json!({
+            "schema_version": "execution_profile.v1",
+            "profile_id": "exec:accepted-gpu-profile",
+            "version": "1",
+            "defaults": { "backend": "fdm", "device": "gpu", "precision": "single", "mode": "strict" },
+        }))
+        .unwrap();
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:accepted-gpu-profile".into(),
+                version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: profile.profile_id.clone(),
+                version: profile.version.clone(),
+            },
+        };
+        let study = fullmag_authoring::scene_document_to_study_plan(
+            &scene,
+            "study:accepted-gpu-profile",
+            scene.revision,
+            &defaults,
+        )
+        .unwrap();
+        let requested_execution = fullmag_application::RequestedExecution {
+            backend: "fdm".into(),
+            device: "auto".into(),
+            precision: "single".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+        let inputs = scene_document_to_study_execution_inputs(
+            &root,
+            workspace.path(),
+            &scene,
+            &requested_execution,
+            &study,
+        )
+        .unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].step_id, "relax");
+        assert!(matches!(&inputs[0].problem.study, fullmag_ir::StudyIR::Relaxation { .. }));
+        assert_eq!(inputs[1].step_id, "run");
+        assert!(matches!(&inputs[1].problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }));
+        for input in &inputs {
+            assert_eq!(input.problem.problem_meta.runtime_metadata["runtime_selection"]["device"], "auto");
+            assert!(input.problem.validate().unwrap_err().iter().any(|error| {
+                error.contains("device='auto' with execution_precision='single'")
+            }));
+        }
+        let catalog = fullmag_application::materialize_study_execution(&study, inputs, |id, version| {
+            assert_eq!(id, profile.profile_id);
+            assert_eq!(version, profile.version);
+            Ok(profile.clone())
+        })
+        .unwrap();
+        assert_eq!(catalog.entries().len(), 2);
+        for entry in catalog.entries() {
+            entry.problem().validate().unwrap();
+            let bound = entry.execution_materialization().unwrap();
+            assert_eq!(bound.requested.device, fullmag_ir::ExecutionDevice::Gpu);
+            assert_eq!(bound.requested.precision, fullmag_ir::ExecutionPrecision::Single);
+            assert_eq!(bound.profile_sha256, Some(profile.canonical_sha256().unwrap()));
+        }
     }
 
     #[test]

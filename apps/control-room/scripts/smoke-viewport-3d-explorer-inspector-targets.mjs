@@ -25,7 +25,10 @@ const timeoutMs = Number(process.env.CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS ?? 30_
 const CANVAS_SELECTOR = ".fm-viewport-3d canvas";
 const appDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(appDir, "../..");
-const browserAuditArtifactDir = join(appDir, ".artifacts", "viewport-3d-browser-audit");
+const browserAuditArtifactDir = resolve(
+  process.env.CONTROL_ROOM_AUDIT_ARTIFACTS_DIR ??
+    join(appDir, ".artifacts", "viewport-3d-browser-audit"),
+);
 // Keep enough rendered support cells for canvas-delta assertions while still
 // retaining a strict outside-support Airbox and two independent regions.
 // The physical extent remains [-1, 1]^3 with a central [-0.5, 0.5]^3 support.

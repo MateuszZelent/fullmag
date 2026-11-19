@@ -87,7 +87,7 @@ describe("ModeCompositionPhaseClock", () => {
 
     frameCallbacks.shift()?.(1_000);
     frameCallbacks.shift()?.(1_250);
-    expect(clock.getSnapshot().phaseByLayerId.get("mode-layer:film")).toBeCloseTo(
+    expect(clock.getPhaseRad("mode-layer:film")).toBeCloseTo(
       0.5 + 0.25 + 2 * Math.PI * 2 * 0.25,
     );
 
@@ -109,7 +109,7 @@ describe("ModeCompositionPhaseClock", () => {
     clock.setResource(composition({ synchronized: false }, { synchronized: false }));
     frameCallbacks.shift()?.(1_000);
     frameCallbacks.shift()?.(1_250);
-    expect(clock.getSnapshot().phaseByLayerId.get("mode-layer:film")).toBeCloseTo(
+    expect(clock.getPhaseRad("mode-layer:film")).toBeCloseTo(
       0.5 + 0.25 + 2 * Math.PI * 3 * 0.25,
     );
 
@@ -125,7 +125,7 @@ describe("ModeCompositionPhaseClock", () => {
     clock.setResource(composition({ enabled: false }));
 
     expect(requestFrame).not.toHaveBeenCalled();
-    expect(clock.getSnapshot().phaseByLayerId.get("mode-layer:film")).toBe(0.75);
+    expect(clock.getPhaseRad("mode-layer:film")).toBe(0.75);
     clock.stop();
   });
 
@@ -146,6 +146,36 @@ describe("ModeCompositionPhaseClock", () => {
 
     expect(cancelFrame).toHaveBeenCalledWith(1);
     expect(requestFrame).toHaveBeenCalledTimes(1);
+    clock.stop();
+  });
+  it("animates through stable phase uniforms without a new React snapshot per frame", () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const clock = new ModeCompositionPhaseClock();
+    clock.setResource(composition({ synchronized: true }));
+    const snapshot = clock.getSnapshot();
+    const uniform = snapshot.phaseUniformByLayerId.get("mode-layer:film");
+    const reactListener = vi.fn();
+    const frameListener = vi.fn();
+    clock.subscribe(reactListener);
+    clock.subscribeFrame(frameListener);
+
+    frameCallbacks.shift()?.(1_000);
+    frameCallbacks.shift()?.(1_100);
+    frameCallbacks.shift()?.(1_200);
+
+    expect(reactListener).not.toHaveBeenCalled();
+    expect(frameListener).toHaveBeenCalledTimes(2);
+    expect(clock.getSnapshot()).toBe(snapshot);
+    expect(clock.getSnapshot().phaseUniformByLayerId.get("mode-layer:film")).toBe(uniform);
+    expect(uniform?.value).toBeCloseTo(0.5 + 0.25 + 2 * Math.PI * 2 * 0.2);
+
+    clock.setResource(null);
+    expect(reactListener).toHaveBeenCalledTimes(1);
+    expect(clock.getSnapshot().phaseUniformByLayerId.size).toBe(0);
     clock.stop();
   });
 });

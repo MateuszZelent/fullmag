@@ -3062,6 +3062,7 @@ class EigenmodesStageSpec:
     bc: str | dict[str, object] = "free"
     magnetostatic_bc: str = "open"
     solver_policy: FemEigenSolverPolicy | None = None
+    equilibrium_acceptance: str = "certified"
 
 
 @dataclass(frozen=True, slots=True)
@@ -3503,6 +3504,7 @@ def eigenmodes_stage(
     solver_rtol: float | None = None,
     solver_max_outer_iterations: int | None = None,
     solver_max_linear_iterations: int | None = None,
+    equilibrium_acceptance: str = "certified",
 ) -> EigenmodesStageSpec:
     solver_policy = _fem_eigen_solver_policy(
         solver_rtol=solver_rtol,
@@ -3527,6 +3529,7 @@ def eigenmodes_stage(
         bc=bc,
         magnetostatic_bc=magnetostatic_bc,
         solver_policy=solver_policy,
+        equilibrium_acceptance=equilibrium_acceptance,
     )
 
 
@@ -3735,6 +3738,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_spin_wave_bc=stage_spec.bc,
                 eigen_magnetostatic_bc=stage_spec.magnetostatic_bc,
                 eigen_solver_policy=stage_spec.solver_policy,
+                eigen_equilibrium_acceptance=stage_spec.equilibrium_acceptance,
             ),
             entrypoint_kind="flat_eigenmodes",
             default_until_seconds=None,
@@ -5049,6 +5053,7 @@ class StudyStagesBuilder:
         solver_rtol: float | None = None,
         solver_max_outer_iterations: int | None = None,
         solver_max_linear_iterations: int | None = None,
+        equilibrium_acceptance: str = "certified",
     ) -> "StudyStagesBuilder":
         return self.add_stage(
             eigenmodes_stage(
@@ -5071,6 +5076,7 @@ class StudyStagesBuilder:
                 solver_rtol=solver_rtol,
                 solver_max_outer_iterations=solver_max_outer_iterations,
                 solver_max_linear_iterations=solver_max_linear_iterations,
+                equilibrium_acceptance=equilibrium_acceptance,
             ),
             stage_id=stage_id,
             id_kind="eigenmodes",
@@ -10243,6 +10249,7 @@ def _build_problem(
     eigen_spin_wave_bc: str | dict[str, object] = "free",
     eigen_magnetostatic_bc: str = "open",
     eigen_solver_policy: FemEigenSolverPolicy | None = None,
+    eigen_equilibrium_acceptance: str = "certified",
     frequency_frequencies_hz: Sequence[float] = (1.0e9,),
     frequency_excitation_field_au_per_m: tuple[float, float, float] = (0.0, 0.0, 1.0),
     frequency_excitation_phase_rad: float = 0.0,
@@ -10512,6 +10519,7 @@ def _build_problem(
             k_vector=eigen_k_vector,
             bias_field_sweep=eigen_bias_field_sweep,
             solver_policy=eigen_solver_policy,
+            equilibrium_acceptance=eigen_equilibrium_acceptance,
             dynamics=dynamics,
         )
     elif study_kind == "frequency_response":

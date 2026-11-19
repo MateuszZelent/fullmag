@@ -651,7 +651,8 @@ fn initial_frequency_response_progress_scalars(
         fullmag_ir::MagnetostaticBoundaryConditionIR::FloquetAirbox => {
             progress.insert("demag_floquet_airbox".to_string(), 1.0);
         }
-        fullmag_ir::MagnetostaticBoundaryConditionIR::Open => {}
+        fullmag_ir::MagnetostaticBoundaryConditionIR::Open
+        | fullmag_ir::MagnetostaticBoundaryConditionIR::OpenAirboxK0 => {}
     }
 
     std::collections::HashMap::from([("fem_frequency_response_progress".to_string(), progress)])
