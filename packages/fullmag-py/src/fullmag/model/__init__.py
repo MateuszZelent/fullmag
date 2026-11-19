@@ -1,5 +1,5 @@
 from .discretization import DiscretizationHints, FDM, FDMDemag, FDMGrid, FEM, FemLinearSolverPolicy, Hybrid, MeshOperation, MeshSizeControls, PerObjectMeshRecipe, SharedMeshAssemblyPolicy, SweepDistribution, SweptMeshControls
-from .absorbing_boundary import AbsorbingBoundaryLayer
+from .absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingGeometry, SpatialAbsorbingLayer
 from .mask_function import FunctionParameter, MaskFunction, MaskFunctionError, TimeFunction
 from .mask_field_drive import MaskAntenna
 from .vector_mask import VectorMask
@@ -174,6 +174,7 @@ from .spin_torque import (
     SincEnvelope,
     SinusoidalEnvelope,
     SlonczewskiSTT,
+    TimeExpression,
     SpinOrbitTorque,
     SpinTorque,
     SpinTorqueModule,
@@ -233,6 +234,8 @@ __all__ = [
     "MaskFunctionError",
     "TimeFunction",
     "AbsorbingBoundaryLayer",
+    "AbsorbingGeometry",
+    "SpatialAbsorbingLayer",
     "Selection",
     "SelectionDefinition",
     "SelectionScalar",
@@ -440,6 +443,7 @@ __all__ = [
     "SincEnvelope",
     "SinusoidalEnvelope",
     "SlonczewskiSTT",
+    "TimeExpression",
     "ConstantEnvelope",
     "InterfaceCppSTT",
     "DriftDiffusionSpinTorque",

@@ -3,7 +3,12 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod absorbing_boundary;
-pub use absorbing_boundary::ResolvedAbsorbingBoundaryProfile;
+pub use absorbing_boundary::{
+    validate_absorbing_boundary, validate_absorbing_boundary_config, AbsorbingBoundaryCoordinate,
+    ResolvedAbsorbingBoundaryProfile,
+};
+mod time_expression;
+pub use time_expression::TimeExpressionIR;
 
 pub mod antenna;
 pub mod antenna_current_source;
@@ -1367,11 +1372,19 @@ impl ProblemIR {
                 );
             }
             if let Some(layer) = &magnet.absorbing_boundary {
-                validate_absorbing_boundary(
+                validate_absorbing_boundary_config(
                     &format!("magnet '{}'.absorbing_boundary", magnet.name),
                     layer,
                     &mut errors,
                 );
+                let owner = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+                for region_id in layer.referenced_regions() {
+                    if !self.object_regions.iter().any(|region| {
+                        region.region_id == region_id && region.owner_object == owner
+                    }) {
+                        errors.push(format!("magnet '{owner}'.absorbing_boundary references missing region '{region_id}' on this object"));
+                    }
+                }
             }
         }
 
@@ -1524,42 +1537,6 @@ impl ProblemIR {
     }
 }
 
-/// Append all boundary-layer diagnostics using the owning resource path.
-pub fn validate_absorbing_boundary(
-    path: &str,
-    layer: &AbsorbingBoundaryLayerIR,
-    errors: &mut Vec<String>,
-) {
-    if !layer.total_width_m.is_finite() || layer.total_width_m <= 0.0 {
-        errors.push(format!("{path}.total_width_m must be finite and > 0"));
-    }
-    if !layer.ramp_width_m.is_finite() || layer.ramp_width_m <= 0.0 {
-        errors.push(format!("{path}.ramp_width_m must be finite and > 0"));
-    }
-    if layer.total_width_m.is_finite()
-        && layer.ramp_width_m.is_finite()
-        && layer.ramp_width_m > layer.total_width_m
-    {
-        errors.push(format!("{path}.ramp_width_m must be <= total_width_m"));
-    }
-    if !layer.max_damping.is_finite() || layer.max_damping < 0.0 {
-        errors.push(format!("{path}.max_damping must be finite and >= 0"));
-    }
-    if let Err(error) = layer.compile_profile() {
-        errors.push(format!("{path}: {error}"));
-    }
-    if layer.faces.is_empty() {
-        errors.push(format!("{path}.faces must contain at least one face"));
-    }
-    let mut faces = BTreeSet::new();
-    for face in &layer.faces {
-        if !faces.insert(*face) {
-            errors.push(format!("{path}.faces must not contain duplicates"));
-            break;
-        }
-    }
-}
-
 #[cfg(test)]
 mod absorbing_boundary_tests {
     use super::*;
@@ -1586,8 +1563,9 @@ mod absorbing_boundary_tests {
         problem.validate().expect("custom ramp is valid");
 
         for expression in [None, Some("u+1"), Some("u/(u-0.5)"), Some("2*u-u**4")] {
-            problem.magnets[0].absorbing_boundary.as_mut().unwrap().expression =
-                expression.map(str::to_string);
+            let Some(AbsorbingBoundaryIR::Legacy(layer)) = &mut problem.magnets[0].absorbing_boundary
+            else { panic!("expected legacy layer") };
+            layer.expression = expression.map(str::to_string);
             let errors = problem.validate().expect_err("invalid custom ramp should fail");
             assert!(errors.iter().any(|error| error.contains("absorbing_boundary")
                 && error.contains("expression")), "{expression:?}: {errors:?}");
@@ -1608,7 +1586,7 @@ mod absorbing_boundary_tests {
             profile: AbsorbingBoundaryProfileIR::Smootherstep,
             frame: AbsorbingBoundaryFrameIR::Object,
             expression: None,
-        });
+        }.into());
 
         let errors = problem
             .validate()

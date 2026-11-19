@@ -2353,6 +2353,14 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_adaptive_numerics_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+        handle: *mut fullmag_fdm_backend,
+        program: *const f64,
+        program_words: u64,
+        stage_origin_s: f64,
+        events_s: *const f64,
+        event_count: u64,
+    ) -> i32;
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);

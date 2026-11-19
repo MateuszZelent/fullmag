@@ -285,3 +285,17 @@
   border-left: 4px solid var(--fm-warning);
   background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
 }
+
+/*
+ * A theme switch repaints every surface in one style change. ThemeProvider
+ * sets this attribute for that change so no control animates from the old
+ * palette: a 120 ms color transition from Mocha to Latte briefly renders
+ * text far below AA contrast, and a state change during it restarts the
+ * transition from that washed-out intermediate color.
+ */
+:root[data-theme-switching],
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}

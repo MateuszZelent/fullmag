@@ -116,13 +116,15 @@ export interface RuntimeExplorerSnapshot {
 export function runtimeResourceSnapshot<T>(resource: {
   data: T | null;
   error: Error | null;
+  refreshError?: Error | null;
   revision: ResourceRevision | null;
   status: ResourceStatus;
 }): RuntimeResourceSnapshot<T> {
+  const error = resource.error ?? resource.refreshError ?? null;
   return {
     data: resource.data,
-    error: resource.error?.message ?? null,
-    missing: resource.error instanceof ControlRoomApiError && resource.error.status === 404,
+    error: error?.message ?? null,
+    missing: error instanceof ControlRoomApiError && error.status === 404,
     revision: resource.revision,
     status: resource.status,
   };
@@ -529,7 +531,7 @@ function detail<T>({
     key,
     lifecycleStatus,
     location,
-    message,
+    message: message ?? source.error,
     owner,
     requestedExecution,
     resolvedExecution,

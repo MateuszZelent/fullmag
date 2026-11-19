@@ -23,7 +23,7 @@ from fullmag.init.magnetization import (
 )
 from fullmag.init.textures import PresetTexture
 from fullmag.init.state_io import infer_magnetization_state_format
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers, SpatialAbsorbingLayer
 from fullmag.model.antenna import (
     ANTENNA_PORT_MODE_SCHEMA_VERSION,
     AntennaSourceCutRt0,
@@ -47,6 +47,7 @@ from fullmag.model.spin_torque import (
     InterfaceCppSTT,
     PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
+    TimeExpression,
     SpinOrbitTorque,
     ZhangLiSTT,
 )
@@ -287,6 +288,7 @@ def export_builder_draft(
         replay_initial_magnetization=replay_initial_magnetization,
     )
     authored_problem = loaded.workspace_problem or loaded.problem
+    base_damping = _object_damping(base_problem)
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
@@ -389,7 +391,7 @@ def export_builder_draft(
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
         "stages": [
-            _export_stage_draft_with_identity(stage)
+            _export_stage_draft_with_identity(stage, base_damping)
             for stage in _builder_stage_sequence(loaded)
         ],
         "study_pipeline": export_study_pipeline_document(loaded),
@@ -771,13 +773,22 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(excitation_lines)
 
+    magnet_names = {m.object_id or m.name: m.name for m in base_problem.magnets}
+    if isinstance(overrides.get("geometries"), list):
+        magnet_names = {
+            obj.get("object_id") or obj["name"]: obj["name"]
+            for obj in overrides["geometries"]
+            if isinstance(obj, dict) and obj.get("name") and (obj.get("role") or "magnet") == "magnet"
+        }
     stage_lines = _render_stages(
         stages,
         overrides=overrides,
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
-        magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
+        initial_table=_study_table_autosave(base_problem.study),
+        base_damping=_object_damping(base_problem),
+        magnet_names=magnet_names,
         region_vars=region_vars,
         source_root=source_root,
         mask_renderer=mask_renderer,
@@ -1530,24 +1541,20 @@ def _render_scene_document_bootstrap(
     for mode in builder.get("antenna_port_modes") or []:
         lines.append(_render_antenna_port_mode_payload_line(mode))
 
+    # Region references are also used by object-scoped damping, even before a stage is added.
+    region_lines, region_vars = _render_region_owned_authoring_from_override(
+        objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
+    )
+    lines.extend(region_lines)
     authored_stages = []
     raw_stages = builder.get("stages") or []
     if include_authored_stages:
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
-        region_vars: dict[tuple[str, str], str] = {}
-        antenna_targets_region = any(
-            _normalize_mapping(payload.get("target")).get("kind") == "region"
-            for payload in [*whole_study_mask_payloads, *staged_mask_payloads]
-        )
-        if antenna_targets_region or any(
-            "magnetization_assignments" in stage for stage in authored_stages
-        ):
-            region_lines, region_vars = _render_region_owned_authoring_from_override(
-                objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
-            )
-            lines.extend(region_lines)
+        if any(stage.get("kind") == "set_spin_torque_enabled" for stage in authored_stages):
+            for torque in builder.get("spin_torques") or []:
+                lines.append(f"study.spin_torque({_render_spin_torque_override(torque)})")
         mask_renderer = _MaskAntennaRenderer(
             reserved_names={"study", "fm", *snapshot_handles.values(), *region_vars.values()},
             source_root=Path.cwd(),
@@ -1567,10 +1574,14 @@ def _render_scene_document_bootstrap(
                         assignment["object_id"], assignment["region_id"], assignment["initializer"],
                         magnet_vars=snapshot_handles_by_id, region_vars=region_vars,
                     ))
-            lines.extend(_render_scene_stage_bootstrap(
+            damping = payload.pop("gilbert_damping_by_object", {})
+            if damping and payload.get("kind") != "run":
+                raise ValueError("gilbert_damping_by_object requires a run stage")
+            stage_lines = _render_scene_stage_bootstrap(
                 payload, index=index, solver=solver, magnet_vars=snapshot_handles,
                 mask_renderer=mask_renderer,
-            ))
+            )
+            lines.extend(_with_run_damping(stage_lines, damping, snapshot_handles_by_id))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1879,7 +1890,11 @@ def _enabled_scene_stages(stages: list[object]) -> list[object]:
             raise ValueError(
                 f"SceneDocument stages[{index}].enabled must be a boolean"
             )
-        if flag:
+        # For these commands the flag is the value being assigned. Their
+        # pipeline node has its own enable flag, checked during traversal.
+        if flag or stage.get("kind") in {
+            "set_spin_torque_enabled", "table_autosave", "autosave", "fft_response",
+        }:
             enabled.append(stage)
     return enabled
 
@@ -3146,6 +3161,7 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     stages = _builder_stage_sequence(loaded)
     if not stages:
         return None
+    base_damping = _object_damping(_builder_base_problem(loaded))
     return {
         "version": (
             "study_pipeline.v2"
@@ -3153,14 +3169,46 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
             else "study_pipeline.v1"
         ),
         "nodes": [
-            _export_study_pipeline_node(stage, index=index)
+            _export_study_pipeline_node(stage, index=index, base_damping=base_damping)
             for index, stage in enumerate(stages)
         ],
     }
 
 
-def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
+def _object_damping(problem: Problem) -> dict[str, float]:
+    return {m.object_id or m.name: m.material.alpha for m in problem.magnets}
+
+
+def _run_damping(stage: LoadedStage, base: Mapping[str, float]) -> dict[str, float]:
+    if stage.action is not None or not isinstance(stage.problem.study, TimeEvolution):
+        return {}
+    return {key: value for key, value in _object_damping(stage.problem).items()
+            if key in base and base[key] != value}
+
+
+def _with_run_damping(
+    calls: list[str], damping: object, handles: Mapping[str, str]
+) -> list[str]:
+    if not isinstance(damping, Mapping):
+        raise ValueError("gilbert_damping_by_object must be a mapping")
+    setters, restores = [], []
+    for object_id, alpha in damping.items():
+        if object_id not in handles:
+            raise ValueError(f"unknown magnetic object in run damping: {object_id!r}")
+        if type(alpha) not in (float, int) or not math.isfinite(alpha) or alpha < 0:
+            raise ValueError("run Gilbert damping must be finite and non-negative")
+        handle = handles[object_id]
+        saved = f"_{handle}_alpha_before_run"
+        setters.extend([f"{saved} = {handle}.alpha.value", f"{handle}.alpha = {_py_float_roundtrip(alpha)}"])
+        restores.append(f"{handle}.alpha = {saved}")
+    return [*setters, *calls, *restores]
+
+
+def _export_stage_draft_with_identity(stage: LoadedStage, base_damping: Mapping[str, float]) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    damping = _run_damping(stage, base_damping)
+    if damping:
+        payload["gilbert_damping_by_object"] = damping
     if stage.stage_id is not None:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
@@ -3185,8 +3233,10 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     return payload
 
 
-def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
-    draft = _export_stage_draft_with_identity(stage)
+def _export_study_pipeline_node(
+    stage: LoadedStage, *, index: int, base_damping: Mapping[str, float]
+) -> dict[str, object]:
+    draft = _export_stage_draft_with_identity(stage, base_damping)
     stage_kind = _infer_pipeline_stage_kind(draft)
     if stage_kind == "antenna_field_solve":
         definition = cast(dict[str, object], draft["definition"])
@@ -5154,6 +5204,25 @@ def _render_absorbing_boundary(var_name: str, raw: object) -> list[str]:
         return []
     if not isinstance(raw, Mapping):
         raise ValueError(f"{var_name}.absorbing_boundary must be an object")
+    if "layers" in raw:
+        if set(raw) != {"layers"} or not isinstance(raw["layers"], (list, tuple)):
+            raise ValueError(f"{var_name}.absorbing_boundary requires a layers array")
+        try:
+            collection = AbsorbingBoundaryLayers(tuple(SpatialAbsorbingLayer.from_ir(row) for row in raw["layers"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Invalid {var_name}.absorbing_boundary: {error}") from error
+        lines = [f"{var_name}.alpha.absorbing_boundary(layers=["]
+        for layer in collection.layers:
+            args = layer.to_ir()
+            geometry = args.pop("geometry")
+            kind = geometry.pop("kind")
+            geometry_args = ", ".join(f"{key}={value!r}" for key, value in geometry.items())
+            lines.append("    fm.SpatialAbsorbingLayer(")
+            lines.extend(f"        {key}={value!r}," for key, value in args.items())
+            lines.append(f"        geometry=fm.AbsorbingGeometry.{kind}({geometry_args}),")
+            lines.append("    ),")
+        lines.append("])")
+        return lines
     faces = raw.get("faces")
     if not isinstance(faces, (list, tuple)):
         raise ValueError(f"{var_name}.absorbing_boundary.faces must be an array")
@@ -7220,6 +7289,8 @@ def _render_spin_torques(
                 kwargs.append(f"free_layer_thickness_m={_py_number(module.free_layer_thickness_m)}")
             if module.formula_version == "slonczewski.legacy_fullmag.v0" and module.fixed_layer_position is not None:
                 kwargs.append(f"fixed_layer_position={_py_repr(module.fixed_layer_position)}")
+            if module.time_expression is not None:
+                kwargs.append(f"time_expression={_render_time_expression(module.time_expression)}")
             lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, ZhangLiSTT):
@@ -7383,6 +7454,14 @@ def _render_region_ref(entry: Mapping[str, object]) -> str:
             raise ValueError("prescribed_sot.target.region_id must be a non-empty string")
         kwargs.append(_py_repr(region_id))
     return f"fm.RegionRef({', '.join(kwargs)})"
+
+
+def _render_time_expression(expression: TimeExpression) -> str:
+    return (
+        f"fm.TimeExpression({_py_repr(expression.source)}, "
+        f"constants={_roundtrip_literal(dict(expression.constants), context='time_expression.constants')}, "
+        f"event_times_s={_roundtrip_literal(list(expression.event_times_s), context='time_expression.event_times_s')})"
+    )
 
 
 def _render_sot_envelope(entry: Mapping[str, object]) -> str:
@@ -7616,7 +7695,7 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             "kind", "current_density", "current_source", "spin_polarization", "degree",
             "lambda_asymmetry", "epsilon_prime", "free_layer_thickness_m",
             "fixed_layer_position", "formula_version", "schema_version", "id", "target",
-            "stack_normal", "realization",
+            "stack_normal", "realization", "time_expression",
         },
         "zhang_li": {
             "kind", "schema_version", "id", "target", "formula_version",
@@ -7665,6 +7744,9 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
                 f"{field}={_required_roundtrip_number(entry, field, context=str(kind))}"
             )
     if kind == "slonczewski":
+        if "time_expression" in entry:
+            expression = TimeExpression.from_ir(entry["time_expression"])
+            kwargs.append(f"time_expression={_render_time_expression(expression)}")
         formula_version = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
         if formula_version == "slonczewski.fullmag.v2":
             if _required_entry(entry, "schema_version", context=str(kind)) != "slonczewski_torque.v1":
@@ -9236,6 +9318,8 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    initial_table: TableAutosave | None,
+    base_damping: Mapping[str, float],
     magnet_names: dict[str, str],
     region_vars: dict[tuple[str, str], str],
     source_root: Path,
@@ -9252,6 +9336,8 @@ def _render_stages(
     stage_overrides = overrides.get("stages")
     is_study_surface = surface == "study"
     active_outputs = list(initial_outputs)
+    table_override = _table_autosave_from_override(overrides.get("table_autosave"))
+    inherits_table = True
     lines = ["# Stages" if is_study_surface else "# Run"]
     magnet_vars_by_id = {
         object_id: magnet_vars[name]
@@ -9284,6 +9370,8 @@ def _render_stages(
             lines.extend(output_lines)
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
+            if action_kind == "table_autosave":
+                inherits_table = False
             if action_kind == "antenna_field_solve":
                 if not is_study_surface:
                     raise ValueError("antenna_field_solve action requires the study API surface")
@@ -10012,6 +10100,9 @@ def _render_stages(
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
         stage_table = _study_table_autosave(study)
+        inherits_table = inherits_table and stage_table == initial_table
+        if inherits_table and table_override is not None:
+            stage_table = table_override
         if stage_table is not None:
             lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
         else:
@@ -10028,9 +10119,11 @@ def _render_stages(
             run_autosave = _stage_autosave_with_override(stage_override, stage.autosave)
             if run_autosave is not None:
                 run_call += _render_stage_autosave(run_autosave)
-            lines.append(run_call)
         else:
-            lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
+            run_call = f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})"
+        lines.extend(_with_run_damping(
+            [run_call], _run_damping(stage, base_damping), magnet_vars_by_id
+        ))
     return lines
 
 

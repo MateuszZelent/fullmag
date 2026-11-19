@@ -41,6 +41,7 @@ import {
 import { resolveViewport3DScalarColorBufferKey, type ScalarColorBuffer } from "../viewport3dFieldMapping";
 import { selectVisibleSurfaceChoice, visibleColorScaleFromBuffer, type Viewport3DVisibleSurfaceChoice, type Viewport3DVisibleColorScale, type Viewport3DVisibleColorScaleReport } from "../model/viewport3DVisibleColorScale";
 import type {
+  Viewport3DComplexGlyphPass,
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
@@ -52,6 +53,7 @@ import {
 } from "../viewport3dScalarSurfaceShader";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { prepareViewport3DFieldPresentationNormals } from "../viewport3dFieldPresentationMaterial";
+import { ComplexGlyphPassLayer } from "./ComplexVectorGlyphLayer";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
@@ -411,6 +413,7 @@ export function FallbackTopologyMeshLayer({
       tracker={tracker}
       vectorBuildReference={vectorLayerInput.buildReference}
       vectorColorMode={vectorColorMode}
+      vectorComplexGlyphs={vectorLayerInput.complexGlyphs ?? null}
       vectorGlyphColors={vectorLayerInput.glyphColors ?? null}
       vectorSegments={vectorLayerInput.segments}
       vectorStyle={vectorStyle}
@@ -439,6 +442,7 @@ function FallbackTopologyMeshPrimitives({
   tracker,
   vectorBuildReference,
   vectorColorMode,
+  vectorComplexGlyphs,
   vectorGlyphColors,
   vectorSegments,
   vectorStyle,
@@ -463,6 +467,7 @@ function FallbackTopologyMeshPrimitives({
   tracker: Viewport3DResourceTracker;
   vectorBuildReference: Viewport3DFieldRenderModel["fullVectorBuild"];
   vectorColorMode: string;
+  vectorComplexGlyphs: Viewport3DComplexGlyphPass | null;
   vectorGlyphColors: Float32Array | null;
   vectorSegments: Viewport3DFieldRenderModel["fullVectorSegments"];
   vectorStyle: VectorFieldLayerVectorStyle;
@@ -537,6 +542,17 @@ function FallbackTopologyMeshPrimitives({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
+      renderPlan.vectors.visible &&
+      vectorComplexGlyphs ? (
+        <ComplexGlyphPassLayer
+          fallbackColor={String(colors.field)}
+          opacity={renderPlan.vectors.opacity}
+          pass={vectorComplexGlyphs}
+          sessionIdentity={sessionIdentity}
+          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+          tracker={tracker}
+        />
+      ) : viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderPlan.vectors.visible ? (
         <VectorFieldLayer
           buildReference={vectorBuildReference}

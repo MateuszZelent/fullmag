@@ -13,7 +13,7 @@ import {
 } from "./crossSectionResources";
 
 describe("cross-section resources", () => {
-  it("uses canonical v2 resource paths plus query and revision as cache keys", () => {
+  it("uses canonical v2 resource paths plus query as stable cache keys (no revision suffix)", () => {
     expect(
       resolveCrossSectionResourceKey(
         {
@@ -22,10 +22,9 @@ describe("cross-section resources", () => {
           plane: "xz",
           positionPercent: 25,
         },
-        42,
       ),
     ).toBe(
-      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH}?include_polygons=true&include_wireframe=false&plane=xz&position_percent=25#revision=42`,
+      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH}?include_polygons=true&include_wireframe=false&plane=xz&position_percent=25`,
     );
     expect(
       resolveCrossSectionQualityResourceKey(
@@ -34,10 +33,9 @@ describe("cross-section resources", () => {
           plane: "xy",
           positionPercent: 50,
         },
-        '"mesh-etag"',
       ),
     ).toBe(
-      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH}?metric=gamma&plane=xy&position_percent=50#revision=%22mesh-etag%22`,
+      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH}?metric=gamma&plane=xy&position_percent=50`,
     );
     expect(
       resolveCrossSectionImageResourceKey(
@@ -53,10 +51,9 @@ describe("cross-section resources", () => {
           shrinkFactor: 0.95,
           wireframe: true,
         },
-        "image-rev",
       ),
     ).toBe(
-      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH}?color_scale=coolwarm&filter_expression=%3E%3D0.1&legend=false&metric=sicn&plane=yz&position_percent=75&resolution=2048&rotation_degrees=17&shrink_factor=0.95&wireframe=true&edge_width=1.5&dpr=1#revision=image-rev`,
+      `${MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH}?color_scale=coolwarm&filter_expression=%3E%3D0.1&legend=false&metric=sicn&plane=yz&position_percent=75&resolution=2048&rotation_degrees=17&shrink_factor=0.95&wireframe=true&edge_width=1.5&dpr=1`,
     );
   });
 
@@ -68,7 +65,6 @@ describe("cross-section resources", () => {
           plane: "xy",
           positionPercent: 50,
         },
-        null,
       ),
     ).toContain("resolution=1024");
   });

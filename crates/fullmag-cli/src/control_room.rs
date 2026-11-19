@@ -2732,7 +2732,7 @@ where
     RuntimeSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
     FieldSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
 {
-    if payload.replace_latest_fields {
+    if payload.replace_latest_fields || payload.mesh_reinitialization().is_some() {
         return snapshot_sync(session_id, payload);
     }
 

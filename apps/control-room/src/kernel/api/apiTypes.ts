@@ -1,5 +1,9 @@
 import type { components, paths } from "./generated/openapi-v2-types";
 
+export type AbsorbingBoundaryConfig = components["schemas"]["AbsorbingBoundaryIR"];
+export type SpatialAbsorbingLayer = components["schemas"]["SpatialAbsorbingLayerIR"];
+export type AbsorbingBoundaryGeometry = components["schemas"]["SpatialAbsorbingGeometryIR"];
+
 export type ResourceRevision = string | number;
 type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -877,7 +881,7 @@ export interface ObjectInteractionResource {
   scene_revision: number;
 }
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
-  absorbing_boundary?: JsonObject | null;
+  absorbing_boundary?: AbsorbingBoundaryConfig | null;
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
   material_ref?: string | null;

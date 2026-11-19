@@ -1,4 +1,4 @@
-"""Safe scalar expression evaluation for authored absorbing-boundary ramps."""
+"""Safe scalar expression evaluation for absorbing-boundary ramps and distance coordinates."""
 
 from __future__ import annotations
 
@@ -36,52 +36,76 @@ def _finite(value: float) -> float:
     return value
 
 
-def _evaluator(node: ast.AST) -> _ScalarFunction:
+def _evaluator(node: ast.AST, variables: tuple[str, ...]) -> Callable[[tuple[float, ...]], float]:
     if isinstance(node, ast.Constant) and type(node.value) in (int, float):
         number = float(node.value)
         if math.isfinite(number):
             return lambda _: number
-    elif isinstance(node, ast.Name) and node.id == "u":
-        return lambda u: u
+    elif isinstance(node, ast.Name) and node.id in variables:
+        index = variables.index(node.id)
+        return lambda values: values[index]
     elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
-        left = _evaluator(node.left)
-        right = _evaluator(node.right)
+        left = _evaluator(node.left, variables)
+        right = _evaluator(node.right, variables)
         operation = _BINARY[type(node.op)]
-        return lambda u: _finite(operation(left(u), right(u)))
+        return lambda values: _finite(operation(left(values), right(values)))
     elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-        operand = _evaluator(node.operand)
+        operand = _evaluator(node.operand, variables)
         sign = -1.0 if isinstance(node.op, ast.USub) else 1.0
-        return lambda u: sign * operand(u)
+        return lambda values: sign * operand(values)
     elif (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        # Python's AST drops parentheses around a callee. The ramp grammar
+        # Python's AST drops parentheses around a callee. The expression grammar
         # accepts a function name followed directly by its argument list.
         and node.col_offset == node.func.col_offset
-        and node.func.id in _FUNCTIONS
-        and len(node.args) == 1
         and not node.keywords
     ):
-        operand = _evaluator(node.args[0])
-        function = _FUNCTIONS[node.func.id]
-        return lambda u: _finite(function(operand(u)))
-    raise ValueError("expression must use u, decimal numbers, or supported math operators and functions")
+        if node.func.id in _FUNCTIONS and len(node.args) == 1:
+            operand = _evaluator(node.args[0], variables)
+            function = _FUNCTIONS[node.func.id]
+            return lambda values: _finite(function(operand(values)))
+        if variables == ("x", "y", "z") and node.func.id in ("min", "max") and len(node.args) == 2:
+            left, right = (_evaluator(arg, variables) for arg in node.args)
+            select = min if node.func.id == "min" else max
+            return lambda values: select(left(values), right(values))
+    raise ValueError(f"expression must use {', '.join(variables)}, decimal numbers, or supported math operators and functions")
+
+
+def _parse(expression: str, variables: tuple[str, ...]) -> Callable[[tuple[float, ...]], float]:
+    alphabet = r"[a-zA-Z0-9.+*/() \t-]+" if variables == ("u",) else r"[a-zA-Z0-9.+*/(), \t-]+"
+    if not isinstance(expression, str) or len(expression) > 256 or re.fullmatch(alphabet, expression) is None:
+        raise ValueError("expression must contain 1 to 256 ASCII math characters")
+    if re.search(r"\b0[xob]", expression, flags=re.IGNORECASE):
+        raise ValueError("expression numeric literals must be decimal")
+    if re.search(r",\s*\)", expression):
+        raise ValueError("expression argument lists cannot end with a comma")
+    try:
+        return _evaluator(ast.parse(expression.strip(), mode="eval").body, variables)
+    except (SyntaxError, OverflowError) as error:
+        raise ValueError("invalid absorbing boundary expression") from error
+
+
+@lru_cache(maxsize=128)
+def compile_distance_expression(expression: str) -> Callable[[float, float, float], float]:
+    evaluate = _parse(expression, ("x", "y", "z"))
+
+    def distance(x: float, y: float, z: float) -> float:
+        try:
+            return _finite(evaluate((x, y, z)))
+        except (ValueError, ArithmeticError) as error:
+            raise ValueError(f"distance expression is undefined at {(x, y, z)}") from error
+
+    return distance
 
 
 @lru_cache(maxsize=128)
 def compile_expression(expression: str) -> _ScalarFunction:
-    if len(expression) > 256 or re.fullmatch(r"[a-zA-Z0-9.+*/() \t-]+", expression) is None:
-        raise ValueError("expression must contain 1 to 256 ASCII math characters")
-    if re.search(r"\b0[xob]", expression, flags=re.IGNORECASE):
-        raise ValueError("expression numeric literals must be decimal")
-    try:
-        evaluate = _evaluator(ast.parse(expression.strip(), mode="eval").body)
-    except (SyntaxError, OverflowError) as error:
-        raise ValueError("invalid absorbing boundary expression") from error
+    evaluate = _parse(expression, ("u",))
 
     def checked(u: float) -> float:
         try:
-            value = evaluate(u)
+            value = evaluate((u,))
         except (ArithmeticError, ValueError) as error:
             raise ValueError(f"expression is undefined at u={u:g}") from error
         if not math.isfinite(value) or not -_TOLERANCE <= value <= 1 + _TOLERANCE:

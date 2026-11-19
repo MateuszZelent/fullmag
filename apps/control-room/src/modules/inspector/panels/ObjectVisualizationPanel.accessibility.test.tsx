@@ -19,6 +19,7 @@ import {
   DEFAULT_OBJECT_VISUALIZATION,
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+  resolveEffectiveVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   nextVisualizationRadioValue,
@@ -194,6 +195,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
   it("renders render modes with a roving keyboard tab stop", () => {
     const html = renderToStaticMarkup(
       <VisualizationRenderModeSection
+        settings={DEFAULT_AIRBOX_VISUALIZATION}
         displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
         passControlsDisabled={false}
         isFieldPending={() => false}
@@ -206,6 +208,31 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('role="radio"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('tabindex="-1"');
+  });
+
+  it("keeps Shaded selected while its surface is waiting for a quantity", () => {
+    const settings = {
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      activeQuantityId: "",
+      pointsVisible: false,
+      shaderVisible: true,
+      surfaceColorSource: "colormap" as const,
+      wireframeVisible: false,
+    };
+    const effective = resolveEffectiveVisualizationSettings(settings);
+    expect(effective.shaderVisible).toBe(false);
+    const html = renderToStaticMarkup(
+      <VisualizationRenderModeSection
+        settings={settings}
+        displaySettings={effective}
+        isFieldPending={() => false}
+        passControlsDisabled={false}
+        patch={vi.fn()}
+        target={{ kind: "object", id: "film" }}
+      />,
+    );
+    expect(html).toContain('aria-checked="true" aria-label="Shaded"');
+    expect(html).toContain('aria-checked="false" aria-label="Off"');
   });
 
   it("gives color picker and text input distinct accessible names", () => {

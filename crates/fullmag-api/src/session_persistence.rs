@@ -396,6 +396,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_quantity_revisions: BTreeMap::new(),
             accepted_terminal_field_generation,
             terminal_field_generations,
+            accepted_mesh_reinitializations: Default::default(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: value.region_realization_revisions,

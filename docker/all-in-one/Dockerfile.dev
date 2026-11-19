@@ -10,9 +10,15 @@ ENV FULLMAG_TOOLCHAIN_IMAGE_ID=${FULLMAG_TOOLCHAIN_IMAGE_ID}
 
 USER root
 
-# The frontend API hygiene gate invokes ripgrep inside its own service.
-RUN apt-get update && apt-get install -y --no-install-recommends ripgrep && \
-    rm -rf /var/lib/apt/lists/*
+# The frontend API hygiene gate uses Ubuntu's signed ripgrep package. Scope
+# index downloads to the distro for this install and use its HTTPS mirror.
+RUN set -eu; \
+    sed -E 's#http://(archive|security)\.ubuntu\.com/ubuntu#https://azure.archive.ubuntu.com/ubuntu#g' \
+        /etc/apt/sources.list > /tmp/fullmag-ubuntu.list; \
+    set -- -o Dir::Etc::sourcelist=/tmp/fullmag-ubuntu.list -o Dir::Etc::sourceparts=-; \
+    apt-get "$@" -o APT::Update::Error-Mode=any update; \
+    apt-get "$@" install -y --no-install-recommends ripgrep; \
+    rm -rf /tmp/fullmag-ubuntu.list /var/lib/apt/lists/*
 
 # Empty prefixes preserve the frozen release context; DEV reads an allowlisted checkout.
 ARG FULLMAG_DOCKER_HELPERS=""

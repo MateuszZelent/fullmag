@@ -124,6 +124,7 @@ import {
   type InteractionDiscretization,
 } from "@/shared/domain/physics/interactions";
 
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
@@ -484,6 +485,14 @@ const physicsTab: RibbonTabContent = {
       subtitle: "add physics",
       tone: "compose",
       actions: [
+        {
+          id: addAbsorbingBoundaryCommand.id,
+          icon: icon(Waves),
+          label: "Add ABL",
+          iconColor: "text-teal-400",
+          commandId: addAbsorbingBoundaryCommand.id,
+          tooltip: "Add or open the selected magnetic object's absorbing boundary",
+        },
         {
           id: "physics-add-frozen-spins",
           icon: icon(Magnet),
@@ -3540,8 +3549,10 @@ function buildSelectedVisualizationGroup(
   );
   const selectedQuantityId = normalizeQuantityIdOrDefault(
     settings?.activeQuantityId ??
-      context.visualizationState?.quantity?.active_quantity_id ??
-      context.visualizationState?.active_quantity_id,
+      (isAirboxLikeTarget
+        ? DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId
+        : context.visualizationState?.quantity?.active_quantity_id ??
+          context.visualizationState?.active_quantity_id),
   );
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,

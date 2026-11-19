@@ -1,5 +1,6 @@
 "use client";
 
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
@@ -47,7 +48,7 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
-  modeCompositionPhaseByLayerId,
+  modeCompositionPhaseUniformByLayerId,
   onSelectPart,
   onGeometryReady,
   replacementObjectIds,
@@ -72,7 +73,7 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers?: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId?: string | null;
-  modeCompositionPhaseByLayerId?: ReadonlyMap<string, number>;
+  modeCompositionPhaseUniformByLayerId?: ReadonlyMap<string, LivePhaseUniform>;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   onGeometryReady?: (part: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>, ready: boolean) => void;
   replacementObjectIds?: ReadonlySet<string>;
@@ -108,8 +109,8 @@ export function TopologyMeshLayer({
           const modeCompositionSnapshot = modeTargetId
             ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
             : null;
-          const modeCompositionPhaseRad = modeCompositionSnapshot?.layer
-            ? modeCompositionPhaseByLayerId?.get(
+          const modeCompositionPhase = modeCompositionSnapshot?.layer
+            ? modeCompositionPhaseUniformByLayerId?.get(
                 modeCompositionSnapshot.layer.layer_id,
               ) ?? null
             : null;
@@ -153,7 +154,7 @@ export function TopologyMeshLayer({
               materialProfile={materialProfile}
               meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
               modeCompositionId={modeCompositionId ?? null}
-              modeCompositionPhaseRad={modeCompositionPhaseRad}
+              modeCompositionPhase={modeCompositionPhase}
               modeCompositionSnapshot={modeCompositionSnapshot}
               onSelectPart={onSelectPart}
               onRenderableGeometryChange={onRenderableGeometryChange}

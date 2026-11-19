@@ -116,9 +116,19 @@ jobs:
           cargo test --locked -p fullmag-authoring --lib scene_validation_rejects_invalid_absorbing_boundary
           cargo test --locked -p fullmag-authoring --lib adding_editing_and_removing_an_absorber
           RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api absorbing_boundary_
+          cargo test --locked -p fullmag-ir --lib absorbing_boundary::tests
+          cargo test --locked -p fullmag-plan --lib spatial_
+          cargo test --locked -p fullmag-authoring --lib spatial_absorbers_reference_owned_regions_by_stable_id
+          RUST_MIN_STACK=16777216 cargo test --locked -p fullmag-api --bin fullmag-api overlapping_csg_boundary_is_rejected_before_mesh_build
 
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
+
+      - name: Verify interleaved Zarr sample indexes after writer drain
+        shell: bash
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
 
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
@@ -689,6 +699,8 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+            packages/fullmag-py/src/fullmag/client/_generated/*.py
           if-no-files-found: error
 
   api-hygiene-rg13:
@@ -892,6 +904,13 @@ jobs:
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots
+          CONTROL_ROOM_TARGET_SMOKE_PHASE=airbox-independent-visualization \
+            CONTROL_ROOM_TARGET_SMOKE_REUSE_FRONTEND_ONLY=1 \
+            CONTROL_ROOM_TARGET_SMOKE_SWIFTSHADER=1 \
+            CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS=90000 \
+            CONTROL_ROOM_API_BASE_URL=http://fullmag-target-smoke.fixture.invalid \
+            CONTROL_ROOM_AUDIT_ARTIFACTS_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/airbox" \
+            pnpm --dir apps/control-room run smoke:viewport-3d-explorer-inspector-targets
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.

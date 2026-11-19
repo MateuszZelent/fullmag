@@ -47,6 +47,7 @@
   padding-inline: var(--fm-space-3);
   white-space: nowrap;
   scroll-margin-inline: var(--fm-space-2);
+  transition-property: border-color;
 }
 
 .fm-footer__tab:hover {

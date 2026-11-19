@@ -92,6 +92,7 @@ impl PreparedMagnetizationApply {
                     &plan_fingerprint,
                     scene_revision,
                     provenance,
+                    false,
                 )?;
                 Ok((MagnetizationApplyStatus::InitialStateReady, None))
             }
@@ -275,7 +276,7 @@ pub(crate) fn plan_on_published_domain(
     let Ok(layout) = fullmag_runner::study_magnetization_layout_for_plan(&published) else {
         return Ok(PublishedDomainPlan::Pending("domain_layout_unsupported"));
     };
-    let geometry = match &published.backend_plan {
+    let (geometry, capture_prepared_grid) = match &published.backend_plan {
         BackendPlanIR::Fem(fem) => {
             let payload = fullmag_runner::FemMeshPayload::from(fem);
             let topology = fullmag_runner::fem_mesh_topology_fingerprint(&payload);
@@ -292,7 +293,7 @@ pub(crate) fn plan_on_published_domain(
                     "native_fem_domain_not_qualified",
                 ));
             };
-            Some(geometry)
+            (Some(geometry), false)
         }
         _ => {
             let published_layout = snapshot
@@ -302,17 +303,23 @@ pub(crate) fn plan_on_published_domain(
             // Build Grid publishes a compact summary alongside its complete execution plan.
             // Qualify that exact summary against the published plan. The full old and new
             // layouts (including native masks and cell order) are still compared below.
-            let matches_publication = published_layout.is_some_and(|persisted| {
-                matching_domain_layout(persisted, &layout) || match &published.backend_plan {
-                    BackendPlanIR::Fdm(fdm) => persisted == &fullmag_runner::live_fdm_grid_layout(fdm),
-                    BackendPlanIR::FdmMultilayer(ml) => persisted == &fullmag_runner::live_fdm_multilayer_grid_layout(ml),
-                    _ => false,
-                }
-            });
-            if !matches_publication {
+            let (compact, has_mask) = match &published.backend_plan {
+                BackendPlanIR::Fdm(fdm) => (
+                    published_layout == Some(&fullmag_runner::live_fdm_grid_layout(fdm)),
+                    fdm.active_mask.is_some(),
+                ),
+                BackendPlanIR::FdmMultilayer(ml) => (
+                    published_layout == Some(&fullmag_runner::live_fdm_multilayer_grid_layout(ml)),
+                    ml.layers.iter().any(|layer| layer.native_active_mask.is_some()),
+                ),
+                _ => (false, false),
+            };
+            if !compact
+                && !published_layout.is_some_and(|persisted| matching_domain_layout(persisted, &layout))
+            {
                 return Ok(PublishedDomainPlan::Pending("domain_layout_not_qualified"));
             }
-            None
+            (None, compact && has_mask)
         }
     };
     let execution = RequestedExecution {
@@ -324,9 +331,20 @@ pub(crate) fn plan_on_published_domain(
     };
     let source = Path::new(&snapshot.session.script_path);
     let asset_root = source.is_absolute().then(|| source.parent()).flatten();
-    let mut problem = crate::script::scene_document_to_authored_problem_ir_with_asset_root(
-        repo, workspace, asset_root, scene, &execution,
-    )?;
+    let mut problem = if capture_prepared_grid {
+        // Build Grid voxelizes the authored universe. Geometry-light Box planning instead
+        // uses a tight grid with an implicit mask, even when both contain the same cells.
+        let config = crate::script::scene_document_to_prepared_script_config_with_asset_root(
+            repo, workspace, asset_root, scene, &execution,
+        )?;
+        let mut problem = config.ir;
+        problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+        problem
+    } else {
+        crate::script::scene_document_to_authored_problem_ir_with_asset_root(
+            repo, workspace, asset_root, scene, &execution,
+        )?
+    };
     if let Some(geometry) = geometry {
         problem.geometry_assets = Some(geometry);
     }

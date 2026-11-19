@@ -1589,7 +1589,7 @@ export async function buildExport3DGltf(
           );
         } else if (prep.arrowCandidateIndices.length > 0) {
           const vecColorMode = normalizeExport3DColorMode(
-            options.vectorColorMode ?? colorMode,
+            target.appearance?.vectorColorMode ?? options.vectorColorMode ?? colorMode,
             colorMode,
           );
           const vecPalette = normalizeExport3DScalarPalette(

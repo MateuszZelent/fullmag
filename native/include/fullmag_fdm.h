@@ -1973,6 +1973,11 @@ int fullmag_fdm_backend_execution_receipt_v2(
  * Return the last error message, or NULL if no error.
  * The pointer is valid until the next API call on this handle.
  */
+int fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+    fullmag_fdm_backend *handle,
+    const double *program, uint64_t program_words,
+    double stage_origin_s, const double *events_s, uint64_t event_count);
+
 const char *fullmag_fdm_backend_last_error(
     fullmag_fdm_backend *handle);
 

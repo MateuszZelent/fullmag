@@ -336,11 +336,19 @@ fn validate_scene_document_with_mode(
     for object in &scene.objects {
         if let Some(layer) = &object.absorbing_boundary {
             let mut errors = Vec::new();
-            fullmag_ir::validate_absorbing_boundary(
+            fullmag_ir::validate_absorbing_boundary_config(
                 &format!("object '{}'.absorbing_boundary", object.id),
                 layer,
                 &mut errors,
             );
+            for id in layer.referenced_regions() {
+                if !object.regions.iter().any(|region| region.region_id == id) {
+                    errors.push(format!(
+                        "object '{}'.absorbing_boundary refers to missing region '{id}'",
+                        object.id
+                    ));
+                }
+            }
             if !errors.is_empty() {
                 return Err(SceneDocumentValidationError::new(errors.join("\n")));
             }
@@ -3173,6 +3181,7 @@ fn validate_spin_torque(
             target,
             stack_normal,
             realization,
+            time_expression,
             ..
         } => {
             validate_current_binding(
@@ -3181,6 +3190,19 @@ fn validate_spin_torque(
                 current_source.as_deref(),
                 transport_ids,
             )?;
+            if let Some(expression) = time_expression {
+                if !matches!(formula_version, SlonczewskiFormulaVersion::FullmagV2)
+                    || current_density.is_none()
+                    || realization.is_none()
+                {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_torques[{index}].time_expression requires canonical thin-layer prescribed current density"
+                    )));
+                }
+                expression.compile().map_err(|error| SceneDocumentValidationError::new(format!(
+                    "spin_torques[{index}].time_expression: {error}"
+                )))?;
+            }
             finite_vec3(
                 *spin_polarization,
                 &format!("spin_torques[{index}].spin_polarization"),
@@ -4767,6 +4789,28 @@ mod tests {
         scene.objects[0].absorbing_boundary = Some(serde_json::from_value(valid).unwrap());
         validate_scene_document_for_authoring(&scene).expect("valid profile should save");
         validate_scene_document(&scene).expect("valid profile should export");
+    }
+
+    #[test]
+    fn spatial_absorbers_reference_owned_regions_by_stable_id() {
+        let mut scene = region_owned_scene();
+        let region_id = scene.objects[0].regions[0].region_id.clone();
+        let config = |mask: &str, boundary: &str| serde_json::from_value(serde_json::json!({
+            "layers": [{
+                "layer_id": "rim", "name": "Rim", "enabled": true, "region_id": mask,
+                "geometry": {"kind": "region_boundary", "region_id": boundary},
+                "frame": "object", "profile": "linear", "total_width_m": 4e-9,
+                "ramp_width_m": 3e-9, "max_damping": 0.5
+            }]
+        })).unwrap();
+        scene.objects[0].regions[0].name = "Renamed region".into();
+        scene.objects[0].absorbing_boundary = Some(config(&region_id, &region_id));
+        validate_scene_document_for_authoring(&scene).unwrap();
+        for (mask, boundary) in [("foreign", region_id.as_str()), (region_id.as_str(), "foreign")] {
+            scene.objects[0].absorbing_boundary = Some(config(mask, boundary));
+            let error = validate_scene_document_for_authoring(&scene).unwrap_err();
+            assert!(error.message.contains("missing region 'foreign'"), "{}", error.message);
+        }
     }
 
     #[test]

@@ -817,6 +817,7 @@ pub(crate) async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -3199,6 +3200,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -3414,6 +3416,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
         terminal_field_generations: BTreeMap::new(),
+        accepted_mesh_reinitializations: Default::default(),
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -13369,6 +13372,70 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
 }
 
 #[tokio::test]
+async fn mesh_build_command_preserves_absorbing_layer_and_region_damping() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    let object = &mut scene.objects[0];
+    let absorber: fullmag_ir::AbsorbingBoundaryIR =
+        serde_json::from_value(serde_json::json!({"layers": [{
+            "layer_id": "end", "name": "Clipped end", "enabled": true,
+            "region_id": "upper-half", "frame": "universe",
+            "geometry": {"kind": "faces", "faces": ["x+"]},
+            "total_width_m": 15e-9, "ramp_width_m": 12e-9,
+            "max_damping": 0.45, "profile": "custom", "expression": "u**3"
+        }]}))
+        .unwrap();
+    object.absorbing_boundary = Some(absorber.clone());
+    object.allocated_region_ids.push("upper-half".into());
+    object.regions.push(
+        serde_json::from_value(serde_json::json!({
+            "region_id": "upper-half", "name": "Upper half", "owner_object": object.id,
+            "shape": {"kind": "box", "size": [1.0, 0.5, 1.0], "center": [0.0, 0.25, 0.0]},
+            "frame": "object", "realization_policy": "project",
+            "material_overrides": [{"parameter": "alpha",
+                "value": {"kind": "constant", "value": 0.04, "unit": "1"},
+                "priority": 1, "conflict_policy": "error"}]
+        }))
+        .unwrap(),
+    );
+    let mesh_input = fullmag_session::canonical_json_sha256(&crate::scene_mesh_signature(&scene));
+    {
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().unwrap();
+        snapshot.session.status = "awaiting_command".into();
+        snapshot.scene_document = Some(scene);
+    }
+
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"kind":"mesh_build","mesh_target":{"kind":"study_domain"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    let mesh_options = queue.front().unwrap().mesh_options.as_ref().unwrap();
+    assert_eq!(mesh_options["authored_mesh_input_sha256"], mesh_input);
+    let patch = &mesh_options["scene_problem_patch"];
+    let magnet: fullmag_ir::MagnetIR = serde_json::from_value(patch["magnets"][0].clone()).unwrap();
+    assert_eq!(magnet.absorbing_boundary, Some(absorber));
+    let region = &patch["object_regions"][0];
+    assert_eq!(region["region_id"], "upper-half");
+    assert_eq!(region["frame"], "object");
+    assert_eq!(region["material_overrides"][0]["parameter"], "alpha");
+    assert_eq!(region["material_overrides"][0]["value"]["value"], 0.04);
+}
+
+#[tokio::test]
 async fn mesh_build_command_lowers_difference_geometry_from_scene() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -22873,6 +22940,7 @@ async fn prepared_absorber_fixture(region: &str) -> (Arc<AppState>, tempfile::Te
 study = fm.study("absorber")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.universe(mode="manual", size=(40e-9, 5e-9, 5e-9), center=(0, 0, 0), padding=(0, 0, 0))
 study.cell(5e-9, 5e-9, 5e-9)
 film = study.geometry(fm.Box(40e-9, 5e-9, 5e-9), name="film")
 film.Ms = 800e3
@@ -22889,10 +22957,16 @@ study.stages.add_run(stage_id="run", until=1e-12)
         backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
         mode: "strict".into(), minimum_resources: None,
     };
-    let problem = crate::script::scene_document_to_problem_ir(&state.repo_root, workspace.path(), &scene, &execution).unwrap();
+    let config = crate::script::scene_document_to_prepared_script_config(
+        &state.repo_root, workspace.path(), &scene, &execution,
+    ).unwrap();
+    let mut problem = config.ir;
+    problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+    let problem = fullmag_application::bind_declared_execution(&problem, vec![]).unwrap();
     let plan = fullmag_plan::plan(&problem).unwrap();
-    // Use the same compact metadata as the CLI's real Build Grid publication.
+    // Desktop Build Grid publishes the voxelized universe and its compact summary.
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM fixture") };
+    assert_eq!(fdm.active_mask.as_deref(), Some([true; 8].as_slice()));
     let layout = fullmag_runner::live_fdm_grid_layout(fdm);
     let (scope, mesh_revision) = {
         let mut current = state.current_live_state.write().await;
@@ -22945,6 +23019,10 @@ async fn absorbing_boundary_patch_moves_and_clears_live_alpha_without_rebuilding
         let current = state.current_live_state.read().await;
         let snapshot = current.as_ref().unwrap();
         assert_eq!(snapshot.mesh_revision, mesh_revision);
+        let fingerprint = snapshot.metadata.as_ref().unwrap()
+            .pointer("/execution_plan/backend_plan/grid_certificate/grid_fingerprint").unwrap().as_str().unwrap();
+        let field = snapshot.latest_fields.get("mat_alpha").unwrap();
+        assert_eq!(field["layout"]["grid_fingerprint"].as_str(), Some(fingerprint));
         assert_eq!(snapshot.scene_document.as_ref().unwrap().objects[0].absorbing_boundary.is_some(), face.is_some());
     }
 }
@@ -23116,6 +23194,7 @@ fm.run(1e-10)
             .unwrap().unwrap().publish(
                 snapshot, "base-preview", "base-plan", 30,
                 serde_json::json!({"source_kind": "prepared_initial_state"}),
+                false,
             ).unwrap();
         let descriptor = crate::live_stage_initial_state::describe_prepared_initial_state(snapshot)
             .expect("the initial preview should qualify");

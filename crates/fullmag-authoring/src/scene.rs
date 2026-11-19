@@ -222,7 +222,7 @@ pub struct SceneObject {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default = "default_true")]

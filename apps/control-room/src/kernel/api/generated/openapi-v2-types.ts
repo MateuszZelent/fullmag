@@ -5359,6 +5359,30 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AbsorbingBoundaryDirectionIR: "outward" | "inward";
+        /** @enum {string} */
+        AbsorbingBoundaryFaceIR: "x+" | "x-" | "y+" | "y-" | "z+" | "z-";
+        /** @enum {string} */
+        AbsorbingBoundaryFrameIR: "object" | "universe";
+        AbsorbingBoundaryIR: components["schemas"]["AbsorbingBoundaryLayerIR"] | components["schemas"]["AbsorbingBoundaryLayersIR"];
+        AbsorbingBoundaryLayerIR: {
+            expression?: string | null;
+            faces: components["schemas"]["AbsorbingBoundaryFaceIR"][];
+            frame: components["schemas"]["AbsorbingBoundaryFrameIR"];
+            /** Format: double */
+            max_damping: number;
+            profile: components["schemas"]["AbsorbingBoundaryProfileIR"];
+            /** Format: double */
+            ramp_width_m: number;
+            /** Format: double */
+            total_width_m: number;
+        };
+        AbsorbingBoundaryLayersIR: {
+            layers: components["schemas"]["SpatialAbsorbingLayerIR"][];
+        };
+        /** @enum {string} */
+        AbsorbingBoundaryProfileIR: "linear" | "quadratic" | "smootherstep" | "logarithmic" | "tanh" | "custom";
         AcceptedAntennaInspectionCatalogResource: {
             entries: components["schemas"]["AcceptedAntennaInspectionIdentity"][];
             project_id: string;
@@ -10404,6 +10428,7 @@ export interface components {
             spin_polarization: number[];
             stack_normal?: number[] | null;
             target?: null | components["schemas"]["SceneRegionRef"];
+            time_expression?: Record<string, unknown> | null;
         } | {
             /** Format: double */
             beta: number;
@@ -12241,7 +12266,7 @@ export interface components {
             time_seconds: number;
         };
         ObjectPatchRequest: {
-            absorbing_boundary?: Record<string, unknown> | null;
+            absorbing_boundary?: null | components["schemas"]["AbsorbingBoundaryIR"];
             /** Format: int64 */
             base_revision?: number | null;
             geometry?: Record<string, unknown> | null;
@@ -15058,7 +15083,7 @@ export interface components {
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
         SceneObjectResource: {
-            absorbing_boundary?: Record<string, unknown> | null;
+            absorbing_boundary?: null | components["schemas"]["AbsorbingBoundaryIR"];
             allocated_region_ids?: string[];
             geometry?: {
                 [key: string]: unknown;
@@ -16804,6 +16829,55 @@ export interface components {
             /** Format: int64 */
             duration_ns: number;
             kind: components["schemas"]["SolverTraceSegmentKindResource"];
+        };
+        SpatialAbsorbingGeometryIR: {
+            faces: components["schemas"]["AbsorbingBoundaryFaceIR"][];
+            /** @enum {string} */
+            kind: "faces";
+        } | {
+            /** @enum {string} */
+            kind: "plane";
+            normal: number[];
+            origin: number[];
+        } | {
+            axis: number[];
+            center: number[];
+            direction: components["schemas"]["AbsorbingBoundaryDirectionIR"];
+            /** @enum {string} */
+            kind: "cylinder";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            center: number[];
+            direction: components["schemas"]["AbsorbingBoundaryDirectionIR"];
+            /** @enum {string} */
+            kind: "sphere";
+            /** Format: double */
+            radius_m: number;
+        } | {
+            /** @enum {string} */
+            kind: "region_boundary";
+            region_id: string;
+        } | {
+            expression: string;
+            /** @enum {string} */
+            kind: "expression";
+        };
+        SpatialAbsorbingLayerIR: {
+            enabled: boolean;
+            expression?: string | null;
+            frame: components["schemas"]["AbsorbingBoundaryFrameIR"];
+            geometry: components["schemas"]["SpatialAbsorbingGeometryIR"];
+            layer_id: string;
+            /** Format: double */
+            max_damping: number;
+            name: string;
+            profile: components["schemas"]["AbsorbingBoundaryProfileIR"];
+            /** Format: double */
+            ramp_width_m: number;
+            region_id?: string | null;
+            /** Format: double */
+            total_width_m: number;
         };
         SpinAuthoringDeleteRequest: {
             /** Format: int64 */

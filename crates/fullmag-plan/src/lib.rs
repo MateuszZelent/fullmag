@@ -67,6 +67,7 @@ pub use antenna_validity::{
 };
 pub use error::PlanError;
 pub use fem::damping_on_geometry_mesh;
+pub use material::validate_absorbing_region_boundary;
 pub use fdm::{
     checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
     fdm_multilayer_cuda_aligned_embedding_eligible, fdm_multilayer_cuda_aligned_embedding_error,

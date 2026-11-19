@@ -43,13 +43,14 @@ enum {
     FULLMAG_TIME_OP_SQRT = 21,
     FULLMAG_TIME_OP_ABS = 22,
     FULLMAG_TIME_OP_MIN = 23,
-    FULLMAG_TIME_OP_MAX = 24
+    FULLMAG_TIME_OP_MAX = 24,
+    FULLMAG_TIME_OP_HEAVISIDE = 25
 };
 
 /* Opcode of one word, or -1 when the word is not an opcode. */
 static inline int fullmag_time_expression_opcode(double word)
 {
-    if (!(word >= 0.0 && word <= (double)FULLMAG_TIME_OP_MAX) || word != floor(word)) {
+    if (!(word >= 0.0 && word <= (double)FULLMAG_TIME_OP_HEAVISIDE) || word != floor(word)) {
         return -1;
     }
     return (int)word;
@@ -140,6 +141,9 @@ static inline double fullmag_time_expression_eval(
             case FULLMAG_TIME_OP_EXP: value = exp(value); break;
             case FULLMAG_TIME_OP_LOG: value = log(value); break;
             case FULLMAG_TIME_OP_SQRT: value = sqrt(value); break;
+            case FULLMAG_TIME_OP_HEAVISIDE:
+                value = !isfinite(value) ? NAN : value == 0.0 ? 0.5 : value > 0.0 ? 1.0 : 0.0;
+                break;
             default: value = fabs(value); break;
             }
             stack[depth - 1] = value;

@@ -5,7 +5,7 @@
 //! `native/include/fullmag_time_expression.h`.
 
 use crate::function::{depends_on_variable, evaluate, CompiledFunction};
-use crate::parser::{BinaryOp, Func1, Func2, Node, Variable};
+use crate::parser::{heaviside, BinaryOp, Func1, Func2, Node, Variable};
 use crate::ExprError;
 
 /// Version of the opcode table; must equal `FULLMAG_TIME_EXPRESSION_VERSION`.
@@ -40,11 +40,29 @@ pub const OP_SQRT: u32 = 21;
 pub const OP_ABS: u32 = 22;
 pub const OP_MIN: u32 = 23;
 pub const OP_MAX: u32 = 24;
+pub const OP_HEAVISIDE: u32 = 25;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeProgram {
     pub code: Vec<f64>,
     pub max_stack: u32,
+}
+
+impl TimeProgram {
+    /// Whether the compiled program contains a Heaviside opcode.
+    /// Literal operands are skipped so a constant equal to an opcode is not
+    /// mistaken for an instruction.
+    pub fn uses_heaviside(&self) -> bool {
+        let mut cursor = 0;
+        while cursor < self.code.len() {
+            let word = self.code[cursor];
+            if word == f64::from(OP_HEAVISIDE) {
+                return true;
+            }
+            cursor += if word == f64::from(OP_PUSH) { 2 } else { 1 };
+        }
+        false
+    }
 }
 
 fn binary_opcode(op: BinaryOp) -> u32 {
@@ -72,6 +90,7 @@ fn func1_opcode(function: Func1) -> u32 {
         Func1::Log => OP_LOG,
         Func1::Sqrt => OP_SQRT,
         Func1::Abs => OP_ABS,
+        Func1::Heaviside => OP_HEAVISIDE,
     }
 }
 
@@ -198,7 +217,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64 {
     while cursor < code.len() {
         let word = code[cursor];
         cursor += 1;
-        if !(0.0..=f64::from(OP_MAX)).contains(&word) || word.fract() != 0.0 {
+        if !(0.0..=f64::from(OP_HEAVISIDE)).contains(&word) || word.fract() != 0.0 {
             return f64::NAN;
         }
         let opcode = word as u32;
@@ -262,6 +281,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64 {
                     OP_EXP => value.exp(),
                     OP_LOG => value.ln(),
                     OP_SQRT => value.sqrt(),
+                    OP_HEAVISIDE => heaviside(value),
                     _ => value.abs(),
                 };
             }

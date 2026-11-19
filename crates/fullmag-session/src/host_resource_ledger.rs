@@ -32,6 +32,19 @@ impl std::fmt::Display for ComputeNodeSampleNotCurrent {
 }
 
 impl std::error::Error for ComputeNodeSampleNotCurrent {}
+
+/// A durable Stop fenced the same still-unused worker launch permit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerLaunchFencedByStop;
+
+impl std::fmt::Display for WorkerLaunchFencedByStop {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("durable Stop fenced the exact unused worker launch permit")
+    }
+}
+
+impl std::error::Error for WorkerLaunchFencedByStop {}
+
 use crate::compute_node_snapshot::{
     ComputeNodeSnapshot, EnforcementStatus, GpuPartition, Reported, UnavailableReason,
 };
@@ -1447,18 +1460,27 @@ impl HostResourceLedger {
             .iter()
             .find(|task| task.task_id == lease.task_id)
             .context("worker launch task is missing from its catalog")?;
-        if task.lifecycle != crate::FmsTaskLifecycle::Preparing
+        let reservation = &mut document.reservations[index];
+        let exact_task = task.attempt_id.as_deref() == Some(lease.attempt_id.as_str())
+            && task.ownership_epoch == Some(lease.ownership_epoch)
+            && task.resource_id.as_deref() == Some(lease.resource_id.as_str());
+        let committed = reservation.state == HostResourceReservationState::Committed;
+        let permit_unused = matches!(
+            reservation.worker_launch_gate.as_ref(),
+            Some(HostWorkerLaunchGate::Pending | HostWorkerLaunchGate::Closed)
+        );
+        if exact_task && committed && permit_unused
+            && task.lifecycle == crate::FmsTaskLifecycle::Stopping
+        {
+            return Err(WorkerLaunchFencedByStop.into());
+        }
+        if !exact_task
+            || task.lifecycle != crate::FmsTaskLifecycle::Preparing
             || task.readiness != crate::FmsTaskReadiness::Ready
-            || task.attempt_id.as_deref() != Some(lease.attempt_id.as_str())
-            || task.ownership_epoch != Some(lease.ownership_epoch)
-            || task.resource_id.as_deref() != Some(lease.resource_id.as_str())
         {
             bail!("worker launch requires its exact preparing task; Stop or a newer owner fences spawn");
         }
-        let reservation = &mut document.reservations[index];
-        if reservation.state != HostResourceReservationState::Committed
-            || reservation.worker_launch_gate != Some(HostWorkerLaunchGate::Pending)
-        {
+        if !committed || reservation.worker_launch_gate != Some(HostWorkerLaunchGate::Pending) {
             bail!("worker launch permit is not pending and committed; reconcile before spawning");
         }
         let token = uuid::Uuid::new_v4().to_string();
@@ -12223,6 +12245,27 @@ mod tests {
         assert!(error
             .to_string()
             .contains("nonreleased v4 reservation has a stale runtime generation"));
+    }
+
+    #[test]
+    fn durable_prestart_stop_fences_pending_and_closed_host_launch_permits() {
+        let fixture = v4_worker_launch_fixture("worker-launch-stopping");
+        let mut catalog = fixture.store.read_run_catalog(&fixture.lease.run_id).unwrap().unwrap();
+        catalog.revision += 1;
+        catalog.updated_at = chrono::Utc::now();
+        catalog.tasks[0].lifecycle = crate::FmsTaskLifecycle::Stopping;
+        fixture.store.commit_run_catalog(&catalog).unwrap();
+
+        let error = fixture.ledger.authorize_worker_launch(&fixture.store, &fixture.lease)
+            .unwrap_err();
+        assert!(error.downcast_ref::<WorkerLaunchFencedByStop>().is_some());
+        assert!(fixture.ledger.worker_has_pending_launch(&fixture.store, &fixture.lease).unwrap());
+
+        fixture.ledger.close_worker_launch_before_spawn(&fixture.store, &fixture.lease).unwrap();
+        let error = fixture.ledger.authorize_worker_launch(&fixture.store, &fixture.lease)
+            .unwrap_err();
+        assert!(error.downcast_ref::<WorkerLaunchFencedByStop>().is_some());
+        assert!(!fixture.ledger.worker_has_pending_launch(&fixture.store, &fixture.lease).unwrap());
     }
 
     #[test]

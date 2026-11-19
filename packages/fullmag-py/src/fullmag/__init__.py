@@ -22,6 +22,8 @@ from .init import (
 )
 from .model import (
     AbsorbingBoundaryLayer,
+    AbsorbingGeometry,
+    SpatialAbsorbingLayer,
     AdaptiveTimestep,
     AntennaLayout,
     AntennaRigidTransform,
@@ -226,6 +228,7 @@ from .model import (
     ConstantEnvelope,
     SpinOrbitTorque,
     SlonczewskiSTT,
+    TimeExpression,
     Snapshot,
     SurfaceBoundary,
     SurfaceProjection,
@@ -524,6 +527,8 @@ __all__ = [
     "table",
     "transaction",
     "AbsorbingBoundaryLayer",
+    "AbsorbingGeometry",
+    "SpatialAbsorbingLayer",
     "ExecutionContext",
     "ParameterDefinition",
     "ParameterExpression",
@@ -738,6 +743,7 @@ __all__ = [
     "SignedScalarDrive",
     "ConstantEnvelope",
     "SlonczewskiSTT",
+    "TimeExpression",
     "InterfaceCppSTT",
     "DriftDiffusionSpinTorque",
     "SpinOrbitTorque",

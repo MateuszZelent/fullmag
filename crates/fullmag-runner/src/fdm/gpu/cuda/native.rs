@@ -1720,6 +1720,11 @@ impl NativeFdmBackend {
                     .to_string(),
             });
         }
+        if plan.slonczewski_time_expression.is_some() {
+            return Err(RunError {
+                message: "batched CUDA FDM does not support time-dependent Slonczewski current; use the regular RK step path".to_string(),
+            });
+        }
         Self::create_with_stats_policy(plan, stats_policy)
     }
 
@@ -1774,6 +1779,16 @@ impl NativeFdmBackend {
         };
         ensure_cuda_frozen_spins_supported(plan.frozen_spins.is_some(), frozen_capabilities)?;
         ensure_cuda_slonczewski_supported(plan)?;
+        let time_program = plan.slonczewski_time_expression.as_ref().map(|expression| {
+            if plan.precision != fullmag_ir::ExecutionPrecision::Double
+                || plan.integrator != Some(fullmag_ir::IntegratorChoice::Rk45)
+                || plan.relaxation.is_some()
+                || !plan.spin_transport_plans.is_empty()
+            {
+                return Err(RunError { message: "Slonczewski time_expression requires single-grid CUDA FP64 RK45 dynamics without solved spin transport".into() });
+            }
+            expression.compile().map(|program| (expression, program)).map_err(|message| RunError { message })
+        }).transpose()?;
         validate_single_grid_budget(plan)?;
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let zhang_li_formula = ffi_zhang_li_formula(plan)?;
@@ -2474,6 +2489,27 @@ impl NativeFdmBackend {
             }
         }
 
+        if let Some((expression, program)) = time_program {
+            let status = unsafe {
+                ffi::fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+                    handle, program.code.as_ptr(), program.code.len() as u64,
+                    plan.time_stage.start_time_s, expression.event_times_s.as_ptr(),
+                    expression.event_times_s.len() as u64,
+                )
+            };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let error = ffi::fullmag_fdm_backend_last_error(handle);
+                    if error.is_null() {
+                        "native FDM refused Slonczewski time_expression".into()
+                    } else {
+                        CStr::from_ptr(error).to_string_lossy().into_owned()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
+        }
         Ok(Self {
             handle,
             cell_count: m_flat.len() / 3,
@@ -5078,6 +5114,37 @@ mod tests {
         assert_eq!(policy.adaptive_safety, 0.9);
         assert_eq!(policy.adaptive_growth_limit, 2.0);
         assert_eq!(policy.adaptive_shrink_limit, 0.2);
+    }
+
+    #[test]
+    fn native_adaptive_batch_constructor_fails_closed_for_time_dependent_current() {
+        let mut plan = fullmag_ir::FdmPlanIR {
+            adaptive_timestep: Some(fullmag_ir::AdaptiveTimeStepIR {
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial: Some(1e-15),
+                dt_min: 1e-16,
+                dt_max: Some(1e-14),
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            }),
+            ..Default::default()
+        };
+        plan.slonczewski_time_expression = Some(fullmag_ir::TimeExpressionIR {
+            source: "sin(t)".into(),
+            constants: Default::default(),
+            event_times_s: Vec::new(),
+        });
+
+        let error = match NativeFdmBackend::create_for_adaptive_batch(&plan) {
+            Err(error) => error,
+            Ok(_) => panic!("native batch constructor must reject J(t) before CUDA creation"),
+        };
+        assert!(error.message.contains("does not support time-dependent"));
     }
 
     #[test]

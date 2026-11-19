@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
@@ -27,7 +27,6 @@ import type {
   PlanarFieldQuery,
   PlanarFieldSource,
   PlanarSampleSourceResource,
-  ResourceRevision,
 } from "../api/apiTypes";
 import {
   isCanonicalU64Decimal,
@@ -369,14 +368,19 @@ function requireCanonicalU64(value: string, name: string): string {
   return value;
 }
 
+/**
+ * Data-store and binary-cache identity of one planar request. The
+ * invalidation revision is deliberately not part of it: refetches are
+ * driven through `revisionKey`, so the last good payload stays visible as
+ * `stale` and ETag revalidation can reuse unchanged buffers.
+ */
 export function resolvePlanarFieldResourceKey(
   quantityId: string,
   source: PlanarFieldSource,
   query: PlanarFieldQuery,
-  revision: ResourceRevision | null,
   path?: string,
 ): string {
-  return `${planarFieldResourceKey(quantityId, source, query, path)}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return planarFieldResourceKey(quantityId, source, query, path);
 }
 
 export function usePlanarFieldMetaResource(
@@ -389,7 +393,6 @@ export function usePlanarFieldMetaResource(
   const sessionIdentity = useSessionResourceIdentity();
   const stableQuery = useStablePlanarFieldQuery(query);
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery);
-  const revision = useResourceRevision(baseKey);
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       api.data.fields.planar.meta(quantityId, source, stableQuery, { sessionScopeKey, signal }),
@@ -402,16 +405,9 @@ export function usePlanarFieldMetaResource(
     enabled: options.enabled !== false && sessionIdentity !== null,
     load,
     resourceKey: sessionIdentity
-      ? sessionScopedResourceKey(
-          sessionIdentity,
-          resolvePlanarFieldResourceKey(
-            quantityId,
-            source,
-            stableQuery,
-            revision,
-          ),
-        )
-      : resolvePlanarFieldResourceKey(quantityId, source, stableQuery, revision),
+      ? sessionScopedResourceKey(sessionIdentity, baseKey)
+      : baseKey,
+    revisionKey: baseKey,
   });
 }
 
@@ -427,17 +423,9 @@ export function usePlanarFieldBinaryResource(
   const stableQuery = useStablePlanarFieldQuery(query);
   const path = binaryPaths[kind][source.kind];
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
-  const revision = useResourceRevision(baseKey);
-  const unscopedResourceKey = resolvePlanarFieldResourceKey(
-    quantityId,
-    source,
-    stableQuery,
-    revision,
-    path,
-  );
   const resourceKey = sessionIdentity
-    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
-    : unscopedResourceKey;
+    ? sessionScopedResourceKey(sessionIdentity, baseKey)
+    : baseKey;
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedPlanarBinary(binaryCaches[kind], resourceKey, (etag) =>
@@ -459,6 +447,7 @@ export function usePlanarFieldBinaryResource(
     load,
     resolveRevision,
     resourceKey,
+    revisionKey: baseKey,
   });
 }
 
@@ -473,17 +462,9 @@ export function usePlanarScalarResource(
   const stableQuery = useStablePlanarFieldQuery(query);
   const path = binaryPaths.scalar[source.kind];
   const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
-  const revision = useResourceRevision(baseKey);
-  const unscopedResourceKey = resolvePlanarFieldResourceKey(
-    quantityId,
-    source,
-    stableQuery,
-    revision,
-    path,
-  );
   const resourceKey = sessionIdentity
-    ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
-    : unscopedResourceKey;
+    ? sessionScopedResourceKey(sessionIdentity, baseKey)
+    : baseKey;
   const load = useCallback(
     ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
       loadCachedPlanarScalar(binaryCaches.scalar, resourceKey, (etag) =>
@@ -505,6 +486,7 @@ export function usePlanarScalarResource(
     load,
     resolveRevision,
     resourceKey,
+    revisionKey: baseKey,
   });
 }
 
@@ -809,19 +791,6 @@ export async function loadCachedPlanarScalar(
     etag: result.etag,
   });
   return { data: result.data, etag: result.etag };
-}
-
-function useResourceRevision(resourceKey: string): ResourceRevision | null {
-  const { resources } = useKernel();
-  const subscribe = useCallback(
-    (listener: () => void) => resources.subscribe(resourceKey, listener),
-    [resourceKey, resources],
-  );
-  const getSnapshot = useCallback(
-    () => resources.getRevision(resourceKey),
-    [resourceKey, resources],
-  );
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {

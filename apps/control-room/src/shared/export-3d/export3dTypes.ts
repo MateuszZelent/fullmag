@@ -135,10 +135,12 @@ export interface Export3DTargetAppearance {
   includeSurface?: boolean;
   includeWireframe?: boolean;
   includeVectors?: boolean;
+  vectorColorMode?: Export3DColorMode;
 }
 
 interface Export3DTargetBase {
   id: string;
+  role?: "airbox";
   name?: string;
   field?: Export3DFieldInput | null;
   appearance?: Export3DTargetAppearance;
@@ -202,6 +204,8 @@ export interface Export3DModelOptions {
   surfaceDisplacementScale?: number;
   surfaceDisplacementComponent?: Export3DSurfaceDisplacementComponent;
   vtkEncoding?: Export3DVtkEncoding;
+  /** Preserve sampled colors while omitting physical vector arrays in VTK. */
+  vtkIncludeVectorData?: boolean;
   vtkFdmGeometryMode?: Export3DVtkFdmGeometryMode;
   frameIndex?: number;
   provenance?: Record<string, unknown>;

@@ -67,7 +67,7 @@ from fullmag.model.antenna import (
     SolvedAntennaDrive,
     SpinWaveExcitationAnalysis,
 )
-from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
+from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer, AbsorbingBoundaryLayers, SpatialAbsorbingLayer
 from fullmag.model.mask_field_drive import MaskAntenna
 from fullmag.model.vector_mask import VectorMask
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
@@ -489,6 +489,7 @@ class AlphaControl:
         self,
         parameters: AbsorbingBoundaryLayer | None = None,
         *,
+        layers: Sequence[SpatialAbsorbingLayer] | None = None,
         total_width: float | None = None,
         ramp_width: float | None = None,
         max_damping: float | None = None,
@@ -496,8 +497,16 @@ class AlphaControl:
         profile: str | None = None,
         frame: str | None = None,
         expression: str | None = None,
-    ) -> AbsorbingBoundaryLayer:
+    ) -> AbsorbingBoundaryLayer | AbsorbingBoundaryLayers:
         self._owner._assert_active_context()
+        if layers is not None:
+            if any(value is not None for value in (
+                parameters, total_width, ramp_width, max_damping, faces, profile, frame, expression
+            )):
+                raise TypeError("layers cannot be combined with single-layer parameters")
+            collection = AbsorbingBoundaryLayers(tuple(layers))
+            self._owner._absorbing_boundary = collection
+            return collection
         if parameters is not None:
             if any(
                 value is not None
@@ -594,7 +603,7 @@ class MagnetHandle:
         self.Aex: float | None = None
         self._alpha_value: float = 0.01
         self._alpha_control = AlphaControl(self)
-        self._absorbing_boundary: AbsorbingBoundaryLayer | None = None
+        self._absorbing_boundary: AbsorbingBoundaryLayer | AbsorbingBoundaryLayers | None = None
         self._material_version: PublishedMaterialVersion | None = None
         self._dind_value: float | None = None
         self._dbulk_value: float | None = None
@@ -857,6 +866,10 @@ class MagnetHandle:
     def remove_region(self, region: ObjectRegion | str | int) -> ObjectRegion:
         self._assert_active_context()
         index, resolved = self._resolve_region_index(region)
+        if isinstance(self._absorbing_boundary, AbsorbingBoundaryLayers):
+            for layer in self._absorbing_boundary.layers:
+                if resolved.region_id in layer.referenced_regions():
+                    raise ValueError(f"region {resolved.region_id!r} is referenced by absorbing layer {layer.layer_id!r}")
         removed = self._object_regions.pop(index)
         removed._delete_callback = None
         removed._simpleantenna_factory = None

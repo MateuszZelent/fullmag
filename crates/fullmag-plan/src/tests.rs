@@ -3714,7 +3714,7 @@ fn fdm_cuda_absorbing_boundary_plans_cellwise_damping() {
         profile: fullmag_ir::AbsorbingBoundaryProfileIR::Smootherstep,
         frame: fullmag_ir::AbsorbingBoundaryFrameIR::Object,
         expression: None,
-    });
+    }.into());
 
     let plan = plan(&ir).expect("single-grid CUDA consumes cellwise damping");
     let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
@@ -3766,7 +3766,7 @@ fn fdm_absorbing_boundary_uses_magnetic_support() {
                 profile: AbsorbingBoundaryProfileIR::Custom,
                 frame,
                 expression: Some("u**3".into()),
-            });
+            }.into());
             if explicit_universe {
                 // x+ is 2 nm beyond the rightmost magnetic cell centre.
                 ir.problem_meta.runtime_metadata.insert(
@@ -8141,6 +8141,7 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: Some(1e-9),
                 fixed_layer_position: Some("top".to_string()),
+                time_expression: None,
                 realization: None,
             },
             "slonczewski",

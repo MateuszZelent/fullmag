@@ -1081,7 +1081,12 @@ describe("FdmCuboidLayer model", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8").replace(/\r\n/g, "\n");
 
     expect(layerSource).toContain("resolveFdmCuboidSurfaceMaterialPlan(");
-    expect(layerSource).toContain("new MeshStandardMaterial({");
+    expect(layerSource).toContain("new MeshStandardMaterial(materialParameters)");
+    // Colour, opacity and PBR scalars are applied in place; only
+    // program-affecting parameters recreate the material.
+    expect(layerSource).toContain("material.opacity = surfaceOpacity;");
+    expect(layerSource).toContain("material.opacity = wireframeOpacity;");
+    expect(layerSource).not.toMatch(/surfaceMaterialColor,\n\s+surfaceOpacity,\n\s+tracker,\n\s+\],/);
     expect(layerSource).toContain("vertexColors: surfaceMaterialPlan.vertexColors");
     expect(layerSource).toContain("castShadow={surfaceMaterialPlan.castShadow}");
     expect(layerSource).toContain("MeshBasicMaterial");

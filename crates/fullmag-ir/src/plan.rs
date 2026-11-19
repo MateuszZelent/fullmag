@@ -942,6 +942,8 @@ pub struct FdmPlanIR {
     /// Resolved FDM cells selected by the canonical target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slonczewski_active_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_time_expression: Option<crate::TimeExpressionIR>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
     /// Prescribed-SOT source current density [A/m²]: signed for v1, raw legacy scalar for v0.
