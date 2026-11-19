@@ -134,9 +134,10 @@ export function selectLatestCompletedLiveChartResult({
       catalog.scene_revision !== sceneRevision || currentSeries.run_id !== execution.run_id) {
     return null;
   }
+  const authoredStageIds = new Set(catalog.authored_stage_ids);
   const matches = catalog.results.filter((result) => {
     const authoredStageIsCurrent = result.authored_stage_id
-      ? catalog.authored_stage_ids.includes(result.authored_stage_id)
+      ? authoredStageIds.has(result.authored_stage_id)
       : result.source.step_id === completedStageId;
     return authoredStageIsCurrent && result.source.run_id === execution.run_id &&
       result.source.case_id === "default" && sameSeries(result.source, currentSeries);
