@@ -310,37 +310,6 @@ ANTENNA_COMMANDS = (
 )
 
 
-LIVE_CHART_TESTS = (
-    'src/kernel/api/ControlRoomApi.test.ts',
-    'src/kernel/resources/studyRuntimeResources.test.ts',
-    'src/modules/live-charts/liveChartsHistory.test.ts',
-    'src/modules/live-charts/hooks/useLiveTableData.test.tsx',
-    'src/modules/live-charts/useLiveChartsController.range.test.tsx',
-    'src/modules/live-charts/useLiveChartsController.export.test.tsx',
-)
-LIVE_CHART_FILES = (
-    'src/kernel/api/ControlRoomApi.ts',
-    'src/kernel/api/apiTypes.ts',
-    'src/kernel/resources/studyRuntimeResources.ts',
-    'src/kernel/resources/studyResultPlaybackResources.ts',
-    'src/modules/live-charts/liveChartsHistory.ts',
-    'src/modules/live-charts/hooks/useLiveChartArchivedTable.ts',
-    'src/modules/live-charts/hooks/useLiveTableData.ts',
-    'src/modules/live-charts/useLiveChartsController.ts',
-    'src/shared/domain/analysis/chartDataPlan.ts',
-    *LIVE_CHART_TESTS,
-)
-LIVE_CHART_COMMANDS = (
-    FRONTEND_COMMANDS[0],
-    ('vitest', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'vitest', 'run',
-                *LIVE_CHART_TESTS, '--pool=threads', '--maxWorkers=1')),
-    FRONTEND_COMMANDS[1],
-    ('api-hygiene', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'run', 'check:api-hygiene')),
-    ('eslint', ('/usr/local/bin/pnpm', '--dir', FRONTEND_APP, 'exec', 'eslint',
-                *LIVE_CHART_FILES, '--max-warnings=0')),
-)
-
-
 FIELD_MAP_TESTS = (
     'src/kernel/visualization/planarSectionModel.test.ts',
     'src/kernel/visualization/VisualizationRegistrySyncController.test.ts',
@@ -736,7 +705,7 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
     import hashlib
     import time
     import docker_dev_codegen as codegen
-    if scope not in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-live-charts', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if scope not in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         raise BuildControlError('Unknown frontend verification scope')
     source_files, commands = {
         'frontend-materials': (MATERIAL_FILES, MATERIAL_COMMANDS),
@@ -744,7 +713,6 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
         'frontend-stl': (STL_FILES, STL_COMMANDS),
         'frontend-import': (IMPORT_FILES, FRONTEND_COMMANDS),
         'frontend-antenna': (ANTENNA_FILES, ANTENNA_COMMANDS),
-        'frontend-live-charts': (LIVE_CHART_FILES, LIVE_CHART_COMMANDS),
         'frontend-field-map': (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
         FIELD_MAP_SOURCE_SCOPE: (FIELD_MAP_FILES, FIELD_MAP_COMMANDS),
         'frontend-airbox': (AIRBOX_FILES, AIRBOX_COMMANDS),
@@ -767,7 +735,7 @@ def frontend_import_checks(control, selected, identity, *, scope='frontend-impor
         receipt.update(runtime_qualification='NOT VERIFIED',
                        qualification='source-only; no API or runtime commands or proof')
     root = f'verification/{scope}-checks'
-    if scope in ('frontend-stl', 'frontend-live-charts', 'frontend-materials', 'frontend-materials-full'):
+    if scope in ('frontend-stl', 'frontend-materials', 'frontend-materials-full'):
         # Keep every failed/passed attempt and its logs; retries must not
         # overwrite the evidence they are intended to explain.
         import uuid
@@ -906,7 +874,7 @@ def main():
     parser.add_argument('--offline', action='store_true', help='Run interpreted checks in a private group helper when backend is stopped')
     parser.add_argument('--initial-attempt', help='Pinned pre-service development attempt for offline checks')
     parser.add_argument('--modules', nargs='+', help='Explicit unittest modules (offline mode only)')
-    parser.add_argument('--scope', choices=('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-live-charts', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-materials', 'frontend-materials-full', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
+    parser.add_argument('--scope', choices=('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts', 'all', 'source-capture', 'activation-history', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-tools', 'field-only', 'network-failure', 'empty-authoring', 'frontend-materials', 'frontend-materials-full', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'), default='all')
     args = parser.parse_args()
     if args.initial_attempt is not None and not args.offline:
         raise BuildControlError('--initial-attempt requires --offline')
@@ -928,10 +896,10 @@ def main():
     helper = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper)
     control.prepare()
-    if args.scope in ('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts'):
+    if args.scope in ('gpu-temperature-contracts', 'material-library-contracts', 'material-library-python-contracts', 'authoring-contracts', 'time-expression-contracts', 'stl-api-contracts', 'live-observation-contracts', 'accepted-runtime-ownership-contracts', 'fem-live-control-contracts', 'fem-response-codec-contracts', 'fem-response-input-contracts', 'fem-response-preparation-contracts', 'fem-response-preparer-contracts', 'fem-response-descriptor-contracts', 'fem-response-worker-contracts', 'fem-preparation-contracts', 'stl-classification-contracts', 'stl-meshing-contracts'):
         from docker_authoring_contract_checks import run
         return run(control, selected, identity, scope=args.scope)
-    if args.scope in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-live-charts', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
+    if args.scope in ('frontend-materials', 'frontend-materials-full', 'frontend-stl', 'frontend-import', 'frontend-antenna', 'frontend-field-map', FIELD_MAP_SOURCE_SCOPE, 'frontend-airbox', 'frontend-camera', 'frontend-visualization', 'frontend-telemetry', 'frontend-telemetry-focused', 'frontend-telemetry-source', 'frontend-performance-source', 'frontend-performance'):
         return frontend_import_checks(control, selected, identity, scope=args.scope)
     if args.initial_attempt is not None:
         return _offline_checks(control, selected, None, args.modules, initial_attempt=args.initial_attempt)

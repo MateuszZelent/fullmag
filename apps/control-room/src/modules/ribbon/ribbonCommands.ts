@@ -21,6 +21,7 @@ import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
 import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import { addAbsorbingBoundaryCommand } from "./absorbingBoundaryCommand";
 import { cycleRibbonDensity } from "./ribbonPreference";
 import {
   BACKEND_INTERACTION_IDS,
@@ -320,6 +321,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
     scope: "workspace",
     run: beginCrossSectionDraftFromCommand,
   },
+  addAbsorbingBoundaryCommand,
   {
     id: RIBBON_PHYSICS_CREATE_FROZEN_SPINS_COMMAND,
     title: "Create Frozen Spins",

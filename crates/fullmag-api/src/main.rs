@@ -3799,7 +3799,7 @@ async fn sync_current_live_session_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_session_frame(next, frame),
+        move |next| apply_current_live_session_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3822,7 +3822,7 @@ async fn sync_current_live_runtime_frame(
         false,
         false,
         move |next| {
-            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization)
+            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization).map(|()| true)
         },
     )
     .await
@@ -3844,7 +3844,7 @@ async fn sync_current_live_scalar_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_scalar_frame(next, frame),
+        move |next| apply_current_live_scalar_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3868,7 +3868,7 @@ async fn sync_current_live_field_frame(
         preview_fields,
         clear_preview_cache,
         false,
-        move |next| apply_current_live_field_frame(next, frame),
+        move |next| apply_current_live_field_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3899,10 +3899,13 @@ impl CurrentLiveSyncKind {
 // not a resident solver publisher and must not start its heartbeat watchdog.
 // Keep all runtime-bearing snapshots and all typed frames on the existing path.
 fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
+    let prepared_grid = req.metadata.as_ref().is_some_and(|metadata| {
+        metadata["prepared_grid_scene_revision"].is_u64()
+    });
     req.mesh_workspace.is_some()
         && req.session.is_none()
         && req.session_status.is_none()
-        && req.metadata.is_none()
+        && (req.metadata.is_none() || prepared_grid)
         && req.stage_execution.is_none()
         && req.simulation_preparation.is_none()
         && req.run.is_none()
@@ -3914,7 +3917,7 @@ fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
         && !req.replace_latest_fields
         && req.field_generation.is_none()
         && req.preview_fields.is_none()
-        && !req.clear_preview_cache
+        && (!req.clear_preview_cache || prepared_grid)
         && req.solver_profile.is_none()
         && req.fem_mesh.is_none()
 }
@@ -3935,6 +3938,9 @@ mod authoring_grid_heartbeat_tests {
     #[test]
     fn grid_metadata_does_not_claim_resident_runner_liveness() {
         let mut req = grid();
+        assert!(is_authoring_grid_snapshot(&req));
+        req.metadata = Some(json!({"prepared_grid_scene_revision": 7}));
+        req.clear_preview_cache = true;
         assert!(is_authoring_grid_snapshot(&req));
         req.mesh_workspace = None;
         assert!(!is_authoring_grid_snapshot(&req));
@@ -4517,7 +4523,7 @@ mod live_publisher_epoch_tests {
                 if reject {
                     Err(ApiError::conflict("fixture_rejected_frame"))
                 } else {
-                    Ok(())
+                    Ok(true)
                 }
             },
         )
@@ -4585,7 +4591,7 @@ async fn sync_current_live_frame_update<F>(
     apply: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
-    F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
+    F: FnOnce(&mut SessionStateResponse) -> Result<bool, ApiError>,
 {
     let _session_transition = state.current_live_session_transition.lock().await;
     let sync_start = std::time::Instant::now();
@@ -4665,7 +4671,12 @@ where
         None => None,
     };
     let apply_start = std::time::Instant::now();
-    if let Err(error) = apply(&mut next) {
+    let applied = apply(&mut next);
+    if matches!(applied, Ok(false)) {
+        let scope = current_live_publisher_scope(state, &next);
+        return Ok(Json(json!({"status": "ok", "session_scope": scope, "revision": next.state_version})));
+    }
+    if let Err(error) = applied {
         // Rejected stale ownership is an admission failure, not a failure of
         // the current publisher. An old sender must not degrade a new owner.
         if !matches!(error.code.as_deref(),

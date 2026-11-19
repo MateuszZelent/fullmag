@@ -901,30 +901,34 @@ function resolveViewport3DTargetColorbarLegend({
 }
 
 export function buildViewport3DColorbarTargetPlans({
+  analysisOverlayQuantityId,
   availableQuantityIds,
   fdmSettings,
   parts,
 }: {
+  analysisOverlayQuantityId?: string | null;
   availableQuantityIds?: ReadonlySet<string> | null;
   fdmSettings?: VisualizationTargetSettings | null;
   parts: readonly Viewport3DColorbarTargetPart[];
 }): Viewport3DTargetRenderPlan[] {
   const targets: Viewport3DTargetRenderPlan[] = [];
   for (const part of parts) {
+    // Analysis artifacts supply the displayed magnetic quantity independently
+    // of the target's live field catalog and projection.
+    const overlayQuantityId = part.targetKind === "part" ? analysisOverlayQuantityId : null;
+    const quantityId = overlayQuantityId || part.settings.activeQuantityId;
     if (
       !isViewport3DColorbarTargetPartEligible(part) ||
-      !viewport3DColorbarQuantityAvailable(
-        part.settings.activeQuantityId,
-        availableQuantityIds,
-      )
+      (!overlayQuantityId &&
+        !viewport3DColorbarQuantityAvailable(quantityId, availableQuantityIds))
     ) {
       continue;
     }
     targets.push(
       buildViewport3DTargetRenderPlan({
         label: part.label,
-        quantityId: part.settings.activeQuantityId,
-        settings: part.settings,
+        quantityId,
+        settings: overlayQuantityId ? { ...part.settings, tensorProjection: null } : part.settings,
         targetId: part.id,
         targetKind: part.targetKind,
       }),
@@ -1467,6 +1471,7 @@ interface Viewport3DFrameProps
     | "orbitDebugRevision"
   > {
   getExportSource: () => Promise<ViewportModelSource>;
+  analysisOverlayQuantityId: string | null;
   artifactInspectionDefinitions: ReadonlyArray<{ id?: string; source_object_id?: string }>;
   artifactPresentationTarget: VisualizationTargetRef | null;
   cameraOwnerKey: string;
@@ -1911,11 +1916,27 @@ function LiveViewport3DModule({
         <WorkspaceRenderProfiler id="Viewport3DModule">
         <Viewport3DFrame
       {...sceneModel}
+      analysisOverlayQuantityId={sceneModel.analysisOverlay?.fieldId ?? null}
       primitiveModel={primitiveModelWithPlacementDraft ?? null}
       getExportSource={async () => {
+        // Capture numbers before loading the exporter. The clocks keep moving while it loads.
+        const overlay = sceneModel.analysisOverlay;
+        const analysisOverlay = overlay
+          ? {
+              ...overlay,
+              visualizationPhaseRad: kernel.analysisFieldOverlay.getDisplayedPhaseRadForOverlay(overlay),
+            }
+          : null;
+        const modeCompositionPhaseByLayerId = new Map(
+          Array.from(sceneModel.modeCompositionPhaseUniformByLayerId, ([layerId, { value }]) =>
+            [layerId, value] as const,
+          ),
+        );
         const { extractViewport3DExportSource } = await import("./export/extractViewport3DExportSource");
         return extractViewport3DExportSource({
           ...sceneModel,
+          analysisOverlay,
+          modeCompositionPhaseByLayerId,
           domainId,
           topology: sceneModel.topology ?? null,
           primitiveModel: primitiveModelWithPlacementDraft ?? null,
@@ -2133,6 +2154,7 @@ function useViewport3DSelectionHandlers({
 }
 
 const Viewport3DFrame = memo(function Viewport3DFrame({
+  analysisOverlayQuantityId,
   artifactInspectionDefinitions,
   artifactPresentationTarget,
   captureRevision,
@@ -2411,6 +2433,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     () =>
       savedViewportColorbarReady
         ? buildViewport3DColorbarTargetPlans({
+            analysisOverlayQuantityId,
             availableQuantityIds: sceneProps.availableQuantityIds,
             fdmSettings:
               sceneProps.fdmDomain && sceneProps.fdmTargetViews.length === 0
@@ -2420,6 +2443,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           })
         : [],
     [
+      analysisOverlayQuantityId,
       colorbarParts,
       sceneProps.availableQuantityIds,
       sceneProps.fdmDomain,

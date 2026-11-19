@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 import math
+import re
 from typing import Mapping, Sequence, TypeAlias
 import warnings
 
@@ -90,6 +91,60 @@ class RegionRef:
         if self.region_id is not None:
             value["region_id"] = self.region_id
         return value
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class TimeExpression:
+    """Dimensionless function of cumulative physical time in seconds."""
+
+    source: str
+    constants: tuple[tuple[str, float], ...]
+    event_times_s: tuple[float, ...]
+
+    def __init__(
+        self,
+        source: str,
+        *,
+        constants: Mapping[str, float] | None = None,
+        event_times_s: Sequence[float] = (),
+    ) -> None:
+        source = require_non_empty(source, "time expression source").strip()
+        if not source.isascii() or len(source) > 1024:
+            raise ValueError("time expression source must contain at most 1024 ASCII characters")
+        bindings = []
+        for name, value in (constants or {}).items():
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name in {"t", "pi", "e"}:
+                raise ValueError(f"invalid time expression constant name {name!r}")
+            bindings.append((name, require_finite(value, f"time expression constant {name}")))
+        if len(bindings) > 64:
+            raise ValueError("time expression may declare at most 64 constants")
+        events = tuple(require_finite(time, "time expression event time") for time in event_times_s)
+        if len(events) > 4096:
+            raise ValueError("time expression may declare at most 4096 event times")
+        if any(time < 0 for time in events) or any(right <= left for left, right in zip(events, events[1:])):
+            raise ValueError("time expression event times must be nonnegative and strictly increasing")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "constants", tuple(sorted(bindings)))
+        object.__setattr__(self, "event_times_s", events)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "constants": dict(self.constants),
+            "event_times_s": list(self.event_times_s),
+        }
+
+
+    @classmethod
+    def from_ir(cls, value: object) -> "TimeExpression":
+        if not isinstance(value, Mapping) or set(value) - {"source", "constants", "event_times_s"}:
+            raise ValueError("time_expression must be a source, constants and event times object")
+        source = value.get("source")
+        constants = value.get("constants", {})
+        events = value.get("event_times_s", [])
+        if not isinstance(source, str) or not isinstance(constants, Mapping) or not isinstance(events, list):
+            raise ValueError("time_expression has invalid field types")
+        return cls(source, constants=constants, event_times_s=events)
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,6 +480,10 @@ class SlonczewskiSTT:
         ``"top"`` → electrons flow upward into the fixed layer (positive J_z),
         ``"bottom"`` → electrons flow downward (sign flip, like amumax ``FIXEDLAYER_BOTTOM``).
         Default: ``"top"``.
+    time_expression : TimeExpression, optional
+        Dimensionless multiplier of the prescribed current density, sampled at
+        RK substeps in cumulative physical seconds. Supported for single-grid
+        FDM CUDA FP64 RK45 in extended mode.
     """
 
     current_density: tuple[float, float, float] | None
@@ -439,6 +498,7 @@ class SlonczewskiSTT:
     target: RegionRef | None = None
     stack_normal: tuple[float, float, float] | None = None
     interface_id: str | None = None
+    time_expression: TimeExpression | None = None
     formula_version: str = "slonczewski.legacy_fullmag.v0"
     realization_version: str | None = None
 
@@ -457,6 +517,7 @@ class SlonczewskiSTT:
         target: RegionRef | None = None,
         stack_normal: Sequence[float] | None = None,
         interface_id: str | None = None,
+        time_expression: TimeExpression | None = None,
     ) -> None:
         resolved_density, resolved_source = _resolve_current_binding(
             current_density=current_density,
@@ -470,6 +531,12 @@ class SlonczewskiSTT:
             or stack_normal is not None
             or interface_id is not None
         )
+        if time_expression is not None:
+            if not isinstance(time_expression, TimeExpression):
+                raise TypeError("time_expression must be a TimeExpression")
+            if not canonical or interface_id is not None or resolved_density is None:
+                raise ValueError("time_expression requires a canonical thin-layer SlonczewskiSTT with prescribed current_density")
+        object.__setattr__(self, "time_expression", time_expression)
         if canonical:
             if id is None or target is None or stack_normal is None:
                 raise ValueError("canonical SlonczewskiSTT requires id, target, and stack_normal")
@@ -562,6 +629,8 @@ class SlonczewskiSTT:
             ir["current_density"] = list(self.current_density)
         if self.current_source is not None:
             ir["current_source"] = self.current_source
+        if self.time_expression is not None:
+            ir["time_expression"] = self.time_expression.to_ir()
         return ir
 
     def to_ir_fields(self) -> dict[str, object]:

@@ -76,6 +76,7 @@ describe("useLiveTableData", () => {
       table: row(101),
     };
     expect(liveTableForCurrentSeries(state, b1)).toBeNull();
+    expect(liveTableForCurrentSeries({ ...state, seriesIdentity: undefined }, b1)).toBeNull();
 
     state = liveTableReducer(state, {
       expectedSeriesIdentity: b1,
@@ -104,6 +105,16 @@ describe("useLiveTableData", () => {
       table: row(201),
     });
     expect(state.table?.values).toEqual(new Float64Array([201]));
+    const acceptedB1 = state;
+    for (const staleRows of [a1, undefined]) {
+      state = liveTableReducer(state, {
+        expectedSeriesIdentity: b1,
+        queryKey: "follow:B1",
+        seriesIdentity: staleRows,
+        table: row(199),
+      });
+      expect(state).toBe(acceptedB1);
+    }
 
     state = liveTableReducer(state, {
       expectedSeriesIdentity: b2,
@@ -202,6 +213,27 @@ describe("useLiveTableData", () => {
     expect(reset.cursor).toBe(1);
     expect(reset.table).toBe(resync);
     expect(reset.table?.rowCount).toBe(0);
+  });
+
+  it("discards the invalidated cursor when a shorter stage returns an empty resync", () => {
+    const row = (count: number): ChartTableWindow => ({
+      columnCount: 1,
+      columns: [{ column_id: "step", label: "Step", unit: "1" }],
+      cursorEnd: 50,
+      cursorStart: 50,
+      resyncRequired: count === 0,
+      revision: count === 0 ? 1 : 50,
+      rowCount: count,
+      schemaRevision: 1,
+      tableId: "default",
+      totalRows: count === 0 ? 1 : 50,
+      values: new Float64Array(count),
+    });
+    const oldStage = { cursor: 50, queryKey: "follow", table: row(50) };
+    const answerFromNewStage = { requestCursor: 50, queryKey: "follow", table: row(0) };
+    const restarted = liveTableReducer(oldStage, answerFromNewStage);
+    expect(restarted.cursor).toBeUndefined();
+    expect(restarted.table).toBeNull();
   });
 
   it("replaces sparse-cursor snapshot windows instead of merging their decimated rows", () => {

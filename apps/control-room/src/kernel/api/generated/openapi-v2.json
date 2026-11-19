@@ -20447,6 +20447,12 @@
                     "$ref": "#/components/schemas/SceneRegionRef"
                   }
                 ]
+              },
+              "time_expression": {
+                "type": [
+                  "object",
+                  "null"
+                ]
               }
             },
             "required": [

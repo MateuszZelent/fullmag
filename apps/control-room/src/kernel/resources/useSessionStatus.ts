@@ -64,7 +64,6 @@ export function useSessionStatusSelector<TSelected>(
   options: {
     enabled?: boolean;
     isEqual?: (previous: TSelected, next: TSelected) => boolean;
-    pauseLoad?: boolean;
   } = {},
 ): TSelected {
   const { api } = useKernel();
@@ -79,7 +78,6 @@ export function useSessionStatusSelector<TSelected>(
     isEqual: options.isEqual,
     load,
     minRefetchIntervalMs: statusRefreshIntervalMs(),
-    pauseLoad: options.pauseLoad,
     resolveRevision: resolveSessionStatusRevision,
     resourceKey: SESSION_STATUS_RESOURCE_KEY,
     selector,

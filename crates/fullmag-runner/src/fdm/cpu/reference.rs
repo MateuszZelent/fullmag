@@ -1310,7 +1310,7 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
         });
     }
 
-    let problem = ExchangeLlgProblem::with_terms_and_mask(
+    let mut problem = ExchangeLlgProblem::with_terms_and_mask(
         grid,
         cell_size,
         material,
@@ -1361,6 +1361,13 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    if let Some(expression) = plan.slonczewski_time_expression.as_ref() {
+        problem
+            .set_slonczewski_time_expression(expression)
+            .map_err(|error| RunError {
+                message: format!("Slonczewski time expression: {error}"),
+            })?;
+    }
     let problem = problem
         .with_static_external_field(plan.static_external_field_xyz.clone())
         .map_err(|e| RunError {
@@ -2052,6 +2059,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             crate::schedules::OUTPUT_TIME_TOLERANCE
         },
     );
+    crate::time_events::extend_absolute_time_expression_events(
+        &mut time_events,
+        plan.slonczewski_time_expression.as_ref(),
+        plan.time_stage.start_time_s,
+        stage_end_time_s,
+    );
     if spin_transport.is_some() {
         let envelopes = plan.spin_transport_plans.iter().filter_map(|resolved| {
             resolved
@@ -2487,7 +2500,11 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         state.time_seconds,
                         dt.min(remaining),
                         &time_events.times_s,
-                        crate::schedules::OUTPUT_TIME_TOLERANCE,
+                        if plan.slonczewski_time_expression.is_some() {
+                            0.0
+                        } else {
+                            crate::schedules::OUTPUT_TIME_TOLERANCE
+                        },
                     )
                 },
                 |target| target - state.time_seconds,
@@ -2503,6 +2520,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 plan.adaptive_timestep.as_ref(),
                 plan.relaxation.is_none() && spin_transport.is_none(),
                 transport_step_end.is_some(),
+                plan.slonczewski_time_expression.is_some(),
                 remaining,
                 dt_step,
             );
@@ -2672,11 +2690,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 }
             } else {
                 let result = if use_hard_endpoint_rk45_step {
+                    let hard_endpoint_s = state.time_seconds + dt_step;
                     step_reference_fdm_problem_to_hard_endpoint(
                         &problem,
                         &mut state,
                         &mut state_soa,
-                        stage_end_time_s,
+                        hard_endpoint_s,
                         &mut fft_workspace,
                         &mut integrator_bufs,
                         step_evaluation,
@@ -3909,15 +3928,21 @@ fn should_use_rk45_hard_endpoint_step(
     adaptive: Option<&AdaptiveTimeStepIR>,
     is_physical_time_evolution: bool,
     has_transport_step_end: bool,
+    has_time_expression: bool,
     remaining_s: f64,
     dt_step_s: f64,
 ) -> bool {
+    let Some(policy) = adaptive else {
+        return false;
+    };
+    let is_subminimum_stage_endpoint = remaining_s < policy.dt_min && dt_step_s == remaining_s;
+    let is_subminimum_expression_interval = has_time_expression && dt_step_s < policy.dt_min;
     is_physical_time_evolution
         && !has_transport_step_end
         && integrator.unwrap_or(IntegratorChoice::Heun) == IntegratorChoice::Rk45
         && remaining_s.is_finite()
         && remaining_s > 0.0
-        && adaptive.is_some_and(|policy| remaining_s < policy.dt_min && dt_step_s == remaining_s)
+        && (is_subminimum_stage_endpoint || is_subminimum_expression_interval)
 }
 
 fn step_reference_fdm_problem_to_hard_endpoint(
@@ -5466,6 +5491,7 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
@@ -5474,6 +5500,7 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             adaptive.dt_min,
             adaptive.dt_min,
         ));
@@ -5481,6 +5508,7 @@ mod tests {
             Some(IntegratorChoice::Rk45),
             Some(&adaptive),
             true,
+            false,
             false,
             endpoint_interval,
             endpoint_interval * 0.5,
@@ -5490,12 +5518,14 @@ mod tests {
             Some(&adaptive),
             true,
             false,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
         assert!(!should_use_rk45_hard_endpoint_step(
             Some(IntegratorChoice::Rk45),
             Some(&adaptive),
+            false,
             false,
             false,
             endpoint_interval,
@@ -5506,6 +5536,7 @@ mod tests {
             Some(&adaptive),
             true,
             true,
+            false,
             endpoint_interval,
             endpoint_interval,
         ));
@@ -5514,7 +5545,26 @@ mod tests {
             None,
             true,
             false,
+            false,
             endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            true,
+            10.0 * adaptive.dt_min,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            false,
+            10.0 * adaptive.dt_min,
             endpoint_interval,
         ));
     }

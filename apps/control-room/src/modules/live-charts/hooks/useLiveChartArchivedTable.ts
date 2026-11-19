@@ -37,10 +37,10 @@ export function useLiveChartArchivedTable({
   // Archive paging is a tail replacement for the default follow view. Existing
   // fixed/time ranges continue to use their live query semantics.
   const enabled = shouldLoadLiveChartArchivedTable({ active, paused, range });
-  const executionResource = useStageExecutionResource({ enabled, pauseLoad: paused });
+  const executionResource = useStageExecutionResource({ enabled });
   const sceneRevision = useSessionStatusSelector(
     ({ data }) => data?.resources.scene_revision ?? null,
-    { enabled, pauseLoad: paused },
+    { enabled },
   );
   const execution = executionResource.data;
   const hasCompletedStage = latestCompletedLiveChartStageId(execution) !== null;
@@ -51,7 +51,6 @@ export function useLiveChartArchivedTable({
     sceneRevision,
     enabled: enabled && hasCompletedStage && currentSeries !== null &&
       currentSeries !== undefined && sceneRevision !== null,
-    pauseLoad: paused,
   });
   const catalog = resultsResource.data;
   const result = useMemo(() => selectLatestCompletedLiveChartResult({

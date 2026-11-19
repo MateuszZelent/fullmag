@@ -10,7 +10,7 @@ import { useSessionScopedResourceKey } from "./useSessionScopedResourceKey";
 import { useSessionStatusSelector } from "./useSessionStatus";
 
 export function useStudyStageResultsResource({
-  stageId, runId, cursor, limit, sceneRevision, enabled, pauseLoad = false,
+  stageId, runId, cursor, limit, sceneRevision, enabled,
 }: {
   stageId?: string;
   runId?: string;
@@ -18,7 +18,6 @@ export function useStudyStageResultsResource({
   limit: number;
   sceneRevision: number | null;
   enabled: boolean;
-  pauseLoad?: boolean;
 }) {
   const { api } = useKernel();
   const runtimeIdentity = useSessionStatusSelector(({ data }) =>
@@ -27,7 +26,7 @@ export function useStudyStageResultsResource({
       data?.resources.command_completion_revision ?? null,
       data?.resources.mesh_revision ?? null,
     ]),
-    { enabled, pauseLoad },
+    { enabled },
   );
   const query = new URLSearchParams({
     limit: String(limit),
@@ -50,7 +49,6 @@ export function useStudyStageResultsResource({
     abortStaleInflight: true,
     notifyOnError: false,
     load,
-    pauseLoad,
     resolveRevision: (data) => data.revision,
     resourceKey,
   });

@@ -632,15 +632,13 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
             return subprocess.run([bash, '--noprofile', '--norc', '-c', program],
                                   env=environment, capture_output=True, text=True, timeout=15)
 
-    def test_dispatches_literal_frontend_scopes_as_fixed_argv(self):
+    def test_dispatches_literal_antenna_scope_as_fixed_argv(self):
         source_root = '/selected/$(printf literal);worktree'
-        for scope in ('frontend-antenna', 'frontend-live-charts'):
-            with self.subTest(scope=scope):
-                recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
-                          f"--source-root '{source_root}' --scope '{scope}'")
-                result = self.dispatch(recipe)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', scope])
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  f"--source-root '{source_root}' --scope 'frontend-antenna'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
 
     def test_dispatches_only_exact_activation_history_scope(self):
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '

@@ -10418,6 +10418,7 @@ mod tests {
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
+            time_expression: None,
         }];
         let mut plan = test_fem_execution_plan();
         plan.common.execution_mode = ExecutionMode::Extended;

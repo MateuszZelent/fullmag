@@ -3056,6 +3056,13 @@ pub(crate) fn plan_fdm(
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
+    if spin_torque.slonczewski_time_expression.is_some() {
+        if integrator != Some(IntegratorChoice::Rk45) {
+            errors.push(
+                "Slonczewski time_expression requires the resolved FDM RK45 integrator".into(),
+            );
+        }
+    }
     if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
         errors.push(
             "RegionalFieldDrive is not executable with ABM3 because the multistep history has no qualified discontinuity/event restart contract; use heun, rk4, rk23, or rk45"
@@ -3442,12 +3449,28 @@ pub(crate) fn plan_fdm(
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some() && !spin_transport_plans.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
     let fdm_gpu_charge_transports = resolve_fdm_gpu_charge_transports_with_active_graph(
         problem,
         resolved_backend,
         &spin_transport_context,
         &active_transport_graph,
     )?;
+    if spin_torque.slonczewski_time_expression.is_some()
+        && !fdm_gpu_charge_transports.is_empty()
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "Slonczewski time_expression does not support coupled spin/charge transport".into(),
+            ],
+        });
+    }
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -3537,6 +3560,7 @@ pub(crate) fn plan_fdm(
         slonczewski_stack_normal: spin_torque.slonczewski_stack_normal,
         slonczewski_target: spin_torque.slonczewski_target.clone(),
         slonczewski_active_mask,
+        slonczewski_time_expression: spin_torque.slonczewski_time_expression.clone(),
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

@@ -47,16 +47,14 @@ export interface Viewport3DDerivedWorkItem {
 export function planViewport3DDerivedWorkItems({
   complexFieldVector,
   targetPasses,
-  visualizationPhaseRad,
 }: {
+  /** Complex field whose phase projection runs in shaders. */
   complexFieldVector?: DecodedComplexFieldVector | null;
   targetPasses: ReadonlyMap<string, Viewport3DTargetRenderPassModel>;
-  visualizationPhaseRad?: number | null;
 }): Viewport3DDerivedWorkItem[] {
   const items: Viewport3DDerivedWorkItem[] = [];
   const complexProjectionItem = buildComplexPhaseProjectionWorkItem({
     complexFieldVector,
-    visualizationPhaseRad,
   });
   if (complexProjectionItem) {
     items.push(complexProjectionItem);
@@ -79,25 +77,24 @@ export function planViewport3DDerivedWorkItems({
   return items.sort((left, right) => left.workId.localeCompare(right.workId));
 }
 
+/**
+ * The complex field is reduced once to phase-independent real/imaginary
+ * attributes and an envelope carrier; the phase itself is a shader uniform,
+ * so this work item's identity never changes during phase animation.
+ */
 function buildComplexPhaseProjectionWorkItem({
   complexFieldVector,
-  visualizationPhaseRad,
 }: {
   complexFieldVector?: DecodedComplexFieldVector | null;
-  visualizationPhaseRad?: number | null;
 }): Viewport3DDerivedWorkItem | null {
-  if (
-    !complexFieldVector ||
-    typeof visualizationPhaseRad !== "number" ||
-    !Number.isFinite(visualizationPhaseRad)
-  ) {
+  if (!complexFieldVector) {
     return null;
   }
   const outputBytesEstimate =
     complexFieldVector.pointCount *
     complexFieldVector.componentCount *
     Float64Array.BYTES_PER_ELEMENT;
-  const phaseRevision = `phase=${visualizationPhaseRad}`;
+  const phaseRevision = "phase=shader-uniform";
   return {
     blockedReason: null,
     execution: "runtime-worker",

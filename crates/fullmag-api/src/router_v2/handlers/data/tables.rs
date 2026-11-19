@@ -178,10 +178,10 @@ pub async fn get_table_rows(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let all_rows = &snapshot.scalar_rows[..];
+    let (all_rows, series) = current_table_rows(snapshot, request_context.run_id.as_deref())?;
     let mut window =
         build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
-    window.series = current_table_series(snapshot, request_context.run_id.as_deref());
+    window.series = series;
 
     Ok(Json(window))
 }
@@ -227,10 +227,10 @@ pub async fn get_table_rows_binary(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let all_rows = &snapshot.scalar_rows[..];
+    let (all_rows, series) = current_table_rows(snapshot, request_context.run_id.as_deref())?;
     let mut window =
         build_table_rows_resource(table_id, all_rows, &query, table_columns(Some(snapshot)))?;
-    window.series = current_table_series(snapshot, request_context.run_id.as_deref());
+    window.series = series;
     let payload = encode_table_rows_binary(&window);
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -248,14 +248,21 @@ pub async fn get_table_rows_binary(
     Ok((headers, payload))
 }
 
-fn current_table_series(
-    snapshot: &SessionStateResponse,
+fn current_table_rows<'a>(
+    snapshot: &'a SessionStateResponse,
     current_run_id: Option<&str>,
-) -> Option<ScalarSeriesIdentity> {
-    let series = snapshot.latest_scalar_source.as_ref()?.series.as_ref()?;
-    current_run_id
-        .filter(|run_id| series.identity.run_id == *run_id)
-        .map(|_| series.identity.clone())
+) -> Result<(&'a [ScalarRow], Option<ScalarSeriesIdentity>), ApiError> {
+    let rows = &snapshot.scalar_rows[..];
+    let Some(series) = snapshot.latest_scalar_source.as_ref().and_then(|source| source.series.as_ref()) else {
+        return Ok((rows, None));
+    };
+    if current_run_id != Some(series.identity.run_id.as_str()) {
+        return Ok((&[], None));
+    }
+    if series.row_revisions.len() != rows.len() {
+        return Err(ApiError::conflict("scalar table row ownership does not match its source revisions"));
+    }
+    Ok((rows, Some(series.identity.clone())))
 }
 
 fn scalar_series_header(series: Option<&ScalarSeriesIdentity>) -> Result<HeaderValue, ApiError> {
@@ -981,6 +988,39 @@ mod modal_history_tests {
         assert_eq!(decode(&b1_header), b1);
         assert_ne!(decode(&a1_header), decode(&b1_header));
         assert_eq!(scalar_series_header(None).unwrap(), "none");
+    }
+
+    #[tokio::test]
+    async fn live_view_continuity_rejects_unbound_scalar_table_rows() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().unwrap();
+        snapshot.scalar_rows = vec![table_row(1, 1e-12, 0.0)];
+        let identity = ScalarSeriesIdentity {
+            run_id: "run-b".into(),
+            task_id: "task-b".into(),
+            step_id: "B1".into(),
+            case_id: "default".into(),
+            attempt_id: "attempt-b".into(),
+            ownership_epoch: 1,
+        };
+        snapshot.latest_scalar_source = Some(crate::types::CurrentScalarSourceState {
+            series: Some(crate::types::CurrentScalarSeries {
+                identity: identity.clone(),
+                row_revisions: vec![1],
+            }),
+            ..Default::default()
+        });
+
+        let (rows, series) = current_table_rows(snapshot, Some("run-b")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(series, Some(identity));
+        let (rows, series) = current_table_rows(snapshot, Some("run-a")).unwrap();
+        assert!(rows.is_empty());
+        assert!(series.is_none());
+
+        snapshot.scalar_rows.push(table_row(2, 2e-12, 0.0));
+        assert!(current_table_rows(snapshot, Some("run-b")).is_err());
     }
 
     fn hidden_modal_row(step: u64, time: f64) -> ScalarRow {

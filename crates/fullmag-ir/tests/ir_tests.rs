@@ -6745,6 +6745,7 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
             realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
         }),
@@ -6781,6 +6782,7 @@ fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
             epsilon_prime,
             free_layer_thickness_m,
             fixed_layer_position: None,
+            time_expression: None,
             realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
                 realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
             }),
@@ -6816,6 +6818,7 @@ fn canonical_slonczewski_interface_flux_does_not_require_bulk_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: None,
         fixed_layer_position: None,
+        time_expression: None,
         realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
             interface_id: "fixed-to-free".to_string(),
             realization_version: "slonczewski_interface_flux.v1".to_string(),
@@ -6874,6 +6877,7 @@ fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.5e-9),
             fixed_layer_position: Some(position.to_string()),
+            time_expression: None,
             realization: None,
         }];
 
@@ -6899,6 +6903,7 @@ fn slonczewski_rejects_invalid_fixed_layer_position() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: Some("side".to_string()),
+        time_expression: None,
         realization: None,
     }];
 
@@ -6927,6 +6932,7 @@ fn slonczewski_rejects_non_positive_free_layer_thickness() {
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(0.0),
         fixed_layer_position: Some("top".to_string()),
+        time_expression: None,
         realization: None,
     }];
 

@@ -179,6 +179,27 @@ describe("Live Charts archived scalar history", () => {
     })).toBe(candidate);
   });
 
+  it("does not restore a previous completed stage while terminal metadata advances", () => {
+    const oldIdentity = { ...currentIdentity, step_id: "A1", attempt_id: "attempt-a1" };
+    const previous = { ...result(oldIdentity), authored_stage_id: "A1" };
+    const completed = {
+      ...execution,
+      total_stages: 2,
+      completed_stage_indexes: [0, 1],
+      stage_statuses: ["completed", "completed"],
+      stages: [
+        { stage_id: "A1", index: 0, status: "completed", converged: true },
+        { stage_id: "B1", index: 1, status: "completed", converged: true },
+      ],
+    };
+    expect(selectLatestCompletedLiveChartResult({
+      catalog: { ...catalog([previous]), authored_stage_ids: ["A1", "B1"] },
+      currentSeries: oldIdentity,
+      execution: completed,
+      sceneRevision: 3,
+    })).toBeNull();
+  });
+
   it("matches StudyPlan V4 results by physical source when durable and authored IDs differ", () => {
     const physicalSeries = {
       ...currentIdentity,

@@ -71,6 +71,7 @@ import {
   useFieldMetaResource,
   useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { resourceDataRevision } from "@/kernel/resources/resourceState";
 import { useResource } from "@/kernel/resources/useResource";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 import {
@@ -115,6 +116,7 @@ import {
 } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  DEFAULT_AIRBOX_VISUALIZATION,
   resolveDefaultVisualizationSettings,
   resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
@@ -146,6 +148,7 @@ import {
 import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
 import { useModeCompositionPhaseClock } from "@/kernel/visualization/ModeCompositionPhaseClock";
+import type { LivePhaseUniform } from "@/kernel/visualization/livePhaseUniform";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
@@ -474,6 +477,25 @@ type SceneRegionShape = components["schemas"]["SceneRegionShape"];
 
 const EMPTY_AIRBOX_FIELD_VECTOR_PARTS: readonly { id: string }[] = [];
 const EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS: ReadonlySet<string> = new Set();
+const EMPTY_MODE_COMPOSITION_PHASE_UNIFORMS: ReadonlyMap<string, LivePhaseUniform> = new Map();
+
+type PhaseFrameSubscribe = (listener: () => void) => () => void;
+
+/** One subscription that fires on every frame of either phase clock. */
+function combinePhaseFrameSubscriptions(
+  first: PhaseFrameSubscribe,
+  second: PhaseFrameSubscribe,
+): PhaseFrameSubscribe {
+  return (listener) => {
+    const unsubscribeFirst = first(listener);
+    const unsubscribeSecond = second(listener);
+    return () => {
+      unsubscribeFirst();
+      unsubscribeSecond();
+    };
+  };
+}
+
 export function resolveViewport3DVectorScale(
   boundsSize: readonly number[],
   vectorLengthScale: number,
@@ -1019,7 +1041,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   airboxFieldVectorRequests,
   airboxFieldVectors,
   airboxQuantityCompatible = false,
-  airboxQuantityId = "m",
+  airboxQuantityId,
   airboxSyntheticVectorsEnabled = false,
   getPartSettings,
   quantityCatalog = null,
@@ -1156,7 +1178,9 @@ export function resolveViewport3DResolvedPartFieldBuffers({
       });
     }
     if (airboxQuantityCompatible) {
-      const targetQuantityId = resolveCanonicalQuantityId(airboxQuantityId ?? "m");
+      const targetQuantityId = resolveCanonicalQuantityId(
+        airboxQuantityId ?? DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+      );
       for (const partModel of topology.airboxParts) {
         const partId = partModel.part.id;
         const resolved = resolveViewport3DTargetQuantityFieldVectorForTarget({
@@ -3245,9 +3269,22 @@ export function useViewport3DSceneModel({
     savedViewportResourceHasFreshData(savedViewportResources.field);
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay, diagnosticRecorder } = useKernel();
-  const analysisOverlayContext = useAnalysisFieldOverlayContext(analysisFieldOverlay);
-  const analysisOverlaySnapshot =
-    useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  // The scene never reads the overlay phase from React state: materials bind
+  // analysisFieldOverlay.phaseClock.uniform, so phase edits and animation
+  // frames do not re-render or rebuild the scene model.
+  const analysisOverlayContext = useAnalysisFieldOverlayContext(
+    analysisFieldOverlay,
+    { ignorePhase: true },
+  );
+  const analysisOverlaySnapshot = useRenderableAnalysisFieldOverlay(
+    analysisFieldOverlay,
+    { ignorePhase: true },
+  );
+  // Stable cell: the overlay phase reaches materials through it, never
+  // through render options, so phase changes do not rebuild the field model.
+  const analysisOverlayPhaseUniform = analysisOverlaySnapshot
+    ? analysisFieldOverlay.phaseClock.uniform
+    : null;
   const analysisOverlay = useMemo(
     () =>
       analysisResultOverlayMatchesSelection(
@@ -3273,6 +3310,16 @@ export function useViewport3DSceneModel({
   const modeCompositionPhaseClock = useModeCompositionPhaseClock(
     modeCompositionController.controller.resource,
   );
+  const subscribeModeCompositionPhaseFrames = modeCompositionPhaseClock.subscribeFrame;
+  // Phase frames reach the canvas only as invalidations; uniforms carry the
+  // values, so no React state changes while either clock runs.
+  const subscribeComplexPhaseFrames = useMemo(() => {
+    const phaseClock = analysisFieldOverlay.phaseClock;
+    return combinePhaseFrameSubscriptions(
+      phaseClock.subscribe.bind(phaseClock),
+      subscribeModeCompositionPhaseFrames,
+    );
+  }, [analysisFieldOverlay, subscribeModeCompositionPhaseFrames]);
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
@@ -3449,6 +3496,13 @@ export function useViewport3DSceneModel({
   const topology = useViewport3DDomainTopology(
     liveViewportResourcesEnabled && femLaneActive,
   );
+  // Identity of the topology payload being shown. `topology.revision` follows
+  // the pending external revision while a refresh is in flight, so keying
+  // builds on it rebuilt (and blanked) FEM geometry and colours twice per
+  // refresh (audit 2026-11-19, A8).
+  const topologyDataRevisionValue = resourceDataRevision(topology);
+  const topologyDataRevision =
+    topologyDataRevisionValue == null ? null : String(topologyDataRevisionValue);
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
     enabled: liveViewportResourcesEnabled && Boolean(fdmLaneActive),
   });
@@ -3540,7 +3594,7 @@ export function useViewport3DSceneModel({
     enabled:
       liveViewportResourcesEnabled &&
       Boolean(fdmLaneActive && fdmRegionMembership.data),
-    revision: fdmRegionMembership.revision,
+    revision: resourceDataRevision(fdmRegionMembership),
   });
   const fdmDomainPresentation = useMemo(
     () =>
@@ -3638,7 +3692,7 @@ export function useViewport3DSceneModel({
     magneticParts: femDomain.magneticParts,
     magneticSurfacePartsByPartId: femDomain.magneticSurfacePartsByPartId,
     topology: topology.data,
-    topologyRevision: topology.revision == null ? null : String(topology.revision),
+    topologyRevision: topologyDataRevision,
   });
   const topologyIndexState =
     topologyIndexBundle.status === "building"
@@ -4933,23 +4987,18 @@ export function useViewport3DSceneModel({
                 quantityId: primaryFieldQuantityId,
                 vectorDomain,
               }),
-              visualizationPhaseRad:
-                analysisOverlay?.visualizationPhaseRad ??
-                analysisOverlay?.query.phase_rad ??
-                null,
+              complexPhaseUniform: analysisOverlayPhaseUniform,
             },
             fieldCompatibleTopologyRenderModel,
             maxInteractiveVectorGlyphs,
           )
         : {
             ...fieldRenderOptions,
-            visualizationPhaseRad:
-              analysisOverlay?.visualizationPhaseRad ??
-              analysisOverlay?.query.phase_rad ??
-              null,
+            complexPhaseUniform: analysisOverlayPhaseUniform,
           },
     [
       analysisOverlay,
+      analysisOverlayPhaseUniform,
       fieldCompatibleTopologyRenderModel,
       fieldRenderOptions,
       getPartSettings,
@@ -5034,8 +5083,7 @@ export function useViewport3DSceneModel({
             targetQuantityFieldVectors.payloadRevision ?? null,
           targetQuantityFieldVectors: targetQuantityFieldVectors.data,
           topology: fieldCompatibleTopologyRenderModel,
-          topologyRevision:
-            topology.revision == null ? null : String(topology.revision),
+          topologyRevision: topologyDataRevision,
         });
       const partScalarRangesByMode = mergeViewport3DPartScalarRanges({
         baseRanges: partScalarRanges.data,
@@ -5076,7 +5124,7 @@ export function useViewport3DSceneModel({
       targetQuantityFieldVectors.data,
       targetQuantityFieldVectors.payloadRevision,
       targetQuantityFieldRequests,
-      topology.revision,
+      topologyDataRevision,
     ],
   );
   const fdmVoxelMagnitudeThreshold =
@@ -5576,8 +5624,7 @@ export function useViewport3DSceneModel({
         primaryFieldResourceKey: fieldVectorResourceKey,
         sessionIdentity,
         topology: fieldCompatibleTopologyRenderModel,
-        topologyRevision:
-          topology.revision == null ? null : String(topology.revision),
+        topologyRevision: topologyDataRevision,
       }),
     [
       primaryFieldPayload,
@@ -5590,7 +5637,7 @@ export function useViewport3DSceneModel({
       primaryFieldRevision,
       resolvedFieldRenderOptions,
       sessionIdentity,
-      topology.revision,
+      topologyDataRevision,
     ],
   );
   const analysisComplexField = useMemo(() => {
@@ -5763,8 +5810,13 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelFieldVector = fdmInstanceModelNeedsFieldVector
     ? fdmFieldVector
     : null;
+  // A1: key FDM builds on the settled payload identity, not on the pending
+  // refresh revision, so the last good voxel model survives a refresh.
+  const domainMetaDataRevision = resourceDataRevision(domainMeta);
+  const fdmRegionMembershipDataRevision =
+    resourceDataRevision(fdmRegionMembership);
   const fdmBuildTopologyRevision =
-    domainMeta.revision == null ? null : String(domainMeta.revision);
+    domainMetaDataRevision == null ? null : String(domainMetaDataRevision);
   const fdmBuildFieldRevision =
     fdmInstanceModelNeedsFieldVector
       ? fdmFieldRevision == null
@@ -5772,7 +5824,7 @@ export function useViewport3DSceneModel({
         : String(fdmFieldRevision)
       : null;
   const fdmBuildSamplingRevision = fdmDomain
-    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembership.revision ?? "none"}`
+    ? `shape=${fdmDomain.shape.join("x")}|display=${fdmDomain.displayCellCount}|total=${fdmDomain.totalCells}|stride=${fdmDomain.stride}|membership=${fdmRegionMembershipDataRevision ?? "none"}`
     : "none";
   const fdmBuildStyleRevision = [
     `fill=${visualProfile.voxelFillRatio}`,
@@ -5813,7 +5865,7 @@ export function useViewport3DSceneModel({
     modelFieldVector: fdmInstanceModelFieldVector,
     topologyKey: `fdm-grid:${domainMeta.data?.domain_id ?? "shared-domain"}|generation=${fdmDomainGenerationId}|${fdmBuildSamplingRevision}|topology=${fdmBuildTopologyRevision ?? "none"}`,
     realizedRegionIds: fdmRealizedRegionIds,
-    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} membership=${fdmRegionMembership.revision ?? "none"}`,
+    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} field=${fdmBuildFieldRevision ?? "none"} membership=${fdmRegionMembershipDataRevision ?? "none"}`,
     vectorAnchorMode: "center",
     vectorField: null,
     vectorScale: 0,
@@ -6077,7 +6129,7 @@ export function useViewport3DSceneModel({
     modelFieldVector: null,
     topologyKey: `fdm-airbox:${domainMeta.data?.domain_id ?? "shared-domain"}|generation=${fdmDomainGenerationId}|${fdmBuildSamplingRevision}|topology=${fdmBuildTopologyRevision ?? "none"}`,
     realizedRegionIds: fdmRealizedRegionIds,
-    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} membership=${fdmRegionMembership.revision ?? "none"} target=${fdmAirboxBuildTargetRevision ?? "none"}`,
+    revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} membership=${fdmRegionMembershipDataRevision ?? "none"} target=${fdmAirboxBuildTargetRevision ?? "none"}`,
     vectorAnchorMode: fdmAirboxVectorAnchorMode,
     vectorField: fdmAirboxVectorsVisible ? fdmAirboxFieldVector : null,
     vectorGeometryScope: fdmSingleGridAirboxSettings?.geometryScope ?? "full",
@@ -7120,7 +7172,7 @@ export function useViewport3DSceneModel({
       globalFieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: fieldCompatibleTopologyRenderModel,
-    topologyRevision: topology.revision,
+    topologyRevision: topologyDataRevisionValue,
   });
   const fieldRenderModelBuildOptions = useMemo(
     () =>
@@ -7168,7 +7220,7 @@ export function useViewport3DSceneModel({
                 : null,
             scalarRangesByMode: fieldScalarRangesByMode,
             targetVisualizationRevision: renderingState?.revision ?? null,
-            topologyRevision: topology.revision,
+            topologyRevision: topologyDataRevisionValue,
             wavevectorKf: analysisOverlay?.wavevectorKf,
             cellOrigin: analysisOverlay?.cellOrigin,
             floquetSpatialConvention: analysisOverlay?.floquetSpatialConvention,
@@ -7195,7 +7247,7 @@ export function useViewport3DSceneModel({
     fieldScalarRangesByMode,
     primaryFieldRevision,
     renderingState?.revision,
-    topology.revision,
+    topologyDataRevisionValue,
     vectorColorMode,
     vectorScale,
     analysisOverlay?.cellOrigin,
@@ -7901,9 +7953,10 @@ export function useViewport3DSceneModel({
       savedSelectionActive
         ? null
         : modeCompositionController.controller.resource?.composition_id ?? null,
-    modeCompositionPhaseByLayerId: savedSelectionActive
-      ? new Map()
-      : modeCompositionPhaseClock.phaseByLayerId,
+    modeCompositionPhaseUniformByLayerId: savedSelectionActive
+      ? EMPTY_MODE_COMPOSITION_PHASE_UNIFORMS
+      : modeCompositionPhaseClock.phaseUniformByLayerId,
+    subscribeComplexPhaseFrames,
     primitiveModel: savedSelectionActive ? null : primitiveModel,
     sceneRefetch: savedSelectionActive ? () => undefined : scene.refetch,
     sceneRevision: savedSelectionActive ? null : primitiveModel.sceneRevision,

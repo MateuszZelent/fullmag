@@ -307,6 +307,15 @@ pub(crate) fn can_qualify_live_geometry_reuse(
     scene: &SceneDocument,
     asset: &FemDomainMeshAssetIR,
 ) -> bool {
+    is_supported_geometry_only_p1_domain(scene, asset)
+        && scene.objects.iter().all(|object| object.regions.is_empty())
+        && asset.object_region_markers.is_empty()
+}
+
+pub(crate) fn is_supported_geometry_only_p1_domain(
+    scene: &SceneDocument,
+    asset: &FemDomainMeshAssetIR,
+) -> bool {
     scene.study.requested_backend.eq_ignore_ascii_case("fem")
         && scene
             .study
@@ -327,8 +336,6 @@ pub(crate) fn can_qualify_live_geometry_reuse(
         && scene.antenna_field_solve_stages.is_empty()
         && scene.antenna_target_projections.is_empty()
         && scene.solved_antenna_drives.is_empty()
-        && scene.objects.iter().all(|object| object.regions.is_empty())
-        && asset.object_region_markers.is_empty()
         && asset.mesh.as_ref().is_some_and(|mesh| {
             !mesh.cells.types.is_empty()
                 && mesh

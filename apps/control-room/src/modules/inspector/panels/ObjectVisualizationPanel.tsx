@@ -1457,7 +1457,9 @@ function ObjectVisualizationPanelView({
   panel: ResolvedObjectVisualizationPanelState;
 }) {
   const { analysisFieldOverlay } = useKernel();
-  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const shownAnalysisField = useRenderableAnalysisFieldOverlay(analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const {
     appliedBaseline: currentAppliedBaseline,
     airboxFieldCarrierIdentity,
@@ -1629,6 +1631,7 @@ function ObjectVisualizationPanelView({
                 />
                 <VisualizationRenderModeSection
               artifactInspection={panel.artifactInspection}
+              settings={settings}
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               isFieldPending={isFieldPending}

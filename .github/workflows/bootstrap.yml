@@ -124,6 +124,12 @@ jobs:
       - name: Run material provenance and authoring roundtrip contracts
         run: cargo test --locked -p fullmag-authoring --lib material_library_roundtrip
 
+      - name: Verify interleaved Zarr sample indexes after writer drain
+        shell: bash
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::zarr_field_sample_indexes_survive_interleaved_buffer_flushes -- --exact | tee "$RUNNER_TEMP/zarr-sample-index-test.log"
+          grep -F "test result: ok. 1 passed" "$RUNNER_TEMP/zarr-sample-index-test.log"
+
       - name: Check FEM CPU runner contracts
         # Type-check the CPU native lane independently of fem-gpu, including
         # its tests. This does not link or qualify the MFEM runtime.
@@ -219,6 +225,11 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api preparation_failure_and_stop_terminalize_only_their_reserved_records
           cargo test -p fullmag-api --bin fullmag-api old_preparation_terminalization_does_not_mutate_replacement_session_ledger
           cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
+
+      - name: Verify Live Charts table ownership and binary rows
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api live_view_continuity_
+          cargo test --locked -p fullmag-api --bin fullmag-api table_rows_binary
 
       - name: Run runtime service sampler and control contracts
         run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
@@ -898,6 +909,13 @@ jobs:
           CONTROL_ROOM_ANALYSIS_PLOTS_FIXTURE=1 \
             CONTROL_ROOM_ACCEPTANCE_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/analysis-plots" \
             pnpm --dir apps/control-room run smoke:analysis-plots
+          CONTROL_ROOM_TARGET_SMOKE_PHASE=airbox-independent-visualization \
+            CONTROL_ROOM_TARGET_SMOKE_REUSE_FRONTEND_ONLY=1 \
+            CONTROL_ROOM_TARGET_SMOKE_SWIFTSHADER=1 \
+            CONTROL_ROOM_TARGET_SMOKE_TIMEOUT_MS=90000 \
+            CONTROL_ROOM_API_BASE_URL=http://fullmag-target-smoke.fixture.invalid \
+            CONTROL_ROOM_AUDIT_ARTIFACTS_DIR="$CONTROL_ROOM_AUDIT_ARTIFACTS_DIR/airbox" \
+            pnpm --dir apps/control-room run smoke:viewport-3d-explorer-inspector-targets
 
       - name: Run start screen stylesheet browser check
         # Static CSS plus inline markup: no server and no audit build are needed.

@@ -382,6 +382,9 @@ function AnalysisResultFieldControls({
             animationLoop={activeOverlay?.animation?.loop ?? true}
             animationRateHz={activeOverlay?.animation?.animationRateHz ?? 1}
             disabled={!activeOverlayOwned}
+            livePhaseController={
+              activeOverlayOwned ? kernel.analysisFieldOverlay : null
+            }
             onAnimationChange={setAnimation}
             onSetPhase={setPhase}
             phaseRad={String(phaseRad)}

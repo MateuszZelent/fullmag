@@ -136,6 +136,10 @@ export function selectLatestCompletedLiveChartResult({
   }
   const authoredStageIds = new Set(catalog.authored_stage_ids);
   const matches = catalog.results.filter((result) => {
+    const knownExecutionStage = execution.stages.find((stage) =>
+      stage.stage_id === result.source.step_id || stage.stage_id === result.authored_stage_id,
+    );
+    if (knownExecutionStage && knownExecutionStage.stage_id !== completedStageId) return false;
     const authoredStageIsCurrent = result.authored_stage_id
       ? authoredStageIds.has(result.authored_stage_id)
       : result.source.step_id === completedStageId;

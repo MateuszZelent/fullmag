@@ -10,7 +10,7 @@ import { useLiveChartsWorkspaceSelector } from "@/kernel/workspace/useLiveCharts
 import type { SelectionController } from "@/kernel/selection/SelectionController";
 import type { LayoutController } from "@/kernel/layout/LayoutController";
 import { deriveChartPresentationState } from "@/shared/analysis-charts/chartPresentationState";
-import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
+import type { ChartDataPresentationState, ChartResourceSnapshot } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import { buildScalarChartSeries } from "@/shared/domain/analysis/scalarTableChart";
 
@@ -117,7 +117,9 @@ export function useLiveChartsController(selection: SelectionController) {
   const selectedDescriptorId = useLiveChartsWorkspaceSelector((state) => state.selectedDescriptorId);
   const descriptorId = (selectedDescriptorId ?? "magnetization") as LiveChartPresetId;
   const preferences = useLiveChartPreferencesHydration(descriptorId);
-  const defaults = liveChartDescriptorDefaults(descriptorId);
+  // Defaults are a fresh object per call; keep one per descriptor so that derived
+  // selection and effect dependencies stay referentially stable across renders.
+  const defaults = useMemo(() => liveChartDescriptorDefaults(descriptorId), [descriptorId]);
   const descriptor = preferences.descriptor ?? defaults;
   const rangeMode = descriptor.range.mode;
   const rangeFromSI = rangeMode === "fixed" ? descriptor.range.fromSI : null;
@@ -181,19 +183,62 @@ export function useLiveChartsController(selection: SelectionController) {
     applyLiveChartsCommand({ action: commandAction, descriptorId, preferences, setLocalExportState, tableXAxisId: tableData.xAxisId });
   }, [commandAction, descriptorId, preferences, tableData.xAxisId]);
   const effectiveTableXAxisId = tableData.xAxisId;
+  // Series depend only on whether the rows resource failed, not on every
+  // loading/ready transition of a background refresh that keeps the same table.
+  const tableRowsFailed = archivedTable === null && tableData.rows.status === "error";
   const tableSeries = useMemo(
-    () => buildLiveChartsTableSeries(chartTable, archivedTable ? "ready" : tableData.rows.status, effectiveTableXAxisId),
-    [archivedTable, chartTable, effectiveTableXAxisId, tableData.rows.status],
+    () => buildLiveChartsTableSeries(chartTable, tableRowsFailed, effectiveTableXAxisId),
+    [chartTable, effectiveTableXAxisId, tableRowsFailed],
   );
   const allSeries = resolveLiveChartsSeries(descriptorId, energyData.series, tableSeries);
-  const selectedSeriesIds = resolveLiveChartSelectedSeriesIds(
-    descriptor.selectedSeriesIds,
-    allSeries,
-    defaults.selectedSeriesIds,
+  const persistedSelectedSeriesIds = descriptor.selectedSeriesIds;
+  const defaultSelectedSeriesIds = defaults.selectedSeriesIds;
+  const selectedSeriesIds = useMemo(
+    () => resolveLiveChartSelectedSeriesIds(
+      persistedSelectedSeriesIds,
+      allSeries,
+      defaultSelectedSeriesIds,
+    ),
+    [allSeries, defaultSelectedSeriesIds, persistedSelectedSeriesIds],
   );
   const series = allSeries;
   const selectionHandlers = createLiveChartSelectionHandlers({ descriptorId, selection });
-  const presentation = deriveLiveChartsPresentation({ chartTable, descriptorId, energyData, paused, tableData });
+  const presentationSnapshot = liveChartsPresentationSnapshot({
+    archivedTable, descriptorId, energyData, tableData,
+  });
+  const {
+    error: presentationError,
+    hasData: presentationHasData,
+    isEmpty: presentationIsEmpty,
+    requestedRevision: presentationRequestedRevision,
+    status: presentationStatus,
+    unsupportedReason: presentationUnsupportedReason,
+    visibleRevision: presentationVisibleRevision,
+  } = presentationSnapshot;
+  // The presentation object feeds chart model memos downstream; rebuild it only
+  // when one of its primitive inputs changes so unrelated renders keep its identity.
+  const presentation = useMemo(
+    () => deriveLiveChartsPresentation({
+      error: presentationError,
+      hasData: presentationHasData,
+      isEmpty: presentationIsEmpty,
+      paused,
+      requestedRevision: presentationRequestedRevision,
+      status: presentationStatus,
+      unsupportedReason: presentationUnsupportedReason,
+      visibleRevision: presentationVisibleRevision,
+    }),
+    [
+      paused,
+      presentationError,
+      presentationHasData,
+      presentationIsEmpty,
+      presentationRequestedRevision,
+      presentationStatus,
+      presentationUnsupportedReason,
+      presentationVisibleRevision,
+    ],
+  );
   const effectiveXAxisId = resolveLiveChartsXAxisId(descriptorId, effectiveTableXAxisId);
   const viewMetadata = deriveLiveChartsViewMetadata({ descriptor, descriptorId, effectiveXAxisId, tableData });
   const viewActions = createLiveChartsViewActions({
@@ -234,13 +279,13 @@ function commandExportRequestFromAction(action: LiveChartsCommandAction | null):
 
 function buildLiveChartsTableSeries(
   table: ReturnType<typeof useLiveTableData>["table"],
-  rowsStatus: ReturnType<typeof useLiveTableData>["rows"]["status"],
+  rowsFailed: boolean,
   xAxisId: string,
 ): ChartSeries[] {
   if (!table) return [];
   return buildScalarChartSeries({ ...table, valueAt: (rowIndex, columnIndex) => table.values[rowIndex * table.columnCount + columnIndex] }, {
     dataRevision: table.seriesRevision ?? table.revision,
-    status: rowsStatus === "error" ? "error" : "ready",
+    status: rowsFailed ? "error" : "ready",
     tableId: "default",
     unitLayout: "split-panes",
     xAxisId,
@@ -259,37 +304,72 @@ function resolveLiveChartsSeries(
   return descriptorId === "energy" ? energySeries : tableSeries;
 }
 
-function deriveLiveChartsPresentation({
-  chartTable,
+interface LiveChartsPresentationSnapshot {
+  error: Error | null;
+  hasData: boolean;
+  isEmpty: boolean;
+  requestedRevision: string | number | null;
+  status: ChartResourceSnapshot<unknown>["status"];
+  unsupportedReason: string | null;
+  visibleRevision: string | number | null;
+}
+
+function liveChartsPresentationSnapshot({
+  archivedTable,
   descriptorId,
   energyData,
-  paused,
   tableData,
 }: {
-  chartTable: ReturnType<typeof useLiveTableData>["table"];
+  archivedTable: ReturnType<typeof useLiveChartArchivedTable>;
   descriptorId: LiveChartPresetId;
   energyData: ReturnType<typeof useLiveEnergyData>;
-  paused: boolean;
   tableData: ReturnType<typeof useLiveTableData>;
-}): ChartDataPresentationState {
+}): LiveChartsPresentationSnapshot {
+  if (archivedTable && descriptorId !== "energy") {
+    const revision = archivedTable.seriesRevision ?? archivedTable.revision;
+    return {
+      error: null,
+      hasData: true,
+      isEmpty: archivedTable.rowCount === 0,
+      requestedRevision: revision,
+      status: "ready",
+      unsupportedReason: null,
+      visibleRevision: revision,
+    };
+  }
   const resource = descriptorId === "energy" ? energyData.resource : tableData.rows;
   const isEmpty = descriptorId === "energy"
     ? energyData.resource.data?.rows.length === 0
-    : chartTable?.rowCount === 0;
-  const data = descriptorId === "energy" ? energyData.resource.data : chartTable;
+    : tableData.table?.rowCount === 0;
+  const data = descriptorId === "energy" ? energyData.resource.data : tableData.table;
   const visibleRevision = descriptorId === "energy"
     ? energyData.resource.data?.revision ?? null
-    : chartTable?.seriesRevision ?? chartTable?.revision ?? null;
-  const archiveReady = descriptorId !== "energy" && Boolean(chartTable?.seriesRevision);
-  return deriveChartPresentationState({
-    content: isEmpty ? "empty" : undefined,
-    data,
-    error: archiveReady ? null : resource.error,
-    requestedRevision: chartTable?.seriesRevision ?? resource.revision,
-    status: tableData.unsupportedReason ? "unsupported" : archiveReady ? "ready" : resource.status,
-    unsupportedReason: tableData.unsupportedReason,
+    : tableData.table?.revision ?? null;
+  return {
+    error: resource.error,
+    hasData: data !== null,
+    isEmpty,
+    requestedRevision: resource.revision,
+    status: tableData.unsupportedReason ? "unsupported" : resource.status,
+    unsupportedReason: tableData.unsupportedReason ?? null,
     visibleRevision,
-  }, { latestKnownRevision: chartTable?.seriesRevision ?? resource.revision, paused });
+  };
+}
+
+function deriveLiveChartsPresentation({
+  paused,
+  ...snapshot
+}: LiveChartsPresentationSnapshot & { paused: boolean }): ChartDataPresentationState {
+  return deriveChartPresentationState({
+    content: snapshot.isEmpty ? "empty" : undefined,
+    // Only presence matters to the presentation state; the payload itself is not read.
+    data: snapshot.hasData ? true : null,
+    error: snapshot.error,
+    requestedRevision: snapshot.requestedRevision,
+    status: snapshot.status,
+    unsupportedReason: snapshot.unsupportedReason,
+    visibleRevision: snapshot.visibleRevision,
+  }, { latestKnownRevision: snapshot.requestedRevision, paused });
 }
 
 function resolveLiveChartsXAxisId(descriptorId: LiveChartPresetId, tableXAxisId: string): string {

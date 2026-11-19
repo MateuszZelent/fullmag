@@ -4,21 +4,17 @@ from math import cos, pi, radians, sin
 
 import fullmag as fm
 
-GRID = (512, 256, 1)
 SIZE = (1600e-9, 800e-9, 1.7e-9)
 CELL = (3.125e-9, 3.125e-9, 1.7e-9)
 FIELD_AZIMUTH = radians(88.0)
 JZ = -2.6e10
-PREPARATION_DURATION = 20e-9
-BEFORE_PULSE_DURATION = 50e-9  # Advance the physical clock from 20 to 70 ns.
-PULSE_DURATION = 200e-9
-AFTER_PULSE_DURATION = 100e-9
+TURN_ON, TURN_OFF = 70e-9, 270e-9
 GAMMA = 1.7595e11 * (4.0 * pi * 1e-7)  # MuMax3 T^-1 s^-1 to Fullmag m/(A s)
 
 study = fm.study("fdm_stt_pma_pulse")
 study.engine("fdm")
 study.device("gpu", precision="double")
-study.mode("strict")
+study.mode("extended")
 study.universe(mode="manual", size=SIZE, center=(0.0, 0.0, 0.0))
 study.cell(*CELL)
 
@@ -50,6 +46,11 @@ study.solver(
 study.spin_torque(
     fm.SlonczewskiSTT(
         current_density=(0.0, 0.0, JZ),
+        time_expression=fm.TimeExpression(
+            "heaviside(t - t_on) - heaviside(t - t_off)",
+            constants={"t_on": TURN_ON, "t_off": TURN_OFF},
+            event_times_s=(TURN_ON, TURN_OFF),
+        ),
         spin_polarization=(0.0, 1.0, 0.0),
         degree=0.21,
         lambda_asymmetry=1.0,
@@ -78,7 +79,7 @@ study.clear_outputs()
 study.stages.set_spin_torque_enabled(module_id="slonczewski_pulse", enabled=False)
 study.stages.add_relax(stage_id="initial_relaxation", **relaxation)
 study.stages.tableautosave(1e-12, quantities=("t", "mx", "my", "mz", "e_total"))
-study.stages.add_run(PREPARATION_DURATION, stage_id="preparation")
+study.stages.add_run(20e-9, stage_id="preparation")
 # Physical-time table cadence applies only to dynamics.
 study.stages.tableautosave(enabled=False)
 study.stages.add_relax(stage_id="second_relaxation", **relaxation)
@@ -89,14 +90,10 @@ film.alpha = 0.045
 # Keep the 1 ps table and the original 5 ns full-vector snapshot cadence.
 # Uncompressed f64 vectors at 24 GHz for both runs exceed the available disk.
 study.stages.autosave("m", every=5e-9)
-study.stages.add_run(BEFORE_PULSE_DURATION, stage_id="before_pulse")
-
 study.stages.set_spin_torque_enabled(module_id="slonczewski_pulse", enabled=True)
-study.stages.add_run(PULSE_DURATION, stage_id="pulse")
-study.stages.set_spin_torque_enabled(module_id="slonczewski_pulse", enabled=False)
-study.stages.add_run(AFTER_PULSE_DURATION, stage_id="after_pulse")
+study.stages.add_run(350e-9, stage_id="dynamics")
 
 study.storage(
-    output_dir="/state/fdm-stt-pulse/fdm_stt_pma_pulse.zarr",
-    temp_dir="/state/fdm-stt-pulse/.fullmag-tmp",
+    output_dir="/state/fdm-stt-time-dependent/fdm_stt_pma_pulse.zarr",
+    temp_dir="/state/fdm-stt-time-dependent/.fullmag-tmp",
 )

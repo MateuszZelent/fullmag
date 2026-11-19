@@ -172,6 +172,11 @@ describe("LiveChartsModule resource flow", () => {
       const kernel = {
         api: {
           data: {
+            scalars: {
+              window: vi.fn(async () => ({
+                revision: 1, rows: [], returned_rows: 0, total_rows: 0,
+              })),
+            },
             tables: {
               columns: vi.fn(async () => columns),
               detail: vi.fn(async () => ({ revision: 1 })),
@@ -184,6 +189,7 @@ describe("LiveChartsModule resource flow", () => {
           },
           sessions: sessionsApi,
           simulation: {
+            stages: { execution: vi.fn(async () => null) },
             solver: {
               energies: {
                 history: vi.fn(async () => ({

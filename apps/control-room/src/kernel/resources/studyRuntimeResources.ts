@@ -222,7 +222,6 @@ function ignoreMissingFieldMetaResource<T>({
 
 interface RuntimeResourceOptions {
   enabled?: boolean;
-  pauseLoad?: boolean;
 }
 
 interface SessionScopedResourceOptions<TData> {
@@ -1051,7 +1050,6 @@ function stageExecutionIdentityRefreshRevision(
 
 export function useStageExecutionResource({
   enabled = true,
-  pauseLoad = false,
 }: RuntimeResourceOptions = {}): ResourceResult<StageExecutionResource | null> {
   const { api, resources } = useKernel();
   const { resourceKey, sessionIdentity: resourceSessionIdentity } = useSessionScopedResourceKey(
@@ -1062,7 +1060,6 @@ export function useStageExecutionResource({
     {
       enabled: enabled && resourceSessionIdentity !== null,
       isEqual: stageExecutionSessionIdentityEquals,
-      pauseLoad,
     },
   );
   const requestedIdentityRef =
@@ -1091,7 +1088,6 @@ export function useStageExecutionResource({
   const stageExecutionResource = useResource<StageExecutionResource | null>({
     enabled: enabled && resourceSessionIdentity !== null && sessionIdentity !== null,
     load,
-    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -2598,13 +2594,12 @@ export function useFieldMetaResource({
 }
 
 export function useScalarWindowResource({
-  pauseLoad = false,
   columns,
   enabled = true,
   limit = 200,
   sinceRevision,
   tail,
-}: ScalarWindowQuery & { enabled?: boolean; pauseLoad?: boolean } = {}) {
+}: ScalarWindowQuery & { enabled?: boolean } = {}) {
   const { api } = useKernel();
   const unscopedResourceKey = scalarWindowResourceKey({
     columns,
@@ -2627,7 +2622,6 @@ export function useScalarWindowResource({
     enabled: enabled && sessionIdentity !== null,
     load,
     minRefetchIntervalMs: tableRowsMinRefetchIntervalMs(),
-    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -2681,7 +2675,7 @@ export function useTableResource(
 
 export function useTableColumnsResource(
   tableId = "default",
-  { enabled = true, pauseLoad = false }: RuntimeResourceOptions = {},
+  { enabled = true }: RuntimeResourceOptions = {},
 ) {
   const { api } = useKernel();
   const unscopedResourceKey = DATA_TABLE_COLUMNS_PATH.replace(
@@ -2702,7 +2696,6 @@ export function useTableColumnsResource(
   return useResource<TableColumnMeta[] | null>({
     enabled: enabled && sessionIdentity !== null,
     load,
-    pauseLoad,
     resolveRevision: (data) => data?.length ?? null,
     resourceKey,
   });

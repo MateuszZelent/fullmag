@@ -64,14 +64,7 @@ export function liveTableForCurrentSeries(
   state: LiveTableStateWithIdentity,
   currentSeries: StudyResultSeriesIdentity | null | undefined,
 ): ChartTableWindow | null {
-  if (
-    currentSeries !== undefined &&
-    state.seriesIdentity !== undefined &&
-    !sameSeriesIdentity(state.seriesIdentity, currentSeries)
-  ) {
-    return null;
-  }
-  return state.table;
+  return responseSeriesMismatch(currentSeries, state.seriesIdentity) ? null : state.table;
 }
 
 export function liveTableUnsupportedReason(columns: readonly { column_id: string }[] | null, status: string): string | null {
@@ -91,6 +84,15 @@ function sameSeriesIdentity(
     left.attempt_id === right.attempt_id && left.ownership_epoch === right.ownership_epoch;
 }
 
+function responseSeriesMismatch(
+  expected: StudyResultSeriesIdentity | null | undefined,
+  received: StudyResultSeriesIdentity | null | undefined,
+): boolean {
+  if (expected === undefined) return false;
+  if (received === undefined) return expected !== null;
+  return !sameSeriesIdentity(expected, received);
+}
+
 export function liveTableReducer(
   state: LiveTableStateWithIdentity,
   next: {
@@ -106,15 +108,20 @@ export function liveTableReducer(
     ? next.expectedSeriesIdentity
     : next.seriesIdentity;
   const identityIsKnown = expectedIdentity !== undefined;
-  const responseDisagreesWithCurrent = next.expectedSeriesIdentity !== undefined &&
-    next.seriesIdentity !== undefined &&
-    !sameSeriesIdentity(next.seriesIdentity, next.expectedSeriesIdentity);
+  const responseDisagreesWithCurrent = responseSeriesMismatch(
+    next.expectedSeriesIdentity, next.seriesIdentity,
+  );
   const stateIdentityChanged = identityIsKnown && state.seriesIdentity !== undefined &&
     !sameSeriesIdentity(state.seriesIdentity, expectedIdentity!);
   const existingIdentityUnknown = identityIsKnown && state.seriesIdentity === undefined && state.table !== null;
 
+  if (responseDisagreesWithCurrent && !stateIdentityChanged && !existingIdentityUnknown &&
+      state.queryKey === next.queryKey) return state;
+
   if (responseDisagreesWithCurrent ||
-      (next.requestCursor !== undefined && (stateIdentityChanged || existingIdentityUnknown))) {
+      (next.requestCursor !== undefined && (
+        stateIdentityChanged || existingIdentityUnknown || next.table.resyncRequired
+      ))) {
     return {
       cursor: undefined,
       queryKey: next.queryKey,
@@ -125,11 +132,16 @@ export function liveTableReducer(
   const table = state.queryKey !== next.queryKey || next.replace === true || next.table.resyncRequired
     ? next.table
     : mergeChartTableWindows(state.table, next.table);
+  const seriesIdentity = expectedIdentity !== undefined ? expectedIdentity : state.seriesIdentity;
+  const seriesRevision = seriesIdentity ? JSON.stringify([
+    liveTableSeriesResourceScope(seriesIdentity), next.queryKey,
+    table.revision, table.cursorStart, table.cursorEnd,
+  ]) : undefined;
   return {
     cursor: table.cursorEnd,
     queryKey: next.queryKey,
-    seriesIdentity: expectedIdentity !== undefined ? expectedIdentity : state.seriesIdentity,
-    table,
+    seriesIdentity,
+    table: table.seriesRevision === seriesRevision ? table : { ...table, seriesRevision },
   };
 }
 
@@ -149,11 +161,10 @@ export function useLiveTableData({
   const resourceEnabled = active && !paused;
   const tableList = useTableListResource({ enabled: resourceEnabled });
   const table = useTableResource("default", { enabled: resourceEnabled });
-  const columns = useTableColumnsResource("default", { enabled: active, pauseLoad: paused });
+  const columns = useTableColumnsResource("default", { enabled: active });
   const scalarWindow = useScalarWindowResource({
     enabled: active,
     limit: 1,
-    pauseLoad: paused,
     tail: true,
   });
   const currentSeriesIdentity = liveTableSeriesIdentityFromResource(scalarWindow);
@@ -198,8 +209,7 @@ export function useLiveTableData({
     const selected = analysisColumnDescriptorsForQuery(columns.data, queryColumns);
     if (selected.length !== decoded.data.columnCount) return;
     const seriesIdentity = decoded.responseMetadata;
-    const identityIsStale = currentSeriesIdentity !== undefined && seriesIdentity !== undefined &&
-      !sameSeriesIdentity(currentSeriesIdentity, seriesIdentity);
+    const identityIsStale = responseSeriesMismatch(currentSeriesIdentity, seriesIdentity);
     append({
       expectedSeriesIdentity: currentSeriesIdentity,
       queryKey,

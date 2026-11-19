@@ -10428,6 +10428,7 @@ export interface components {
             spin_polarization: number[];
             stack_normal?: number[] | null;
             target?: null | components["schemas"]["SceneRegionRef"];
+            time_expression?: Record<string, unknown> | null;
         } | {
             /** Format: double */
             beta: number;

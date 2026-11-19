@@ -426,8 +426,9 @@ function overlayStateFromContext(
     DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE;
   const phaseRad =
     numberValue(input.phaseRad) ??
-    activeOverlay?.visualizationPhaseRad ??
-    activeOverlay?.query.phase_rad ??
+    (activeOverlay
+      ? context.analysisFieldOverlay?.getDisplayedPhaseRad()
+      : undefined) ??
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
   const selectedResultRef = selectedAnalysisResultRef(context);
@@ -728,11 +729,12 @@ function setOverlayAnimationCommand(options: {
       const input = overlayCommandInput(context);
       const animatePhase = booleanValue(input.animatePhase) ?? true;
       const animationRateHz = clampAnimationRateHz(numberValue(input.animationRateHz));
+      // Starting, pausing or retiming keeps the phase that is on screen.
       const visualizationPhaseRad =
         numberValue(input.phaseRad) ??
-        overlay.visualizationPhaseRad ??
-        overlay.query.phase_rad ??
-        0;
+        (existingOverlay
+          ? controller.getDisplayedPhaseRad()
+          : overlay.visualizationPhaseRad ?? overlay.query.phase_rad ?? 0);
       const nextOverlay = {
         ...overlay,
         animation: {

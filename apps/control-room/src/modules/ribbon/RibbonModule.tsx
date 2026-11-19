@@ -225,7 +225,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   );
   const { setActiveTab } = useLayoutActions();
   const selection = useSelectionSelector((currentSelection) =>
-    activeTab === "view" || activeTab === "geometry" || activeTab === "mesh"
+    activeTab === "view" || activeTab === "geometry" || activeTab === "mesh" || activeTab === "physics"
       ? currentSelection
       : EMPTY_SELECTION,
   );
@@ -387,7 +387,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
-          [MODEL_SCENE_PATH]: scene.status === "ready" ? scene.data : null,
+          [MODEL_SCENE_PATH]: scene.status === "ready" &&
+            (activeTab !== "physics" || scene.sessionScopeKey === kernel.commands.getSessionScopeKey?.())
+            ? scene.data : null,
           [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
             ? checkpointCatalog.data
             : null,
@@ -411,6 +413,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       meshSummary.data,
       scene.data,
       scene.status,
+      scene.sessionScopeKey,
       modelReadiness.data,
       modelReadiness.status,
       needsSessionStatusResources,
@@ -422,7 +425,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     ],
   );
 
-  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
+  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay, {
+    ignorePhase: true,
+  });
   const activeAnalysisFieldId = activeOverlay?.fieldId ?? null;
   const activeAnalysisFieldLabel = activeOverlay?.label ?? null;
   const activeAnalysisField = useMemo(
