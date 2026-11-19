@@ -1766,6 +1766,30 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it.each([undefined, null])("uses the Airbox H_demag target field when its quantity is %s", (airboxQuantityId) => {
+    const query = { component: "full", scope_id: "airbox", scope_kind: "airbox" } as const;
+    const requestId = fieldVectorResourceKey("H_demag", query);
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      airboxQuantityCompatible: true,
+      airboxQuantityId,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      targetQuantityFieldRequests: new Map([[requestId, {
+        consumers: ["airbox:surface"],
+        quantityId: "H_demag",
+        query,
+        requestId,
+      }]]),
+      targetQuantityFieldVectors: new Map([[requestId, fieldVectorFixture({ quantityId: "H_demag" })]]),
+      topology: {
+        airboxParts: [{ part: { id: "airbox", label: "Airbox", role: "air" } }],
+        magneticParts: [],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partTargetFieldBuffers.get("airbox")).toMatchObject({ quantityId: "H_demag", scopeKind: "airbox" });
+  });
+
   it("keeps synthetic airbox vectors as target buffers instead of legacy fields", () => {
     const resolved = resolveViewport3DResolvedPartFieldBuffers({
       airboxSyntheticVectorsEnabled: true,

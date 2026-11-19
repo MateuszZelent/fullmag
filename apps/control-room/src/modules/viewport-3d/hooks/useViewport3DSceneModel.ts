@@ -116,6 +116,7 @@ import {
 } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  DEFAULT_AIRBOX_VISUALIZATION,
   resolveDefaultVisualizationSettings,
   resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
@@ -1040,7 +1041,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   airboxFieldVectorRequests,
   airboxFieldVectors,
   airboxQuantityCompatible = false,
-  airboxQuantityId = "m",
+  airboxQuantityId,
   airboxSyntheticVectorsEnabled = false,
   getPartSettings,
   quantityCatalog = null,
@@ -1177,7 +1178,9 @@ export function resolveViewport3DResolvedPartFieldBuffers({
       });
     }
     if (airboxQuantityCompatible) {
-      const targetQuantityId = resolveCanonicalQuantityId(airboxQuantityId ?? "m");
+      const targetQuantityId = resolveCanonicalQuantityId(
+        airboxQuantityId ?? DEFAULT_AIRBOX_VISUALIZATION.activeQuantityId,
+      );
       for (const partModel of topology.airboxParts) {
         const partId = partModel.part.id;
         const resolved = resolveViewport3DTargetQuantityFieldVectorForTarget({
