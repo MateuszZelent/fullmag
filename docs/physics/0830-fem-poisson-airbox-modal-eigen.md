@@ -2347,3 +2347,60 @@ a residuum deskryptora jest certyfikowane.
 | --- | --- | --- |
 | source-augmented-shift-solver | backends/fem/cpu/frequency_domain/modal_augmented_shift_solver.hpp + create_augmented_shift_solver | Składanie i faktoryzacja $K_{\hat\tau}$, akcja bloku $q$; runtime zmierzony w Docker DEV (headless) |
 | source-cpu-schur-augmented-shift | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + solve_poisson_airbox_modal_eigen_cpu_schur | Wybór preconditionera shift-invert i ścieżka zapasowa |
+
+## Wymiar bazy Krylova dla pojedynczego przesunięcia
+
+Status: zmiana parametru solvera EPS ścieżki FEM CPU K0 Schur dla pojedynczego
+celu (bez okien częstotliwości). Build Docker DEV i runtime headless CPU
+zmierzone A/B na jednym modelu (tabela niżej). Qualification, GPU, Floquet i
+run zaakceptowany: **NOT VERIFIED**. Pencil, cel, `nev`, tolerancje EPS i
+shifted KSP, residuum oryginalnego deskryptora i bramki certyfikacji nie
+zmieniają się. Zmienia się wyłącznie wymiar podprzestrzeni Krylova `ncv`
+przekazywany do `EPSSetDimensions`.
+
+Dotychczas pojedyncze przesunięcie używało `ncv = 2 nev`, czyli 4 wektorów
+dla pary $\pm\omega$. Krylov-Schur przy każdym restarcie zachowuje do `nev`
+wektorów Ritza i dokłada tylko `ncv - nev` nowych kierunków, więc przy `ncv = 4`
+każdy restart dodaje dwa rozwiązania przesunięte. Na dużym modelu daje to
+30 restartów. Teraz pojedyncze przesunięcie przyjmuje domyślną regułę SLEPc
+$\mathrm{ncv}=\min\bigl(n,\max(2\,\mathrm{nev},\,\mathrm{nev}+15)\bigr)$,
+gdzie $n$ to wymiar real-split. Okna częstotliwości zachowują
+`ncv = 4 nev`. Baza zajmuje `ncv` wektorów długości $n$, więc dodatkowa pamięć
+przy $n = 10816$ wynosi około 1,3 MiB.
+
+Pomiar A/B (2026-11-19): ten sam model co w tabeli $K_{\hat\tau}$ (wymiar
+real-split 10816, $\phi$ 11352), jeden build z tymczasowym przełącznikiem
+dolnej granicy `ncv` (usuniętym przed scaleniem), uruchomienie headless w
+kontenerze backend grupy Docker DEV. Częstotliwość we wszystkich przypadkach
+wynosi 6,0100362431 GHz, a residuum deskryptora jest certyfikowane.
+
+| `ncv` | Restarty EPS | Zbieżne pary | Iteracje FGMRES | Rozwiązania Poissona | EPS [s] |
+| --- | --- | --- | --- | --- | --- |
+| 4 (poprzednio) | 30 | 2 | 124 | 328 | 14,9 |
+| 10 | 7 | 5 | 80 | 216 | 9,2 |
+| 17 (reguła SLEPc) | 4 | 4 | 82 | 212 | 10,0 |
+| 24 | 2 | 4 | 72 | 188 | 8,2 |
+| 32 | 2 | 2 | 96 | 216 | 11,4 |
+
+Różnice między `ncv` od 10 do 24 mieszczą się w zmienności zbieżności
+pojedynczego pomiaru. Każda z tych wartości skraca EPS o 30–45% względem
+`ncv = 4`. Reguła SLEPc jest domyślną wartością biblioteki i nie wymaga
+strojenia pod model. Na małym modelu z gęstą dokładną odwrotnością
+(wymiar 344) czas EPS pozostaje poniżej 0,01 s dla każdego `ncv`.
+
+| Symbol | Znaczenie | Jednostka SI |
+| --- | --- | --- |
+| `nev` | liczba żądanych par Ritza (para $\pm\omega$ na mod) | $1$ |
+| `ncv` | wymiar podprzestrzeni Krylova EPS | $1$ |
+| $n$ | wymiar real-split operatora Schura | $1$ |
+
+| Solver | Urządzenie | Stan | Uzasadnienie |
+| --- | --- | --- | --- |
+| FEM | CPU | zmieniony `ncv` dla pojedynczego przesunięcia K0; zmierzone w Docker DEV (headless) | `modal_krylov_tuning.eps_dimensions` publikuje odczytane `nev/ncv/mpd` |
+| FEM | GPU | bez zmian | lane GPU ma własną konfigurację EPS |
+| FDM | CPU | nie dotyczy | FDM nie używa tego pencilu |
+| FDM | GPU | nie dotyczy | FDM nie używa tego pencilu |
+
+| Source ID | Path + symbol | Odpowiedzialność i dowód |
+| --- | --- | --- |
+| source-cpu-schur-krylov-basis | backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp + bounded_krylov_dimensions | Reguła `ncv` dla pojedynczego przesunięcia i okien; runtime zmierzony w Docker DEV (headless) |
