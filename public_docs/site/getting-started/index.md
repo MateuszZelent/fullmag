@@ -28,8 +28,11 @@ criteria, and expected artifacts.
    Jupyter notebook directly to a running Control Room session via `fm.connect()`.
 6. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
    browser interface.
+6. **{doc}`Live control from Python and Jupyter <../python-api/runtime/live-session>`** — drive the
+   current session of a running instance with `fm.connect()` from a script, an interpreter, or a
+   Jupyter notebook; runnable `.py` and `.ipynb` examples are in `examples/live/`.
 
-## Public authoring contract
+## Stage-first script structure
 
 A public script constructs a study, declares its numerical lane and physical domain, assigns
 material and magnetization data, registers interactions, and appends ordered stages:
@@ -118,22 +121,3 @@ choosing-a-solver
 interactive-python
 control-room
 ```
-## Control Room crosswalk
-
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
-
-## Bibliography
-
-No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

@@ -8,6 +8,7 @@ import {
 import {
   createResourcePartialLoadError,
   ResourceRuntimeStore,
+  resolveResourceRetryDecision,
 } from "./ResourceRuntimeStore";
 import { sessionScopedResourceKey } from "./sessionResourceIdentity";
 
@@ -691,6 +692,126 @@ describe("ResourceRuntimeStore", () => {
       pendingRequestCount: 0,
       readyCount: 0,
     });
+  });
+
+  it("retries only an explicitly allowed transient performance conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi.fn()
+        .mockRejectedValueOnce(Object.assign(new Error("observation busy"), {
+          code: "performance_observation_busy", status: 409,
+        }))
+        .mockResolvedValue("current performance");
+      const request = {
+        externalRevision: "attempt-1", load,
+        resourceKey: "diagnostics/performance|session-1",
+        retryPolicy: {
+          deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      };
+      await store.ensureLoad(request as never);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(store.getSnapshot(request.resourceKey)).toMatchObject({
+        data: "current performance", status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the extended retry cap only for allowlisted conflicts", () => {
+    const policy = {
+      maxAttempts: 3,
+      maxConflictAttempts: 41,
+      retryableConflictReasonCodes: ["performance_observation_busy"],
+    };
+    const busyConflict = Object.assign(new Error("busy"), {
+      code: "performance_observation_busy",
+      status: 409,
+    });
+
+    expect(resolveResourceRetryDecision(busyConflict, policy, 3).retry).toBe(true);
+    expect(resolveResourceRetryDecision(
+      busyConflict,
+      { maxAttempts: 3, maxConflictAttempts: 41 },
+      1,
+    ).retry).toBe(false);
+
+    const serverFailure = Object.assign(new Error("server failure"), { status: 503 });
+    expect(resolveResourceRetryDecision(serverFailure, policy, 2).retry).toBe(true);
+    expect(resolveResourceRetryDecision(serverFailure, policy, 3).retry).toBe(false);
+  });
+
+  it("keeps deadline retries capped by maxAttempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      });
+      const pending = store.ensureLoad({
+        externalRevision: "attempt-1",
+        load,
+        resourceKey: "diagnostics/performance|timeout-budget",
+        retryPolicy: {
+          deadlineMs: 10,
+          maxAttempts: 3,
+          maxConflictAttempts: 41,
+          retryAfterMs: 1,
+          retryableConflictReasonCodes: ["performance_observation_busy"],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry other conflict codes or statuses under the performance opt-in", async () => {
+    vi.useFakeTimers();
+    try {
+      for (const error of [
+        { code: "stale_authored_initial_state_replacement", status: 409 },
+        { code: "permission_denied", status: 409 },
+        { status: 409 },
+        { code: "performance_observation_busy", status: 403 },
+      ]) {
+        const store = new ResourceRuntimeStore<string>();
+        const load = vi.fn().mockRejectedValue(Object.assign(new Error("conflict"), error));
+        const request = {
+          externalRevision: "attempt-1", load,
+          resourceKey: "diagnostics/performance|session-1",
+          retryPolicy: {
+            deadlineMs: 1000, maxAttempts: 3, retryAfterMs: 250,
+            retryableConflictReasonCodes: ["performance_observation_busy"],
+          },
+        };
+        await store.ensureLoad(request as never);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(load).toHaveBeenCalledTimes(1);
+        expect(store.getSnapshot(request.resourceKey).status).toBe("error");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("autonomously retries an allowlisted transient 404 using retry_after_ms", async () => {

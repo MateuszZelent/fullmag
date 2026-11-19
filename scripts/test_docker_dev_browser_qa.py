@@ -5215,5 +5215,44 @@ assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.
         self.assertNotEqual(malformed.returncode, 0)
 
 
+class TerminalFooterSampleClockTests(unittest.TestCase):
+    def setUp(self):
+        self.qa = _load_qa_module()
+
+    def sample(self, label, value="0"):
+        detail = "Step of the displayed telemetry sample" if label == "Sample step" else "Latest step"
+        return {
+            "visible": True, "label": label, "detail": detail,
+            "value": value, "unit": "steps",
+            "title": f"{label}: {value} steps\n{detail}\nSession summary",
+        }
+
+    def test_accepts_sample_clock_with_both_supported_labels(self):
+        for label in ("Step", "Sample step"):
+            with self.subTest(label=label):
+                self.qa._validate_terminal_footer_sample_step(self.sample(label), "0")
+
+    def test_rejects_solver_clock_in_place_of_authoritative_scalar_sample(self):
+        for sample in (self.sample("Solver step"), self.sample("Sample step", "17,767")):
+            with self.subTest(sample=sample):
+                with self.assertRaises(self.qa.BuildControlError):
+                    self.qa._validate_terminal_footer_sample_step(sample, "0")
+
+    def test_rejects_crossed_label_and_description(self):
+        for label, detail in (("Step", "Step of the displayed telemetry sample"), ("Sample step", "Latest step")):
+            sample = self.sample(label)
+            sample["detail"] = detail
+            sample["title"] = f"{label}: 0 steps\n{detail}\nSession summary"
+            with self.subTest(label=label):
+                with self.assertRaises(self.qa.BuildControlError):
+                    self.qa._validate_terminal_footer_sample_step(sample, "0")
+
+    def test_rejects_inconsistent_metric_title(self):
+        sample = self.sample("Step")
+        sample["title"] = "Sample step: 0 steps\nLatest step\nSession summary"
+        with self.assertRaises(self.qa.BuildControlError):
+            self.qa._validate_terminal_footer_sample_step(sample, "0")
+
+
 if __name__ == "__main__":
     unittest.main()

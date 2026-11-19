@@ -16,48 +16,38 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 Initializers are explicit object-level values and are lowered without assuming a particular mesh.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page covers the Python authoring contract: construction validates initial magnetization directions, PRNG seeds, or sampled field arrays and provenance metadata in Python, while `to_ir()` emits the canonical `ProblemIR` initializer record before mesh mapping.
 
 (python-api-magnets-and-textures-initial-magnetization-governing-equations)=
 ## Governing equations
 
-```{math}
-:label: eq-initial_magnetization
-
-q_{\mathrm{IR}} = \mathrm{initial_magnetization}(\text{qualified inputs})
-```
-
-The physical term or constraint is represented by the canonical IR object initial_magnetization. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+Continuum micromagnetics specifies an initial condition $\mathbf{m}(\mathbf{x}, t=0) = \mathbf{m}_0(\mathbf{x})$ obeying the unit-norm constraint $\lVert\mathbf{m}_0(\mathbf{x})\rVert_2 = 1$ at active magnetic cells or nodes prior to LLG integration or energy minimization. Continuum initial-value semantics and high-level texture helpers are documented in {doc}`../../physics/foundations/llg-equation`, {doc}`uniform-texture`, and {doc}`preset-textures`.
 
 (python-api-magnets-and-textures-initial-magnetization-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Meaning | SI unit |
-|---|---|---|
-| $q$ | canonical typed authoring quantity | $\mathrm{1}$ |
-
-All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+Reduced magnetization components (`UniformMagnetization.value`, `SampledMagnetization.values`), random `seed` integers, and external file provenance fields (`source_path`, `source_format`, `dataset`, `sample_index`) are dimensionless ($1$).
 
 (python-api-magnets-and-textures-initial-magnetization-assumptions-and-validity)=
 ## Assumptions and validity
 
-Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+`UniformMagnetization.value` requires a finite non-zero three-vector, `RandomMagnetization.seed` requires an integer seed, and `SampledMagnetization.values` requires typed vector entries compatible with normalization. Zero vectors or malformed sampled shapes fail closed during construction or discretization.
 
 (python-api-magnets-and-textures-initial-magnetization-python-api)=
 ## Python API
 
 ### Constructor or function
 
-fm.init.UniformMagnetization, fm.init.RandomMagnetization, fm.init.SampledMagnetization
+`fm.init.UniformMagnetization`, `fm.init.RandomMagnetization`, `fm.init.SampledMagnetization`
 
 ### Parameters
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `UniformMagnetization.value` | `Sequence[float]` | `required` | `1` | finite three-vector | uniform direction/value | FEM/FDM CPU/GPU: IR; resolver-specific | `value` |
-| `RandomMagnetization.seed` | `int` | `required` | `1` | integer | reproducible random seed | FEM/FDM CPU/GPU: IR; resolver-specific | `seed` |
-| `SampledMagnetization.values` | `Sequence[Sequence[float]]` | `required` | `1` | typed sampled vectors | sampled initial field | FEM/FDM CPU/GPU: IR; resolver-specific | `values` |
-| `SampledMagnetization.source_path/source_format/dataset/sample_index` | `optional` | `None` | `1` | typed when supplied | sample provenance and selection | FEM/FDM CPU/GPU: IR; resolver-specific | `source metadata` |
+| `UniformMagnetization.value` | `Sequence[float]` | `required` | $1$ | finite three-vector | uniform direction/value | FEM/FDM CPU/GPU: IR; resolver-specific | `value` |
+| `RandomMagnetization.seed` | `int` | `required` | $1$ | integer | reproducible random seed | FEM/FDM CPU/GPU: IR; resolver-specific | `seed` |
+| `SampledMagnetization.values` | `Sequence[Sequence[float]]` | `required` | $1$ | typed sampled vectors | sampled initial field | FEM/FDM CPU/GPU: IR; resolver-specific | `values` |
+| `SampledMagnetization.source_path/source_format/dataset/sample_index` | `optional` | `None` | $1$ | typed when supplied | sample provenance and selection | FEM/FDM CPU/GPU: IR; resolver-specific | `source metadata` |
 
 ### Stage-first example
 
@@ -78,40 +68,38 @@ value = fm.init.UniformMagnetization((0.0, 0.0, 1.0))
 canonical_ir = value.to_ir()
 ```
 
-The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+In a complete simulation script, assign initial magnetization via `body.m = ...` using `fm.texture.*` helpers or these `fm.init.*` value classes.
 
 (python-api-magnets-and-textures-initial-magnetization-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed initial_magnetization record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+`value.to_ir()` emits `{"kind": "uniform", "value": [...]}`, `{"kind": "random", "seed": ...}`, or `{"kind": "sampled", "values": ...}` with optional sample provenance metadata.
 
 (python-api-magnets-and-textures-initial-magnetization-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-
-A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+`requested intent` preserves uniform vectors, random seeds, sampled arrays, and source provenance in `ProblemIR` independently of `resolved execution`. `Validation errors` reject zero-norm or malformed sequences, while `unsupported combinations` (such as mismatched sampled DOF counts at load time) fail closed during discretization.
 
 (python-api-magnets-and-textures-initial-magnetization-discrete-realization)=
 ## Discrete realization
 
-The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+The Python contract supplies mesh-independent initializer data and provenance in `ProblemIR` only; evaluating random cell/nodal spin vectors or loading sampled fields onto active FEM nodes or FDM cells is handled by the solver backends.
 
 (python-api-magnets-and-textures-initial-magnetization-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/init/magnetization.py symbol class UniformMagnetization. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is `packages/fullmag-py/src/fullmag/init/magnetization.py` (`class UniformMagnetization`, `class RandomMagnetization`, and `class SampledMagnetization`). Constructor parameters, validation branches, and `to_ir()` keys come directly from that module.
 
 (python-api-magnets-and-textures-initial-magnetization-validation)=
 ## Validation
 
-Focused repository tests covering this contract include: test_random_initializer_serializes_to_ir, test_sampled_initializer_preserves_provenance. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+Focused repository unit tests covering initializer IR serialization and sampled provenance include `test_random_initializer_serializes_to_ir` and `test_sampled_initializer_preserves_provenance`. Live solver runtime and Control Room browser behavior require separate qualification.
 
 (python-api-magnets-and-textures-initial-magnetization-limitations)=
 ## Limitations and Control Room
 
 - **Supported initial-magnetization editing in Control Room:** `Model Explorer -> Objects -> <object> -> Magnetization` renders `ObjectMagneticTexturePanel`, which authors object-level initial magnetization using the 16 `MAGNETIZATION_TEXTURE_PRESETS` and commits draft changes through `commitMagneticTextureApply`.
-- **Python-only surfaces:** Analytical `SpatialParameterField` callbacks, custom spatial expressions, region-specific overrides not exposed in `ObjectMagneticTexturePanel`, and textures outside the supported preset family remain Python-only (`not implemented`); see {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
+- **Python-only surfaces:** Analytical `SpatialParameterField` callbacks, custom spatial expressions, region-specific overrides not exposed in `ObjectMagneticTexturePanel`, and textures outside the supported preset family remain `Python-only`; see {doc}`/frontend/inspectors/objects-and-materials` and {doc}`/frontend/capability-register`.
 
 ```{image} /_static/images/ui/inspector-magnetic-texture.png
 :alt: Semantic Inspector Magnetic Texture panel configuring initial magnetization presets on an object
@@ -121,15 +109,12 @@ Focused repository tests covering this contract include: test_random_initializer
 (python-api-magnets-and-textures-initial-magnetization-scientific-bibliography)=
 ## Scientific bibliography
 
-- W. F. Brown, Jr., Thermal Fluctuations of a Single-Domain Particle, Phys. Rev. 130 (1963), DOI: https://doi.org/10.1103/PhysRev.130.1677
+- W. F. Brown Jr., *Micromagnetics*, Interscience Publishers (Wiley), New York (1963).
+- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *The European Physical Journal B* **92**(6), 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6) | [Open-access Springer PDF](https://link.springer.com/content/pdf/10.1140/epjb/e2019-90599-6.pdf).
 
 (python-api-magnets-and-textures-initial-magnetization-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
 |---|---|---|
-| packages/fullmag-py/src/fullmag/init/magnetization.py | class UniformMagnetization | public constructor and IR lowering |
-
-- Implementation: packages/fullmag-py/src/fullmag/init/magnetization.py::class UniformMagnetization
-- Source-map: magnets-and-textures/initial-magnetization.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+| `packages/fullmag-py/src/fullmag/init/magnetization.py` | `class UniformMagnetization` | public constructor and IR lowering |

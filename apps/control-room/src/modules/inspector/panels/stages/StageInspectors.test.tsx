@@ -62,10 +62,7 @@ import {
 } from "@/kernel/resources/sessionResourceIdentity";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
-import {
-  findElement,
-  installSimulationPreparationTestDom,
-} from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 import { stageResultInitialState } from "./StageInitialStateSelector";
@@ -203,6 +200,8 @@ import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
 import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
 import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
+import { MaskFieldDriveStageInspector } from "./MaskFieldDriveStageInspector";
+import { summarizeMaskFieldDriveStage } from "./maskFieldDriveStageSummary";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -285,52 +284,39 @@ function render(
   );
 }
 
-function renderedFieldState(
-  html: string,
-  labelText: string,
-): { disabled: boolean; unit: string | null } {
-  const dom = installSimulationPreparationTestDom();
-  try {
-    const root = dom.document.createElement("div");
-    root.innerHTML = html;
-    const label = findElement(
-      root,
-      (element) => element.tagName === "LABEL" && element.textContent.trim() === labelText,
-      `FormField label '${labelText}'`,
-    );
-    const controlId = label.getAttribute("for");
-    if (!controlId) throw new Error(`FormField '${labelText}' has no associated control.`);
-    const control = findElement(
-      root,
-      (element) => element.getAttribute("id") === controlId,
-      `FormField control for '${labelText}'`,
-    );
-    if (control.getAttribute("aria-label") !== labelText) {
-      throw new Error(`FormField '${labelText}' has no matching accessible name.`);
-    }
-    const field = control.closest(".fm-inspector-form-field");
-    if (!field) throw new Error(`FormField '${labelText}' has no field wrapper.`);
-    const unitElement = field.querySelector(".fm-inspector-form-field__unit");
-    const unit = unitElement?.textContent.trim() ?? null;
-    if (unitElement) {
-      const unitId = unitElement.getAttribute("id")?.trim();
-      if (!unitId) throw new Error(`FormField '${labelText}' unit has no ID.`);
-      const describedBy =
-        control
-          .getAttribute("aria-describedby")
-          ?.split(/\s+/)
-          .filter(Boolean) ?? [];
-      if (!describedBy.includes(unitId)) {
-        throw new Error(`FormField '${labelText}' does not describe its unit.`);
-      }
-    }
-    return {
-      disabled: control.disabled,
-      unit,
-    };
-  } finally {
-    dom.restore();
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function expectFormFieldUnit(
+  markup: string,
+  label: string,
+  unit: string,
+  disabled = false,
+): void {
+  const labelPattern = new RegExp(`<label\\b[^>]*>${escapeRegExp(label)}<\\/label>`);
+  const disabledPattern = disabled ? `(?=[^>]*\\bdisabled="")` : "";
+  const inputPattern = new RegExp(
+    `<input\\b(?=[^>]*\\baria-label="${escapeRegExp(label)}")${disabledPattern}[^>]*>`,
+  );
+  const unitPattern = new RegExp(
+    `<span\\b(?=[^>]*\\bclass="[^"]*fm-inspector-form-field__unit[^"]*")[^>]*>${escapeRegExp(unit)}<\\/span>`,
+  );
+  const labelElement = markup.match(labelPattern)?.[0];
+  const inputElement = markup.match(inputPattern)?.[0];
+  const unitElement = markup.match(unitPattern)?.[0];
+  if (!labelElement || !inputElement || !unitElement) {
+    throw new Error(`Expected the ${label} field, its input, and its ${unit} unit.`);
   }
+  const fieldId = inputElement.match(/\bid="([^"]+)"/)?.[1];
+  const unitId = unitElement.match(/\bid="([^"]+)"/)?.[1];
+  if (!fieldId || !unitId) {
+    throw new Error(`Expected ${label} and its ${unit} unit to have linked IDs.`);
+  }
+  expect(labelElement).toContain(`for="${fieldId}"`);
+  const describedBy = inputElement.match(/\baria-describedby="([^"]+)"/)?.[1]?.split(/\s+/) ?? [];
+  expect(describedBy).toContain(unitId);
+  if (disabled) expect(inputElement).toContain('disabled=""');
 }
 
 function renderMounted(
@@ -482,6 +468,43 @@ describe("Study stage inspectors", () => {
     expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
       "Unsupported Stage",
     );
+    const addAntenna = summarizeMaskFieldDriveStage({
+      kind: "add_mask_field_drive",
+      drive: {
+        id: "antenna",
+        name: "Antenna",
+        target: { kind: "object", object_id: "sample" },
+        shape: { kind: "box", size: [6e-6, 1e-6, 4.5e-8] },
+        frame: "world",
+        time_origin: "absolute",
+        terms: [{
+          mask: { kind: "function", function: {
+            name: "antenna_mask", parameters: [{ name: "B01", value: 0.0002 }],
+            outputs: ["B01 * sin(k * x)", "0.0", "0.0"],
+          } },
+          time: { name: "antenna_time", parameters: [{ name: "frequency", value: 3.6e9 }],
+            outputs: ["sin(2 * pi * frequency * t)"] },
+        }],
+      },
+    })!;
+    const addAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={addAntenna} />,
+    );
+    expect(addAntennaHtml).toContain("Add Antenna");
+    expect(addAntennaHtml).toContain("antenna_mask(B01 = 0.0002)");
+    expect(addAntennaHtml).toContain("sin(2 * pi * frequency * t)");
+    expect(addAntennaHtml).not.toContain("Unsupported Stage");
+    const updateAntenna = summarizeMaskFieldDriveStage({
+      kind: "update_mask_field_drive",
+      drive_id: "antenna",
+      term: null,
+      mask_parameters: { B01: 0.0004 },
+    })!;
+    const updateAntennaHtml = render(
+      <MaskFieldDriveStageInspector {...unsupported} summary={updateAntenna} />,
+    );
+    expect(updateAntennaHtml).toContain("Antenna Update");
+    expect(updateAntennaHtml).toContain("B01 = 0.0004");
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
     ).toContain("Execution Device");
@@ -590,10 +613,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(renderedFieldState(tableHtml, "t_sampling")).toEqual({
-      disabled: true,
-      unit: "s",
-    });
+    expectFormFieldUnit(tableHtml, "t_sampling", "s", true);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -625,10 +645,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(renderedFieldState(autosaveHtml, "Every")).toEqual({
-      disabled: true,
-      unit: "s",
-    });
+    expectFormFieldUnit(autosaveHtml, "Every", "s", true);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -640,9 +657,9 @@ describe("Study stage inspectors", () => {
     );
     expect(antennaHtml).toContain("Sampling plan");
     expect(antennaHtml).toContain("104 GHz");
-    expect(renderedFieldState(antennaHtml, "Cutoff fc").unit).toBe("Hz");
+    expectFormFieldUnit(antennaHtml, "Cutoff fc", "Hz");
     expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
-    expect(renderedFieldState(antennaHtml, "Center t0").unit).toBe("s");
+    expectFormFieldUnit(antennaHtml, "Center t0", "s");
     expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
     expect(antennaHtml).toContain("t0=50 ps");
 

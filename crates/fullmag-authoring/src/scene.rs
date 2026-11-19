@@ -158,6 +158,9 @@ pub struct ScenePostprocessingDataRef {
 pub struct SceneFieldDrivesState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    /// Hand-written mask antennas (`mask_field_drive.v1`, ADR 0081).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask_drives: Vec<fullmag_ir::MaskFieldDriveIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -219,7 +222,7 @@ pub struct SceneObject {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_parameter_fields: Vec<SceneMaterialParameterAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryLayerIR>,
+    pub absorbing_boundary: Option<fullmag_ir::AbsorbingBoundaryIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default = "default_true")]
@@ -252,8 +255,42 @@ pub struct SceneMeshInterface {
     pub config: ScriptBuilderPerGeometryMeshState,
 }
 
+/// Immutable project-owned source; this is not a generated solver mesh.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SceneImportedGeometryAssetRef {
+    pub asset_id: String,
+    pub content_sha256: String,
+    pub archive_path: String,
+}
+
+impl SceneImportedGeometryAssetRef {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.asset_id.is_empty() || self.asset_id.len() > 256
+            || self.asset_id.trim() != self.asset_id
+            || self.asset_id.chars().any(|c| c.is_control() || c == '/' || c == '\\')
+        {
+            return Err("source_asset.asset_id must be a nonempty bounded identifier");
+        }
+        if self.content_sha256.len() != 64
+            || !self.content_sha256.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err("source_asset.content_sha256 must be 64 lowercase hexadecimal digits");
+        }
+        if !self.archive_path.starts_with("project/assets/")
+            || self.archive_path.chars().any(|c| c.is_control() || c == '\\' || c == ':')
+            || self.archive_path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err("source_asset.archive_path must be a normalized path under project/assets/");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneGeometry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_asset: Option<SceneImportedGeometryAssetRef>,
     pub geometry_kind: String,
     #[serde(default)]
     pub geometry_params: Value,
@@ -291,11 +328,13 @@ pub struct SceneMaterialAsset {
     pub id: String,
     pub name: String,
     pub properties: ScriptBuilderMaterialState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::SceneMaterialSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<SceneMaterialReference>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, utoipa::ToSchema)]
 pub struct SceneMaterialReference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -877,8 +916,6 @@ pub struct SceneStudyState {
     pub fem_bb_preconditioner: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fem_gpu_pcg_control_experiment: Option<fullmag_ir::FemGpuPcgControlExperimentIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]
@@ -1447,6 +1484,10 @@ fn default_mesh() -> ScriptBuilderMeshState {
         adaptive_max_passes: 5,
         adaptive_error_tolerance: String::new(),
         order: None,
+        domain_mesh_mode: None,
+        domain_mesh_source: None,
+        domain_region_markers: None,
+        domain_object_region_markers: None,
     }
 }
 

@@ -150,9 +150,7 @@ and equivalent output location before a tolerance is interpreted.
 (dmi-validation-implementation-mapping)=
 ## Implementation mapping
 
-Python term classes own input lowering. FDM and FEM variants have separate field paths;
-the planner owns output legality and normal restrictions. The source map records the stable
-implementation symbols and tests used by this page.
+Python term classes own input lowering, FDM and FEM variants provide separate field paths, and the planner owns output legality and normal restrictions. The source-code index below lists the corresponding implementation symbols and test suites.
 
 (dmi-validation-validation)=
 ## Validation strategy
@@ -230,7 +228,7 @@ $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$:
 (dmi-validation-limitations)=
 ## Limitations and known gaps
 
-- No muMAG-style standard problem exists for DMI validation; the Göbel case is
+- No µMAG-style standard problem exists for DMI validation; the Göbel case is
   a paper reproduction with an explicit Fullmag acceptance contract.
 - Executed-device identity is captured for the rotated-DMI Göbel FP64 case, but
   not retroactively for every conventional interfacial or bulk DMI test.

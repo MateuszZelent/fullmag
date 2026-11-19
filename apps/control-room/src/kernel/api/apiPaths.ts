@@ -902,6 +902,22 @@ export const MODEL_FIELD_DRIVE_PATH = openApiV2Path(
   "/v2/sessions/current/model/field-drives/{drive_id}",
 );
 
+export const MODEL_MASK_FIELD_DRIVES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives",
+);
+
+export const MODEL_MASK_FIELD_DRIVE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/mask-field-drives/{drive_id}",
+);
+
+export const MODEL_READY_ANTENNAS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas",
+);
+
+export const MODEL_READY_ANTENNA_TERMS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/ready-antennas/terms",
+);
+
 export const MODEL_REGION_PATH = openApiV2Path(
   "/v2/sessions/current/model/regions/{region_id}",
 );
@@ -1241,3 +1257,15 @@ export const PLATFORM_COMPUTE_PREVIEW_PATH = openApiV2Path("/v2/platform/compute
 export const PLATFORM_COMPUTE_NODES_PATH = openApiV2Path("/v2/platform/compute/nodes");
 export const PLATFORM_COMPUTE_NODE_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}");
 export const PLATFORM_COMPUTE_NODE_POLICY_PATH = openApiV2Path("/v2/platform/compute/nodes/{node_id}/policy");
+
+export const MODEL_OBJECT_SOURCE_SURFACE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface",
+);
+export const MODEL_OBJECT_SOURCE_SURFACE_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/source-surface/topology",
+);
+
+export const WORKSPACE_MATERIAL_LIBRARY_PATH = openApiV2Path("/v2/workspace/material-library");
+export const WORKSPACE_MATERIAL_LIBRARY_ENTRY_PATH = openApiV2Path("/v2/workspace/material-library/{id}");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSIONS_PATH = openApiV2Path("/v2/workspace/material-library/versions");
+export const WORKSPACE_MATERIAL_LIBRARY_VERSION_PATH = openApiV2Path("/v2/workspace/material-library/versions/{family}/{version}");

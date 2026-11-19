@@ -41,6 +41,7 @@ import {
 import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 import { CrossSectionQualityChart } from "./CrossSectionQualityChart";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
+import { resourceHasDisplayableData } from "@/kernel/resources/resourceState";
 
 const DEFAULT_METRIC: CrossSectionQualityMetric = "skewness";
 const QUALITY_THRESHOLD = 0.1;
@@ -88,8 +89,7 @@ export function CrossSectionInspectorPanel({
     enabled: !draftMode,
   });
   const quality = useCrossSectionQualityResource(qualityQuery, {
-    enabled:
-      !draftMode && crossSection.status === "ready" && Boolean(crossSection.data),
+    enabled: !draftMode && resourceHasDisplayableData(crossSection),
   });
 
   if (draftMode) {
@@ -142,7 +142,8 @@ export function CrossSectionInspectorPanel({
       />
     );
   }
-  if (crossSection.status !== "ready") {
+  // A background refresh keeps the previous section visible (`stale`).
+  if (crossSection.status !== "ready" && !resourceHasDisplayableData(crossSection)) {
     return <MeshResourceEmpty label="Loading cross-section resources." />;
   }
   if (!crossSection.data) {

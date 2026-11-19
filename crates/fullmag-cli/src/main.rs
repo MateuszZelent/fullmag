@@ -1684,7 +1684,6 @@ mod tests {
         };
         let plan = BackendPlanIR::Fem(FemPlanIR {
             gpu_bb_preconditioner: None,
-            gpu_pcg_control_experiment: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh: mesh.clone(),
@@ -1734,6 +1733,7 @@ mod tests {
             solved_antenna_drive_bases: Vec::new(),
             field_drives: Vec::new(),
             field_drive_geometry_masks: Vec::new(),
+            mask_field_term_bases: Vec::new(),
             time_stage: Default::default(),
             current_modules: vec![],
             charge_transport_plans: vec![],

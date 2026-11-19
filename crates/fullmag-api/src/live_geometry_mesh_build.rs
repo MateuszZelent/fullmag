@@ -307,6 +307,15 @@ pub(crate) fn can_qualify_live_geometry_reuse(
     scene: &SceneDocument,
     asset: &FemDomainMeshAssetIR,
 ) -> bool {
+    is_supported_geometry_only_p1_domain(scene, asset)
+        && scene.objects.iter().all(|object| object.regions.is_empty())
+        && asset.object_region_markers.is_empty()
+}
+
+pub(crate) fn is_supported_geometry_only_p1_domain(
+    scene: &SceneDocument,
+    asset: &FemDomainMeshAssetIR,
+) -> bool {
     scene.study.requested_backend.eq_ignore_ascii_case("fem")
         && scene
             .study
@@ -327,8 +336,6 @@ pub(crate) fn can_qualify_live_geometry_reuse(
         && scene.antenna_field_solve_stages.is_empty()
         && scene.antenna_target_projections.is_empty()
         && scene.solved_antenna_drives.is_empty()
-        && scene.objects.iter().all(|object| object.regions.is_empty())
-        && asset.object_region_markers.is_empty()
         && asset.mesh.as_ref().is_some_and(|mesh| {
             !mesh.cells.types.is_empty()
                 && mesh
@@ -695,7 +702,7 @@ pub(crate) async fn build_and_publish_geometry_mesh(
     command_id: &str,
     scene: SceneDocument,
 ) -> Result<(), ApiError> {
-    let previous_history = {
+    let (previous_history, source_asset_root) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -707,13 +714,17 @@ pub(crate) async fn build_and_publish_geometry_mesh(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
-        snapshot
+        let previous_history = snapshot
             .mesh_workspace
             .as_deref()
             .and_then(|workspace| workspace.get("mesh_history"))
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let source_asset_root = crate::imported_geometry_sources::script_asset_root(
+            &snapshot.session.script_path, &state.current_workspace_root,
+        );
+        (previous_history, source_asset_root)
     };
     let payload = geometry_only_mesh_payload(&scene)?;
     let input_sha256 = mesh_input_sha256(&scene, &payload);
@@ -722,6 +733,7 @@ pub(crate) async fn build_and_publish_geometry_mesh(
         "shared_domain": scene.study.shared_domain_mesh,
         "objects": payload["mesh_options"]["per_geometry"],
     });
+    let workspace_root = state.current_workspace_root.clone();
     let repo_root = state.repo_root.clone();
     let store_root = state.submit_store_root.clone();
     let owner = context.clone();
@@ -729,7 +741,11 @@ pub(crate) async fn build_and_publish_geometry_mesh(
     let source_scene_revision = scene.revision;
     let captured_input = input_sha256.clone();
     let publication = tokio::task::spawn_blocking(move || {
-        let output = run_geometry_mesh_build(&repo_root, &payload)?;
+        let frozen_scene = crate::imported_geometry_sources::snapshot_pinned_stl_sources(
+            &repo_root, &workspace_root, Some(&source_asset_root), &scene,
+        )?;
+        let frozen_payload = geometry_only_mesh_payload(&frozen_scene)?;
+        let output = run_geometry_mesh_build(&repo_root, &frozen_payload)?;
         let mut publication = geometry_mesh_publication(
             output,
             &build_command_id,
@@ -751,7 +767,7 @@ pub(crate) async fn build_and_publish_geometry_mesh(
     .await
     .map_err(|error| ApiError::internal(format!("geometry mesh build task failed: {error}")))??;
 
-    {
+    let damping_snapshot = {
         let _transition = state.current_live_session_transition.lock().await;
         if !state
             .current_command_ledger
@@ -830,7 +846,14 @@ pub(crate) async fn build_and_publish_geometry_mesh(
             &mut published,
             validated_scene_revision,
         );
+        let refresh = crate::live_authored_damping::geometry::invalidate_for_build(
+            &mut published, validated_scene_revision,
+        );
         *snapshot = published;
+        refresh.then(|| snapshot.clone())
+    };
+    if let Some(snapshot) = damping_snapshot {
+        crate::live_authored_damping::geometry::refresh_after_build(state, context, snapshot).await;
     }
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
         let display_revision = state.current_display_selection.read().await.revision;

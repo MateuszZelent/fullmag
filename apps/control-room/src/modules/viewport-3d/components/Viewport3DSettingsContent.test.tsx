@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -10,6 +12,8 @@ import {
   TestElement,
   TestEvent,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { VIEWPORT_3D_QUALITY_PROFILE_OPTIONS } from "@/shared/viewport3dQualityLabels";
+
 import { viewport3dStore } from "../viewport3dStore";
 
 vi.mock("@/shared/ui/Slider", () => ({
@@ -66,16 +70,20 @@ async function mountContent(activeSection: Viewport3DSettingsSection) {
   const onSectionChange = vi.fn();
   const onCommand = vi.fn();
 
-  await act(async () => {
-    root.render(
-      <Viewport3DSettingsContent
-        activeSection={activeSection}
-        cameraContent={<p>Camera editor content</p>}
-        onCommand={onCommand}
-        onSectionChange={onSectionChange}
-      />,
-    );
-  });
+  const renderSection = async (section: Viewport3DSettingsSection) => {
+    await act(async () => {
+      root.render(
+        <Viewport3DSettingsContent
+          activeSection={section}
+          cameraContent={<p>Camera editor content</p>}
+          onCommand={onCommand}
+          onSectionChange={onSectionChange}
+        />,
+      );
+    });
+  };
+
+  await renderSection(activeSection);
 
   return {
     cleanup: async () => {
@@ -85,6 +93,7 @@ async function mountContent(activeSection: Viewport3DSettingsSection) {
     container,
     onCommand,
     onSectionChange,
+    renderSection,
   };
 }
 
@@ -118,6 +127,177 @@ describe("Viewport3DSettingsContent", () => {
     const nextPanelStart = html.indexOf('role="tabpanel"', viewPanelStart + 1);
     expect(html.slice(viewPanelStart, nextPanelStart)).toContain("Camera editor content");
     expect(html).not.toContain('role="dialog"');
+  });
+
+  it("keeps Visualization mode above every tab and independent from the quality profile", async () => {
+    const settings = await mountContent("view");
+    try {
+      const markup = settings.container.innerHTML;
+      const groupIndex = markup.indexOf('aria-label="Visualization mode"');
+      const tabsIndex = markup.indexOf('role="tablist"');
+      expect(groupIndex).toBeGreaterThanOrEqual(0);
+      expect(groupIndex).toBeLessThan(tabsIndex);
+      expect(settings.container.textContent).toContain(
+        "Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.",
+      );
+
+      const radios = findElements(
+        settings.container,
+        (element) => element.getAttribute("role") === "radio",
+      );
+      expect(radios.map((radio) => radio.textContent)).toEqual(["Scientific", "Presentation"]);
+      expect(radios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+      expect(radios[0]?.getAttribute("tabindex")).toBe("0");
+      expect(radios[1]?.getAttribute("tabindex")).toBe("-1");
+
+      await act(async () => radios[1]?.click());
+      expect(viewport3dStore.getSnapshot().appearance.renderMode).toBe("presentation");
+      expect(viewport3dStore.getSnapshot().visualProfileId).toBe("interactive");
+      expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(true);
+
+      await settings.renderSection("quality");
+      const qualityRadios = findElements(
+        settings.container,
+        (element) => element.getAttribute("role") === "radio",
+      );
+      expect(qualityRadios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+      expect(settings.container.textContent).toContain("Quality profile");
+      expect(settings.container.textContent).toContain("Quality controls render detail and GPU cost.");
+      expect(VIEWPORT_3D_QUALITY_PROFILE_OPTIONS).toEqual([
+        ["interactive-lite", "Fast"],
+        ["interactive", "Standard"],
+        ["balanced", "Detailed"],
+        ["figure", "Figure"],
+      ]);
+      const qualityControl = elementById(settings.container, "fm-view-quality");
+      const describedBy = qualityControl.getAttribute("aria-describedby")?.split(/\s+/) ?? [];
+      expect(describedBy).toContain("fm-view-quality-help");
+      expect(describedBy).toContain("fm-view-quality-description");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Standard.");
+
+      await act(async () => viewport3dStore.setVisualProfile("figure"));
+      expect(viewport3dStore.getSnapshot().visualProfileId).toBe("figure");
+      expect(viewport3dStore.getSnapshot().appearance.renderMode).toBe("presentation");
+      const figureDescription = elementById(settings.container, "fm-view-quality-description").textContent;
+      expect(figureDescription).toMatch(/2× viewport resolution.*100% zoom/);
+      expect(figureDescription).toMatch(/switching to Presentation.*Studio lighting.*soft shadows.*ambient occlusion/);
+      expect(figureDescription).toMatch(/adjust.*GPU memory.*longer to render/i);
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Figure.");
+      await act(async () => viewport3dStore.requestCapture());
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toContain("Active quality: Figure. Exporting PNG.");
+      await act(async () => viewport3dStore.completeCapture());
+      await act(async () => viewport3dStore.setEffectAmbientOcclusion(false));
+      const selectedPresentation = findElement(
+        settings.container,
+        (element) => element.getAttribute("role") === "radio" && element.textContent === "Presentation",
+        "Presentation mode radio",
+      );
+      await act(async () => selectedPresentation.click());
+      expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(false);
+      expect(
+        findElements(settings.container, (element) =>
+          element.getAttribute("role") === "radio" && element.getAttribute("aria-checked") === "true",
+        ).map((radio) => radio.textContent),
+      ).toEqual(["Presentation"]);
+
+      for (const section of ["view", "appearance", "quality", "export"] as const) {
+        await settings.renderSection(section);
+        expect(
+          findElements(settings.container, (element) =>
+            element.getAttribute("role") === "radiogroup" &&
+            element.getAttribute("aria-label") === "Visualization mode",
+          ),
+        ).toHaveLength(1);
+        const sectionMarkup = settings.container.innerHTML;
+        expect(sectionMarkup.indexOf('aria-label="Visualization mode"')).toBeLessThan(
+          sectionMarkup.indexOf('role="tablist"'),
+        );
+      }
+    } finally {
+      await settings.cleanup();
+    }
+  });
+
+  it("supports keyboard mode selection through the shared radio group", async () => {
+    const settings = await mountContent("quality");
+    try {
+      const scientific = findElement(
+        settings.container,
+        (element) => element.getAttribute("role") === "radio" && element.textContent === "Scientific",
+        "Scientific mode radio",
+      );
+      const keyEvent = new TestEvent("keydown", { bubbles: true, key: "ArrowRight" });
+
+      await act(async () => scientific.dispatchEvent(keyEvent));
+
+      expect(keyEvent.defaultPrevented).toBe(true);
+      expect(viewport3dStore.getSnapshot().appearance.renderMode).toBe("presentation");
+      expect(
+        findElement(
+          settings.container,
+          (element) => element.getAttribute("role") === "radio" && element.getAttribute("aria-checked") === "true",
+          "Selected presentation mode radio",
+        ).textContent,
+      ).toBe("Presentation");
+    } finally {
+      await settings.cleanup();
+    }
+  });
+
+  it("shows the retained profile during export and an explicit Capture profile honestly", async () => {
+    const settings = await mountContent("quality");
+    try {
+      await act(async () => viewport3dStore.setVisualProfile("figure"));
+      await act(async () => viewport3dStore.requestCapture());
+      expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe("figure");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toBe("Active quality: Figure. Exporting PNG.");
+      expect(elementById(settings.container, "fm-view-quality").textContent)
+        .toContain("Figure");
+
+      await act(async () => viewport3dStore.completeCapture());
+      await act(async () => viewport3dStore.setVisualProfile("capture"));
+      expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBeNull();
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .toBe("Active quality: Capture.");
+      expect(elementById(settings.container, "fm-view-quality-status").textContent)
+        .not.toContain("Exporting PNG");
+      expect(elementById(settings.container, "fm-view-quality").textContent)
+        .toContain("Capture");
+      expect(elementById(settings.container, "fm-view-quality-description").textContent)
+        .toContain("image capture");
+    } finally {
+      await settings.cleanup();
+    }
+  });
+
+  it("shows one shared mode control in Appearance and the legacy dialog", async () => {
+    const appearance = await mountContent("appearance");
+    const dialog = readFileSync(
+      new URL("./Viewport3DSettingsDialog.tsx", import.meta.url),
+      "utf8",
+    );
+
+    try {
+      expect(
+        findElements(appearance.container, (element) =>
+          element.getAttribute("role") === "radiogroup" &&
+          element.getAttribute("aria-label") === "Visualization mode",
+        ),
+      ).toHaveLength(1);
+      expect(
+        findElements(appearance.container, (element) => element.getAttribute("id") === "fm-view-render-mode"),
+      ).toHaveLength(0);
+      expect(dialog.match(/<Viewport3DVisualizationModeControl\s*\/>/g) ?? []).toHaveLength(1);
+      expect(dialog).not.toContain("fm-view-render-mode");
+      expect(dialog).toContain('label="Quality profile"');
+      expect(dialog).toContain('describedBy="fm-view-quality-dialog-help fm-view-quality-dialog-description"');
+    } finally {
+      await appearance.cleanup();
+    }
   });
 
   it("updates persisted view switches through the store", async () => {
@@ -175,31 +355,33 @@ describe("Viewport3DSettingsContent", () => {
     }
   });
 
-  it("keeps presentation materials separate and reports protected post-processing as inactive", async () => {
+  it("keeps Presentation effects available and reports field protection in Scientific", async () => {
     viewport3dStore.setAppearance({ renderMode: "presentation" });
     viewport3dStore.setEffectAmbientOcclusion(true);
     viewport3dStore.setEffectBloom(true);
-    viewport3dStore.setPostProcessingDataProtection(true);
+    viewport3dStore.setPostProcessingDataProtection(false);
 
     const appearance = await mountContent("appearance");
     try {
       expect(elementById(appearance.container, "fm-view-roughness")).toBeDefined();
       expect(elementById(appearance.container, "fm-view-metalness")).toBeDefined();
-      expect(appearance.container.textContent).toContain("Field colors stay faithful in both modes");
+      expect(appearance.container.textContent).toContain(
+        "Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.",
+      );
     } finally {
       await appearance.cleanup();
     }
 
     const quality = await mountContent("quality");
     try {
-      expect(quality.container.textContent).toContain("Quantitative field colors are protected");
+      expect(quality.container.textContent).not.toContain("Quantitative field colors are protected");
       expect(
         findElements(quality.container, (element) =>
           element.getAttribute("role") === "status" &&
           element.textContent.includes("Ambient occlusion") &&
           element.textContent.includes("inactive"),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       const aoSwitch = findElement(
         quality.container,
         (element) => element.getAttribute("role") === "switch" && element.getAttribute("aria-label") === "Ambient occlusion",
@@ -208,6 +390,44 @@ describe("Viewport3DSettingsContent", () => {
       expect(aoSwitch.getAttribute("aria-checked")).toBe("true");
     } finally {
       await quality.cleanup();
+    }
+
+    viewport3dStore.setAppearance({ renderMode: "scientific" });
+    viewport3dStore.setPostProcessingDataProtection(true);
+    const scientificQuality = await mountContent("quality");
+    try {
+      expect(scientificQuality.container.textContent).toContain("Quantitative field colors are protected");
+      expect(
+        findElements(scientificQuality.container, (element) =>
+          element.getAttribute("role") === "status" &&
+          element.textContent.includes("Ambient occlusion") &&
+          element.textContent.includes("inactive"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await scientificQuality.cleanup();
+    }
+  });
+
+  it("explains the field-color contract in both settings surfaces", async () => {
+    const appearance = await mountContent("appearance");
+    const dialog = readFileSync(
+      new URL("./Viewport3DSettingsDialog.tsx", import.meta.url),
+      "utf8",
+    );
+    const contentSource = readFileSync(
+      new URL("./Viewport3DSettingsContent.tsx", import.meta.url),
+      "utf8",
+    );
+
+    try {
+      const explanation = "Scientific preserves exact field colors. Presentation shades field colors to reveal shape; use Scientific for quantitative color reading.";
+      expect(appearance.container.textContent).toContain(explanation);
+      expect(dialog).toContain("<Viewport3DVisualizationModeControl />");
+      expect(contentSource).toContain("<Viewport3DVisualizationModeControl />");
+      expect(dialog).not.toContain("field colors remain independent of lighting in both modes");
+    } finally {
+      await appearance.cleanup();
     }
   });
 

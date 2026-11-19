@@ -16,7 +16,9 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
-pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 3;
+pub const FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION: u32 = 4;
+/// At most this many HOST_EXPRESSION drives per backend on the GPU lane.
+pub const FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES: u32 = 8;
 pub const FULLMAG_FEM_STAGE_OERSTED_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_STAGE_TRANSPORT_CALLBACK_ERROR_CAPACITY: usize = 256;
@@ -137,6 +139,9 @@ pub enum fullmag_fem_time_dependence_kind {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /// The multiplier is the value of the descriptor's `time_program`
+    /// (`fullmag_time_expr.v1`), evaluated on the host once per field build.
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 }
 
 #[repr(C)]
@@ -191,6 +196,9 @@ pub struct fullmag_fem_time_dependence_desc {
     pub parameters: fullmag_fem_time_dependence_parameters,
     pub points: *const fullmag_fem_time_point,
     pub point_count: u64,
+    /// HOST_EXPRESSION only: `fullmag_time_expr.v1` words; null and 0 otherwise.
+    pub time_program: *const f64,
+    pub time_program_len: u64,
 }
 
 #[repr(C)]
@@ -3350,6 +3358,9 @@ extern "C" {
     pub fn fullmag_fem_get_regional_field_drive_abi_layout(
         out_layout: *mut fullmag_fem_regional_field_drive_abi_layout,
     ) -> i32;
+    /// Value of a `fullmag_time_expr.v1` program at `t_s`, by the interpreter
+    /// the library uses for HOST_EXPRESSION drives.
+    pub fn fullmag_fem_time_expression_eval_v1(code: *const f64, len: u64, t_s: f64) -> f64;
     pub fn fullmag_fem_get_mesh_abi_layout(out_layout: *mut fullmag_fem_mesh_abi_layout) -> i32;
     pub fn fullmag_fem_prepare_mesh_space_v1(
         request: *const fullmag_fem_mesh_space_preparation_request_v1,
@@ -3566,18 +3577,6 @@ extern "C" {
         handle: *mut fullmag_fem_backend,
         policy: u32,
     ) -> i32;
-    pub fn fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(
-        handle: *mut fullmag_fem_backend,
-        certificate: *mut fullmag_fem_gpu_bb_pcg_certificate_v1,
-    ) -> i32;
-    pub fn fullmag_fem_backend_set_gpu_pcg_control_v1(
-        handle: *mut fullmag_fem_backend,
-        config: *const fullmag_fem_gpu_pcg_control_config_v1,
-    ) -> i32;
-    pub fn fullmag_fem_backend_get_gpu_pcg_control_info_v1(
-        handle: *mut fullmag_fem_backend,
-        info: *mut fullmag_fem_gpu_pcg_control_info_v1,
-    ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
         request: fullmag_fem_gpu_execution_request_v1,
@@ -3770,22 +3769,6 @@ extern "C" {
     pub fn fullmag_fem_backend_get_transfer_audit(
         handle: *mut fullmag_fem_backend,
         out_audit: *mut fullmag_fem_transfer_audit,
-    ) -> i32;
-
-    pub fn fullmag_fem_backend_get_mandatory_control_counters_v1(
-        handle: *mut fullmag_fem_backend, scope: u32,
-        out_counters: *mut fullmag_fem_gpu_mandatory_control_counters_v1,
-    ) -> i32;
-
-    pub fn fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
-        handle: *mut fullmag_fem_backend,
-        scope: u32,
-        out_counters: *mut fullmag_fem_poisson_device_pcg_counters_v1,
-    ) -> i32;
-
-    pub fn fullmag_fem_backend_get_poisson_linear_engine_v1(
-        handle: *mut fullmag_fem_backend,
-        out_engine: *mut u32,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
@@ -7392,107 +7375,4 @@ extern "C" {
         profile: *mut fullmag_fem_surface_rt0_profile_result_v1,
         observer: *const fullmag_fem_antenna_operation_observer_v1,
     ) -> i32;
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct fullmag_fem_poisson_device_pcg_counters_v1 {
-    pub status_readbacks: u64,
-    pub status_record_bytes: u64,
-    pub control_d2h_bytes: u64,
-    pub solves: u64,
-    pub active_iterations: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct fullmag_fem_gpu_bb_pcg_certificate_v1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub available: u32,
-    pub cooperative_launch_supported: u32,
-    pub status: u32,
-    pub iterations: u32,
-    pub nonzero_rhs_mask: u32,
-    pub reserved: u32,
-    pub rhs_norm_squared: [f64; 3],
-    pub residual_norm_squared: [f64; 3],
-    pub certificate_relative_tolerance: f64,
-}
-
-const _: () = {
-    assert!(std::mem::size_of::<fullmag_fem_gpu_bb_pcg_certificate_v1>() == 88);
-    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, rhs_norm_squared) == 32);
-    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, residual_norm_squared) == 56);
-    assert!(std::mem::offset_of!(fullmag_fem_gpu_bb_pcg_certificate_v1, certificate_relative_tolerance) == 80);
-};
-
-#[cfg(all(test, feature = "build-native"))]
-#[test]
-fn gpu_bb_pcg_certificate_v1_has_additive_layout_and_getter() {
-    assert_eq!(std::mem::align_of::<fullmag_fem_gpu_bb_pcg_certificate_v1>(), 8);
-    let _getter: unsafe extern "C" fn(
-        *mut fullmag_fem_backend,
-        *mut fullmag_fem_gpu_bb_pcg_certificate_v1,
-    ) -> i32 = fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1;
-    assert_eq!(unsafe { _getter(std::ptr::null_mut(), std::ptr::null_mut()) }, FULLMAG_FEM_ERR_INVALID);
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct fullmag_fem_gpu_pcg_control_config_v1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub status_batch_stride: u32,
-    pub reserved: u32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct fullmag_fem_gpu_pcg_control_info_v1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub requested_status_batch_stride: u32,
-    pub resolved_status_batch_stride: u32,
-    pub solve_attempts: u64,
-    pub enqueued_iterations: u64,
-    pub amg_apply_calls: u64,
-    pub hot_loop_solve_attempts: u64,
-    pub hot_loop_enqueued_iterations: u64,
-    pub hot_loop_amg_apply_calls: u64,
-}
-
-const _: () = {
-    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_config_v1>() == 16);
-    assert!(std::mem::size_of::<fullmag_fem_gpu_pcg_control_info_v1>() == 64);
-    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, solve_attempts) == 16);
-    assert!(std::mem::offset_of!(fullmag_fem_gpu_pcg_control_info_v1, hot_loop_amg_apply_calls) == 56);
-};
-
-#[cfg(test)]
-#[test]
-fn poisson_device_pcg_counters_v1_is_additive_five_u64_layout() {
-    assert_eq!(std::mem::size_of::<fullmag_fem_poisson_device_pcg_counters_v1>(),40);
-    assert_eq!(std::mem::offset_of!(fullmag_fem_poisson_device_pcg_counters_v1,active_iterations),32);
-}
-
-#[repr(C)]
-#[derive(Debug,Clone,Copy,Default)]
-pub struct fullmag_fem_gpu_mandatory_control_counters_v1 {
-    pub bb_certificate_record_bytes: u64,
-    pub bb_certificate_readbacks: u64,
-    pub bb_certificate_bytes: u64,
-    pub bb_descent_readbacks: u64,
-    pub bb_descent_bytes: u64,
-    pub poisson_certificate_readbacks: u64,
-    pub poisson_certificate_bytes: u64,
-    pub confirmation_observations: u64,
-    pub confirmation_metric_readbacks: u64,
-    pub confirmation_metric_bytes: u64,
-}
-
-#[cfg(test)]
-#[test]
-fn mandatory_control_counters_v1_is_additive_ten_u64_layout() {
-    assert_eq!(std::mem::size_of::<fullmag_fem_gpu_mandatory_control_counters_v1>(),80);
 }

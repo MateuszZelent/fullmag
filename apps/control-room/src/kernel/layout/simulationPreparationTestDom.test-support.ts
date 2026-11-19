@@ -321,7 +321,7 @@ export class TestElement extends TestNode {
     this.style = style;
   }
 
-  append(...nodes: (TestNode | string)[]): void {
+  append(...nodes: Array<TestNode | string>): void {
     for (const node of nodes) {
       this.appendChild(
         typeof node === "string" ? this.ownerDocument.createTextNode(node) : node,
@@ -795,7 +795,12 @@ export function installSimulationPreparationTestDom({
       return [];
     }
   }
-  const getComputedStyle = () => ({ direction: "ltr" });
+  // Mirror the CSSStyleDeclaration read API used by layout hooks; unset custom
+  // properties resolve to the empty string as in browsers.
+  const getComputedStyle = () => ({
+    direction: "ltr",
+    getPropertyValue: (_name: string) => "",
+  });
   const requestAnimationFrame = (callback: FrameRequestCallback) => {
     callback(0);
     return 1;

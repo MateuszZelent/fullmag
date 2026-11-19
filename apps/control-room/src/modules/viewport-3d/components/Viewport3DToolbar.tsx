@@ -5,6 +5,7 @@ import {
   Box,
   Camera,
   Compass,
+  Download,
   Eye,
   Gauge,
   Layers,
@@ -26,29 +27,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/Popover";
 import { Separator } from "@/shared/ui/Separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/Tooltip";
 import { useToolbarRovingFocus } from "@/shared/ui/useToolbarRovingFocus";
+import {
+  VIEWPORT_3D_QUALITY_PROFILE_LABELS,
+  VIEWPORT_3D_QUALITY_PROFILE_OPTIONS,
+} from "@/shared/viewport3dQualityLabels";
 
 import { VIEW_DIRECTION_COMMANDS } from "../viewport3dViewDirections";
 import type { Viewport3DVisualProfileId } from "../viewport3dVisualProfile";
 
 const ICON_SIZE = 16;
-
-const QUALITY_PROFILE_OPTIONS: ReadonlyArray<{
-  id: Exclude<Viewport3DVisualProfileId, "capture">;
-  label: string;
-}> = [
-  { id: "interactive-lite", label: "Interactive Lite" },
-  { id: "interactive", label: "Interactive" },
-  { id: "balanced", label: "Balanced" },
-  { id: "figure", label: "Figure" },
-];
-
-const QUALITY_PROFILE_LABELS: Record<Viewport3DVisualProfileId, string> = {
-  "interactive-lite": "Interactive Lite",
-  interactive: "Interactive",
-  balanced: "Balanced",
-  figure: "Figure",
-  capture: "Capture",
-};
 
 export interface Viewport3DToolbarProps {
   onCommand: (id: string) => void;
@@ -73,7 +60,9 @@ export function Viewport3DToolbar({
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarKeyDown = useToolbarRovingFocus(toolbarRef);
   const fitReason = fitDisabledReason?.trim() || null;
-  const qualityLabel = QUALITY_PROFILE_LABELS[qualityProfileId];
+  const qualityLabel = qualityProfileId === "capture"
+    ? "Capture"
+    : VIEWPORT_3D_QUALITY_PROFILE_LABELS[qualityProfileId];
   const projectionLabel = projection === "orthographic" ? "Orthographic" : "Perspective";
 
   return (
@@ -210,10 +199,10 @@ export function Viewport3DToolbar({
 
         <div aria-label="Quality" className="fm-viewport-3d-toolbar__group" role="group">
           <DropdownMenu modal={false}>
-            <ToolbarTooltip content={`Render quality: ${qualityLabel}`}>
+            <ToolbarTooltip content={`Quality profile: ${qualityLabel}`}>
               <DropdownMenuTrigger asChild>
                 <Button
-                  aria-label={`Quality: ${qualityLabel}`}
+                  aria-label={`Quality profile: ${qualityLabel}`}
                   className="fm-viewport-3d-toolbar__button"
                   size="icon"
                   type="button"
@@ -228,18 +217,18 @@ export function Viewport3DToolbar({
               </DropdownMenuTrigger>
             </ToolbarTooltip>
             <DropdownMenuContent align="start">
-              <DropdownMenuLabel>Render quality</DropdownMenuLabel>
+              <DropdownMenuLabel>Quality profile</DropdownMenuLabel>
               <DropdownMenuRadioGroup
                 onValueChange={(value) => {
-                  if (QUALITY_PROFILE_OPTIONS.some((option) => option.id === value)) {
+                  if (VIEWPORT_3D_QUALITY_PROFILE_OPTIONS.some(([id]) => id === value)) {
                     onCommand(`viewport-3d.profile-${value}`);
                   }
                 }}
                 value={qualityProfileId === "capture" ? "" : qualityProfileId}
               >
-                {QUALITY_PROFILE_OPTIONS.map((profile) => (
-                  <DropdownMenuRadioItem key={profile.id} value={profile.id}>
-                    {profile.label}
+                {VIEWPORT_3D_QUALITY_PROFILE_OPTIONS.map(([id, label]) => (
+                  <DropdownMenuRadioItem key={id} value={id}>
+                    {label}
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
@@ -262,6 +251,20 @@ export function Viewport3DToolbar({
             >
               <Camera aria-hidden="true" size={ICON_SIZE} />
               <span className="fm-viewport-3d-toolbar__label">PNG</span>
+            </Button>
+          </ToolbarTooltip>
+          <ToolbarTooltip content="Export the current view as a 3D model">
+            <Button
+              aria-label="Export 3D model"
+              className="fm-viewport-3d-toolbar__button"
+              data-command-id="viewport-3d.export-model"
+              onClick={() => onCommand("viewport-3d.export-model")}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <Download aria-hidden="true" size={ICON_SIZE} />
+              <span className="fm-viewport-3d-toolbar__label">3D model</span>
             </Button>
           </ToolbarTooltip>
         </div>

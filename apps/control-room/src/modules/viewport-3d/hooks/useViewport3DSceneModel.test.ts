@@ -1476,7 +1476,7 @@ describe("useViewport3DSceneModel", () => {
       "fdmSettings: fdmDomain ? fdmSettings : null,",
     );
     expect(source).toContain(
-      "const tet4FmmqQualitySupported = topologySupportsTet4FmmqQuality(topology.data);",
+      "const tet4FmmqQualitySupported = useMemo(\n    () => topologySupportsTet4FmmqQuality(topology.data),\n    [topology.data],\n  );",
     );
     expect(source).toContain(
       "useViewport3DMeshQualityData(\n    Boolean(\n      liveViewportResourcesEnabled &&\n        fieldCompatibleTopologyRenderModel &&\n        meshQualityOverlayVisible &&\n        tet4FmmqQualitySupported,\n    ),\n  )",
@@ -6172,7 +6172,10 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useFdmCuboidBuildResult");
     expect(source).toContain("modelFieldVector: fdmInstanceModelFieldVector");
     expect(source).toContain("realizedRegionIds: fdmRealizedRegionIds");
-    expect(source).toContain("membership=${fdmRegionMembership.revision ?? \"none\"}");
+    expect(source).toContain("membership=${fdmRegionMembershipDataRevision ?? \"none\"}");
+    // A1: FDM build keys use the settled payload identity, not the pending revision.
+    expect(source).toContain("const fdmRegionMembershipDataRevision =");
+    expect(source).not.toContain("domainMeta.revision == null ? null : String(domainMeta.revision)");
     expect(source).toContain("const fdmRealizedRegionIds = useMemo");
     expect(source).toContain("adaptDomainPresentation({");
     expect(source).toContain("expectedFdmGridFingerprint:");

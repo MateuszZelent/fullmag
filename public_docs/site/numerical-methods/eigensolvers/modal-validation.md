@@ -4,7 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/0600-fem-eigenmodes-linearized-llg.md
+source_of_truth: /physics/foundations/llg-equation, /physics/interactions/demagnetization/validation
 ---
 
 (public-docs-numerical-methods-eigensolvers-modal-validation)=
@@ -361,7 +361,7 @@ Validation contracts serialize into `runtime_metadata.k0_kittel_validation` and
 
 1. C. Kittel, “On the theory of ferromagnetic resonance absorption,” *Physical Review*, 73, 155–161 (1948).
 2. B. A. Kalinikos and A. N. Slavin, “Theory of dipole-exchange spin wave spectrum for ferromagnetic films with mixed exchange boundary conditions,” *Journal of Physics C: Solid State Physics*, 19, 7013–7033 (1986).
-3. FullMag physics contracts: `docs/physics/0600-fem-eigenmodes-linearized-llg.md` and `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`.
+3. FullMag public physics contracts: {doc}`/physics/foundations/llg-equation` and {doc}`/physics/interactions/demagnetization/validation`.
 
 (modal-validation-source-code-index)=
 ## 13. Source-code index

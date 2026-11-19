@@ -6,6 +6,7 @@
  */
 
 #include "fullmag_fdm.h"
+#include "fullmag_time_expression.h"
 #include "fullmag_adaptive_step_decision.hpp"
 #include "context.hpp"
 #include "plan_ingestion_v2.hpp"
@@ -1120,7 +1121,9 @@ uint64_t fullmag_fdm_capability_bits_v1(void) {
     // The single-grid CUDA integrators consume a device-resident Frozen Spins
     // mask after all physical RHS sources are assembled. Multilayer plans are
     // still rejected by the planner and do not advertise this lane.
-    return FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1;
+    // Regional field drives accept HOST_MULTIPLIER terms through descriptor v3.
+    return FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 |
+           FULLMAG_FDM_CAPABILITY_HOST_MULTIPLIER_DRIVES_V1;
 }
 
 /* ── Create ── */
@@ -4268,6 +4271,47 @@ int fullmag_fdm_backend_set_regional_field_drives_v2(
     uint32_t drive_count)
 {
     return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+int fullmag_fdm_backend_set_regional_field_drives_v3(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
+    uint32_t drive_count)
+{
+    return set_regional_field_drives_impl(handle, drives, drive_count);
+}
+
+double fullmag_fdm_time_expression_eval_v1(const double *code, uint64_t len, double t_s) {
+    return fullmag_time_expression_eval(code, len, t_s);
+}
+
+int fullmag_fdm_backend_set_slonczewski_time_expression_v1(
+    fullmag_fdm_backend *handle, const double *program, uint64_t program_words,
+    double stage_origin_s, const double *events_s, uint64_t event_count)
+{
+    if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto &ctx = *reinterpret_cast<Context *>(handle);
+    if (!ctx.has_slonczewski_stt || ctx.current_time != 0.0 ||
+        !std::isfinite(stage_origin_s) || stage_origin_s < 0.0 ||
+        fullmag_time_expression_reads_t(program, program_words) < 0 ||
+        (event_count > 0 && events_s == nullptr)) {
+        ctx.last_error = "invalid Slonczewski time expression binding";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    for (uint64_t index = 0; index < event_count; ++index) {
+        if (!std::isfinite(events_s[index]) || events_s[index] < 0.0 ||
+            (index > 0 && events_s[index] <= events_s[index - 1])) {
+            ctx.last_error = "invalid Slonczewski time expression event schedule";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+    }
+    ctx.slonczewski_time_origin_s = stage_origin_s;
+    ctx.slonczewski_time_program.assign(program, program + program_words);
+    ctx.slonczewski_time_events_s.clear();
+    if (event_count > 0) {
+        ctx.slonczewski_time_events_s.assign(events_s, events_s + event_count);
+    }
+    return FULLMAG_FDM_OK;
 }
 
 /* ── Error ── */

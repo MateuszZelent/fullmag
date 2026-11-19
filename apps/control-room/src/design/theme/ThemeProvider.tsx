@@ -18,6 +18,7 @@ import {
   type ThemeMode,
 } from "./themePreference";
 import { THEME_TOGGLE_EVENT } from "./themeEvents";
+import { applyWithoutTransitions } from "./themeTransition";
 
 interface ThemeSnapshot {
   theme: ThemeMode;
@@ -113,12 +114,18 @@ function updateThemeSnapshot(
     preference,
     theme: resolveThemeMode(preference, systemPrefersDark),
   };
+  const paletteChanged = currentSnapshot.theme !== nextSnapshot.theme;
   const changed =
-    currentSnapshot.preference !== nextSnapshot.preference ||
-    currentSnapshot.theme !== nextSnapshot.theme;
+    currentSnapshot.preference !== nextSnapshot.preference || paletteChanged;
 
   currentSnapshot = nextSnapshot;
-  applyTheme(nextSnapshot);
+  if (paletteChanged) {
+    applyWithoutTransitions(document.documentElement, window, () =>
+      applyTheme(nextSnapshot),
+    );
+  } else {
+    applyTheme(nextSnapshot);
+  }
   if (shouldPersist) {
     persistTheme(preference);
   }

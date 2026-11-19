@@ -1,3 +1,4 @@
+import { CONTROL_ROOM_JSON_BODY_LIMIT_BYTES, JSON_UPLOAD_ENVELOPE_RESERVE_BYTES, STL_UPLOAD_MAX_BYTES } from "./src/kernel/api/transportLimits";
 import {
   mkdtempSync,
   mkdirSync,
@@ -29,6 +30,18 @@ import {
 } from "./src/kernel/layout/instanceTabVisibility";
 
 describe("control-room Next dev proxy config", () => {
+  it("forwards complete large STL and project bodies within the admitted API limit", () => {
+    const backend = readFileSync(new URL("../../crates/fullmag-api/src/main.rs", import.meta.url), "utf8");
+    const limit = /LOCAL_BRIDGE_BODY_LIMIT_BYTES[^=]*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(backend);
+    expect(limit).not.toBeNull();
+    const backendBytes = Number(limit![1]) * 1024 * 1024;
+    expect(CONTROL_ROOM_JSON_BODY_LIMIT_BYTES).toBe(backendBytes);
+    expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe(backendBytes);
+    expect(Math.ceil(STL_UPLOAD_MAX_BYTES / 3) * 4 + JSON_UPLOAD_ENVELOPE_RESERVE_BYTES)
+      .toBeLessThanOrEqual(backendBytes);
+    expect(STL_UPLOAD_MAX_BYTES).toBeGreaterThan(100_000_084); // maximum binary STL at the parser's 2M-face limit
+  });
+
   it("keeps proxy waiting compatible with the synchronous command phase owners", () => {
     const script = readFileSync(new URL("../../crates/fullmag-api/src/script.rs", import.meta.url), "utf8");
     const preparation = readFileSync(new URL("../../crates/fullmag-api/src/live_scene_preparation.rs", import.meta.url), "utf8");

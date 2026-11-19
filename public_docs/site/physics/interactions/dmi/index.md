@@ -27,7 +27,7 @@ validation
 (physics-dmi-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+Antisymmetric exchange (Dzyaloshinskii–Moriya interaction, DMI) favors canted or chiral spin textures according to the crystal symmetry of the bulk lattice or heavy-metal interface. This overview maps the three supported DMI symmetry variants onto Fullmag's authoring constructors, `ProblemIR` schema, planner rules, and backend lanes.
 
 (physics-dmi-governing-equations)=
 ## Governing equations
@@ -61,8 +61,7 @@ Its bulk field is
 ```
 
 For the canonical $\hat{\mathbf n}=\hat{\mathbf z}$ thin-film case this gives
-$(2D_{\mathrm i}/\mu_0M_s)
-(\partial_xm_z,\partial_ym_z,-\partial_xm_x-\partial_ym_y)$.
+$(2D_{\mathrm i}/\mu_0M_s)(\partial_xm_z,\partial_ym_z,-\partial_xm_x-\partial_ym_y)$.
 
 Bulk DMI uses
 
@@ -147,12 +146,7 @@ study.demag(realization="poisson_robin")
 study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5.0e-13, max_steps=500, tolT=1.0e-6)
 ```
 
-The study facade already supports material-owned interfacial DMI. It must not be documented as
-unregisterable.
-
-
-
-Explicit constructors remain useful for IR tests:
+The study facade supports material-owned interfacial DMI directly. Explicit energy-term constructors also remain supported for `ProblemIR` serialization tests and explicit compatibility scripts:
 
 (physics-dmi-problem-ir)=
 ## ProblemIR and coefficient ownership
@@ -170,12 +164,9 @@ silently added. Resolved execution records normalized normal, scalar versus spat
 mesh, boundary policy, solver, device, and precision.
 
 (physics-dmi-validation)=
-## Validation boundary and required code corrections
+## Validation boundary
 
-`InterfacialDMI.__init__` currently checks vector length/conversion but not finite values or
-non-zero norm. Those checks occur later and should either be documented there or moved into the
-constructor. The `Material.Dbulk` warning and public coefficient contract use
-$\mathrm{J\,m^{-2}}$.
+`InterfacialDMI.__init__` validates vector length and numeric conversion, while finite-value and non-zero-norm checks on the interface normal are enforced later during lowering and planning. Both the `Material.Dbulk` deprecation warning and the public DMI coefficient contract use $\mathrm{J\,m^{-2}}$.
 
 ## Required numerical validation
 

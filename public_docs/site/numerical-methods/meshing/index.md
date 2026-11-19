@@ -14,8 +14,6 @@ source_of_truth: "FDM/FEM discretization schemas, meshing builders, Control Room
 (public-docs-numerical-methods-meshing-index)=
 # Meshing and spatial discretization
 
-**Last changes: 12:31 24.08.2026**
-
 This chapter defines the complete Fullmag meshing contract: physical resolution, authored intent, realized topology, Control Room workflows, Python API, quality evidence and implementation ownership.
 
 ::::{admonition} Implementation status
@@ -302,7 +300,3 @@ fem-shared-domain
 refinement
 swept-meshes
 ```
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

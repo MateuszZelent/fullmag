@@ -136,8 +136,8 @@ Panel (a) shows Fullmag's uniaxial anisotropy regimes (easy axis, easy plane, an
 (uniaxial-assumptions-and-validity)=
 ## Assumptions and validity
 
-- `Ku1` and `Ku2` are SI energy-density constants in J/m^3. They are not exchange stiffnesses
-  and are not supplied in J/m.
+- `Ku1` and `Ku2` are SI energy-density constants in $\mathrm{J\,m^{-3}}$. They are not exchange stiffnesses
+  and are not supplied in $\mathrm{J\,m^{-1}}$.
 - The configured axis is required to be a finite non-zero direction for an active realization.
   Native paths normalize it; the stored public tuple is not silently treated as unit length.
 - The reduced magnetization is expected to satisfy the surrounding dynamics normalization contract.
@@ -300,8 +300,7 @@ fallback is implied by the presence of a host reference implementation.
 (uniaxial-implementation-mapping)=
 ## Implementation mapping
 
-The adjacent `uniaxial.source-map.json` records stable path-plus-symbol citations. Ownership is
-split deliberately:
+Responsibilities are split across Python authoring, planning, and native kernels:
 
 - Python `UniaxialAnisotropy` and `_migrate_legacy_anisotropy_energy_terms` own public migration.
 - `Material` owns canonical values and serialization.
@@ -311,8 +310,7 @@ split deliberately:
 - FEM CPU owns nodal/quadrature field and energy evaluation.
 - FEM CUDA owns device field/energy kernels and reductions.
 
-Line numbers are intentionally not the citation identity because source edits move them. Use the
-stable symbol and inspect the current line range when reviewing a particular revision.
+Refer to the symbol entries in the source-code index below when locating the current implementation across Python, planner, and backend kernels.
 
 (uniaxial-validation)=
 ## Validation and qualification

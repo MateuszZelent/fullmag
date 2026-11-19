@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import math
+from collections.abc import Iterable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
@@ -71,7 +73,9 @@ class LoadedStage:
             runtime_metadata["output_storage_source_dir"] = str(Path(source_root).resolve())
             if source_stem:
                 runtime_metadata["output_storage_source_stem"] = source_stem
-        if isinstance(runtime_metadata, dict):
+        # Actions inherit the surrounding study snapshot but do not execute its
+        # integrator or produce a time-domain output stream of their own.
+        if isinstance(runtime_metadata, dict) and self.action is None:
             configure_problem_ir_autosave(
                 ir,
                 runtime_metadata.get("output_storage"),
@@ -205,7 +209,7 @@ class LoadedProblem:
             if not isinstance(action, dict):
                 continue
             kind = action.get("kind")
-            if kind == "add_field_drive":
+            if kind in {"add_field_drive", "add_mask_field_drive"}:
                 drive = action.get("drive")
                 drive_id = getattr(drive, "id", None)
                 if drive_id is None and isinstance(drive, dict):
@@ -281,6 +285,7 @@ class LoadedProblem:
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
+            mask_field_drives=self._base_mask_field_drives(candidate, introduced_ids),
             antenna_target_projections=tuple(
                 projection for projection in candidate.antenna_target_projections
                 if projection.id not in introduced_projection_ids
@@ -296,6 +301,28 @@ class LoadedProblem:
             runtime_metadata=runtime_metadata,
             study=study,
         )
+
+    def _base_mask_field_drives(
+        self, candidate: Problem, introduced_ids: set[str]
+    ) -> tuple[object, ...]:
+        """Whole-study mask antennas as they are before the first stage.
+
+        Stage actions update or remove a whole-study antenna in the final problem;
+        the base keeps the definition captured before any stage ran. Antennas added
+        with ``study.field_drives.add`` after the first stage are kept as well.
+        """
+        if not self.stages:
+            return tuple(
+                drive for drive in candidate.mask_field_drives if drive.id not in introduced_ids
+            )
+        initial = tuple(self.stages[0].problem.mask_field_drives)
+        initial_ids = {drive.id for drive in initial}
+        late = tuple(
+            drive
+            for drive in candidate.mask_field_drives
+            if drive.id not in initial_ids and drive.id not in introduced_ids
+        )
+        return initial + late
 
     def study_pipeline_document(self) -> dict[str, object] | None:
         from fullmag.runtime.script_builder import export_study_pipeline_document
@@ -377,8 +404,11 @@ def load_problem_from_script(
     *,
     lightweight_assets: bool = False,
     source_bytes: bytes | None = None,
+    material_catalog: Iterable[Mapping[str, object]] | None = None,
+    material_catalog_unavailable: bool = False,
 ) -> LoadedProblem:
     import fullmag.world as world
+    from fullmag._material_versions import _bind_catalog, _bind_unavailable_catalog
 
     source_path = Path(path).resolve()
     if source_bytes is None:
@@ -397,12 +427,22 @@ def load_problem_from_script(
         module = ModuleType(f"fullmag_user_script_{uuid4().hex}")
         module.__file__ = str(source_path)
         module.__package__ = ""
+        # Mask and time functions are transpiled from their source; let
+        # inspect read the captured text instead of the file on disk.
+        from fullmag.model.mask_function import register_script_source
+
+        register_script_source(str(source_path), source_text)
         script_source = source_text
         dont_inherit = False
 
-    world.begin_script_capture(source_path.parent)
-    world.set_script_capture_lightweight_assets(lightweight_assets)
-    try:
+    with ExitStack() as stack:
+        if material_catalog_unavailable:
+            stack.enter_context(_bind_unavailable_catalog())
+        elif material_catalog is not None:
+            stack.enter_context(_bind_catalog(material_catalog))
+        world.begin_script_capture(source_path.parent)
+        stack.callback(world.finish_script_capture)
+        world.set_script_capture_lightweight_assets(lightweight_assets)
         if source_bytes is None:
             # SourceFileLoader.exec_module may accept timestamp-and-size-valid
             # bytecode after this file is rewritten within one second. Capture
@@ -494,9 +534,6 @@ def load_problem_from_script(
                 workspace_problem=workspace_problem,
                 antenna_inventory=antenna_inventory,
             )
-
-    finally:
-        world.finish_script_capture()
 
 
 def _extract_problem(module: ModuleType) -> tuple[Problem, str]:

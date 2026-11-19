@@ -4,13 +4,91 @@ use crate::magnetoelastic;
 use crate::Vector3;
 use fullmag_ir::TimeDependenceIR;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TimeEvaluationSide {
+    Exact,
+    LeftLimit,
+    RightLimit,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SlonczewskiTimeExpression {
+    program: fullmag_expr::TimeProgram,
+    event_times_s: Vec<f64>,
+}
+
+impl SlonczewskiTimeExpression {
+    pub(crate) fn compile(expression: &fullmag_ir::TimeExpressionIR) -> crate::Result<Self> {
+        let program = expression
+            .compile()
+            .map_err(|message| crate::EngineError::with_code(crate::EngineErrorCode::InvalidInput, message))?;
+        Ok(Self {
+            program,
+            event_times_s: expression.event_times_s.clone(),
+        })
+    }
+
+    pub(crate) fn evaluate(
+        &self,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> crate::Result<f64> {
+        if !time_seconds.is_finite() {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "Slonczewski time expression received a non-finite physical time",
+            ));
+        }
+        let tolerance = 8.0 * f64::EPSILON * time_seconds.abs();
+        let lower = self.event_times_s.partition_point(|event| *event < time_seconds);
+        let before = lower
+            .checked_sub(1)
+            .and_then(|index| self.event_times_s.get(index));
+        let after = self.event_times_s.get(lower);
+        let event = match (before, after) {
+            (Some(before), Some(after)) => Some(if (time_seconds - *before).abs()
+                <= (time_seconds - *after).abs()
+            {
+                before
+            } else {
+                after
+            }),
+            (Some(before), None) => Some(before),
+            (None, Some(after)) => Some(after),
+            (None, None) => None,
+        }
+        .filter(|event| (**event - time_seconds).abs() <= tolerance);
+        let evaluation_time = match (event, side) {
+            (Some(event), TimeEvaluationSide::LeftLimit) => event.next_down(),
+            (Some(event), TimeEvaluationSide::RightLimit) => event.next_up(),
+            _ => time_seconds,
+        };
+        let value = fullmag_expr::eval_time_program(&self.program.code, evaluation_time);
+        if !value.is_finite() {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "Slonczewski time expression produced a non-finite current multiplier at an RK stage",
+            ));
+        }
+        Ok(value)
+    }
+}
+
+/// Time factor of one regional drive: a built-in waveform, or the
+/// `fullmag_time_expr.v1` program of a hand-written mask term (ADR 0081).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriveTimeFunction {
+    Waveform(TimeDependenceIR),
+    Expression(Vec<f64>),
+}
+
 /// Immutable cell-wise spatial basis plus a time envelope for one canonical
 /// regional magnetic drive. The planner/runner owns target realization;
 /// integrators only evaluate this basis at their exact RK stage time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegionalFieldDriveTerm {
     pub basis_field: Vec<Vector3>,
-    pub waveform: TimeDependenceIR,
+    pub time: DriveTimeFunction,
     /// Absolute time subtracted before waveform evaluation for stage-local drives.
     pub time_offset_s: f64,
     pub enabled: bool,
@@ -19,7 +97,13 @@ pub struct RegionalFieldDriveTerm {
 impl RegionalFieldDriveTerm {
     pub fn multiplier_at(&self, absolute_time_s: f64) -> f64 {
         let time = absolute_time_s - self.time_offset_s;
-        match &self.waveform {
+        let waveform = match &self.time {
+            DriveTimeFunction::Expression(program) => {
+                return fullmag_expr::eval_time_program(program, time);
+            }
+            DriveTimeFunction::Waveform(waveform) => waveform,
+        };
+        match waveform {
             TimeDependenceIR::Constant => 1.0,
             TimeDependenceIR::Sinusoidal {
                 frequency_hz,
@@ -265,5 +349,83 @@ impl Default for EffectiveFieldTerms {
             sot: None,
             oersted_cylinder: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod time_expression_tests {
+    use super::{SlonczewskiTimeExpression, TimeEvaluationSide};
+
+    fn pulse_expression() -> fullmag_ir::TimeExpressionIR {
+        fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - t_on) - heaviside(t - t_off)".into(),
+            constants: std::collections::BTreeMap::from([
+                ("t_off".into(), 270.0e-9),
+                ("t_on".into(), 70.0e-9),
+            ]),
+            event_times_s: vec![70.0e-9, 270.0e-9],
+        }
+    }
+
+    #[test]
+    fn j_of_t_is_zero_outside_pulse_and_uses_consistent_one_sided_rk_values() {
+        let expression = SlonczewskiTimeExpression::compile(&pulse_expression()).unwrap();
+        assert_eq!(expression.evaluate(0.0, TimeEvaluationSide::Exact).unwrap(), 0.0);
+        assert_eq!(expression.evaluate(120.0e-9, TimeEvaluationSide::Exact).unwrap(), 1.0);
+        assert_eq!(expression.evaluate(350.0e-9, TimeEvaluationSide::Exact).unwrap(), 0.0);
+
+        assert_eq!(
+            expression.evaluate(70.0e-9, TimeEvaluationSide::Exact).unwrap(),
+            0.5,
+        );
+        assert_eq!(
+            expression.evaluate(70.0e-9, TimeEvaluationSide::LeftLimit).unwrap(),
+            0.0,
+        );
+        assert_eq!(
+            expression.evaluate(70.0e-9, TimeEvaluationSide::RightLimit).unwrap(),
+            1.0,
+        );
+        assert_eq!(
+            expression.evaluate(270.0e-9, TimeEvaluationSide::LeftLimit).unwrap(),
+            1.0,
+        );
+        assert_eq!(
+            expression.evaluate(270.0e-9, TimeEvaluationSide::RightLimit).unwrap(),
+            0.0,
+        );
+    }
+
+    #[test]
+    fn j_of_t_rejects_non_finite_stage_values() {
+        let expression = SlonczewskiTimeExpression::compile(&fullmag_ir::TimeExpressionIR {
+            source: "1 / (t - singular_time)".into(),
+            constants: std::collections::BTreeMap::from([("singular_time".into(), 1.0e-9)]),
+            event_times_s: vec![1.0e-9],
+        })
+        .unwrap();
+        assert!(expression.evaluate(1.0e-9, TimeEvaluationSide::Exact).is_err());
+    }
+
+    #[test]
+    fn nearby_events_select_the_nearest_declared_boundary() {
+        let first = 1.0_f64;
+        let second = first.next_up();
+        let expression = SlonczewskiTimeExpression::compile(&fullmag_ir::TimeExpressionIR {
+            source: "heaviside(t - first) + 2*heaviside(t - second)".into(),
+            constants: std::collections::BTreeMap::from([
+                ("first".into(), first),
+                ("second".into(), second),
+            ]),
+            event_times_s: vec![first, second],
+        })
+        .unwrap();
+
+        assert_eq!(
+            expression
+                .evaluate(second, TimeEvaluationSide::RightLimit)
+                .unwrap(),
+            3.0,
+        );
     }
 }

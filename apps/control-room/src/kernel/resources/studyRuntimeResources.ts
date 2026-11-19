@@ -3003,6 +3003,16 @@ export function useSolverProfileResource({
   return { ...resource, data: mergedProfile };
 }
 
+export const RUN_PERFORMANCE_RETRY_POLICY: ResourceRetryPolicy = {
+  // Preserve the resource hook's existing first-response/timeout budget.
+  // Only the explicitly typed busy conflict gains a retry path.
+  deadlineMs: 30_000,
+  maxAttempts: 3,
+  maxConflictAttempts: 41,
+  retryAfterMs: 500,
+  retryableConflictReasonCodes: ["performance_observation_busy"],
+};
+
 export function useRunPerformanceResource({
   enabled = true,
 }: RuntimeResourceOptions = {}) {
@@ -3017,6 +3027,7 @@ export function useRunPerformanceResource({
     enabled,
     load,
     notifyOnError: shouldNotifyRunPerformanceResourceError,
+    retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
     resolveRevision: (data) => data.revision,
     resourceKey: DIAGNOSTICS_RUN_PERFORMANCE_PATH,
   });

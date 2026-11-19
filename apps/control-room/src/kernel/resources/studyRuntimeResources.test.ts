@@ -1,6 +1,6 @@
 import { readFileSync as readSourceFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -48,9 +48,11 @@ import type {
 } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { activeLaneCapabilityFixture } from "./activeLaneCapabilityFixture.testSupport";
+import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
 
 import {
   STUDY_RUNTIME_CONTROL_RESOURCE_KEYS,
+  RUN_PERFORMANCE_RETRY_POLICY,
   hasPublishedFemMeshEvidence,
   isRunPerformanceObservationBusyError,
   readyCommandResourceData,
@@ -1925,5 +1927,81 @@ describe("study runtime command resource bundles", () => {
         content_digest: "sha256:two",
       }),
     ).not.toBe(revision);
+  });
+});
+
+
+describe("run performance resource loading budget", () => {
+  it("preserves a slow first response before retrying a typed busy conflict", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        calls += 1;
+        if (calls > 1) return Promise.resolve("ready");
+        return new Promise<string>((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new ControlRoomApiError(
+            "observation busy", 409, null, "performance_observation_busy",
+          )), 4000);
+          signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+          }, { once: true });
+        });
+      });
+      const resourceKey = "diagnostics/performance|slow-first-read";
+      const pending = store.ensureLoad({
+        resourceKey, load, externalRevision: "attempt-1",
+        retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
+      } as never);
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+      await pending;
+      await vi.advanceTimersByTimeAsync(RUN_PERFORMANCE_RETRY_POLICY.retryAfterMs ?? 500);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries eight typed busy conflicts at 500 ms before performance becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const signals: AbortSignal[] = [];
+      let calls = 0;
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        calls += 1;
+        if (calls <= 8) {
+          return Promise.reject(new ControlRoomApiError(
+            "observation busy", 409, null, "performance_observation_busy",
+          ));
+        }
+        return Promise.resolve("ready");
+      });
+      const resourceKey = "diagnostics/performance|busy-then-ready";
+      const pending = store.ensureLoad({
+        resourceKey, load, externalRevision: "attempt-1",
+        retryPolicy: RUN_PERFORMANCE_RETRY_POLICY,
+      } as never);
+      await pending;
+      for (let expectedCalls = 2; expectedCalls <= 9; expectedCalls += 1) {
+        await vi.advanceTimersByTimeAsync(500);
+        await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(expectedCalls));
+      }
+      expect(load).toHaveBeenCalledTimes(9);
+      expect(signals).toHaveLength(9);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      expect(store.getSnapshot(resourceKey)).toMatchObject({ data: "ready", status: "ready" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

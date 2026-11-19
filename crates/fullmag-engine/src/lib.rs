@@ -46,7 +46,7 @@ pub use fdm::{
     Abm3StepTelemetry, AbmHistory, AbmHistorySoA, AdaptiveAttemptDecision, AdaptiveAttemptReason,
     AdaptiveAttemptRecord, AdaptiveStepConfig, AdaptiveStepController, AdaptiveStepDecision,
     AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau, CubicAnisotropyConfig,
-    DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
+    DemagKernelSpectra, DriveTimeFunction, EffectiveFieldObservables, EffectiveFieldTerms, EngineError,
     EngineErrorCode, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     ExternalStageTerms, FdmBoundaryPolicy, FdmCpuSolverCheckpointV1, FdmCpuStateCopyTelemetry,
     FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
@@ -483,7 +483,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });
@@ -529,7 +529,7 @@ mod tests {
         );
         problem.regional_field_drives.push(RegionalFieldDriveTerm {
             basis_field: vec![[0.0, 3.0, 0.0], [0.0, -1.0, 0.0]],
-            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time: DriveTimeFunction::Waveform(fullmag_ir::TimeDependenceIR::Constant),
             time_offset_s: 0.0,
             enabled: true,
         });
@@ -1086,7 +1086,8 @@ mod tests {
             &mut report_bufs.h_scratch,
             &mut report_bufs.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
 
         let mut aos_ws = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(&magnetization, &mut aos_ws);
@@ -1163,7 +1164,8 @@ mod tests {
             &mut report_bufs.h_scratch,
             &mut report_bufs.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
         let mut aos_ws = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(state.magnetization(), &mut aos_ws);
         let soa_m = VectorFieldSoA::from_aos(state.magnetization());
@@ -3606,7 +3608,8 @@ mod tests {
             &mut buffers.h_scratch,
             &mut buffers.rhs,
             EvaluationRequest::Full,
-        );
+        )
+        .expect("step observables should evaluate");
         let mut aos_workspace = problem.create_workspace();
         let aos_energy = problem.total_energy_from_vectors_ws(&magnetization, &mut aos_workspace);
         let soa_magnetization = VectorFieldSoA::from_aos(&magnetization);

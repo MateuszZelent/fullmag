@@ -61,7 +61,84 @@ pub(crate) struct LiveScenePreparationReadModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AcceptedPreparationPublicationMode {
     Active,
+    ActiveObservation(AcceptedTaskAttemptIdentity),
+    VerifiedOutput(AcceptedStageOutputIdentity),
     TerminalObservation(crate::development_accepted_restore::AcceptedRunReattachIdentity),
+    TerminalVerifiedOutput {
+        reattach: crate::development_accepted_restore::AcceptedRunReattachIdentity,
+        output: AcceptedStageOutputIdentity,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcceptedTaskAttemptIdentity {
+    run_id: String,
+    task_id: String,
+    step_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
+}
+
+/// Identity supplied only from an already verified accepted output/catalog row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AcceptedStageOutputIdentity {
+    pub(crate) run_id: String,
+    pub(crate) task_id: String,
+    pub(crate) step_id: String,
+    pub(crate) case_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) ownership_epoch: u64,
+    pub(crate) object_ref: String,
+    pub(crate) data_kind: String,
+    pub(crate) plan_fingerprint: Option<String>,
+}
+
+impl AcceptedTaskAttemptIdentity {
+    fn from_live_header(
+        header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+    ) -> Result<Self, ApiError> {
+        if header.schema_version != crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_current_state_changed",
+                "accepted live observation header schema changed before preparation",
+            ));
+        }
+        Ok(Self {
+            run_id: header.run_id.clone(),
+            task_id: header.task_id.clone(),
+            step_id: header.step_id.clone(),
+            attempt_id: header.attempt_id.clone(),
+            ownership_epoch: header.ownership_epoch,
+        })
+    }
+}
+
+impl AcceptedPreparationPublicationMode {
+    fn target_attempt(&self) -> Option<AcceptedTaskAttemptIdentity> {
+        match self {
+            Self::ActiveObservation(identity) => Some(identity.clone()),
+            Self::VerifiedOutput(identity) | Self::TerminalVerifiedOutput { output: identity, .. } => Some(AcceptedTaskAttemptIdentity {
+                run_id: identity.run_id.clone(),
+                task_id: identity.task_id.clone(),
+                step_id: identity.step_id.clone(),
+                attempt_id: identity.attempt_id.clone(),
+                ownership_epoch: identity.ownership_epoch,
+            }),
+            Self::Active | Self::TerminalObservation(_) => None,
+        }
+    }
+
+    fn is_verified_output_only(&self) -> bool {
+        matches!(self, Self::VerifiedOutput(_) | Self::TerminalVerifiedOutput { .. })
+    }
+
+    fn is_terminal_observation(&self) -> bool {
+        matches!(self, Self::TerminalObservation(_) | Self::TerminalVerifiedOutput { .. })
+    }
+
+    fn resolves_step_initial_state(&self) -> bool {
+        matches!(self, Self::Active | Self::ActiveObservation(_))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +184,19 @@ impl AcceptedPreparationPublicationFence {
     ) -> Result<Self, ApiError> {
         crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
         match &mode {
-            AcceptedPreparationPublicationMode::Active => ensure_preparation_run_is_active(snapshot)?,
+            AcceptedPreparationPublicationMode::Active
+            | AcceptedPreparationPublicationMode::ActiveObservation(_) => {
+                ensure_preparation_run_is_active(snapshot)?
+            }
+            AcceptedPreparationPublicationMode::VerifiedOutput(identity) => {
+                let current_run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str());
+                if current_run_id != Some(identity.run_id.as_str()) {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_preparation_output_identity_invalid",
+                        "verified output domain belongs to another current run",
+                    ));
+                }
+            }
             AcceptedPreparationPublicationMode::TerminalObservation(identity) => {
                 let run = snapshot.run.as_ref().ok_or_else(|| ApiError::conflict(
                     "terminal domain restoration requires an accepted run",
@@ -124,6 +213,23 @@ impl AcceptedPreparationPublicationFence {
                     ));
                 }
             }
+            AcceptedPreparationPublicationMode::TerminalVerifiedOutput { reattach, output } => {
+                let run = snapshot.run.as_ref().ok_or_else(|| ApiError::conflict(
+                    "terminal domain restoration requires an accepted run",
+                ))?;
+                let revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
+                if !matches!(run.status.as_str(), "completed" | "failed" | "cancelled")
+                    || output.run_id != run.run_id
+                    || !revision.is_some_and(|revision| reattach.matches(
+                        &run.run_id, &snapshot.session.session_id, session_epoch, revision,
+                    ))
+                {
+                    return Err(ApiError::conflict_with_code(
+                        "accepted_terminal_domain_identity_mismatch",
+                        "terminal output restoration requires the exact process-authenticated restored run",
+                    ));
+                }
+            }
         }
         let run_id = snapshot
             .run
@@ -135,6 +241,19 @@ impl AcceptedPreparationPublicationFence {
                 "accepted_preparation_current_run_missing",
                 "accepted preparation requires the current durable live run",
             ));
+        }
+        if let Some(target) = mode.target_attempt() {
+            if target.run_id != run_id
+                || target.step_id.trim().is_empty()
+                || target.task_id.trim().is_empty()
+                || target.attempt_id.trim().is_empty()
+                || target.ownership_epoch == 0
+            {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_preparation_current_state_changed",
+                    "accepted target attempt does not match the current live run",
+                ));
+            }
         }
         let scene_revision = snapshot
             .scene_document
@@ -463,6 +582,8 @@ fn prepared_domain_publication(
         Some(Value::Object(metadata)) => metadata.clone(),
         Some(_) => return Err(ApiError::conflict("live metadata must be an object")),
     };
+    // A newly qualified preparation owns its material samples again.
+    metadata.remove("authored_damping");
     let execution_plan_metadata = serde_json::to_value(&read_model.execution_plan).map_err(
         |error| ApiError::internal(format!("failed to encode prepared execution plan: {error}")),
     )?;
@@ -539,14 +660,897 @@ fn prepared_domain_publication(
 fn publish_prepared_initial_state(
     snapshot: &mut SessionStateResponse,
     read_model: &LiveScenePreparationReadModel,
+    retain_accepted_scalar_series: bool,
 ) -> Result<(), ApiError> {
     if let Some(carrier) = prepare_initial_magnetization(&read_model.execution_plan)? {
         carrier.publish(
             snapshot, &read_model.preparation_id, &read_model.plan_fingerprint,
             read_model.scene_revision, serde_json::json!({"source_kind": "prepared_initial_state"}),
+            retain_accepted_scalar_series,
         )?;
     }
     Ok(())
+}
+
+struct PreparedAcceptedStepOutputInitialState {
+    carrier: PreparedInitialMagnetization,
+    provenance: Value,
+    claim: fullmag_application::TaskClaim,
+}
+
+fn accepted_step_output_store_read_error(
+    operation: &str,
+    step_id: &str,
+    error: anyhow::Error,
+) -> ApiError {
+    accepted_preparation_store_read_error(
+        operation,
+        step_id,
+        error,
+        "accepted_preparation_input_invalid",
+    )
+}
+
+fn accepted_store_read_is_transient(error: &anyhow::Error) -> bool {
+    fullmag_runtime_control::is_transient_store_io(error)
+        || error.chain().any(|cause| {
+            cause.is::<fullmag_session::StoreWriterBusy>()
+                || matches!(
+                    cause.downcast_ref::<std::fs::TryLockError>(),
+                    Some(std::fs::TryLockError::WouldBlock)
+                )
+        })
+}
+
+fn accepted_preparation_store_read_error(
+    operation: &str,
+    step_id: &str,
+    error: anyhow::Error,
+    invalid_code: &'static str,
+) -> ApiError {
+    let message = format!("{operation} for `{step_id}`: {error:#}");
+    if accepted_store_read_is_transient(&error) {
+        ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "accepted_preparation_pending",
+            message,
+        )
+    } else {
+        ApiError::conflict_with_code(invalid_code, message)
+    }
+}
+
+/// Resolve the exact worker-effective M0 for a state-valued StepOutput input.
+/// The canonical accepted read model remains untouched; this materialized
+/// plan is used only to publish its actual initial magnetization carrier.
+fn prepare_accepted_step_output_initial_state(
+    store: &fullmag_session::SessionStore,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    task_id: &str,
+    step_id: &str,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+    receipt: &fullmag_application::AcceptedPreparationReceipt,
+    expected_attempt: Option<&AcceptedTaskAttemptIdentity>,
+) -> Result<Option<PreparedAcceptedStepOutputInitialState>, ApiError> {
+    use fullmag_authoring::{StudyInputSource, StudyPortDataKind};
+
+    let accepted_step = accepted
+        .study
+        .steps
+        .iter()
+        .find(|step| step.step_id == step_id)
+        .ok_or_else(|| ApiError::conflict("accepted preparation step is absent from its immutable Study"))?;
+    let state_inputs = accepted_step
+        .inputs
+        .iter()
+        .filter(|input| {
+            matches!(input.data_kind, StudyPortDataKind::InitialState | StudyPortDataKind::State)
+                && matches!(
+                    &input.source,
+                    StudyInputSource::StepOutput { .. } | StudyInputSource::PinnedArtifact { .. }
+                )
+        })
+        .collect::<Vec<_>>();
+    if state_inputs.is_empty() {
+        if accepted_step.initial_state_overlay.is_some() {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_input_invalid",
+                "accepted magnetization overlay has no state-valued accepted input",
+            ));
+        }
+        // Authored resets stay bound to the canonical authored PlanIR.
+        return Ok(None);
+    }
+    if state_inputs.len() != 1 {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_input_invalid",
+            "accepted worker has multiple state-valued StepOutput inputs for one initial state",
+        ));
+    }
+    if !matches!(
+        &execution_plan.backend_plan,
+        fullmag_ir::BackendPlanIR::Fdm(_)
+            | fullmag_ir::BackendPlanIR::FdmMultilayer(_)
+            | fullmag_ir::BackendPlanIR::Fem(_)
+    ) {
+        // FEM frequency response and other non-time-domain plans do not
+        // publish a solver initial-magnetization carrier in this read model.
+        return Ok(None);
+    }
+
+    let pending = || {
+        ApiError::with_status_and_code(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "accepted_preparation_pending",
+            format!("accepted StepOutput state for `{step_id}` is not pinned to a started task attempt yet"),
+        )
+    };
+    let invalid = |message: String| {
+        ApiError::conflict_with_code("accepted_preparation_input_invalid", message)
+    };
+    let run_id = &accepted.run.specification.run_id;
+    let run_catalog = store
+        .read_run_catalog(run_id.as_str())
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted StepOutput run catalog read failed", step_id, error,
+        ))?
+        .ok_or_else(|| invalid("accepted StepOutput run catalog is missing".into()))?;
+    let Some(durable_task) = run_catalog.tasks.iter().find(|task| task.task_id == task_id) else {
+        return Err(pending());
+    };
+    match durable_task.lifecycle {
+        fullmag_session::FmsTaskLifecycle::Accepted | fullmag_session::FmsTaskLifecycle::Queued => {
+            return Err(pending());
+        }
+        fullmag_session::FmsTaskLifecycle::Preparing
+        | fullmag_session::FmsTaskLifecycle::Running
+        | fullmag_session::FmsTaskLifecycle::Stopping => {}
+        fullmag_session::FmsTaskLifecycle::Succeeded
+        | fullmag_session::FmsTaskLifecycle::Failed
+        | fullmag_session::FmsTaskLifecycle::Cancelled
+        | fullmag_session::FmsTaskLifecycle::Interrupted => {
+            // A completed stage no longer exposes its start-state frame as
+            // current. Let the accepted output projection publish the actual
+            // terminal observation instead of replacing it with authored m0.
+            return Err(pending());
+        }
+    }
+    if !matches!(&durable_task.readiness, fullmag_session::FmsTaskReadiness::Ready) {
+        return Err(pending());
+    }
+
+    let claim = fullmag_runtime_control::load_current_task_claim(store, run_id, task_id)
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted StepOutput current claim is invalid", step_id, error,
+        ))?;
+    let start = {
+        let transaction = store
+            .read_transaction()
+            .map_err(|error| accepted_step_output_store_read_error(
+                "accepted StepOutput read fence failed", step_id, error,
+            ))?;
+        let recovered = fullmag_runtime_control::recover_coordinator_readonly(
+            store,
+            &claim,
+            &transaction,
+        )
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted StepOutput coordinator recovery failed", step_id, error,
+        ))?;
+        let starts = recovered
+            .commands
+            .iter()
+            .filter(|command| {
+                command.claim.matches_claim(&claim)
+                    && matches!(&command.command, fullmag_application::WorkerCommand::Start)
+            })
+            .collect::<Vec<_>>();
+        match starts.as_slice() {
+            [] => return Err(pending()),
+            [start] => (*start).clone(),
+            _ => {
+                return Err(invalid(format!(
+                    "accepted StepOutput target `{step_id}` has multiple durable Start commands"
+                )));
+            }
+        }
+    };
+    let project_id = accepted.run.specification.snapshot.project_id.clone();
+    let accepted_worker_step = fullmag_runtime_control::load_accepted_worker_step_for_start(
+        store,
+        &project_id,
+        &start,
+    )
+    .map_err(|error| accepted_step_output_store_read_error(
+        "accepted StepOutput worker Start is invalid", step_id, error,
+    ))?;
+    if accepted_worker_step.step_id != step_id
+        || &accepted_worker_step.claim.run_id != run_id
+        || accepted_worker_step.claim.task_id.as_str() != task_id
+        || accepted_worker_step.execution_plan != *execution_plan
+        || accepted_worker_step.study_inputs != accepted_step.inputs
+        || accepted_worker_step.initial_state_overlay != accepted_step.initial_state_overlay
+    {
+        return Err(invalid(format!(
+            "accepted StepOutput Start for `{step_id}` differs from its pinned read model"
+        )));
+    }
+    if expected_attempt.is_some_and(|expected| {
+        expected.run_id != accepted_worker_step.claim.run_id.as_str()
+            || expected.task_id != accepted_worker_step.claim.task_id.as_str()
+            || expected.step_id != accepted_worker_step.step_id
+            || expected.attempt_id != accepted_worker_step.claim.attempt_id.as_str()
+            || expected.ownership_epoch != accepted_worker_step.claim.ownership_epoch.value()
+    }) {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_current_state_changed",
+            "accepted live observation belongs to another task attempt",
+        ));
+    }
+
+    // Admission is the durable attempt/epoch/lease pin for the resolved-input
+    // map. Compare it with the worker's exact Start-derived Prepare before
+    // reading the CAS artifact or exposing any m samples.
+    let admission = store
+        .read_task_admission(
+            run_id.as_str(),
+            task_id,
+            accepted_worker_step.claim.attempt_id.as_str(),
+        )
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted StepOutput admission read failed", step_id, error,
+        ))?
+        .ok_or_else(|| invalid("accepted StepOutput attempt has no durable admission".into()))?;
+    let lease = &admission.lease;
+    let admitted_inputs = admission
+        .resolved_inputs_snapshot
+        .as_ref()
+        .ok_or_else(|| invalid("accepted StepOutput admission has no resolved-input snapshot".into()))?;
+    let admitted_inputs: std::collections::BTreeMap<
+        String,
+        fullmag_application::ResolvedInput,
+    > = serde_json::from_value(admitted_inputs.inputs.clone()).map_err(|error| {
+        invalid(format!("accepted StepOutput admission inputs are not typed: {error}"))
+    })?;
+    let admitted_frozen_context = admission
+        .resolved_inputs_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.frozen_stage_context.clone())
+        .map(serde_json::from_value::<fullmag_application::FrozenStageContextRefV1>)
+        .transpose()
+        .map_err(|error| invalid(format!("accepted StepOutput frozen context is not typed: {error}")))?;
+    let current_claim = &accepted_worker_step.claim;
+    let admitted_kind = match current_claim.lease.kind {
+        fullmag_application::ResourceKind::Cpu => fullmag_session::FmsResourceKind::Cpu,
+        fullmag_application::ResourceKind::Gpu => fullmag_session::FmsResourceKind::Gpu,
+        fullmag_application::ResourceKind::Storage => fullmag_session::FmsResourceKind::Storage,
+        fullmag_application::ResourceKind::Meshing => fullmag_session::FmsResourceKind::Meshing,
+    };
+    if admission.task.task_id != task_id
+        || admission.task.attempt_id.as_deref() != Some(current_claim.attempt_id.as_str())
+        || admission.task.ownership_epoch != Some(current_claim.ownership_epoch.value())
+        || lease.run_id != run_id.as_str()
+        || lease.task_id != task_id
+        || lease.attempt_id != current_claim.attempt_id.as_str()
+        || lease.ownership_epoch != current_claim.ownership_epoch.value()
+        || lease.kind != admitted_kind
+        || lease.state != fullmag_session::FmsResourceLeaseState::Active
+        || lease.resource_id != current_claim.lease.resource_id
+        || lease.lease_token != current_claim.lease.lease_token.as_str()
+        || lease.budget.cpu_millis != current_claim.lease.budget.cpu_millis
+        || lease.budget.memory_bytes != current_claim.lease.budget.memory_bytes
+        || lease.budget.gpu_memory_bytes != current_claim.lease.budget.gpu_memory_bytes
+        || lease.budget.storage_bytes != current_claim.lease.budget.storage_bytes
+        || admitted_inputs != accepted_worker_step.resolved_input.inputs
+        || admitted_frozen_context != accepted_worker_step.resolved_input.frozen_stage_context
+    {
+        return Err(invalid(format!(
+            "accepted StepOutput admission differs from target attempt/epoch/lease or worker inputs for `{step_id}`"
+        )));
+    }
+
+    materialize_accepted_step_output_initial_state(
+        store,
+        &accepted_worker_step,
+        state_inputs[0],
+        execution_plan,
+        receipt.preparation_id(),
+        receipt.plan_fingerprint(),
+    )
+    .map(Some)
+}
+
+fn materialize_accepted_step_output_initial_state(
+    store: &fullmag_session::SessionStore,
+    accepted_worker_step: &fullmag_runtime_control::AcceptedWorkerStep,
+    input_port: &fullmag_authoring::StudyInputPort,
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+    preparation_id: &str,
+    plan_fingerprint: &str,
+) -> Result<PreparedAcceptedStepOutputInitialState, ApiError> {
+    let invalid = |message: String| {
+        ApiError::conflict_with_code("accepted_preparation_input_invalid", message)
+    };
+    let step_id = accepted_worker_step.step_id.as_str();
+    let (source_kind, source_identity) = match &input_port.source {
+        fullmag_authoring::StudyInputSource::StepOutput {
+            step_id: source_step_id,
+            port,
+            case_id,
+        } => (
+            "step_output",
+            serde_json::json!({
+                "step_id": source_step_id,
+                "port": port,
+                "case_id": case_id,
+            }),
+        ),
+        fullmag_authoring::StudyInputSource::PinnedArtifact {
+            artifact_id,
+            content_sha256,
+        } => (
+            "pinned_artifact",
+            serde_json::json!({
+                "artifact_id": artifact_id,
+                "content_sha256": content_sha256,
+            }),
+        ),
+        _ => {
+            return Err(invalid(format!(
+                "accepted state input `{}` is not a materializable source",
+                input_port.port_id
+            )));
+        }
+    };
+    let current_claim = &accepted_worker_step.claim;
+    let materialized = fullmag_runtime_control::materialize_accepted_worker_execution_plan_with_source(
+        store,
+        accepted_worker_step,
+    )
+    .map_err(|error| accepted_step_output_store_read_error(
+        "accepted StepOutput materialization failed", step_id, error,
+    ))?;
+    let state_input = materialized
+        .state_input
+        .ok_or_else(|| invalid(format!("accepted StepOutput port `{}` has no resolved state", input_port.port_id)))?;
+    if let fullmag_authoring::StudyInputSource::PinnedArtifact {
+        artifact_id,
+        content_sha256,
+    } = &input_port.source
+    {
+        if state_input.artifact.artifact_id != *artifact_id
+            || state_input.artifact.object_ref != *content_sha256
+        {
+            return Err(invalid(format!(
+                "accepted pinned state input `{}` differs from its exact artifact identity",
+                input_port.port_id
+            )));
+        }
+    }
+    if state_input.input_port != *input_port {
+        return Err(invalid(format!(
+            "accepted StepOutput input metadata differs from the immutable port `{}`",
+            input_port.port_id
+        )));
+    }
+    let expected_layout = fullmag_runner::study_magnetization_layout_for_plan(execution_plan)
+        .map_err(|error| invalid(format!("accepted StepOutput target layout is invalid: {}", error.message)))?;
+    let expected_layout_sha256 = fullmag_application::study_state_layout_sha256(&expected_layout)
+        .map_err(|error| invalid(format!("accepted StepOutput target layout digest failed: {error}")))?;
+    if state_input.layout_sha256 != expected_layout_sha256 {
+        return Err(invalid(format!(
+            "accepted StepOutput source layout differs from the exact target plan for `{step_id}`"
+        )));
+    }
+    let effective_plan = materialized.execution_plan;
+    if fullmag_runner::study_magnetization_layout_for_plan(&effective_plan)
+        .map_err(|error| invalid(format!("materialized StepOutput layout is invalid: {}", error.message)))?
+        != expected_layout
+    {
+        return Err(invalid(format!(
+            "materialized StepOutput layout differs from the exact target plan for `{step_id}`"
+        )));
+    }
+    let carrier = prepare_initial_magnetization(&effective_plan)?
+        .ok_or_else(|| invalid(format!("accepted StepOutput plan `{step_id}` has no initial m carrier")))?;
+    if accepted_worker_step.initial_state_overlay.is_none()
+        && accepted_worker_step.resolved_input.frozen_stage_context.is_none()
+        && carrier.values_sha256 != state_input.values_sha256
+    {
+        return Err(invalid(format!(
+            "accepted StepOutput M0 differs from its source artifact for `{step_id}`"
+        )));
+    }
+    let materialization_kind = if accepted_worker_step.resolved_input.frozen_stage_context.is_some() {
+        "frozen_continuation"
+    } else if accepted_worker_step.initial_state_overlay.is_some() {
+        if source_kind == "pinned_artifact" {
+            "pinned_artifact_overlay"
+        } else {
+            "step_output_overlay"
+        }
+    } else if source_kind == "pinned_artifact" {
+        "pinned_artifact"
+    } else {
+        "step_output"
+    };
+    let mut provenance = serde_json::json!({
+        "source_kind": "accepted_step_output_initial_state",
+        "materialization_kind": materialization_kind,
+        "preparation_id": preparation_id,
+        "plan_fingerprint": plan_fingerprint,
+        "target_attempt": {
+            "run_id": current_claim.run_id.as_str(),
+            "task_id": current_claim.task_id.as_str(),
+            "attempt_id": current_claim.attempt_id.as_str(),
+            "ownership_epoch": current_claim.ownership_epoch.value(),
+            "step_id": step_id,
+        },
+        "accepted_input": {
+            "source_kind": source_kind,
+            "source_identity": source_identity,
+            "port_id": input_port.port_id,
+            "port_data_kind": input_port.data_kind,
+            "artifact_id": state_input.artifact.artifact_id,
+            "object_ref": state_input.artifact.object_ref,
+            "data_kind": state_input.artifact.data_kind,
+            "values_sha256": state_input.values_sha256,
+            "layout_sha256": state_input.layout_sha256,
+        },
+        "producer_clock": {
+            "step": state_input.producer_step,
+            "time_seconds": state_input.producer_time_s,
+            "solver_dt_seconds": state_input.producer_solver_dt_s,
+        },
+        "target_clock": {
+            "step": 0,
+            "time_seconds": carrier.start_time_s,
+        },
+        "materialized_state": {
+            "values_sha256": carrier.values_sha256,
+            "layout_sha256": state_input.layout_sha256,
+        },
+    });
+    if let Some(overlay) = accepted_worker_step.initial_state_overlay.as_ref() {
+        provenance["overlay_scopes"] = serde_json::to_value(overlay.scopes()).map_err(|error| {
+            ApiError::internal(format!("encode accepted StepOutput overlay scopes: {error}"))
+        })?;
+    }
+    if let Some(context) = accepted_worker_step.resolved_input.frozen_stage_context.as_ref() {
+        provenance["frozen_stage_context"] = serde_json::to_value(context).map_err(|error| {
+            ApiError::internal(format!("encode accepted frozen stage context: {error}"))
+        })?;
+    }
+    Ok(PreparedAcceptedStepOutputInitialState {
+        carrier,
+        provenance,
+        claim: current_claim.clone(),
+    })
+}
+
+fn publish_accepted_step_output_initial_state(
+    snapshot: &mut SessionStateResponse,
+    read_model: &LiveScenePreparationReadModel,
+    prepared: PreparedAcceptedStepOutputInitialState,
+) -> Result<(), ApiError> {
+    let frame = crate::session::accepted_observation_frame_ref(
+        snapshot,
+        0,
+        Some(prepared.carrier.start_time_s),
+    );
+    let mut provenance = prepared.provenance;
+    provenance["preparation_id"] = read_model.preparation_id.clone().into();
+    provenance["plan_fingerprint"] = read_model.plan_fingerprint.clone().into();
+    let mut field = prepared.carrier.field;
+    field["n_comp"] = 3.into();
+    field["source_step"] = 0.into();
+    field["source_time_seconds"] = prepared.carrier.start_time_s.into();
+    field["source_revision"] = read_model.scene_revision.into();
+    field["provenance"] = provenance;
+    field["observation_frame"] = serde_json::to_value(&frame).map_err(|error| {
+        ApiError::internal(format!("encode accepted StepOutput observation frame: {error}"))
+    })?;
+    let mut fields = crate::types::LatestFields::default();
+    fields.insert("m".into(), field);
+    let session_id = snapshot.session.session_id.clone();
+    crate::session::apply_current_live_accepted_field_frame(
+        snapshot,
+        crate::types::CurrentLiveFieldFrameRequest {
+            session_id,
+            latest_fields: Some(fields),
+            replace_latest_fields: false,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        },
+        frame,
+    )
+}
+
+fn task_attempt_changed() -> ApiError {
+    ApiError::conflict_with_code(
+        "accepted_preparation_current_state_changed",
+        "accepted task attempt changed before domain publication",
+    )
+}
+
+fn hold_current_accepted_attempt_fence(
+    store: &fullmag_session::SessionStore,
+    expected: &AcceptedTaskAttemptIdentity,
+    expected_claim: Option<&fullmag_application::TaskClaim>,
+) -> Result<fullmag_session::ReadTransaction, ApiError> {
+    let transaction = store
+        .read_transaction()
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted attempt final read fence failed",
+            &expected.step_id,
+            error,
+        ))?;
+    let catalog = store
+        .read_run_catalog(&expected.run_id)
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted attempt final catalog read failed",
+            &expected.step_id,
+            error,
+        ))?
+        .ok_or_else(task_attempt_changed)?;
+    let task = catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == expected.task_id)
+        .ok_or_else(task_attempt_changed)?;
+    if !matches!(
+        task.lifecycle,
+        fullmag_session::FmsTaskLifecycle::Preparing
+            | fullmag_session::FmsTaskLifecycle::Running
+            | fullmag_session::FmsTaskLifecycle::Stopping
+    ) || !matches!(
+        &task.readiness,
+        fullmag_session::FmsTaskReadiness::Ready
+    ) || task.attempt_id.as_deref() != Some(expected.attempt_id.as_str())
+        || task.ownership_epoch != Some(expected.ownership_epoch)
+        || task.resource_id.is_none()
+    {
+        return Err(task_attempt_changed());
+    }
+    if let Some(expected_claim) = expected_claim {
+        if expected_claim.run_id.as_str() != expected.run_id
+            || expected_claim.task_id.as_str() != expected.task_id
+            || expected_claim.attempt_id.as_str() != expected.attempt_id
+            || expected_claim.ownership_epoch.value() != expected.ownership_epoch
+        {
+            return Err(task_attempt_changed());
+        }
+        let current_claim = fullmag_runtime_control::load_current_task_claim(
+            store,
+            &expected_claim.run_id,
+            expected_claim.task_id.as_str(),
+        )
+        .map_err(|error| accepted_step_output_store_read_error(
+            "accepted attempt final claim read failed",
+            &expected.step_id,
+            error,
+        ))?;
+        if !expected_claim.is_same_or_renewed_by(&current_claim) {
+            return Err(task_attempt_changed());
+        }
+    }
+    Ok(transaction)
+}
+
+fn validate_verified_output_task_identity(
+    identity: &AcceptedStageOutputIdentity,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+) -> Result<(), ApiError> {
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Succeeded
+        || task.task_id != identity.task_id
+        || task.attempt_id.as_deref() != Some(identity.attempt_id.as_str())
+        || task.ownership_epoch != Some(identity.ownership_epoch)
+    {
+        return Err(task_attempt_changed());
+    }
+    Ok(())
+}
+
+/// Verify the small output manifest and catalog row before a domain candidate
+/// exists. The potentially large state object has already been decoded by the
+/// accepted output projection and is deliberately not read a second time.
+fn verify_accepted_stage_output_identity(
+    store: &fullmag_session::SessionStore,
+    accepted: Option<&fullmag_runtime_control::AcceptedStudySnapshot>,
+    identity: &AcceptedStageOutputIdentity,
+    expected_plan_fingerprint: &str,
+) -> Result<fullmag_session::ReadTransaction, ApiError> {
+    if !matches!(identity.data_kind.as_str(), "state" | "initial_state") {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output-only domain requires a typed magnetization state",
+        ));
+    }
+    if identity.plan_fingerprint.as_deref().is_some_and(|fingerprint| {
+        fingerprint != expected_plan_fingerprint
+    }) {
+        return Err(task_attempt_changed());
+    }
+    if accepted.is_some_and(|accepted| {
+        accepted.run.specification.run_id.as_str() != identity.run_id
+    }) {
+        return Err(task_attempt_changed());
+    }
+    let expected_task = fullmag_session::task_id_for_study_step(
+        &identity.run_id,
+        &identity.step_id,
+    )
+    .map_err(|error| ApiError::bad_request(format!("accepted output step id is invalid: {error}")))?;
+    if expected_task != identity.task_id {
+        return Err(task_attempt_changed());
+    }
+
+    let transaction = store
+        .read_transaction()
+        .map_err(|error| accepted_step_output_store_read_error(
+            "verified output identity read fence failed",
+            &identity.step_id,
+            error,
+        ))?;
+    let run_catalog = store
+        .read_run_catalog(&identity.run_id)
+        .map_err(|error| accepted_step_output_store_read_error(
+            "verified output run catalog read failed",
+            &identity.step_id,
+            error,
+        ))?
+        .ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output run catalog is missing",
+        ))?;
+    let task = run_catalog
+        .tasks
+        .iter()
+        .find(|task| task.task_id == identity.task_id)
+        .ok_or_else(task_attempt_changed)?;
+    validate_verified_output_task_identity(identity, task)?;
+
+    let artifact_catalog = store
+        .read_artifact_catalog(&identity.run_id)
+        .map_err(|error| accepted_step_output_store_read_error(
+            "verified output artifact catalog read failed",
+            &identity.step_id,
+            error,
+        ))?
+        .ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output artifact catalog is missing",
+        ))?;
+    artifact_catalog.validate().map_err(|error| {
+        ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            format!("verified output artifact catalog is invalid: {error}"),
+        )
+    })?;
+    if artifact_catalog.run_id != identity.run_id {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output artifact catalog belongs to another run",
+        ));
+    }
+    let manifests = artifact_catalog.entries.iter().filter(|entry| {
+        entry.artifact_type == "study_output_manifest"
+            && entry.task_id == identity.task_id
+            && entry.attempt_id == identity.attempt_id
+            && entry.ownership_epoch == identity.ownership_epoch
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+            && task.artifact_ids.contains(&entry.artifact_id)
+    }).collect::<Vec<_>>();
+    let [manifest_entry] = manifests.as_slice() else {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified task must have exactly one output manifest for its attempt",
+        ));
+    };
+    let manifest_ref = manifest_entry.object_ref.as_deref()
+        .filter(|object_ref| *object_ref == manifest_entry.content_sha256)
+        .ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output manifest digest is not pinned",
+        ))?;
+    let manifest_bytes = store
+        .cas()
+        .get_bounded(manifest_ref, fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
+        .map_err(|error| accepted_step_output_store_read_error(
+            "verified output manifest CAS read failed",
+            &identity.step_id,
+            error,
+        ))?
+        .ok_or_else(|| ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output manifest is missing from CAS",
+        ))?;
+    let manifest = fullmag_runtime_control::read_study_output_manifest_projection(&manifest_bytes)
+        .map_err(|error| ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            format!("verified output manifest is invalid: {error}"),
+        ))?;
+    if manifest.run_id != identity.run_id
+        || manifest.task_id != identity.task_id
+        || manifest.step_id != identity.step_id
+        || manifest.attempt_id != identity.attempt_id
+        || manifest.ownership_epoch != identity.ownership_epoch
+    {
+        return Err(task_attempt_changed());
+    }
+    let matching_outputs = manifest.outputs.iter().filter(|output| {
+        output.case_id == identity.case_id
+            && output.object_ref == identity.object_ref
+            && output.data_kind == identity.data_kind
+            && output.content_sha256 == identity.object_ref
+    }).collect::<Vec<_>>();
+    let [output] = matching_outputs.as_slice() else {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output reference and case do not identify exactly one manifest output",
+        ));
+    };
+    let artifacts = artifact_catalog.entries.iter().filter(|entry| {
+        entry.artifact_id == output.artifact_id
+            && entry.task_id == identity.task_id
+            && entry.attempt_id == identity.attempt_id
+            && entry.ownership_epoch == identity.ownership_epoch
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+            && entry.object_ref.as_deref() == Some(identity.object_ref.as_str())
+            && entry.content_sha256 == identity.object_ref
+            && entry.study_output.as_ref().is_some_and(|study_output| {
+                study_output.step_id == identity.step_id
+                    && study_output.port_id == output.port_id
+                    && study_output.case_id == identity.case_id
+            })
+    }).collect::<Vec<_>>();
+    if artifacts.len() != 1 {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output is not pinned by exactly one artifact catalog entry",
+        ));
+    }
+    if let Some(accepted) = accepted {
+        let step = accepted.study.steps.iter().find(|step| step.step_id == identity.step_id)
+            .ok_or_else(|| ApiError::conflict_with_code(
+                "accepted_preparation_output_identity_invalid",
+                "verified output step is absent from the immutable Study",
+            ))?;
+        let declared_output = step.outputs.iter().any(|port| {
+            if port.port_id != output.port_id {
+                return false;
+            }
+            matches!(
+                (port.data_kind, identity.data_kind.as_str()),
+                (fullmag_authoring::StudyPortDataKind::State, "state")
+                    | (fullmag_authoring::StudyPortDataKind::InitialState, "initial_state")
+            )
+        });
+        if !declared_output {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_output_identity_invalid",
+                "verified output port differs from the immutable Study",
+            ));
+        }
+    }
+    Ok(transaction)
+}
+
+async fn hold_current_accepted_attempt_fence_async(
+    store_root: PathBuf,
+    expected: AcceptedTaskAttemptIdentity,
+    expected_claim: Option<fullmag_application::TaskClaim>,
+) -> Result<fullmag_session::ReadTransaction, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
+            accepted_step_output_store_read_error(
+                "accepted attempt final store open failed",
+                &expected.step_id,
+                error,
+            )
+        })?;
+        hold_current_accepted_attempt_fence(&store, &expected, expected_claim.as_ref())
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("accepted attempt final fence task failed: {error}")))?
+}
+
+/// Hold the durable active-task identity stable through a live observation's
+/// final session pointer swap. Callers retain the returned read fence until
+/// that swap is complete.
+pub(crate) async fn hold_live_observation_publication_fence(
+    store_root: &std::path::Path,
+    header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+) -> Result<fullmag_session::ReadTransaction, ApiError> {
+    let expected = AcceptedTaskAttemptIdentity::from_live_header(header)?;
+    hold_current_accepted_attempt_fence_async(store_root.to_path_buf(), expected, None).await
+}
+
+async fn hold_verified_stage_output_fence_async(
+    store_root: PathBuf,
+    identity: AcceptedStageOutputIdentity,
+    plan_fingerprint: String,
+) -> Result<fullmag_session::ReadTransaction, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
+            accepted_step_output_store_read_error(
+                "verified output final store open failed",
+                &identity.step_id,
+                error,
+            )
+        })?;
+        verify_accepted_stage_output_identity(&store, None, &identity, &plan_fingerprint)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("verified output final fence task failed: {error}")))?
+}
+
+struct RetainedAcceptedScalarHistory {
+    run_id: String,
+    rows: Vec<crate::types::ScalarRow>,
+    source: crate::types::CurrentScalarSourceState,
+}
+
+/// A new accepted predecessor input becomes the stage's M0. Retire the prior
+/// solver frame and its spatial caches before publishing it. Same-run scalar
+/// history is returned for restoration after domain replacement, with each
+/// original observation frame intact.
+fn retire_previous_observation_for_step_output(
+    snapshot: &mut SessionStateResponse,
+) -> Option<RetainedAcceptedScalarHistory> {
+    let current_run_id = snapshot
+        .run
+        .as_ref()
+        .map(|run| run.run_id.as_str())
+        .unwrap_or(snapshot.session.run_id.as_str());
+    let keep_chart_rows = snapshot
+        .latest_scalar_source
+        .as_ref()
+        .and_then(|source| source.series.as_ref())
+        .is_some_and(|series| series.identity.run_id == current_run_id);
+    let mut scalar_source = keep_chart_rows
+        .then(|| snapshot.latest_scalar_source.clone())
+        .flatten();
+    let retained_history = scalar_source.take().map(|mut source| {
+        source.public_source = None;
+        source.accepted_live_identity = None;
+        source.active_live_identity = None;
+        RetainedAcceptedScalarHistory {
+            run_id: source
+                .series
+                .as_ref()
+                .expect("same-run scalar source was checked above")
+                .identity
+                .run_id
+                .clone(),
+            rows: snapshot.scalar_rows.clone(),
+            source,
+        }
+    });
+
+    crate::session::invalidate_live_magnetization_preview(snapshot);
+    crate::session::retire_previous_solver_h_fields(snapshot);
+    retained_history
+}
+
+fn restore_retained_accepted_scalar_history(
+    snapshot: &mut SessionStateResponse,
+    history: Option<RetainedAcceptedScalarHistory>,
+) {
+    let Some(history) = history else {
+        return;
+    };
+    let current_run_id = snapshot
+        .run
+        .as_ref()
+        .map(|run| run.run_id.as_str())
+        .unwrap_or(snapshot.session.run_id.as_str());
+    if current_run_id != history.run_id {
+        return;
+    }
+    snapshot.scalar_rows = history.rows;
+    snapshot.latest_scalar_source = Some(history.source);
 }
 
 /// Dense payload encoded outside the live transition lock. Publication binds
@@ -610,8 +1614,9 @@ impl PreparedInitialMagnetization {
         plan_fingerprint: &str,
         scene_revision: u64,
         mut provenance: Value,
+        retain_accepted_scalar_series: bool,
     ) -> Result<(), ApiError> {
-        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+        let mut publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
             snapshot,
             crate::schemas::common::AuthoredInitialStateOrigin {
                 preparation_id: preparation_id.into(),
@@ -622,6 +1627,7 @@ impl PreparedInitialMagnetization {
             },
             self.start_time_s,
         );
+        publication.retain_accepted_scalar_series = retain_accepted_scalar_series;
         provenance["preparation_id"] = preparation_id.into();
         provenance["plan_fingerprint"] = plan_fingerprint.into();
         let mut field = self.field;
@@ -918,6 +1924,7 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
         let (metadata, fem_mesh) = prepared_domain_publication(snapshot, &read_model)?;
         let session_status = preparation_session_status(snapshot);
         let mut prepared_snapshot = snapshot.clone();
+        crate::live_authored_damping::retire_for_prepared_domain(&mut prepared_snapshot);
         crate::session::apply_current_live_snapshot(
             &mut prepared_snapshot,
             CurrentLiveSnapshotRequest {
@@ -943,7 +1950,7 @@ pub(crate) async fn prepare_current_live_scene_with_transition(
                 fem_mesh,
             },
         )?;
-        publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+        publish_prepared_initial_state(&mut prepared_snapshot, &read_model, false)?;
         *snapshot = prepared_snapshot;
     }
     if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
@@ -1233,6 +2240,7 @@ pub(crate) async fn publish_accepted_frontier_preparation(
             command_kind,
             AcceptedPreparationPublicationMode::Active,
             mesh_command_id,
+            None,
         )
         .await;
         match publication {
@@ -1424,8 +2432,68 @@ pub(crate) async fn publish_accepted_task_preparation(
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     publish_accepted_task_preparation_with_mode(
-        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active, None,
+        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active, None, None,
     ).await
+}
+
+/// Publish a live stage domain only for the exact worker attempt whose
+/// observation header triggered the request.
+pub(crate) async fn publish_accepted_task_preparation_for_observation(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    header: &crate::accepted_study_worker::AcceptedLiveObservationHeader,
+) -> Result<PublishedLiveScenePreparation, ApiError> {
+    let target = AcceptedTaskAttemptIdentity::from_live_header(header)?;
+    let run_id = target.run_id.clone();
+    let step_id = target.step_id.clone();
+    publish_accepted_task_preparation_with_mode(
+        state,
+        context,
+        &run_id,
+        &step_id,
+        "accepted_projection_stage_preparation",
+        AcceptedPreparationPublicationMode::ActiveObservation(target),
+        None,
+        None,
+    )
+    .await
+}
+
+type AcceptedVerifiedOutputInstaller<'a> = Box<
+    dyn FnOnce(
+            &mut SessionStateResponse,
+            &LiveScenePreparationReadModel,
+        ) -> Result<(), ApiError>
+        + Send
+        + 'a,
+>;
+
+/// Publish only the accepted domain for a terminal stage whose exact output
+/// has already been verified. This path never invents an M0 or starts a task.
+pub(crate) async fn publish_accepted_task_domain_for_output<'a>(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    identity: AcceptedStageOutputIdentity,
+    install_verified_output: impl FnOnce(
+            &mut SessionStateResponse,
+            &LiveScenePreparationReadModel,
+        ) -> Result<(), ApiError>
+        + Send
+        + 'a,
+) -> Result<PublishedLiveScenePreparation, ApiError> {
+    let run_id = identity.run_id.clone();
+    let step_id = identity.step_id.clone();
+    publish_accepted_task_preparation_with_mode(
+        state,
+        context,
+        &run_id,
+        &step_id,
+        "accepted_projection_stage_preparation",
+        AcceptedPreparationPublicationMode::VerifiedOutput(identity),
+        None,
+        Some(Box::new(install_verified_output)),
+    )
+    .await
 }
 
 /// Reconstruct only the domain read-model of an authenticated terminal restore.
@@ -1443,7 +2511,45 @@ pub(crate) async fn restore_terminal_task_domain(
         state, context, run_id, step_id, "accepted_projection_stage_preparation",
         AcceptedPreparationPublicationMode::TerminalObservation(identity),
         None,
+        None,
     ).await
+}
+
+/// Restore a terminal domain after API restart only with the process-local
+/// reattachment authority and an exact, already decoded accepted output.
+pub(crate) async fn restore_terminal_task_domain_for_output<'a>(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    identity: AcceptedStageOutputIdentity,
+    install_verified_output: impl FnOnce(
+            &mut SessionStateResponse,
+            &LiveScenePreparationReadModel,
+        ) -> Result<(), ApiError>
+        + Send
+        + 'a,
+) -> Result<PublishedLiveScenePreparation, ApiError> {
+    let reattach = state
+        .accepted_run_reattach_identity
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| ApiError::conflict("terminal domain restore has no process-local authority"))?;
+    let run_id = identity.run_id.clone();
+    let step_id = identity.step_id.clone();
+    publish_accepted_task_preparation_with_mode(
+        state,
+        context,
+        &run_id,
+        &step_id,
+        "accepted_projection_stage_preparation",
+        AcceptedPreparationPublicationMode::TerminalVerifiedOutput {
+            reattach,
+            output: identity,
+        },
+        None,
+        Some(Box::new(install_verified_output)),
+    )
+    .await
 }
 
 async fn publish_accepted_task_preparation_with_mode(
@@ -1454,8 +2560,16 @@ async fn publish_accepted_task_preparation_with_mode(
     command_kind: &str,
     mode: AcceptedPreparationPublicationMode,
     mesh_command_id: Option<&str>,
+    output_installer: Option<AcceptedVerifiedOutputInstaller<'_>>,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
-    let terminal_observation = matches!(&mode, AcceptedPreparationPublicationMode::TerminalObservation(_));
+    let terminal_observation = mode.is_terminal_observation();
+    let verified_output_only = mode.is_verified_output_only();
+    if verified_output_only != output_installer.is_some() {
+        return Err(ApiError::conflict_with_code(
+            "accepted_preparation_output_identity_invalid",
+            "verified output preparation requires one atomic output installer",
+        ));
+    }
     let (fence, scene_revision, display_projection, preparation_revision, existing_preparation) = {
         let _transition = state.current_live_session_transition.lock().await;
         let current = state.current_live_state.read().await;
@@ -1478,7 +2592,10 @@ async fn publish_accepted_task_preparation_with_mode(
         let fence = match &mode {
             AcceptedPreparationPublicationMode::Active =>
                 AcceptedPreparationPublicationFence::capture(snapshot, context, session_epoch)?,
-            AcceptedPreparationPublicationMode::TerminalObservation(_) =>
+            AcceptedPreparationPublicationMode::ActiveObservation(_)
+            | AcceptedPreparationPublicationMode::VerifiedOutput(_)
+            | AcceptedPreparationPublicationMode::TerminalObservation(_)
+            | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { .. } =>
                 AcceptedPreparationPublicationFence::capture_with_mode(
                     snapshot, context, session_epoch, mode.clone(),
                 )?,
@@ -1504,23 +2621,36 @@ async fn publish_accepted_task_preparation_with_mode(
     };
     let run_id_for_worker = run_id.to_owned();
     let step_id_for_worker = step_id.to_owned();
+    let mode_for_worker = mode.clone();
+    let final_fence_store_root = store_root.clone();
     let observed_preparation_started_at_unix_ms =
         u64::try_from(crate::session::unix_time_millis_now()).unwrap_or(u64::MAX);
     let materialized = tokio::task::spawn_blocking(move || {
         let store = fullmag_session::SessionStore::open_existing(&store_root).map_err(|error| {
-            ApiError::with_status_and_code(
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                "accepted_preparation_store_unavailable",
-                format!("failed to open accepted preparation store: {error}"),
-            )
+            if accepted_store_read_is_transient(&error) {
+                accepted_step_output_store_read_error(
+                    "accepted preparation store open failed",
+                    &step_id_for_worker,
+                    error,
+                )
+            } else {
+                ApiError::with_status_and_code(
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "accepted_preparation_store_unavailable",
+                    format!("failed to open accepted preparation store: {error}"),
+                )
+            }
         })?;
         let typed_run_id = fullmag_application::RunId::parse(run_id_for_worker.clone())
             .map_err(|error| ApiError::bad_request(format!("accepted run id is invalid: {error}")))?;
         let intent = store
             .read_run_intent(typed_run_id.as_str())
-            .map_err(|error| {
-                ApiError::conflict(format!("accepted preparation RunIntent read failed: {error}"))
-            })?
+            .map_err(|error| accepted_preparation_store_read_error(
+                "accepted preparation RunIntent read failed",
+                &step_id_for_worker,
+                error,
+                "accepted_preparation_snapshot_invalid",
+            ))?
             .ok_or_else(|| {
                 ApiError::conflict_with_code(
                     "accepted_preparation_run_missing",
@@ -1552,18 +2682,18 @@ async fn publish_accepted_task_preparation_with_mode(
         // thirty-minute wait while the manual Compute gate remains closed.
         if store
             .read_task_preparation_receipt(typed_run_id.as_str(), &task_id)
-            .map_err(|error| {
-                ApiError::conflict_with_code(
-                    "accepted_preparation_receipt_invalid",
-                    format!("accepted task preparation receipt read failed: {error:#}"),
-                )
-            })?
+            .map_err(|error| accepted_preparation_store_read_error(
+                "accepted task preparation receipt read failed",
+                &step_id_for_worker,
+                error,
+                "accepted_preparation_receipt_invalid",
+            ))?
             .is_none()
         {
             let failure = observe_accepted_preparation_failure(
                 &store, &typed_run_id, &step_id_for_worker, &task_id, &specification,
             ).map_err(|error| {
-                if error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()) {
+                if accepted_store_read_is_transient(&error) {
                     ApiError::with_status_and_code(
                         axum::http::StatusCode::SERVICE_UNAVAILABLE,
                         "accepted_preparation_pending",
@@ -1602,9 +2732,12 @@ async fn publish_accepted_task_preparation_with_mode(
             &specification.snapshot.project_id,
         )
         .map_err(|error| {
-            ApiError::conflict(format!(
-                "accepted preparation snapshot validation failed: {error:#}"
-            ))
+            accepted_preparation_store_read_error(
+                "accepted preparation snapshot validation failed",
+                &step_id_for_worker,
+                error,
+                "accepted_preparation_snapshot_invalid",
+            )
         })?;
         let execution_plan = accepted
             .lowered
@@ -1620,23 +2753,64 @@ async fn publish_accepted_task_preparation_with_mode(
             })?;
         let receipt = accepted
             .read_task_preparation(&store, &task_id)
-            .map_err(|error| {
-                ApiError::conflict_with_code(
-                    "accepted_preparation_receipt_invalid",
-                    format!(
-                        "accepted task preparation receipt is invalid for `{step_id_for_worker}`: {error:#}"
-                    ),
-                )
-            })?;
+            .map_err(|error| accepted_preparation_store_read_error(
+                "accepted task preparation receipt validation failed",
+                &step_id_for_worker,
+                error,
+                "accepted_preparation_receipt_invalid",
+            ))?;
+        let verified_output_identity = match &mode_for_worker {
+            AcceptedPreparationPublicationMode::VerifiedOutput(identity)
+            | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { output: identity, .. } => {
+                let _read_fence = verify_accepted_stage_output_identity(
+                    &store,
+                    Some(&accepted),
+                    identity,
+                    receipt.plan_fingerprint(),
+                )?;
+                Some(identity.clone())
+            }
+            _ => None,
+        };
+        let accepted_initial_state = if !mode_for_worker.resolves_step_initial_state() {
+            None
+        } else {
+            prepare_accepted_step_output_initial_state(
+                &store,
+                &accepted,
+                &task_id,
+                &step_id_for_worker,
+                &execution_plan,
+                &receipt,
+                mode_for_worker.target_attempt().as_ref(),
+            )?
+        };
         let entry = accepted.catalog.entries().iter().find(|entry| entry.step_id() == step_id_for_worker)
             .ok_or_else(|| ApiError::conflict("accepted preparation has no pinned ProblemIR"))?;
         let global_sampling_mesh = antenna_domain::pinned_global_mesh(entry.problem(), &execution_plan)?;
-        Ok::<_, ApiError>((receipt, execution_plan, specification.requested_execution, global_sampling_mesh))
+        Ok::<_, ApiError>((
+            receipt,
+            execution_plan,
+            specification.requested_execution,
+            global_sampling_mesh,
+            accepted_initial_state,
+            verified_output_identity,
+        ))
     })
     .await
     .map_err(|error| ApiError::internal(format!("accepted preparation task failed: {error}")))??;
 
-    let (receipt, execution_plan, requested_execution, global_sampling_mesh) = materialized;
+    let (
+        receipt,
+        execution_plan,
+        requested_execution,
+        global_sampling_mesh,
+        accepted_initial_state,
+        verified_output_identity,
+    ) = materialized;
+    let expected_initial_state_claim = accepted_initial_state
+        .as_ref()
+        .map(|prepared| prepared.claim.clone());
     let validated_source =
         ValidatedAcceptedPreparationSource::from_validated_receipt(run_id, &receipt)?;
     let preparation_id = receipt.preparation_id().to_owned();
@@ -1692,6 +2866,11 @@ async fn publish_accepted_task_preparation_with_mode(
             "preparation_id": &read_model.preparation_id,
         });
     }
+    if let Some(target) = mode.target_attempt() {
+        mesh_workspace["accepted_task_id"] = target.task_id.into();
+        mesh_workspace["accepted_attempt_id"] = target.attempt_id.into();
+        mesh_workspace["accepted_ownership_epoch"] = target.ownership_epoch.into();
+    }
     let mut completed_stages = canonical_completed_preparation_stages(
         now, "accepted task preparation receipt committed",
     );
@@ -1713,8 +2892,8 @@ async fn publish_accepted_task_preparation_with_mode(
             }
         }
     }
-    let ready_log = if terminal_observation {
-        "verified accepted domain restored for terminal results; no solver was restarted"
+    let ready_log = if terminal_observation || verified_output_only {
+        "verified accepted domain restored; no solver was restarted"
     } else {
         "accepted task authored model preparation ready; Compute has not run"
     };
@@ -1755,7 +2934,20 @@ async fn publish_accepted_task_preparation_with_mode(
         snapshot.clone()
     };
     let (metadata, fem_mesh) = prepared_domain_publication(&prepared_snapshot, &read_model)?;
-    let session_status = if terminal_observation { None } else { preparation_session_status(&prepared_snapshot) };
+    let retained_scalar_history = if accepted_initial_state.is_some()
+        || verified_output_only
+        || mode.target_attempt().is_some()
+    {
+        retire_previous_observation_for_step_output(&mut prepared_snapshot)
+    } else {
+        None
+    };
+    let session_status = if terminal_observation || verified_output_only {
+        None
+    } else {
+        preparation_session_status(&prepared_snapshot)
+    };
+    crate::live_authored_damping::retire_for_prepared_domain(&mut prepared_snapshot);
     crate::session::apply_current_live_snapshot(
         &mut prepared_snapshot,
         CurrentLiveSnapshotRequest {
@@ -1781,13 +2973,35 @@ async fn publish_accepted_task_preparation_with_mode(
             fem_mesh,
         },
     )?;
-    // A restored terminal run must never briefly publish prepared step0 over
-    // its completed solver clock. The output projector installs the verified
-    // final state and terminal quantity bundle after this domain publication.
-    if !terminal_observation {
-        publish_prepared_initial_state(&mut prepared_snapshot, &read_model)?;
+    restore_retained_accepted_scalar_history(
+        &mut prepared_snapshot,
+        retained_scalar_history,
+    );
+    if verified_output_only {
+        let install_verified_output = output_installer.expect(
+            "verified output mode was checked to carry one installer",
+        );
+        install_verified_output(&mut prepared_snapshot, &read_model)?;
     }
-    if let Some(store_root) = state.submit_store_root.as_deref().filter(|_| !terminal_observation) {
+    // A restored terminal run must never briefly publish prepared step0 over
+    // its completed solver clock. Output-only modes installed the verified
+    // final state above in this same candidate before the pointer swap.
+    if !terminal_observation && !verified_output_only {
+        if let Some(accepted_initial_state) = accepted_initial_state {
+            publish_accepted_step_output_initial_state(
+                &mut prepared_snapshot,
+                &read_model,
+                accepted_initial_state,
+            )?;
+        } else {
+            publish_prepared_initial_state(&mut prepared_snapshot, &read_model, true)?;
+        }
+    }
+    if let Some(store_root) = state
+        .submit_store_root
+        .as_deref()
+        .filter(|_| !terminal_observation && !verified_output_only)
+    {
         // Evaluated fields are optional: without them the prepared m stays the
         // only readable quantity until a run publishes its fields.
         if let Err(error) = crate::prepared_observation_adoption::adopt_prepared_observation(
@@ -1836,7 +3050,7 @@ async fn publish_accepted_task_preparation_with_mode(
             ));
         }
     }
-    let durable_disposition = commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
+    let committed_receipt = persist_live_preparation_receipt_for_context_under_transition_with_source_pin(
         state,
         context,
         receipt,
@@ -1846,14 +3060,55 @@ async fn publish_accepted_task_preparation_with_mode(
         Some(&validated_source),
     )
     .await?;
-    let disposition = match durable_disposition {
+    let output_attempt_fence = match (&mode, verified_output_identity.as_ref()) {
+        (AcceptedPreparationPublicationMode::ActiveObservation(identity), _) => {
+            Some(hold_current_accepted_attempt_fence_async(
+                final_fence_store_root.clone(),
+                identity.clone(),
+                expected_initial_state_claim.clone(),
+            ).await?)
+        }
+        (AcceptedPreparationPublicationMode::Active, _) => {
+            if let Some(claim) = expected_initial_state_claim.clone() {
+                Some(hold_current_accepted_attempt_fence_async(
+                    final_fence_store_root.clone(),
+                    AcceptedTaskAttemptIdentity {
+                        run_id: claim.run_id.as_str().to_owned(),
+                        task_id: claim.task_id.as_str().to_owned(),
+                        step_id: step_id.to_owned(),
+                        attempt_id: claim.attempt_id.as_str().to_owned(),
+                        ownership_epoch: claim.ownership_epoch.value(),
+                    },
+                    Some(claim),
+                ).await?)
+            } else {
+                None
+            }
+        }
+        (
+            AcceptedPreparationPublicationMode::VerifiedOutput(identity)
+            | AcceptedPreparationPublicationMode::TerminalVerifiedOutput { output: identity, .. },
+            Some(verified),
+        ) => {
+            Some(hold_verified_stage_output_fence_async(
+                final_fence_store_root.clone(),
+                verified.clone(),
+                plan_fingerprint.clone(),
+            ).await?)
+        }
+        _ => None,
+    };
+    let disposition = match &committed_receipt.disposition {
         fullmag_session::PreparationReceiptCommitDisposition::Accepted => "accepted",
         fullmag_session::PreparationReceiptCommitDisposition::Replayed => "replayed",
     };
-    let previous = {
-        let mut current = state.current_live_state.write().await;
-        std::mem::replace(&mut *current, Some(prepared_snapshot))
-    };
+    let previous = publish_prepared_candidate_after_final_fence(
+        state,
+        prepared_snapshot,
+        committed_receipt.receipt,
+        Ok(output_attempt_fence),
+    )
+    .await?;
     drop(transition);
     if let Some(previous) = previous {
         let _ = tokio::task::spawn_blocking(move || drop(previous));
@@ -1867,6 +3122,27 @@ async fn publish_accepted_task_preparation_with_mode(
         receipt_sha256: binding.receipt_sha256,
         read_model,
     })
+}
+
+/// Finalize the observable candidate only after its durable attempt/output
+/// fence has been acquired. The caller holds the live-session transition.
+/// Take both locks in the GET handler's order so cancellation before either
+/// lock is acquired leaves the previous snapshot and receipt together.
+async fn publish_prepared_candidate_after_final_fence(
+    state: &AppState,
+    prepared_snapshot: SessionStateResponse,
+    receipt: fullmag_session::FmsPreparationReceipt,
+    final_fence: Result<Option<fullmag_session::ReadTransaction>, ApiError>,
+) -> Result<Option<SessionStateResponse>, ApiError> {
+    let final_fence = final_fence?;
+    let mut current = state.current_live_state.write().await;
+    let mut current_receipt = state.current_live_preparation_receipt.write().await;
+    let previous = current.replace(prepared_snapshot);
+    *current_receipt = Some(receipt);
+    drop(current_receipt);
+    drop(current);
+    drop(final_fence);
+    Ok(previous)
 }
 
 pub(crate) async fn commit_live_preparation_receipt_for_context(
@@ -1921,6 +3197,34 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
     expected_run_id: Option<&str>,
     validated_source: Option<&ValidatedAcceptedPreparationSource>,
 ) -> Result<fullmag_session::PreparationReceiptCommitDisposition, ApiError> {
+    let committed = persist_live_preparation_receipt_for_context_under_transition_with_source_pin(
+        state,
+        context,
+        receipt,
+        expected_scene_revision,
+        expected_preparation_id,
+        expected_run_id,
+        validated_source,
+    )
+    .await?;
+    *state.current_live_preparation_receipt.write().await = Some(committed.receipt);
+    Ok(committed.disposition)
+}
+
+struct CommittedLivePreparationReceipt {
+    disposition: fullmag_session::PreparationReceiptCommitDisposition,
+    receipt: fullmag_session::FmsPreparationReceipt,
+}
+
+async fn persist_live_preparation_receipt_for_context_under_transition_with_source_pin(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    receipt: AcceptedPreparationReceipt,
+    expected_scene_revision: Option<u64>,
+    expected_preparation_id: Option<&str>,
+    expected_run_id: Option<&str>,
+    validated_source: Option<&ValidatedAcceptedPreparationSource>,
+) -> Result<CommittedLivePreparationReceipt, ApiError> {
     let session_epoch = state
         .current_live_session_epoch
         .load(std::sync::atomic::Ordering::Acquire);
@@ -2158,8 +3462,10 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
             .commit_preparation_receipt(&durable_receipt)
             .map_err(|error| ApiError::conflict(error.to_string()))?
     };
-    *state.current_live_preparation_receipt.write().await = Some(durable_receipt);
-    Ok(disposition)
+    Ok(CommittedLivePreparationReceipt {
+        disposition,
+        receipt: durable_receipt,
+    })
 }
 
 fn live_preparation_accepted_source(
@@ -3676,6 +4982,120 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn absorbing_boundary_live_fem_projects_edited_and_removed_profiles_in_native_node_order() {
+        for equal_node_and_element_counts in [false, true] {
+            check_fem_damping_endpoints(equal_node_and_element_counts).await;
+        }
+    }
+
+    async fn check_fem_damping_endpoints(equal_node_and_element_counts: bool) {
+        use fullmag_ir::{AirBoxPolicyIR, BackendTarget, DiscretizationHintsIR, EnergyTermIR,
+            FemConnectivityIR, FemDomainMeshAssetIR, FemDomainRegionMarkerIR, FemFacetConnectivityIR,
+            FemHintsIR, GeometryAssetsIR, MeshIR, ProblemIR};
+
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fem;
+        problem.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: None, hybrid: None,
+            fem: Some(FemHintsIR {
+                    gpu_bb_preconditioner: None,
+                    order: 1,
+                    hmax: 2e-9,
+                    mesh: None,
+                    demag_solver_policy: None,
+                }),
+        });
+        problem.air_box_policy = Some(AirBoxPolicyIR { boundary_marker: Some(99), ..Default::default() });
+        problem.energy_terms = vec![EnergyTermIR::Exchange];
+        problem.geometry_assets = Some(GeometryAssetsIR {
+            fdm_grid_assets: vec![], fem_mesh_assets: vec![],
+            fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+                mesh_source: None, build_report: None, object_region_markers: vec![],
+                region_markers: vec![FemDomainRegionMarkerIR { geometry_name: "strip".into(), marker: 1 }],
+                mesh: Some(MeshIR {
+                    mesh_name: "strip".into(),
+                    nodes: vec![[0.,0.,0.], [1e-9,0.,0.], [0.,1e-9,0.], [0.,0.,1e-9],
+                        [-2e-9,-2e-9,-2e-9], [2e-9,-2e-9,-2e-9], [-2e-9,2e-9,-2e-9], [-2e-9,-2e-9,2e-9]],
+                    cells: FemConnectivityIR::from_tet4(vec![[0,1,2,3], [4,5,6,7]]),
+                    element_markers: vec![1,0],
+                    facets: FemFacetConnectivityIR::from_tri3(vec![[0,1,2], [4,5,6]]),
+                    boundary_markers: vec![1,99], periodic_boundary_pairs: vec![], periodic_node_pairs: vec![],
+                    per_domain_quality: Default::default(),
+                }),
+            }),
+        });
+        if equal_node_and_element_counts {
+            let mesh = problem.geometry_assets.as_mut().unwrap().fem_domain_mesh_asset.as_mut()
+                .unwrap().mesh.as_mut().unwrap();
+            let mut magnetic = vec![[0_u32, 1, 2, 3]];
+            // Three conforming barycentric subdivisions each add one node and
+            // three tetrahedra. The full mesh then has 11 nodes and 11 cells.
+            for _ in 0..3 {
+                let cell = magnetic.pop().unwrap();
+                let center = std::array::from_fn(|axis| cell.iter()
+                    .map(|index| mesh.nodes[*index as usize][axis] * 0.25).sum());
+                let index = mesh.nodes.len() as u32;
+                mesh.nodes.push(center);
+                for slot in 0..4 {
+                    let mut child = cell;
+                    child[slot] = index;
+                    magnetic.push(child);
+                }
+            }
+            mesh.element_markers = vec![1; magnetic.len()];
+            mesh.element_markers.push(0);
+            magnetic.push([4, 5, 6, 7]);
+            mesh.cells = FemConnectivityIR::from_tet4(magnetic);
+            assert_eq!(mesh.nodes.len(), mesh.cell_count());
+        }
+        let fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg { fixed_timestep, .. }, ..
+        } = &mut problem.study else { panic!("fixture requires LLG time evolution") };
+        // The refined tetrahedra have sub-nanometre edges.
+        *fixed_timestep = Some(1e-17);
+        let mut model = prepared_fem_read_model(true);
+        model.execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let layout = fullmag_runner::study_magnetization_layout_for_plan(&model.execution_plan).unwrap();
+        let mut request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "fem-absorber"})).unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let (metadata, mesh) = prepared_domain_publication(&snapshot, &model).unwrap();
+        request.metadata = Some(metadata);
+        request.fem_mesh = mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, request).unwrap();
+        let mesh_revision = snapshot.mesh_revision;
+        let base = problem.materials[0].damping;
+        for (i, face) in [Some("x+"), Some("x-"), None].into_iter().enumerate() {
+            problem.magnets[0].absorbing_boundary = face.map(|face| serde_json::from_value(json!({
+                "total_width_m": 0.5e-9, "ramp_width_m": 0.25e-9, "max_damping": 0.5,
+                "faces": [face], "profile": "linear", "frame": "object"
+            })).unwrap());
+            let plan = fullmag_plan::plan(&problem).unwrap();
+            let updated_layout = fullmag_runner::study_magnetization_layout_for_plan(&plan).unwrap();
+            assert_eq!(layout, updated_layout);
+            let revision = i as u64 + 1;
+            let projected = crate::live_authored_damping::project_damping(plan.backend_plan, updated_layout, revision).unwrap();
+            snapshot.metadata.as_mut().unwrap()["authored_damping"] =
+                crate::live_authored_damping::binding(revision, Some(&projected));
+            crate::session::replace_authored_damping(&mut snapshot, Some(projected));
+            let published = crate::session::resolved_current_field_source(&snapshot, "mat_alpha", 1);
+            let Some(crate::session::ResolvedCurrentFieldSource::Latest(raw)) = published else {
+                panic!("edited FEM damping must be an accepted native scalar source");
+            };
+            let samples = raw["values"].as_array().unwrap();
+            let nodes = &snapshot.fem_mesh.as_ref().unwrap().nodes;
+            assert_eq!(samples.len(), nodes.len());
+            for (node, sample) in nodes[..4].iter().zip(samples) {
+                let at_face = match face { Some("x+") => node[0] > 0., Some("x-") => node[0] == 0., _ => false };
+                let expected = base + if at_face {0.5} else {0.0};
+                assert!((sample.as_f64().unwrap() - expected).abs() < 1e-12);
+            }
+            assert_eq!(snapshot.mesh_revision, mesh_revision);
+            let expected: Vec<f64> = samples.iter().map(|sample| sample.as_f64().unwrap()).collect();
+            crate::router_v2::tests::assert_fem_absorber_field_endpoints(&snapshot, &expected).await;
+        }
+    }
+
     fn prepared_field_only_read_model() -> LiveScenePreparationReadModel {
         let mut model = prepared_fem_read_model(true);
         let fullmag_ir::BackendPlanIR::Fem(fem) = &model.execution_plan.backend_plan else {
@@ -3731,7 +5151,7 @@ mod tests {
         publication.metadata = Some(metadata);
         publication.fem_mesh = Some(mesh);
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
         assert!(snapshot.fem_mesh.is_some());
         assert!(snapshot.latest_fields.get("m").is_none());
         assert!(snapshot.latest_fields.get("mat_ms").is_none());
@@ -4131,7 +5551,7 @@ mod tests {
         .unwrap();
         publication.metadata = Some(metadata.into());
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
 
         let field = snapshot.latest_fields.get("m").expect("initial m field");
         assert_eq!(
@@ -4187,7 +5607,7 @@ mod tests {
         publication.metadata = Some(metadata.into());
         publication.fem_mesh = Some(mesh);
         crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
-        publish_prepared_initial_state(&mut snapshot, &model).unwrap();
+        publish_prepared_initial_state(&mut snapshot, &model, false).unwrap();
         assert_eq!(
             snapshot.latest_fields.get("m").unwrap()["values"],
             json!(vec![[1.0, 0.0, 0.0]; 4])
@@ -4316,5 +5736,941 @@ mod tests {
                 .is_ok()
         );
         assert!(validate_requested_device_value("cpu", Some("gpu")).is_err());
+    }
+
+    #[test]
+    fn accepted_step_output_read_defers_transient_store_errors_only() {
+        let transient = accepted_step_output_store_read_error(
+            "reading admitted input",
+            "step-b",
+            anyhow::anyhow!(std::io::Error::from_raw_os_error(12)).context("CAS read"),
+        );
+        assert_eq!(transient.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(transient.code.as_deref(), Some("accepted_preparation_pending"));
+
+        let busy_read = accepted_step_output_store_read_error(
+            "reading admitted input",
+            "step-b",
+            anyhow::Error::new(std::fs::TryLockError::WouldBlock),
+        );
+        assert_eq!(busy_read.status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy_read.code.as_deref(), Some("accepted_preparation_pending"));
+
+        let corrupt = accepted_step_output_store_read_error(
+            "reading admitted input",
+            "step-b",
+            anyhow::anyhow!(std::io::Error::from(std::io::ErrorKind::InvalidData))
+                .context("CAS read"),
+        );
+        assert_eq!(corrupt.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(
+            corrupt.code.as_deref(),
+            Some("accepted_preparation_input_invalid")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_view_continuity_rejected_final_fence_preserves_the_current_snapshot_and_receipt() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let _transition = state.current_live_session_transition.lock().await;
+        let original = state.current_live_state.read().await.as_ref().unwrap().clone();
+        let mut candidate = original.clone();
+        candidate.state_version = candidate.state_version.saturating_add(1);
+        let run_id = original
+            .run
+            .as_ref()
+            .map(|run| run.run_id.as_str())
+            .unwrap_or(original.session.run_id.as_str());
+        let receipt_a = fullmag_session::FmsPreparationReceipt::new(
+            "prep-a",
+            run_id,
+            digest('a'),
+            json!({"stage": "a"}),
+        );
+        let receipt_b = fullmag_session::FmsPreparationReceipt::new(
+            "prep-b",
+            run_id,
+            digest('b'),
+            json!({"stage": "b"}),
+        );
+        *state.current_live_preparation_receipt.write().await = Some(receipt_a.clone());
+
+        let rejected = publish_prepared_candidate_after_final_fence(
+            &state,
+            candidate.clone(),
+            receipt_b.clone(),
+            Err(task_attempt_changed()),
+        )
+        .await;
+        let error = match rejected {
+            Err(error) => error,
+            Ok(previous) => {
+                drop(previous);
+                panic!("a rejected final fence must not publish the candidate");
+            }
+        };
+        assert_eq!(error.code.as_deref(), Some("accepted_preparation_current_state_changed"));
+        assert_eq!(
+            state.current_live_state.read().await.as_ref().unwrap().state_version,
+            original.state_version,
+        );
+        assert_eq!(
+            state.current_live_preparation_receipt.read().await.as_ref().unwrap().preparation_id,
+            "prep-a",
+        );
+
+        // Cancel after taking the snapshot lock but before the receipt lock.
+        // No reader may see a snapshot from the candidate after cancellation.
+        let receipt_guard = state.current_live_preparation_receipt.read().await;
+        {
+            use std::future::Future;
+            let mut publish = Box::pin(publish_prepared_candidate_after_final_fence(
+                &state, candidate.clone(), receipt_b.clone(), Ok(None),
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(publish.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            }).await;
+            assert!(state.current_live_state.try_read().is_err());
+        }
+        assert_eq!(state.current_live_state.read().await.as_ref().unwrap().state_version, original.state_version);
+        assert_eq!(receipt_guard.as_ref().unwrap().preparation_id, "prep-a");
+        drop(receipt_guard);
+        let previous = publish_prepared_candidate_after_final_fence(
+            &state,
+            candidate.clone(),
+            receipt_b,
+            Ok(None),
+        )
+        .await
+        .unwrap();
+        drop(previous);
+        assert_eq!(
+            state.current_live_state.read().await.as_ref().unwrap().state_version,
+            candidate.state_version,
+        );
+        assert_eq!(
+            state.current_live_preparation_receipt.read().await.as_ref().unwrap().preparation_id,
+            "prep-b",
+        );
+    }
+
+    #[test]
+    fn live_view_continuity_verified_output_mode_admits_succeeded_attempt_without_prepared_m0() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-verified-output-without-m0";
+        let step_id = "step-a";
+        let task_id = fullmag_session::task_id_for_study_step(run_id, step_id).unwrap();
+        let attempt_id = "attempt-verified-output";
+        let ownership_epoch = 7;
+        let object_ref = store.cas().put(b"already-verified final state bytes").unwrap();
+        let manifest = fullmag_session::FmsStudyOutputManifest {
+            schema_version: fullmag_session::FMS_STUDY_OUTPUT_MANIFEST_SCHEMA_V1.into(),
+            run_id: run_id.into(),
+            task_id: task_id.clone(),
+            step_id: step_id.into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch,
+            accepted_state_ref: None,
+            observation_source: None,
+            outputs: vec![fullmag_session::FmsStudyOutputManifestEntry {
+                port_id: "final_state".into(),
+                case_id: "default".into(),
+                data_kind: "state".into(),
+                codec_id: fullmag_application::STUDY_MAGNETIZATION_CODEC_ID.into(),
+                codec_version: fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+                artifact_id: "artifact-state".into(),
+                object_ref: object_ref.clone(),
+                content_sha256: object_ref.clone(),
+            }],
+        };
+        manifest.validate().unwrap();
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let manifest_ref = store.cas().put(&manifest_bytes).unwrap();
+        let manifest_artifact_id = "artifact-output-manifest";
+        let succeeded = fullmag_session::FmsTaskCatalogEntry {
+            task_id: task_id.clone(),
+            input_fingerprint: "a".repeat(64),
+            lifecycle: fullmag_session::FmsTaskLifecycle::Succeeded,
+            readiness: fullmag_session::FmsTaskReadiness::Ready,
+            observation: None,
+            attempt_id: Some(attempt_id.into()),
+            ownership_epoch: Some(ownership_epoch),
+            resolved_input_fingerprint: None,
+            artifact_ids: vec![manifest_artifact_id.into(), "artifact-state".into()],
+            resource_id: None,
+            coordinator_watermark: None,
+            coordinator_genesis: None,
+        };
+        let run_catalog = fullmag_session::FmsRunCatalog {
+            schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: vec![succeeded.clone()],
+        };
+        run_catalog.validate().unwrap();
+        let artifact_catalog = fullmag_session::FmsArtifactCatalog {
+            schema_version: fullmag_session::FMS_ARTIFACT_CATALOG_SCHEMA.into(),
+            run_id: run_id.into(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            entries: vec![
+                fullmag_session::FmsArtifactCatalogEntry {
+                    artifact_id: manifest_artifact_id.into(),
+                    task_id: task_id.clone(),
+                    attempt_id: attempt_id.into(),
+                    ownership_epoch,
+                    logical_path: "outputs/manifest.json".into(),
+                    artifact_type: "study_output_manifest".into(),
+                    content_sha256: manifest_ref.clone(),
+                    object_ref: Some(manifest_ref.clone()),
+                    status: fullmag_session::FmsArtifactStatus::Published,
+                    required: true,
+                    study_output: None,
+                },
+                fullmag_session::FmsArtifactCatalogEntry {
+                    artifact_id: "artifact-state".into(),
+                    task_id: task_id.clone(),
+                    attempt_id: attempt_id.into(),
+                    ownership_epoch,
+                    logical_path: "outputs/state.bin".into(),
+                    artifact_type: "study_state".into(),
+                    content_sha256: object_ref.clone(),
+                    object_ref: Some(object_ref.clone()),
+                    status: fullmag_session::FmsArtifactStatus::Published,
+                    required: true,
+                    study_output: Some(fullmag_session::FmsStudyArtifactOutput {
+                        step_id: step_id.into(),
+                        port_id: "final_state".into(),
+                        case_id: "default".into(),
+                    }),
+                },
+            ],
+        };
+        artifact_catalog.validate().unwrap();
+        let run_directory = store.root().join("runs").join(run_id);
+        std::fs::create_dir_all(&run_directory).unwrap();
+        std::fs::write(
+            run_directory.join("run_catalog.json"),
+            serde_json::to_vec(&run_catalog).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            run_directory.join("artifact_catalog.json"),
+            serde_json::to_vec(&artifact_catalog).unwrap(),
+        )
+        .unwrap();
+
+        let identity = AcceptedStageOutputIdentity {
+            run_id: run_id.into(),
+            task_id: task_id.clone(),
+            step_id: step_id.into(),
+            case_id: "default".into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch,
+            object_ref: object_ref.clone(),
+            data_kind: "state".into(),
+            plan_fingerprint: None,
+        };
+        let mode = AcceptedPreparationPublicationMode::VerifiedOutput(identity.clone());
+        assert!(!mode.resolves_step_initial_state());
+        validate_verified_output_task_identity(&identity, &succeeded).unwrap();
+        assert!(store.read_task_admission(run_id, &task_id, attempt_id).unwrap().is_none());
+        let read_fence = verify_accepted_stage_output_identity(
+            &store,
+            None,
+            &identity,
+            "canonical-plan-fingerprint",
+        )
+        .unwrap();
+        drop(read_fence);
+
+        let mut terminal_snapshot_request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "verified-output-without-m0",
+        }))
+        .unwrap();
+        terminal_snapshot_request.session_status = Some("completed".into());
+        let mut terminal_snapshot = crate::session::default_current_live_state(&terminal_snapshot_request);
+        terminal_snapshot.session.run_id = run_id.into();
+        terminal_snapshot.scene_document = Some(fullmag_authoring::SceneDocument::default());
+        terminal_snapshot.run = Some(crate::types::RunManifest {
+            run_id: run_id.into(),
+            session_id: terminal_snapshot.session.session_id.clone(),
+            status: "completed".into(),
+            total_steps: 1,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: ".".into(),
+        });
+        let terminal_context = crate::types::CurrentLiveRequestContext {
+            session_id: terminal_snapshot.session.session_id.clone(),
+            run_id: Some(run_id.into()),
+            session_epoch: 1,
+            request_scope_epoch: "test-output-only".into(),
+        };
+        let active_mode_error = AcceptedPreparationPublicationFence::capture_with_mode(
+            &terminal_snapshot,
+            &terminal_context,
+            1,
+            AcceptedPreparationPublicationMode::Active,
+        )
+        .expect_err("ordinary preparation must remain blocked after terminal completion");
+        assert_eq!(
+            active_mode_error.code.as_deref(),
+            Some("accepted_preparation_run_stopped")
+        );
+        AcceptedPreparationPublicationFence::capture_with_mode(
+            &terminal_snapshot,
+            &terminal_context,
+            1,
+            mode.clone(),
+        )
+        .expect("a verified output may restore a succeeded producer after terminal completion");
+
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "verified-output-without-m0",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.latest_fields.insert("m".into(), json!({"values": [[1.0, 0.0, 0.0]]}));
+        let before_version = snapshot.state_version;
+        let before_fields = serde_json::to_value(&snapshot.latest_fields).unwrap();
+
+        let mut stale = identity.clone();
+        stale.attempt_id = "older-attempt".into();
+        let error = match verify_accepted_stage_output_identity(
+            &store,
+            None,
+            &stale,
+            "canonical-plan-fingerprint",
+        ) {
+            Err(error) => error,
+            Ok(read_fence) => {
+                drop(read_fence);
+                panic!("an output from another attempt must be rejected before publication");
+            }
+        };
+        assert_eq!(
+            error.code.as_deref(),
+            Some("accepted_preparation_current_state_changed")
+        );
+        assert_eq!(snapshot.state_version, before_version);
+        assert_eq!(serde_json::to_value(&snapshot.latest_fields).unwrap(), before_fields);
+    }
+
+    #[test]
+    fn live_view_continuity_restores_same_run_scalar_history_after_domain_replacement() {
+        let run = accepted_test_specification("run-live-view-continuity-scalar-history");
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let receipt = fullmag_application::materialize_fdm_preparation_from_problem(
+            "prep-scalar-history",
+            1,
+            &problem,
+            &json!({}),
+        )
+        .unwrap();
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "live-view-continuity-scalar-history",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.session.run_id = run.run_id.as_str().to_owned();
+        let identity = crate::types::AcceptedLiveScalarIdentity {
+            run_id: run.run_id.as_str().to_owned(),
+            task_id: "task-scalar-history".into(),
+            step_id: "step-a".into(),
+            case_id: "default".into(),
+            attempt_id: "attempt-scalar-history".into(),
+            ownership_epoch: 1,
+        };
+        let old_frame = crate::session::accepted_observation_frame_ref(
+            &snapshot,
+            31,
+            Some(3.1e-9),
+        );
+        let mut row = crate::types::ScalarRow::from_accepted_stats(&fullmag_runner::StepStats {
+            step: 31, time: 3.1e-9, dt: 1e-12, mx: 0.1, my: 0.2, mz: 0.3,
+            ..Default::default()
+        });
+        row.observation_frame = Some(old_frame);
+        let expected_frame = row.observation_frame.clone();
+        snapshot.scalar_rows = vec![row];
+        snapshot.latest_scalar_source = Some(crate::types::CurrentScalarSourceState {
+            public_source: None,
+            accepted_live_identity: Some(identity.clone()),
+            active_live_identity: Some(identity.clone()),
+            series: Some(crate::types::CurrentScalarSeries {
+                identity,
+                row_revisions: vec![snapshot.scalar_revision],
+            }),
+        });
+        let retained = retire_previous_observation_for_step_output(&mut snapshot);
+        let read_model = LiveScenePreparationReadModel {
+            schema_version: LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
+            preparation_id: receipt.preparation_id.clone(),
+            scene_revision: 2,
+            plan_fingerprint: receipt.plan_fingerprint.clone(),
+            requested_execution: run.requested_execution.clone(),
+            execution_plan,
+            global_sampling_mesh: None,
+        };
+        let (metadata, fem_mesh) = prepared_domain_publication(&snapshot, &read_model).unwrap();
+        let mut publication: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "live-view-continuity-scalar-history",
+        }))
+        .unwrap();
+        publication.metadata = Some(metadata.into());
+        publication.fem_mesh = fem_mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
+        assert!(snapshot.scalar_rows.is_empty(), "domain replacement must first retire current rows");
+        restore_retained_accepted_scalar_history(&mut snapshot, retained);
+
+        assert_eq!(snapshot.scalar_rows.len(), 1);
+        assert_eq!(snapshot.scalar_rows[0].observation_frame, expected_frame);
+        let source = snapshot.latest_scalar_source.as_ref().unwrap();
+        assert!(source.public_source.is_none());
+        assert!(source.accepted_live_identity.is_none());
+        assert!(source.active_live_identity.is_none());
+        assert_eq!(source.series.as_ref().unwrap().identity.run_id, run.run_id.as_str());
+    }
+
+    #[test]
+    fn live_view_continuity_pinned_artifact_overlay_uses_verified_predecessor_for_serial_fdm_stt() {
+        use fullmag_application::{
+            PreparationBinding, ResolvedInput, ResolvedStudyArtifact, ResolvedTaskInput,
+            ResourceBudget, ResourceKind, ResourceLease, TaskRecord, RESOLVED_TASK_INPUT_SCHEMA,
+            STUDY_MAGNETIZATION_CODEC_ID, STUDY_MAGNETIZATION_CODEC_VERSION,
+        };
+        use fullmag_authoring::{
+            StudyInitialStateOverlay, StudyInputPort, StudyInputSource, StudyPortDataKind,
+        };
+        use fullmag_ir::{
+            GeometryEntryIR, InitialMagnetizationIR, ObjectRegionIR, RegionRealizationPolicyIR,
+            RegionShapeIR, RegionTextureOverrideIR, SpinTorqueModuleIR,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let run = accepted_test_specification("run-live-view-continuity-pinned-overlay");
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.geometry.entries[0] = GeometryEntryIR::Box {
+            name: "strip".into(),
+            size: [4e-9, 2e-9, 2e-9],
+        };
+        problem.magnets[0].object_id = Some("strip".into());
+        problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        });
+        problem.object_regions.push(ObjectRegionIR {
+            region_id: "left-half".into(),
+            owner_object: "strip".into(),
+            name: "left half".into(),
+            shape: RegionShapeIR::Box {
+                size: [2e-9, 2e-9, 2e-9],
+                center: [-1e-9, 0.0, 0.0],
+            },
+            frame: Default::default(),
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: Some(RegionTextureOverrideIR {
+                initial_magnetization: InitialMagnetizationIR::Uniform {
+                    value: [1.0, 0.0, 0.0],
+                },
+            }),
+            realization_policy: RegionRealizationPolicyIR::default(),
+            material_transition: None,
+        });
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None,
+            id: None,
+            target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".into(),
+            current_density: Some([0.0, 0.0, 5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: None,
+            fixed_layer_position: None,
+            realization: None,
+            time_expression: None,
+        }];
+        let execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let fullmag_ir::BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
+            panic!("the pinned-overlay fixture must resolve to FDM");
+        };
+        assert!(fdm.stt_spin_polarization.is_some());
+        let authored_base = fdm.initial_magnetization.clone();
+        assert!(authored_base.iter().all(|value| *value == [1.0, 0.0, 0.0]));
+        let layout = fullmag_runner::study_magnetization_layout_for_plan(&execution_plan).unwrap();
+        let predecessor_values = (0..authored_base.len())
+            .map(|index| match index % 3 {
+                0 => [0.0, 1.0, 0.0],
+                1 => [0.0, 0.0, 1.0],
+                _ => [0.0, -1.0, 0.0],
+            })
+            .collect::<Vec<_>>();
+        let state_bytes = serde_json::to_vec(&json!({
+            "observable": "m",
+            "unit": "1",
+            "step": 23,
+            "time": 2.3e-9,
+            "solver_dt": 1e-12,
+            "layout": layout,
+            "provenance": {"execution_engine": "fdm_cpu"},
+            "state_identity": {
+                "schema_version": fullmag_application::MAGNETIZATION_STATE_IDENTITY_SCHEMA,
+                "backend": "fdm",
+                "layout_sha256": fullmag_application::study_state_layout_sha256(&layout).unwrap(),
+                "sample_count": predecessor_values.len(),
+            },
+            "values": predecessor_values,
+        }))
+        .unwrap();
+        let object_ref = store.cas().put(&state_bytes).unwrap();
+        let artifact_id = "pinned-predecessor".to_owned();
+        let input = ResolvedInput {
+            source: artifact_id.clone(),
+            content_sha256: object_ref.clone(),
+            study_artifact: Some(ResolvedStudyArtifact {
+                artifact_id: artifact_id.clone(),
+                object_ref: object_ref.clone(),
+                data_kind: "state".into(),
+                codec_id: STUDY_MAGNETIZATION_CODEC_ID.into(),
+                codec_version: STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+            }),
+        };
+        let receipt = fullmag_application::materialize_fdm_preparation_from_problem(
+            "prep-pinned-overlay",
+            1,
+            &problem,
+            &json!({}),
+        )
+        .unwrap();
+        let mut task = TaskRecord::new(run.run_id.clone(), "b".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-live-view-continuity-pinned-overlay",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1 << 20,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1 << 20,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let port = StudyInputPort {
+            port_id: "initial_state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::PinnedArtifact {
+                artifact_id,
+                content_sha256: object_ref.clone(),
+            },
+        };
+        let overlay = StudyInitialStateOverlay::Scoped {
+            scopes: vec![fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some("left-half".into()),
+            }],
+        };
+        let worker_step = fullmag_runtime_control::AcceptedWorkerStep {
+            claim: claim.clone(),
+            step_id: "step-b".into(),
+            study_inputs: vec![port.clone()],
+            initial_state_overlay: Some(overlay.clone()),
+            problem: problem.clone(),
+            execution_plan: execution_plan.clone(),
+            until_seconds: Some(1e-9),
+            resolved_input: ResolvedTaskInput {
+                schema_version: RESOLVED_TASK_INPUT_SCHEMA.into(),
+                run_id: claim.run_id.clone(),
+                task_id: claim.task_id.clone(),
+                attempt_id: claim.attempt_id.clone(),
+                ownership_epoch: claim.ownership_epoch,
+                specification_fingerprint: run.fingerprint().unwrap(),
+                plan_fingerprint: fullmag_session::canonical_json_sha256(
+                    &serde_json::to_value(&execution_plan).unwrap(),
+                ),
+                requested_execution: run.requested_execution.clone(),
+                preparation: PreparationBinding::from_receipt(&receipt).unwrap(),
+                inputs: [(port.port_id.clone(), input)].into_iter().collect(),
+                frozen_stage_context: None,
+            },
+        };
+        let overlay_mask = fullmag_plan::study_magnetization_overlay_mask(
+            &problem,
+            &execution_plan,
+            overlay.scopes(),
+        )
+        .unwrap();
+        assert!(overlay_mask.iter().any(|masked| *masked));
+        assert!(overlay_mask.iter().any(|masked| !*masked));
+        let expected_plan = fullmag_runner::materialize_study_magnetization_input_with_overlay(
+            &execution_plan,
+            &layout,
+            &predecessor_values,
+            Some((&problem, overlay.scopes())),
+        )
+        .unwrap();
+        let fullmag_ir::BackendPlanIR::Fdm(expected_fdm) = &expected_plan.backend_plan else {
+            panic!("the overlay expectation must remain FDM");
+        };
+
+        let effective = materialize_accepted_step_output_initial_state(
+            &store,
+            &worker_step,
+            &port,
+            &execution_plan,
+            &receipt.preparation_id,
+            &receipt.plan_fingerprint,
+        )
+        .expect("PinnedArtifact plus scoped overlay is a valid accepted worker input");
+        assert_eq!(effective.carrier.field["values"], json!(expected_fdm.initial_magnetization));
+        assert_ne!(effective.carrier.field["values"], json!(predecessor_values));
+        assert_eq!(effective.provenance["source_kind"], "accepted_step_output_initial_state");
+        assert_eq!(effective.provenance["materialization_kind"], "pinned_artifact_overlay");
+        assert_eq!(effective.provenance["accepted_input"]["source_kind"], "pinned_artifact");
+        assert_eq!(effective.provenance["accepted_input"]["source_identity"]["artifact_id"], "pinned-predecessor");
+        assert_eq!(effective.provenance["producer_clock"]["step"], 23);
+        assert_eq!(effective.provenance["producer_clock"]["time_seconds"], 2.3e-9);
+    }
+
+    #[test]
+    fn live_view_continuity_uses_verified_step_output_m0_for_serial_fdm_stt() {
+        use fullmag_application::{
+            PreparationBinding, ResolvedInput, ResolvedStudyArtifact, ResolvedTaskInput,
+            ResourceBudget, ResourceKind, ResourceLease, TaskRecord, RESOLVED_TASK_INPUT_SCHEMA,
+            STUDY_MAGNETIZATION_CODEC_ID, STUDY_MAGNETIZATION_CODEC_VERSION,
+        };
+        use fullmag_authoring::{StudyInputPort, StudyInputSource, StudyPortDataKind};
+        use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, SpinTorqueModuleIR};
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        let run = accepted_test_specification("run-live-view-continuity");
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.geometry.entries[0] = GeometryEntryIR::Box {
+            name: "strip".into(),
+            size: [4e-9, 2e-9, 2e-9],
+        };
+        problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        });
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None,
+            id: None,
+            target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".into(),
+            current_density: Some([0.0, 0.0, 5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: None,
+            fixed_layer_position: None,
+            realization: None,
+            time_expression: None,
+        }];
+        let execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let fullmag_ir::BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
+            panic!("the serial STT fixture must resolve to FDM");
+        };
+        assert!(fdm.stt_spin_polarization.is_some(), "fixture must retain STT");
+        assert_eq!(run.requested_execution.device, "cpu");
+        assert!(fdm.initial_magnetization.len() > 1, "fixture needs a spatial predecessor");
+        let authored_base = fdm.initial_magnetization.clone();
+        assert!(authored_base.iter().all(|value| *value == [1.0, 0.0, 0.0]));
+
+        let receipt = fullmag_application::materialize_fdm_preparation_from_problem(
+            "prep-step-b",
+            1,
+            &problem,
+            &json!({}),
+        )
+        .unwrap();
+        let layout = fullmag_runner::study_magnetization_layout_for_plan(&execution_plan).unwrap();
+        let predecessor_values = (0..authored_base.len())
+            .map(|index| {
+                if index % 2 == 0 {
+                    [0.0, 1.0, 0.0]
+                } else {
+                    [0.0, 0.0, 1.0]
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(predecessor_values, authored_base);
+        let state_bytes = serde_json::to_vec(&json!({
+            "observable": "m",
+            "unit": "1",
+            "step": 17,
+            "time": 1.7e-9,
+            "solver_dt": 1e-12,
+            "layout": layout,
+            "provenance": {"execution_engine": "fdm_cpu"},
+            "state_identity": {
+                "schema_version": fullmag_application::MAGNETIZATION_STATE_IDENTITY_SCHEMA,
+                "backend": "fdm",
+                "layout_sha256": fullmag_application::study_state_layout_sha256(&layout).unwrap(),
+                "sample_count": predecessor_values.len(),
+            },
+            "values": predecessor_values,
+        }))
+        .unwrap();
+        let object_ref = store.cas().put(&state_bytes).unwrap();
+        let artifact_id = "step-a-final".to_owned();
+        let input = ResolvedInput {
+            source: artifact_id.clone(),
+            content_sha256: object_ref.clone(),
+            study_artifact: Some(ResolvedStudyArtifact {
+                artifact_id,
+                object_ref,
+                data_kind: "state".into(),
+                codec_id: STUDY_MAGNETIZATION_CODEC_ID.into(),
+                codec_version: STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+            }),
+        };
+        let mut task = TaskRecord::new(run.run_id.clone(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-live-view-continuity",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1 << 20,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1 << 20,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let port = StudyInputPort {
+            port_id: "initial_state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::StepOutput {
+                step_id: "step-a".into(),
+                port: "final_state".into(),
+                case_id: "default".into(),
+            },
+        };
+        let worker_step = fullmag_runtime_control::AcceptedWorkerStep {
+            claim: claim.clone(),
+            step_id: "step-b".into(),
+            study_inputs: vec![port.clone()],
+            initial_state_overlay: None,
+            problem: problem.clone(),
+            execution_plan: execution_plan.clone(),
+            until_seconds: Some(1e-9),
+            resolved_input: ResolvedTaskInput {
+                schema_version: RESOLVED_TASK_INPUT_SCHEMA.into(),
+                run_id: claim.run_id.clone(),
+                task_id: claim.task_id.clone(),
+                attempt_id: claim.attempt_id.clone(),
+                ownership_epoch: claim.ownership_epoch,
+                specification_fingerprint: run.fingerprint().unwrap(),
+                plan_fingerprint: fullmag_session::canonical_json_sha256(
+                    &serde_json::to_value(&execution_plan).unwrap(),
+                ),
+                requested_execution: run.requested_execution.clone(),
+                preparation: PreparationBinding::from_receipt(&receipt).unwrap(),
+                inputs: [(port.port_id.clone(), input)].into_iter().collect(),
+                frozen_stage_context: None,
+            },
+        };
+        let effective = materialize_accepted_step_output_initial_state(
+            &store,
+            &worker_step,
+            &port,
+            &execution_plan,
+            &receipt.preparation_id,
+            &receipt.plan_fingerprint,
+        )
+        .unwrap();
+        assert_eq!(effective.carrier.field["values"], json!(predecessor_values));
+        assert_eq!(
+            effective.provenance["materialization_kind"],
+            "step_output"
+        );
+        assert_eq!(effective.provenance["producer_clock"]["step"], 17);
+        assert_eq!(effective.provenance["producer_clock"]["time_seconds"], 1.7e-9);
+        assert_eq!(effective.provenance["target_clock"]["step"], 0);
+        assert_eq!(effective.provenance["target_clock"]["time_seconds"], 0.0);
+
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "live-view-continuity",
+        }))
+        .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        let read_model = LiveScenePreparationReadModel {
+            schema_version: LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
+            preparation_id: receipt.preparation_id.clone(),
+            scene_revision: 7,
+            plan_fingerprint: receipt.plan_fingerprint.clone(),
+            requested_execution: run.requested_execution.clone(),
+            execution_plan,
+            global_sampling_mesh: None,
+        };
+        let (old_metadata, old_fem_mesh) = prepared_domain_publication(&snapshot, &read_model).unwrap();
+        let mut old_domain: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "live-view-continuity",
+        }))
+        .unwrap();
+        old_domain.metadata = Some(old_metadata.into());
+        old_domain.fem_mesh = old_fem_mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, old_domain).unwrap();
+        let old_h_locator = serde_json::json!({
+            "owner": {
+                "session_id": "session-live-view-continuity",
+                "session_epoch": "1",
+                "request_scope_epoch": "scope-live-view-continuity",
+                "run_id": run.run_id.as_str(),
+                "runtime_stage_id": "step-a",
+                "authored_stage_id": "step-a",
+                "module_id": "fdm",
+                "object_id": "strip",
+                "output_id": "H_demag",
+                "source_digest": "sha256:old-source",
+                "content_digest": "sha256:old-content",
+                "observation_mesh_revision": 1,
+                "observation_topology_revision": 1,
+                "historical_inspection": true,
+                "native_mesh_identity": "sha256:old-mesh",
+                "native_topology_identity": "sha256:old-topology"
+            },
+            "carrier_scope_kind": "object",
+            "carrier_scope_id": "strip",
+            "carrier_id": "artifact:sha256:old-content:point_samples",
+            "carrier_digest": "sha256:old-content",
+            "carrier_revision": "1",
+            "indexing": "point_samples",
+            "sample_count": 1,
+            "coordinate_frame": "world",
+            "coordinate_unit": "m",
+            "topology_binary_schema": "FMMT.v2"
+        });
+        snapshot.latest_fields.insert(
+            "H_demag".into(),
+            json!({
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 17,
+                "artifact_field_locator": old_h_locator.clone()
+            }),
+        );
+        let old_h_frame = crate::session::accepted_observation_frame_ref(
+            &snapshot,
+            17,
+            Some(1.7e-9),
+        );
+        let mut old_h_bundle = crate::schemas::common::FieldPublicationBundle::for_response(
+            old_h_frame,
+            1,
+            1,
+            1,
+            1,
+            "sha256:old-topology",
+            "H_demag",
+            "x",
+            "object",
+            Some("strip"),
+            "artifact:old-h",
+            "sha256:old-content",
+        );
+        old_h_bundle.field.artifact_field_locator = Some(
+            serde_json::from_value(old_h_locator).unwrap(),
+        );
+        snapshot
+            .field_publication_bundles
+            .insert("H_demag".into(), old_h_bundle);
+        snapshot.preview_cache.insert(fullmag_runner::LivePreviewField {
+            config_revision: 1,
+            source_step: 17,
+            source_time_seconds: Some(1.7e-9),
+            source_revision: 1,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 1,
+            quantity: "H_demag".into(),
+            unit: "T".into(),
+            spatial_kind: "vector".into(),
+            quantity_domain: "magnetic_only".into(),
+            preview_grid: [1, 1, 1],
+            original_grid: [1, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        let same_domain_generation = crate::router_v2::handlers::sessions::status::domain_generation_id(&snapshot);
+        let (metadata, fem_mesh) = prepared_domain_publication(&snapshot, &read_model).unwrap();
+        retire_previous_observation_for_step_output(&mut snapshot);
+        assert!(snapshot.latest_fields.get("H_demag").is_none());
+        assert!(snapshot.field_publication_bundles.get("H_demag").is_none());
+        assert!(snapshot.preview_cache.get("H_demag").is_none());
+        assert_eq!(
+            crate::router_v2::handlers::sessions::status::domain_generation_id(&snapshot),
+            same_domain_generation,
+            "same-grid stage switches retain the active prepared domain identity"
+        );
+        let mut publication: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "live-view-continuity",
+        }))
+        .unwrap();
+        publication.metadata = Some(metadata.into());
+        publication.fem_mesh = fem_mesh;
+        crate::session::apply_current_live_snapshot(&mut snapshot, publication).unwrap();
+        publish_accepted_step_output_initial_state(&mut snapshot, &read_model, effective).unwrap();
+
+        let field = snapshot.latest_fields.get("m").expect("accepted M0 carrier");
+        assert_eq!(field["values"], json!(predecessor_values));
+        assert!(snapshot.latest_fields.get("H_demag").is_none());
+        assert!(snapshot.preview_cache.get("H_demag").is_none());
+        assert_eq!(
+            snapshot.metadata.as_deref().unwrap()["execution_plan"],
+            serde_json::to_value(&read_model.execution_plan).unwrap(),
+            "the published metadata stays bound to the canonical authored execution plan"
+        );
+        assert_eq!(
+            field["provenance"]["source_kind"],
+            "accepted_step_output_initial_state"
+        );
+        assert_eq!(
+            field["provenance"]["plan_fingerprint"],
+            read_model.plan_fingerprint
+        );
+        assert_eq!(field["provenance"]["target_attempt"]["attempt_id"], claim.attempt_id.as_str());
+        assert!(field["observation_frame"]["authored_initial_state"].is_null());
+        assert_eq!(
+            field["observation_frame"]["domain_generation_id"],
+            crate::router_v2::handlers::sessions::status::domain_generation_id(&snapshot)
+        );
+        assert!(snapshot.authored_initial_state.is_none());
     }
 }

@@ -135,22 +135,11 @@ Inspecting relaxed 3D magnetization glyphs ($\mathbf{m}$ colored by $m_z$ / comp
 This is an onboarding run, not a scientific qualification benchmark. It uses a small cell grid so it is
 practical to run; exchange and demagnetization validation regimes are documented on the canonical
 {ref}`interaction pages <public-docs-physics-interactions-root>`. The FDM CPU lane shown here has
-scoped published evidence; do not infer executed CUDA parity from this snippet.
-## Control Room crosswalk
+scoped published evidence; do not infer executed CUDA parity from this snippet. Authoring and
+`ProblemIR` validation alone do not establish mesh convergence, solver execution, or GPU parity.
 
-Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked {doc}`/python-api/index` page rather than duplicating an unverified signature.
-
-## Physics, limitations, and bibliography
-
-Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
 ## Source-code index
 
 - `packages/fullmag-py/src/fullmag/world.py` — `StudyBuilder`, `StudyStagesBuilder`: stage-first authoring and capture.
 - `packages/fullmag-py/src/fullmag/model/problem.py` — `Problem.to_ir`: canonical serialization and validation.
 - `justfile` — `docker-dev`, `docker-dev-script`, `fullmag-dev-container`: Docker Compose DEV launch and script execution recipes.
-
-Authoring and IR validation do not establish mesh convergence, solver execution, or GPU parity.

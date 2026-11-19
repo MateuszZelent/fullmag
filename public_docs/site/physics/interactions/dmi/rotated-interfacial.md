@@ -259,10 +259,7 @@ validation criteria are shared; FDM/FEM and CPU/GPU keep separate numerical owne
 (rotated-interfacial-dmi-validation)=
 ## Göbel 2019 validation
 
-The reference case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one
-$0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,
-\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,
-\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
+The reference case is a $500\times40\times0.5\,\mathrm{nm^3}$ film with one $0.5\,\mathrm{nm}$ FDM cell through thickness, periodic $x$, $M_s=0.58\,\mathrm{MA\,m^{-1}}$, $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,\mathrm{mJ\,m^{-2}}$, $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, and $\alpha=0.3$.
 
 The stored strict FP64 CUDA report was generated before the verifier gained its
 current 19 checks. It previously passed 15/15 checks after 20 ps relaxation and

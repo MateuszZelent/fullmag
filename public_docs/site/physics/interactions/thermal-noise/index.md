@@ -16,8 +16,9 @@ alone.
 (physics-thermal-noise-problem-statement)=
 ## Physical problem
 
-This page is the public physical and authoring contract for the interaction. It separates authored
-semantics, planner resolution, executable backend lanes, and scientific qualification.
+Thermal Brown fluctuations enter as an uncorrelated Gaussian effective field calibrated by the
+fluctuation–dissipation theorem so that equilibrium spin ensembles converge to the Boltzmann
+distribution at temperature $T$.
 
 ```{figure} /_static/diagrams/thermal-brown-stochastic-llg.svg
 :alt: Two-panel diagram of Brown thermal noise in Fullmag: Panel (a) shows the discrete stochastic field formula with bare gamma_{mu0}, accepted-interval raw-draw reuse across rejected adaptive RK retries, FSAL invalidation, and lane constraints; Panel (b) plots the exact Boltzmann equilibrium density P(theta) proportional to sin(theta) exp(xi cos(theta)) against ensemble 95% confidence intervals and contrasts statistical validation against invalid bitwise CPU/GPU comparison.
@@ -139,8 +140,8 @@ study.stages.add_run(stage_id="thermalize", until=1.0e-12)
 ```
 
 Use a physical-time stage, not deterministic energy minimization. A direct `H_therm` output is
-rejected in the current FDM CPU/GPU observable contract; `H_eff` is the safer portable field
-observable at the audited revision. For exact constructor arguments on `fm.ThermalNoise`, see
+rejected in the current FDM CPU/GPU observable contract; `H_eff` is the portable field
+observable across lanes. For exact constructor arguments on `fm.ThermalNoise`, see
 {doc}`/python-api/interactions/thermal-noise`.
 
 (physics-thermal-noise-problem-ir)=
@@ -153,13 +154,12 @@ observable at the audited revision. For exact constructor arguments on `fm.Therm
 Omitting `seed` requests system entropy. `seed=0` is not the same state and is rejected.
 
 (physics-thermal-noise-validation)=
-## Validation boundary and code hardening
+## Validation boundary
 
-`ThermalNoise.temperature` is required positive. The current Python annotation says `seed:
-int | None`, but runtime type enforcement is incomplete: positive non-integer values and booleans
-can pass the constructor's `seed <= 0` check. Replace this with an explicit positive-integer
-validator and document the exact accepted range. Planner checks remain responsible for lane,
-volume, timestep, material fields, and random-state availability.
+`ThermalNoise.temperature` must be finite and strictly positive. `ThermalNoise.seed` accepts
+`None` or a positive integer (`seed <= 0` is rejected, while runtime integer type checking is not
+enforced by the constructor). Planner checks additionally validate lane support, active
+cell/nodal volumes, timestep compatibility, and random-state availability.
 
 ## Required numerical validation
 
@@ -190,12 +190,11 @@ never silently omitted or replaced by deterministic evolution.
 Python owns authoring and serialization (`packages/fullmag-py/src/fullmag/model/energy.py`,
 `world.py`), `ProblemIR` owns canonical intent, planners (`crates/fullmag-plan/src/fdm.rs`,
 `fem.rs`) enforce temperature/seed consistency, integrator legality, and lane gates, and backend
-solvers own stochastic field sampling, raw-draw caching, and FSAL invalidation. Control Room
-parameter exposure is tracked in {doc}`/frontend/capability-register`; do not infer UI controls
-from backend or Python availability.
+solvers own stochastic field sampling, raw-draw caching, and FSAL invalidation. Control Room parameter exposure is tracked in {doc}`/frontend/capability-register`; parameters
+without a matching UI control are configured in Python.
 
 (physics-thermal-noise-limitations)=
-## Limitations and recommended extensions
+## Limitations
 
 The model does not provide longitudinal thermal fluctuations, temperature-dependent material
 laws, heat transport, or LLB dynamics near $T_C$. These require separate coupled physics

@@ -202,11 +202,6 @@ pub(crate) async fn submit_live_command_with_transition(
         if let Some(error) = accepted_preparation_recovery_error(snapshot) {
             return Err(error);
         }
-        if matches!(command.kind.as_str(), "run" | "relax" | "solve") {
-            if let Some(error) = restored_asset_origin_error(snapshot) {
-                return Err(error);
-            }
-        }
         if matches!(command.kind.as_str(), "run" | "relax" | "solve")
             && snapshot.scene_document.as_ref().is_some_and(|scene| {
                 scene.study.requested_backend.eq_ignore_ascii_case("fem")
@@ -478,23 +473,6 @@ pub(crate) async fn submit_live_command_with_transition(
         step_id,
         selected_step_id: prepared.selected_step_id,
     }, admission)))
-}
-
-fn restored_asset_origin_error(snapshot: &crate::types::SessionStateResponse) -> Option<ApiError> {
-    let restored_terminal = snapshot.metadata.as_ref()
-        .and_then(|metadata| metadata.pointer("/accepted_run_reattach/schema"))
-        .and_then(serde_json::Value::as_str)
-        == Some("fullmag.development-terminal-observation-input.v1");
-    if restored_terminal && snapshot.session.script_path.is_empty()
-        && snapshot.scene_document.as_ref().is_some_and(|scene| scene.study.fem_domain_mesh.is_some())
-    {
-        Some(ApiError::conflict_with_code(
-            "restored_asset_origin_unavailable",
-            "The restored FEM scene requires its verified original script asset directory.",
-        ))
-    } else {
-        None
-    }
 }
 
 fn accepted_preparation_recovery_error(
@@ -1245,9 +1223,6 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
         if let Some(error) = accepted_preparation_recovery_error(snapshot) {
             return Err(error);
         }
-        if let Some(error) = restored_asset_origin_error(snapshot) {
-            return Err(error);
-        }
         let scene = snapshot
             .scene_document
             .clone()
@@ -1647,6 +1622,17 @@ fn request_accepted_stop_for_catalog(
                 })?
                 .map(|intent| intent.expected_catalog_revision),
         };
+        let record_cancellation = |expected_catalog_revision| {
+            fullmag_runtime_control::retry_store_writer_busy(|| {
+                store.request_task_cancellation_intent(
+                    run_id,
+                    &task.task_id,
+                    &cancellation_id,
+                    expected_catalog_revision,
+                    reason,
+                )
+            })
+        };
         match task.lifecycle {
             fullmag_session::FmsTaskLifecycle::Preparing
             | fullmag_session::FmsTaskLifecycle::Running => {
@@ -1676,14 +1662,7 @@ fn request_accepted_stop_for_catalog(
                 // valid Stop retry into an IntentConflict.
                 let expected_catalog_revision =
                     cancellation_expected_revision.unwrap_or(catalog_revision);
-                let (_, _, next_catalog_revision) = store
-                    .request_task_cancellation_intent(
-                        run_id,
-                        &task.task_id,
-                        &cancellation_id,
-                        expected_catalog_revision,
-                        reason,
-                    )
+                let (_, _, next_catalog_revision) = record_cancellation(expected_catalog_revision)
                     .map_err(|error| {
                         ApiError::conflict_with_code(
                             "accepted_control_stop_conflict",
@@ -1704,14 +1683,7 @@ fn request_accepted_stop_for_catalog(
                 // successful two-stage Stop remains idempotent after worker
                 // lifecycle projection.
                 if let Some(expected_catalog_revision) = cancellation_expected_revision {
-                    let (_, _, next_catalog_revision) = store
-                        .request_task_cancellation_intent(
-                            run_id,
-                            &task.task_id,
-                            &cancellation_id,
-                            expected_catalog_revision,
-                            reason,
-                        )
+                    let (_, _, next_catalog_revision) = record_cancellation(expected_catalog_revision)
                         .map_err(|error| {
                             ApiError::conflict_with_code(
                                 "accepted_control_stop_conflict",
@@ -1774,8 +1746,8 @@ fn materialize_live_accepted(
 /// admitted source script.  The authored SceneDocument and the Python export
 /// remain unchanged; ordinary UI/managed sources outside the Docker source
 /// prefix retain their existing output policy.
-fn apply_docker_output_storage_binding(
-    inputs: &mut [fullmag_application::StudyStepExecutionInput],
+fn apply_docker_output_storage_binding<'a>(
+    problems: impl IntoIterator<Item = &'a mut fullmag_ir::ProblemIR>,
     scene: &fullmag_authoring::SceneDocument,
     source_script_path: Option<&Path>,
 ) -> Result<(), ApiError> {
@@ -1793,11 +1765,11 @@ fn apply_docker_output_storage_binding(
         scene,
         source_script_path,
     )?;
-    apply_resolved_docker_output_storage_binding(inputs, &binding, source_script_path)
+    apply_resolved_docker_output_storage_binding(problems, &binding, source_script_path)
 }
 
-fn apply_resolved_docker_output_storage_binding(
-    inputs: &mut [fullmag_application::StudyStepExecutionInput],
+fn apply_resolved_docker_output_storage_binding<'a>(
+    problems: impl IntoIterator<Item = &'a mut fullmag_ir::ProblemIR>,
     binding: &Value,
     source_script_path: &Path,
 ) -> Result<(), ApiError> {
@@ -1817,8 +1789,8 @@ fn apply_resolved_docker_output_storage_binding(
         .ok_or_else(|| ApiError::bad_request("Docker startup source path has no valid script stem"))?
         .to_string();
 
-    for input in inputs {
-        let runtime_metadata = &mut input.problem.problem_meta.runtime_metadata;
+    for problem in problems {
+        let runtime_metadata = &mut problem.problem_meta.runtime_metadata;
         runtime_metadata.insert("output_storage".to_string(), output_storage.clone());
         runtime_metadata.insert(
             "output_storage_source_dir".to_string(),
@@ -1962,7 +1934,8 @@ fn prepare_live_accepted(
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     // Script-backed scenes retain relative native mesh references after the
     // startup request. Resolve them with the same original asset parent.
-    let asset_root = if scene.study.fem_domain_mesh.is_some() {
+    let has_pinned_stl_sources = scene.objects.iter().any(|object| object.geometry.source_asset.is_some());
+    let asset_root = if scene.study.fem_domain_mesh.is_some() || has_pinned_stl_sources {
         asset_root.or_else(|| source_script_path.as_deref().and_then(Path::parent))
     } else {
         asset_root
@@ -2112,13 +2085,23 @@ fn prepare_live_accepted(
     } else {
         None
     };
+    // SceneDocument carries the STT actions but does not encode material
+    // assignments made between scripted Run or Relax captures.
+    let capture_fdm_stt_stages = matches!(
+        &submission,
+        LiveAcceptedSubmission::Startup { source_path: Some(path), .. }
+            if path.starts_with(crate::docker_startup::CONTAINER_SOURCE_ROOT)
+    ) && scene.study.requested_backend.eq_ignore_ascii_case("fdm")
+        && scene.study.stages.iter().any(|stage| stage.kind == "set_spin_torque_enabled");
     let mut closed_capture = if source_bound_pipeline {
         let source_path = match (&submission, &generated_scene_source) {
             (LiveAcceptedSubmission::Startup { source_path: Some(path), .. }, None) => path,
             (_, Some(generated)) => &generated.path,
             _ => return Err(ApiError::internal("closed-loop source preparation lost its owner")),
         };
-        let capture = crate::script::capture_startup_script_scene(repo_root, workspace_root, source_path)?;
+        let mut capture = crate::script::capture_startup_script_scene(
+            repo_root, workspace_root, source_path, capture_fdm_stt_stages,
+        )?;
         let entry = capture.manifest["entry_relative_path"].as_str().ok_or_else(|| ApiError::unprocessable("captured source entry missing"))?;
         let source = capture.files.get(entry).ok_or_else(|| ApiError::unprocessable("captured source entry bytes missing"))?;
         let captured_source_sha256 = fullmag_session::hex_sha256(source);
@@ -2154,9 +2137,20 @@ fn prepare_live_accepted(
                     "captured script does not reproduce the immutable startup scene"));
             }
         }
-        // Capture authoring without geometry; bind the profile before preparing a source.
-        let config = crate::script::scene_document_to_authored_script_config_with_asset_root(
-            repo_root, workspace_root, asset_root, &effective_scene, &requested_execution)?;
+        let config = if let Some(mut config) = capture.config.take() {
+            if config.stages.is_empty() {
+                return Err(ApiError::unprocessable("scripted FDM STT capture has no stage snapshots"));
+            }
+            let problems = std::iter::once(&mut config.ir)
+                .chain(config.stages.iter_mut().map(|stage| &mut stage.ir));
+            apply_docker_output_storage_binding(problems, &effective_scene, Some(source_path))?;
+            config
+        } else {
+            // Bind the profile before preparing geometry for Scene-only input.
+            crate::script::scene_document_to_authored_script_config_with_asset_root(
+                repo_root, workspace_root, asset_root, &effective_scene, &requested_execution,
+            )?
+        };
         capture.verify_unchanged().map_err(|error| ApiError::conflict_with_code(
             "accepted_script_source_changed", format!("source changed during scene preparation: {error:#}")))?;
         Some((capture, config))
@@ -2221,7 +2215,7 @@ fn prepare_live_accepted(
         },
     );
     apply_docker_output_storage_binding(
-        &mut inputs,
+        inputs.iter_mut().map(|input| &mut input.problem),
         &effective_scene,
         source_script_path.as_deref(),
     )?;
@@ -2333,7 +2327,7 @@ fn prepare_live_accepted(
     let (mut catalog, mut initial_state) = if let Some((capture, config)) = closed_capture.take() {
         let layers = inputs.first().ok_or_else(|| ApiError::unprocessable("closed-loop migration input missing"))?.layers.clone();
         let bound = fullmag_application::materialize_captured_study_input(
-            "script-base", config.ir, &defaults.execution_profile, layers.clone(),
+            "script-base", config.ir.clone(), &defaults.execution_profile, layers.clone(),
             |id, version| if id == published_profile.profile_id && version == published_profile.version {
                 Ok(published_profile.clone())
             } else { Err("closed-loop execution profile differs from pinned live profile".into()) },
@@ -2346,8 +2340,13 @@ fn prepare_live_accepted(
         )?);
         let prepared_request = preparation_constraints.for_problem(&bound.problem)
             .map_err(|error| ApiError::unprocessable(error.to_string()))?;
-        let config = crate::script::scene_document_to_bound_prepared_script_config_with_asset_root(
-            repo_root, workspace_root, asset_root, &effective_scene, &prepared_request, &bound.problem)?;
+        let config = if capture_fdm_stt_stages {
+            config
+        } else {
+            crate::script::scene_document_to_bound_prepared_script_config_with_asset_root(
+                repo_root, workspace_root, asset_root, &effective_scene, &prepared_request, &bound.problem,
+            )?
+        };
         let compiled = fullmag_application::compile_accepted_closed_loop_pipeline(
             config, study.study_id.clone(), effective_scene.revision, defaults.execution_profile.clone(), layers,
             capture.manifest.clone(),
@@ -3207,29 +3206,6 @@ mod tests {
             request_scope_epoch: "scope:17".into(),
         };
         (snapshot, context)
-    }
-
-    #[test]
-    fn restored_relative_mesh_requires_origin_without_blocking_ordinary_ui_scenes() {
-        let (mut snapshot, _) = grid_refresh_predecessor_snapshot("completed");
-        let mut scene = fullmag_authoring::SceneDocument::default();
-        scene.study.fem_domain_mesh = Some(fullmag_authoring::SceneFemDomainMeshReference {
-            source: "model.fullmag-mesh".into(), sha256: "a".repeat(64),
-            build_requested: false,
-        });
-        snapshot.scene_document = Some(scene);
-        snapshot.session.script_path.clear();
-        assert!(super::restored_asset_origin_error(&snapshot).is_none());
-        snapshot.metadata = Some(serde_json::json!({"accepted_run_reattach": {
-            "schema": "fullmag.development-terminal-observation-input.v1"
-        }}).into());
-        assert_eq!(super::restored_asset_origin_error(&snapshot).unwrap().code.as_deref(),
-            Some("restored_asset_origin_unavailable"));
-        snapshot.session.script_path = "/opt/fullmag/source/examples/model.py".into();
-        assert!(super::restored_asset_origin_error(&snapshot).is_none());
-        snapshot.session.script_path.clear();
-        snapshot.scene_document.as_mut().unwrap().study.fem_domain_mesh = None;
-        assert!(super::restored_asset_origin_error(&snapshot).is_none());
     }
 
     fn record_accepted_commit(
@@ -4285,7 +4261,7 @@ mod tests {
         );
 
         apply_resolved_docker_output_storage_binding(
-            &mut inputs,
+            inputs.iter_mut().map(|input| &mut input.problem),
             &binding,
             Path::new("/opt/fullmag/source/examples/authored_filename.py"),
         )

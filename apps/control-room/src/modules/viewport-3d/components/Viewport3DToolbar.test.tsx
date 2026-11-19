@@ -42,6 +42,8 @@ describe("Viewport3DToolbar", () => {
     for (const group of ["Navigation", "Projection", "Inspection", "Layers", "Quality", "Export", "Settings"]) {
       expect(html).toContain(`aria-label="${group}"`);
     }
+    expect(html).toContain('aria-label="Quality profile: Detailed"');
+    expect(html).toContain("Detailed");
     expect(html).toContain('aria-label="Fit view"');
     expect(html).toContain('aria-disabled="true"');
     expect(html).toContain("The current scene has no visible bounds.");
@@ -74,12 +76,14 @@ describe("Viewport3DToolbar", () => {
       await act(async () => click(findElement(container, (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === "Projection", "projection")));
       await act(async () => click(findElement(container, (element) => element.getAttribute("aria-label") === "Inspect values", "inspect values")));
       await act(async () => click(findElement(container, (element) => element.getAttribute("aria-label") === "Export PNG", "export PNG")));
+      await act(async () => click(findElement(container, (element) => element.getAttribute("aria-label") === "Export 3D model", "export 3D model")));
       await act(async () => click(findElement(container, (element) => element.getAttribute("aria-label") === "View settings", "view settings")));
 
       expect(onCommand.mock.calls).toEqual([
         ["view-projection"],
         ["viewport-3d.inspect-toggle"],
         ["viewport-3d.capture-frame"],
+        ["viewport-3d.export-model"],
         ["viewport-3d.toggle-settings"],
       ]);
     } finally {

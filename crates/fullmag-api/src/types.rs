@@ -977,6 +977,9 @@ pub(crate) struct SessionStateResponse {
     /// runner bridge. It is internal state, not a browser resource payload.
     #[serde(skip, default)]
     pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
+    /// Remesh events already consumed by this publisher/session incarnation.
+    #[serde(skip, default)]
+    pub accepted_mesh_reinitializations: std::collections::BTreeSet<String>,
     /// Highest accepted terminal generation per run. Retained durably so a
     /// restarted bridge can begin a new run at sequence 1 without admitting a
     /// delayed terminal frame from an earlier run.
@@ -1144,6 +1147,16 @@ impl LatestFields {
         self.1.remove(quantity);
     }
 
+    pub(crate) fn retain_quantity_from(&mut self, previous: &Self, quantity: &str) {
+        self.remove(quantity);
+        if let Some(value) = previous.0.get(quantity) {
+            self.0.insert(quantity.to_string(), value.clone());
+        }
+        if let Some(reader) = previous.1.get(quantity) {
+            self.1.insert(quantity.to_string(), Arc::clone(reader));
+        }
+    }
+
     pub(crate) fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
         self.0.iter().map(|(quantity, value)| (quantity, &**value))
     }
@@ -1223,6 +1236,12 @@ impl CachedPreviewFields {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+
+    pub(crate) fn forget_quantity(&mut self, quantity: &str) {
+        self.fields.remove(quantity);
+        self.accepted_latest_source_frames.remove(quantity);
+        self.accepted_preview_source_frames.retain(|(id, _, _, _, _), _| id != quantity);
     }
 
     pub(crate) fn clear_fields(&mut self) {
@@ -1456,6 +1475,8 @@ pub(crate) struct ImportSessionAssetRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionAssetImportResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     pub asset_id: String,
     pub session_id: String,
     pub artifact_ref: String,
@@ -2257,6 +2278,7 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            material_assets: None,
             revision: 3,
             compute_resources: None,
             execution_profile: None,
@@ -2272,7 +2294,6 @@ mod tests {
             fem_demag_solver_policy: None,
             fem_bb_preconditioner: None,
             fem_demag_accuracy_contract: None,
-            fem_gpu_pcg_control_experiment: None,
             fem_domain_mesh: None,
             exchange_enabled: true,
             demag_enabled: true,
@@ -2331,6 +2352,10 @@ mod tests {
                 adaptive_max_passes: 5,
                 adaptive_error_tolerance: String::new(),
                 order: None,
+                domain_mesh_mode: None,
+                domain_mesh_source: None,
+                domain_region_markers: None,
+                domain_object_region_markers: None,
             },
             universe: None,
             domain_frame: None,
@@ -2340,6 +2365,7 @@ mod tests {
             output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                source_asset: None,
                 name: "body".to_string(),
                 region_name: None,
                 geometry_kind: "Box".to_string(),
@@ -2378,6 +2404,7 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             planar_monitors: Vec::new(),
             current_modules: Vec::new(),
             current_transports: Vec::new(),
@@ -2472,6 +2499,7 @@ mod tests {
             field_quantity_revisions: BTreeMap::new(),
             accepted_terminal_field_generation: None,
             terminal_field_generations: BTreeMap::new(),
+            accepted_mesh_reinitializations: Default::default(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

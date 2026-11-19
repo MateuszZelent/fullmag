@@ -140,7 +140,7 @@ Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles
 (cubic-assumptions-and-validity)=
 ## Assumptions and validity
 
-- `Kc1`, `Kc2`, and `Kc3` are SI energy-density constants in J/m^3.
+- `Kc1`, `Kc2`, and `Kc3` are SI energy-density constants in $\mathrm{J\,m^{-3}}$.
 - The physical crystal frame is orthonormal. FEM planner validation is strict; FDM normalization
   behavior must be recorded as resolved execution and not generalized to all lanes.
 - $M_s>0$ and the reduced magnetization normalization are supplied by surrounding contracts.
@@ -160,14 +160,14 @@ Panel (b) displays 3D isometric energy surfaces and $(1\bar{1}0)$-plane profiles
 | `CubicAnisotropy.kc3` | `float` | `0.0` | $\mathrm{J\,m^{-3}}$ | finite | third cubic constant | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_kc3` |
 | `CubicAnisotropy.axis1` | `Sequence[float]` | `(1,0,0)` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis1` |
 | `CubicAnisotropy.axis2` | `Sequence[float]` | `(0,1,0)` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU after migration | `materials[].cubic_anisotropy_axis2` |
-| `Material.Kc1` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical third cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `tuple[float,float,float] \\| None` | `None` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `tuple[float,float,float] \\| None` | `None` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis2` |
-| `Material.Kc1_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc1 override | FEM and supported allocating FDM reference paths | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] \\| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
+| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical first cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc1` |
+| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical second cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc2` |
+| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite when supplied | canonical third cubic value | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_kc3` |
+| `Material.anisC1` | `tuple[float,float,float] \| None` | `None` | $1$ | length 3; finite | first crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis1` |
+| `Material.anisC2` | `tuple[float,float,float] \| None` | `None` | $1$ | length 3; finite | second crystal axis | FDM/FEM CPU/GPU | `materials[].cubic_anisotropy_axis2` |
+| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc1 override | FEM and supported allocating FDM reference paths | `materials[].kc1_field` |
+| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc2 override | FEM and supported allocating FDM reference paths | `materials[].kc2_field` |
+| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | finite; cardinality downstream | spatial Kc3 override | FEM and supported allocating FDM reference paths | `materials[].kc3_field` |
 
 
 ### Executable user workflow: study and stages
@@ -279,7 +279,7 @@ fields use element quadrature with explicit field cardinality and material-locat
 ### FEM GPU
 
 The CUDA kernel computes the crystal-frame components, reconstructs the laboratory field, emits
-block energy sums, and the RK reduction consumes those sums. Device `Ms`, Kc arrays, axes, masks,
+block energy sums, and the RK reduction consumes those sums. Device `Ms`, `Kc` arrays, axes, masks,
 and lumped masses are required; missing arrays fail closed.
 
 ### Observables
@@ -294,8 +294,7 @@ and lumped masses are required; missing arrays fail closed.
 ## Implementation mapping
 
 Python migration and material serialization are separate from native plan resolution. FDM CPU,
-FDM CUDA, FEM CPU, and FEM CUDA have separate field/energy symbols listed in the source index and
-machine map. Stable symbols, not stale line numbers, are the citation identity.
+FDM CUDA, FEM CPU, and FEM CUDA have separate field and energy symbols listed in the source-code index below.
 
 (cubic-validation)=
 ## Validation and qualification

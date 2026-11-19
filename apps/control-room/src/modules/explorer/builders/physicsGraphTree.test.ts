@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExplorerNode } from "../explorerTypes";
-import { buildPhysicsGraphTree } from "./physicsGraphTree";
+import { buildPhysicsGraphTree, withMaskAntennaModules } from "./physicsGraphTree";
 
 const graph = {
   schema_version: "physics_graph.v1",
@@ -62,6 +62,34 @@ const graph = {
 function flatten(nodes: readonly ExplorerNode[]): ExplorerNode[] {
   return nodes.flatMap((node) => [node, ...(node.children ? flatten(node.children) : [])]);
 }
+
+describe("withMaskAntennaModules", () => {
+  const graph = { schema_version: "physics_graph.v1", modules: [], edges: [] };
+
+  it("puts each mask antenna under the scope of its target", () => {
+    const merged = withMaskAntennaModules(graph, [
+      { enabled: true, id: "regional", label: "Regional", targetKind: "global", waveformKind: "constant" },
+      { driveKind: "mask", enabled: true, id: "global-mask", label: "Global mask", targetKind: "global", waveformKind: "mask" },
+      { driveKind: "mask", enabled: false, id: "film-mask", label: "Film mask", targetKind: "region", targetObjectId: "film", targetRegionId: "film:left", waveformKind: "mask" },
+    ]);
+    const tree = buildPhysicsGraphTree({ graph: merged, objects: [{ id: "film", label: "Film" }] });
+    const modules = tree.flatMap((scope) =>
+      (scope.children ?? []).map((node) => [scope.kind, node.physicsModuleId, node.physicsModuleKind, node.label, node.status, node.regionId]),
+    );
+
+    expect(modules).toEqual([
+      ["physics.scope.global", "global-mask", "mask_field_drive", "Global mask", "ready", undefined],
+      ["object.physics.scope", "film-mask", "mask_field_drive", "Film mask", "degraded", "film:left"],
+    ]);
+  });
+
+  it("leaves a graph without mask antennas untouched", () => {
+    expect(withMaskAntennaModules(graph, [])).toBe(graph);
+    expect(withMaskAntennaModules(null, [
+      { driveKind: "mask", enabled: true, id: "a", label: "A", targetKind: "global", waveformKind: "mask" },
+    ])).toBeNull();
+  });
+});
 
 describe("buildPhysicsGraphTree", () => {
   it("keeps the zero-current racetrack transport graph object-scoped with semantic labels", () => {

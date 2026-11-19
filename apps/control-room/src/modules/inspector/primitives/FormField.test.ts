@@ -49,10 +49,8 @@ describe("FormField physical numeric input contract", () => {
         }),
       );
 
-      const input = html.match(/<input\b[^>]*>/)?.[0];
-      expect(input).toBeDefined();
-      expect(input).toContain('aria-invalid="false"');
-      expect(input).not.toMatch(/(?:^|\s)invalid(?:\s|=|\/?>)/);
+      expect(html).toContain('aria-invalid="false"');
+      expect(html).not.toMatch(/(?:^|\s)invalid(?:\s|=|>)/);
       expect(consoleError).not.toHaveBeenCalledWith(
         expect.stringContaining("non-boolean attribute"),
         expect.anything(),

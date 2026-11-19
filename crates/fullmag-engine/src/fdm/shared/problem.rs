@@ -8,6 +8,7 @@ use crate::{
     RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator,
     Vector3,
 };
+use crate::fdm::shared::terms::{SlonczewskiTimeExpression, TimeEvaluationSide};
 use sha2::Digest;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -58,6 +59,9 @@ pub struct ExchangeLlgProblem {
     pub exchange_faces: Option<std::sync::Arc<crate::ExchangeFaces>>,
     /// Canonical regional field drives, separate from legacy per-node fields.
     pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
+    /// Optional scalar multiplier for the canonical Slonczewski current,
+    /// evaluated at every physical RK stage time.
+    slonczewski_time_expression: Option<SlonczewskiTimeExpression>,
     /// Resolved static external H_ext profile [A/m], kept separate from the
     /// legacy Oersted/antenna per-node buffer for observable provenance.
     pub static_external_field: Option<Vec<Vector3>>,
@@ -164,8 +168,41 @@ impl ExchangeLlgProblem {
             alpha_field: None,
             exchange_faces: None,
             regional_field_drives: Vec::new(),
+            slonczewski_time_expression: None,
             static_external_field: None,
         })
+    }
+
+    /// Attach a compiled dimensionless multiplier to the canonical CPP STT.
+    /// The runner calls this only after the planner has admitted the matching
+    /// FP64 single-grid FDM RK45 lane.
+    pub fn set_slonczewski_time_expression(
+        &mut self,
+        expression: &fullmag_ir::TimeExpressionIR,
+    ) -> Result<()> {
+        if self.terms.slonczewski_stt.is_none() {
+            return Err(crate::EngineError::with_code(
+                crate::EngineErrorCode::InvalidInput,
+                "Slonczewski time expression requires an active Slonczewski STT term",
+            ));
+        }
+        self.slonczewski_time_expression = Some(SlonczewskiTimeExpression::compile(expression)?);
+        Ok(())
+    }
+
+    pub(crate) fn slonczewski_current_multiplier_at_time(
+        &self,
+        time_seconds: f64,
+        side: TimeEvaluationSide,
+    ) -> Result<f64> {
+        match &self.slonczewski_time_expression {
+            Some(expression) => expression.evaluate(time_seconds, side),
+            None => Ok(1.0),
+        }
+    }
+
+    pub(crate) fn has_slonczewski_time_expression(&self) -> bool {
+        self.slonczewski_time_expression.is_some()
     }
 
     pub fn regional_drive_field_at_time(&self, evaluation_time_s: f64) -> Vec<Vector3> {
@@ -1091,6 +1128,7 @@ impl Clone for ExchangeLlgProblem {
             alpha_field: self.alpha_field.clone(),
             exchange_faces: self.exchange_faces.clone(),
             regional_field_drives: self.regional_field_drives.clone(),
+            slonczewski_time_expression: self.slonczewski_time_expression.clone(),
             static_external_field: self.static_external_field.clone(),
         }
     }

@@ -47,17 +47,6 @@ pub(crate) enum AcceptedFemExecutionOutcome {
     },
 }
 
-fn initial_observation_policy(resolved_device: &str, field_every_n: u64) -> fullmag_runner::InitialObservationPolicy {
-    // Cadence one is the observation writer's existing full-generation
-    // budget/domain gate. Larger/sentinel cadences retain its bounded path;
-    // they never authorize CPU physical evaluation of a GPU task.
-    if resolved_device == "gpu" && field_every_n == 1 {
-        fullmag_runner::InitialObservationPolicy::NativeGpuInitialFields
-    } else {
-        fullmag_runner::InitialObservationPolicy::None
-    }
-}
-
 /// Immutable FEM execution input prepared before an attempt directory or
 /// started receipt is created. Once the common worker has crossed that durable
 /// boundary, the solver consumes this value instead of rereading accepted
@@ -188,23 +177,20 @@ pub(crate) fn execute_accepted_fem_attempt(
         &prepared.execution_plan,
         format!("fem_{}", prepared.resolved_device),
     );
-    let field_sampling_interval = live_observation.field_sampling_interval();
+    let field_cadence = live_observation.field_cadence();
     let mut cuda_trace = start_cuda_trace()?;
-    let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_observation_and_fem_mesh_identity_and_autosave_root(
+    let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
         Some(&prepared.stage_mesh.identity),
         prepared.until_seconds,
         attempt_output_dir,
         autosave_root,
-        field_sampling_interval,
+        field_cadence,
         &display_selection,
         interrupt_requested,
-        initial_observation_policy(&prepared.resolved_device, field_sampling_interval),
+        false,
         |update| {
-            if let Some(capture) = &mut cuda_trace {
-                capture.observe_accepted_step(&update.stats);
-            }
             profile.observe(&update.stats);
             live_observation.observe(&update);
             StepAction::Continue
@@ -696,18 +682,6 @@ mod source_contract_tests {
     use serde_json::json;
 
     #[test]
-    fn initial_gpu_observation_requires_the_actual_gpu_lane_and_full_live_budget() {
-        use fullmag_runner::InitialObservationPolicy;
-        assert_eq!(super::initial_observation_policy("gpu", 1), InitialObservationPolicy::NativeGpuInitialFields);
-        for device in ["cpu", "auto"] {
-            assert_eq!(super::initial_observation_policy(device, 1), InitialObservationPolicy::None);
-        }
-        for cadence in [0, 2, 100, u64::MAX] {
-            assert_eq!(super::initial_observation_policy("gpu", cadence), InitialObservationPolicy::None);
-        }
-    }
-
-    #[test]
     fn accepted_gpu_scope_admits_pgbb_and_rejects_unqualified_direct_minimizers() {
         assert!(accepted_gpu_relaxation_algorithm(
             RelaxationAlgorithmIR::ProjectedGradientBb
@@ -799,28 +773,6 @@ mod source_contract_tests {
         assert!(source.contains("AcceptedFemExecutionOutcome::Cancelled"));
         assert!(source.contains("FemStaticPbcLane attestation"));
         assert!(!source.contains("runner was cancelled before final-state publication"));
-    }
-
-    #[test]
-    fn accepted_cuda_window_observes_step_before_profile_and_live_publication() {
-        let source = include_str!("accepted_fem_study_worker.rs")
-            .split_once("#[cfg(test)]")
-            .expect("source contracts follow the production execution adapter")
-            .0;
-        let callback = source
-            .split_once("|update| {")
-            .expect("runner update callback is present")
-            .1;
-        let observe = callback
-            .find("capture.observe_accepted_step(&update.stats)")
-            .expect("accepted CUDA window observes the physical callback stats");
-        let profile = callback
-            .find("profile.observe(&update.stats)")
-            .expect("step profile retains its existing observation");
-        let live = callback
-            .find("live_observation.observe(&update)")
-            .expect("live writer retains its existing observation");
-        assert!(observe < profile && observe < live);
     }
 
     #[test]

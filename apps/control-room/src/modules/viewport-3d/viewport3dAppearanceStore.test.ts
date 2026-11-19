@@ -43,6 +43,64 @@ describe("viewport3dStore appearance preferences", () => {
     expect(viewport3dStore.getSnapshot().appearance).toBe(appearance);
   });
 
+  it("applies Figure lighting and AO together in Presentation without changing the camera", () => {
+    viewport3dStore.setAppearance({ renderMode: "presentation", lightingMode: "flat", softShadows: false });
+    const before = viewport3dStore.getSnapshot();
+    const updates: ReturnType<typeof viewport3dStore.getSnapshot>[] = [];
+    const unsubscribe = viewport3dStore.subscribe(() => updates.push(viewport3dStore.getSnapshot()));
+    try {
+      viewport3dStore.setVisualProfile("figure");
+      expect(updates).toHaveLength(1);
+      expect(updates[0].appearance).toMatchObject({ renderMode: "presentation", lightingMode: "studio", softShadows: true });
+      expect(updates[0].widgets.effectAmbientOcclusion).toBe(true);
+      expect(updates[0].appearanceDiagnostics.ambientOcclusion).toMatchObject({ requested: true, effective: true });
+      expect(updates[0].camera).toBe(before.camera);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps Scientific preferences until entering Presentation with Figure selected", () => {
+    viewport3dStore.setAppearance({ lightingMode: "flat", softShadows: false });
+    viewport3dStore.setVisualProfile("figure");
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ renderMode: "scientific", lightingMode: "flat", softShadows: false });
+    expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(false);
+
+    viewport3dStore.setAppearance({ renderMode: "presentation" });
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ renderMode: "presentation", lightingMode: "studio", softShadows: true });
+    expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(true);
+
+    viewport3dStore.setAppearance({ renderMode: "scientific" });
+    viewport3dStore.setPostProcessingDataProtection(true);
+    expect(viewport3dStore.getSnapshot().appearanceDiagnostics.ambientOcclusion).toMatchObject({ requested: true, effective: false, reason: "Quantitative field colors are protected" });
+  });
+
+  it("allows manual Figure effect changes and preserves them through PNG export", () => {
+    viewport3dStore.setAppearance({ renderMode: "presentation" });
+    viewport3dStore.setVisualProfile("figure");
+    viewport3dStore.setEffectAmbientOcclusion(false);
+    viewport3dStore.setAppearance({ softShadows: false, lightingMode: "flat" });
+    viewport3dStore.setAppearance({ materialRoughness: 0.7 });
+    viewport3dStore.requestCapture();
+    viewport3dStore.completeCapture();
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("figure");
+    expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(false);
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ softShadows: false, lightingMode: "flat", materialRoughness: 0.7 });
+
+    viewport3dStore.setVisualProfile("figure");
+    expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(true);
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ softShadows: true, lightingMode: "studio", materialRoughness: 0.7 });
+  });
+
+  it("keeps effect switches unchanged when selecting the other quality profiles", () => {
+    viewport3dStore.setAppearance({ renderMode: "presentation", lightingMode: "flat", softShadows: false });
+    for (const profile of ["interactive-lite", "interactive", "balanced"] as const) {
+      viewport3dStore.setVisualProfile(profile);
+      expect(viewport3dStore.getSnapshot().widgets.effectAmbientOcclusion).toBe(false);
+      expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ renderMode: "presentation", lightingMode: "flat", softShadows: false });
+    }
+  });
+
   it("resets only the requested preference section and preserves the camera", () => {
     viewport3dStore.setAppearance({
       backgroundMode: "gradient",

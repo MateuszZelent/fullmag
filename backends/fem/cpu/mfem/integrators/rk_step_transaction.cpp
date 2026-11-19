@@ -2,7 +2,6 @@
 
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
-#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -140,15 +139,8 @@ struct PoissonStepStateSnapshot {
     double last_residual = 0.0;
     uint64_t last_setup_wall_time_ns = 0;
     uint64_t last_solver_apply_wall_time_ns = 0;
-    uint64_t last_solver_apply_device_wall_time_ns = 0;
     uint64_t step_assemble_wall_time_ns = 0;
     uint64_t step_solver_apply_wall_time_ns = 0;
-    uint64_t step_solver_apply_device_wall_time_ns = 0;
-    uint64_t step_hypre_wait_in_enqueue_wall_time_ns = 0;
-    uint64_t step_hypre_host_api_wall_time_ns = 0;
-    uint64_t step_hypre_wait_out_enqueue_wall_time_ns = 0;
-    uint64_t step_hypre_event_wait_count = 0;
-    uint64_t step_hypre_timed_solve_count = 0;
     uint64_t step_recover_wall_time_ns = 0;
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
@@ -169,15 +161,8 @@ PoissonStepStateSnapshot capture_poisson_step_state(
         source.last_residual,
         source.last_setup_wall_time_ns,
         source.last_solver_apply_wall_time_ns,
-        source.last_solver_apply_device_wall_time_ns,
         source.step_assemble_wall_time_ns,
         source.step_solver_apply_wall_time_ns,
-        source.step_solver_apply_device_wall_time_ns,
-        source.step_hypre_wait_in_enqueue_wall_time_ns,
-        source.step_hypre_host_api_wall_time_ns,
-        source.step_hypre_wait_out_enqueue_wall_time_ns,
-        source.step_hypre_event_wait_count,
-        source.step_hypre_timed_solve_count,
         source.step_recover_wall_time_ns,
         source.step_energy_wall_time_ns,
         source.last_solver_setup_reused,
@@ -199,20 +184,8 @@ void restore_poisson_step_state(
     target.last_residual = source.last_residual;
     target.last_setup_wall_time_ns = source.last_setup_wall_time_ns;
     target.last_solver_apply_wall_time_ns = source.last_solver_apply_wall_time_ns;
-    target.last_solver_apply_device_wall_time_ns =
-        source.last_solver_apply_device_wall_time_ns;
     target.step_assemble_wall_time_ns = source.step_assemble_wall_time_ns;
     target.step_solver_apply_wall_time_ns = source.step_solver_apply_wall_time_ns;
-    target.step_solver_apply_device_wall_time_ns =
-        source.step_solver_apply_device_wall_time_ns;
-    target.step_hypre_wait_in_enqueue_wall_time_ns =
-        source.step_hypre_wait_in_enqueue_wall_time_ns;
-    target.step_hypre_host_api_wall_time_ns =
-        source.step_hypre_host_api_wall_time_ns;
-    target.step_hypre_wait_out_enqueue_wall_time_ns =
-        source.step_hypre_wait_out_enqueue_wall_time_ns;
-    target.step_hypre_event_wait_count = source.step_hypre_event_wait_count;
-    target.step_hypre_timed_solve_count = source.step_hypre_timed_solve_count;
     target.step_recover_wall_time_ns = source.step_recover_wall_time_ns;
     target.step_energy_wall_time_ns = source.step_energy_wall_time_ns;
     target.last_solver_setup_reused = source.last_solver_setup_reused;
@@ -492,9 +465,6 @@ struct RkStepTransaction::Impl {
         attempt_trace = ctx.stepper.attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
         poisson_step_state = capture_poisson_step_state(ctx.poisson_demag);
-#if FULLMAG_HAS_CUDA_RUNTIME
-        hypre_apply_timing_scope = capture_context_hypre_apply_timing_scope(ctx);
-#endif
         capture_vector_into(ctx.poisson_demag.solution_vec, poisson_solution);
         capture_vector_into(ctx.poisson_demag.periodic_solution, periodic_solution);
         capture_vector_into(ctx.poisson_demag.gf_potential, poisson_grid_function);
@@ -560,6 +530,7 @@ struct RkStepTransaction::Impl {
         for (const auto &drive : zeeman.regional_drives) {
             add(vector_payload_bytes(drive.target_element_markers));
             add(vector_payload_bytes(drive.waveform.points));
+            add(vector_payload_bytes(drive.waveform.time_program));
             add(vector_payload_bytes(drive.geometry_nodes));
             add(vector_payload_bytes(drive.basis_h_xyz));
         }
@@ -695,9 +666,6 @@ struct RkStepTransaction::Impl {
         ctx.stepper.attempt_trace = attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
         restore_poisson_step_state(ctx.poisson_demag, poisson_step_state);
-#if FULLMAG_HAS_CUDA_RUNTIME
-        restore_context_hypre_apply_timing_scope(ctx, hypre_apply_timing_scope);
-#endif
         restore_vector(ctx.poisson_demag.solution_vec, poisson_solution);
         restore_vector(ctx.poisson_demag.periodic_solution, periodic_solution);
         restore_vector(ctx.poisson_demag.gf_potential, poisson_grid_function);
@@ -748,9 +716,6 @@ struct RkStepTransaction::Impl {
     RkAttemptTraceState attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
     PoissonStepStateSnapshot poisson_step_state{};
-#if FULLMAG_HAS_CUDA_RUNTIME
-    HypreApplyTimingScopeSnapshot hypre_apply_timing_scope{};
-#endif
     std::vector<double> poisson_solution;
     std::vector<double> periodic_solution;
     std::vector<double> poisson_grid_function;

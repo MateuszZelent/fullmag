@@ -150,28 +150,6 @@ a wynik w `terminal.json` w tym samym katalogu wolumenu. SHA konfiguracji to
 SHA256 kanonicznego JSON (`docker_build_control.canonical`), nie pliku z newline.
 Nie kopiuj tych plików do hostowego `storage/builds`.
 
-### Wspólna kwalifikacja natywnej biblioteki FEM
-
-Opcja `--native-contract` zarządzanego launchera może wskazać jeden kontrakt,
-parę `fem-adaptive-dt` i `fem-rk-explicit` albo dokładnie tę parę wraz z
-`fem-demag-poisson`. Kolejność selektorów jest dowolna; duplikaty i pozostałe
-kombinacje wielu kontraktów są odrzucane.
-
-Przykład dla wybranego checkoutu i wolnego portu:
-
-```sh
-python3 -B scripts/docker_dev.py --repo-root "<source>" up \
-  --source-root "<source>" --port 3197 --gpu-access required \
-  --native-contract fem-demag-poisson \
-  --native-contract fem-adaptive-dt --native-contract fem-rk-explicit
-```
-
-Backend kompiluje wskazane testy i wykonuje je przed publikacją jednego pakietu.
-Receipt wiąże każdy wynik z tą samą migawką źródeł oraz hashem biblioteki buildu
-i pakietu. Brak testu, błąd lub zmiana biblioteki blokują publikację. Nie jest to
-uruchamianie dodatkowych testów na już opublikowanym pakiecie ani dowód parytetu
-SP4 lub przyspieszenia solvera; te wymagają osobnych pomiarów runtime.
-
 ## Wyniki obok skryptu
 
 Po jawnej zgodzie na zapis wybranego podkatalogu ustaw w `.env` głównego
@@ -348,63 +326,6 @@ Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
 `verified`, nie uruchamia usług i nie usuwa danych. Domyślnie oryginalny helper
 zwalnia swój marker `active` po odebraniu terminalnego wyniku.
 
-Dla jawnie zachowanej historii istnieje oddzielny wariant `--retained-prestart`.
-Nie zmienia on warunków powyższego trybu initial-only ani wariantu recreated.
-Dopuszcza wyłącznie sekwencję: udany `verified` → managed stop-only `iteration`
-z drain → `recreate-services` bez fresh-state usuwający te same zatrzymane
-usługi → potwierdzony błąd `current` przed publikacją Compose → bieżący błąd
-puli sieci przed utworzeniem usług. Można go wykonać z żywym oryginalnym
-helperem albo jawnie połączyć z `--recover-absent-helper`, jeśli helper zniknął
-po zewnętrznym restarcie hosta/WSL. To jedyne połączenie absent-helper z
-odtworzeniem: zwykły wariant recreated i wznowienie przygotowanej, częściowej
-publikacji nadal nie dopuszczają tego trybu. Walidacja całej zachowanej historii
-oraz pinów natywnego OWNER, dzieci, konfiguracji i provenance pozostaje taka
-sama.
-
-Preview uruchom bezpośrednio z wybranej, sprawdzonej wersji skryptu:
-
-```text
-python3 -B scripts/docker_volume_network_failure_reconcile.py \
-  --source-root <source> --attempt <unknown-attempt> \
-  --receipt-sha256 <raw-unknown-sha256> --compose-sha256 <raw-compose-sha256> \
-  --engine-id <engine-id> --retained-prestart \
-  --retained-current-sha256 <raw-current-sha256> \
-  --retained-verified-sha256 <raw-verified-sha256> \
-  --stop-attempt <iteration-attempt> --stop-sha256 <raw-stop-terminal-sha256> \
-  --recreation-attempt <recreation-attempt> --recreation-sha256 <raw-recreation-terminal-sha256> \
-  --native-config-sha256 <raw-retained-docker-all-sha256>
-```
-
-Dwie obserwacje wiążą pełny census kontenerów i prób development, surowe
-receipty/terminale, snapshoty stop/removal, OWNER, proces, trwały pin ready,
-konfigurację i provenance z poprzednim `verified`. Napis `drained` sam nie
-wystarcza: walidacja natywnego kontraktu sprawdza protokół, tożsamości,
-generacje, pule i statusy obydwu dzieci schedulera. `retained_history` zwraca
-manifest ścieżka → SHA-256 oraz `manifest_sha256`; żądanie ani dane techniczne
-nie są zapisywane w hostowym storage.
-
-Dowód stopu i recreation uwzględnia różnicę między ich producerami. Receipt
-managed stop musi zawierać w `inputs.source_root` dokładny root wybranego
-checkoutu. Producer `recreate-services` wiąże receipt z próbą zweryfikowanego
-development i jej `config_sha256`, ale nie zapisuje `inputs.source_root`;
-dlatego brak tego klucza jest dopuszczalny. Jeśli klucz występuje, musi
-wskazywać ten sam checkout — wartość obca lub `null` jest odrzucana.
-Pochodzenie recreation nadal potwierdzają grupa/namespace, zgodna próba i hash
-Compose oraz zgodne fingerprint i stan obu snapshotów usług z właściwymi
-etykietami źródła.
-`previous_state_root` wskazuje zachowane dane runtime; nie zastępuje tokenu
-zweryfikowanej próby development.
-
-Po ocenie preview apply wymaga tych samych pinów oraz
-`--apply --expected-plan-sha256 <plan_sha256-z-preview>`. Hash planu obejmuje
-całą stabilną obserwację, w tym manifest. Przed publikacją następuje ponowny
-census, a transakcja CAS ponownie sprawdza rekordy, listę prób i dokładne bajty
-`active`. Publikuje wyłącznie archiwum i dowód bieżącej próby oraz jej
-receipt/terminal; `current`, `verified`, OWNER, proces, konfiguracja, provenance
-i starsza historia pozostają byte-exact. Oryginalny helper zwalnia wyłącznie
-własny marker. Częściowa publikacja jest odrzucana i wymaga osobnego
-rozstrzygnięcia. Ten wariant nie uruchamia API, usług ani Solve.
-
 Jeżeli oryginalny helper został utracony, istnieje osobny, jawnie wybierany tryb
 `recover_absent_helper`. Najpierw wykonaj preview z argumentami `false true`:
 
@@ -422,16 +343,6 @@ tożsamość oraz przypięte receipty i marker. Pod jedną blokadą archiwizuje
 oryginał, publikuje dowód i trzy zgodne zapisy `failed-confirmed`, a dopiero
 wtedy usuwa dokładnie marker tej próby. Nie odtwarza starego helpera ani
 nie przypisuje sobie jego tożsamości.
-
-Dla zachowanej historii użyj zamiast powyższego uproszczonego wywołania
-bezpośredniego CLI z `--retained-prestart`, wszystkimi pinami historii,
-`--recover-absent-helper` i — przy apply — świeżym
-`--expected-plan-sha256` z preview tego samego zestawu argumentów.
-CAS ponownie sprawdza inode istniejącej blokady, `active`, receipt, Compose,
-manifest zachowanej historii i census prób. Zachowuje `current`, `verified`,
-OWNER, proces, konfigurację, provenance i pozostałą historię bajt w bajt;
-publikuje receipt i terminal, zanim usunie `active`. Nie uruchamia usług ani
-Solve.
 
 Nieznany wynik publikacji lub częściowy zapis wymaga odczytu zachowanych
 dowodów; nie ponawiaj mutacji w ciemno. Potwierdzone zamknięcie błędu pozwala
@@ -527,6 +438,31 @@ przeglądarki. Nieznany wynik operacji zachowuje lease do jawnej rekonsyliacji.
 próby/konfiguracji. Zachowuje wolumeny; opcja `fresh_state=true` tworzy nowy root
 sesji, pozostawiając poprzedni. Nie powtarza automatycznie aktywacji Solve.
 Przed pierwszym admission awaria samego buildu może zachować ten sam root sesji. Wymaga to dokładnego bootstrap certyfikatu, jednej potwierdzonej awarii przypiętej do bieżącego `Docker StartedAt` oraz braku handoff, publikacji pakietu i storage probe. Dowód wskazuje bezpośredni terminal tej próby development albo związany terminal resume; bieżąca inkarnacja kontenera musi być zgodna. Launcher ponawia cały dowód pod blokadą przed odtworzeniem usług. Nie ustawia `restart_verified`, nie zmienia ownera i nie powtarza Solve; nowe API nadal wymaga zwykłego admission. Brak lub zmiana dowodu blokuje tę ścieżkę.
+
+Przerwanie początkowego startu przed handoff pakietu można zamknąć przez
+`scripts/docker_volume_development_interrupted.py`. Checkpoint
+`starting-services` wymaga zgodnych ID oraz `StartedAt` obu zatrzymanych usług;
+zachowany wariant `starting` zachowuje wcześniejszy kontrakt. Builder
+`--build-interrupted-request --attempt <development-attempt>` zbiera piny z
+wybranej grupy i zapisuje immutable request w jej control volume dopiero po
+pełnej obserwacji. Wymagany jest brak starego helpera oraz dowodów handoff/API.
+Wywołanie z `--request <control-relative-path> --request-sha256 <sha256>`
+domyślnie wykonuje preview; jawne `--apply` zatwierdza wyłącznie
+`failed-confirmed` pod blokadą i CAS. Receipty zachowują nieznany status wyjścia
+producenta, a dalszy start lub odtworzenie usług przechodzi własne bramki.
+
+Jeżeli późniejsze resume zatrzyma się przed PID1 na błędzie OCI `not a directory`
+przy montowaniu `/run/fullmag/linux-native-host.json`, builder
+`scripts/docker_volume_resume_mount_refusal.py --source-root <checkout>
+--attempt <resume-attempt> --port <port>` obsługuje wyłącznie ten przypadek po
+potwierdzonym przerwaniu początkowego startu przed handoff. Wymaga niezmienionych
+zatrzymanych usług, działającego oryginalnego helpera i jego blokady, poprawnego
+certyfikatu na hoście oraz pustego stanu poza certyfikatem, ownerem i sentinelem.
+Zapisany request i SHA przekazuje się do `docker_volume_reconcile.py` najpierw z
+`--preview`, następnie bez tej flagi. Publikacja zachowuje rzeczywisty błąd OCI
+i ostatnie `verified`; tylko oryginalny helper zwalnia `active`. Nie naprawia
+mountu ani nie uruchamia usług. Następny krok to osobno walidowane
+`recreate-volume --fresh-state`, zachowujące poprzedni root stanu.
 
 Bezpośredni CLI `recreate-volume` obsługuje również powtarzane
 `--include-untracked`. Jawne opcje przypinają kompletną listę plików nowej
@@ -633,36 +569,6 @@ Kontrakt i warunki rollback opisuje
 [ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#awaria-runtime-po-udanym-przygotowaniu-przed-start-05112026).
 Stan runtime: **NOT VERIFIED**, dopóki rzeczywiste stop, anulowanie, archiwizacja
 i admission nie mają osobnych, dopasowanych receiptów.
-
-### Zamknięcie anulowanego buildu zależności
-
-`docker-dev-reconcile-toolchain` potwierdza wyłącznie porażkę dokładnie jednej
-zachowanej próby BuildKit. Nie ponawia kompilacji ani Solve. Żądanie zapisane
-w control volume przypina oryginalny receipt, Compose, log, źródła kontrolera,
-referencję BuildKit, silnik, wersję klienta oraz pełną listę builderów.
-Najpierw wykonaj preview, potem apply z tym samym hashem żądania:
-
-```sh
-just docker-dev-reconcile-toolchain <request-in-control> <request-sha256> <source-root> true
-just docker-dev-reconcile-toolchain <request-in-control> <request-sha256> <source-root> false
-```
-
-Nieaktywny builder wymaga osobnego wpisu `inactive_builders`; sam błąd
-połączenia ani brak PID klienta nie wystarcza. `stopped-before-attempt`
-przypina kontener pojedynczego węzła `docker-container`, jego fingerprint i stan.
-Węzeł musi wskazywać zaobserwowany lokalny silnik, a kontener pozostawać
-zatrzymany z datą zakończenia sprzed początku próby i własnym wolumenem BuildKit.
-`unavailable-desktop-windows` dotyczy wyłącznie wbudowanego kontekstu Windows:
-wymaga jego dokładnej tożsamości, tej samej sesji Docker Desktop oraz listy
-dostępnych trybów zawierającej wyłącznie bieżący Linux. Istnienie named pipe
-nie jest dowodem aktywności silnika.
-
-Kontroler ponawia te odczyty przed publikacją wyniku. Nie uruchamia builderów,
-nie ignoruje nieznanych lub zdalnych niedostępnych węzłów i nadal sprawdza
-historię wszystkich aktywnych workerów, niejednoznaczność oraz ucięcie listy.
-Oryginalny helper zachowuje lease aż do terminalnego handshake; zweryfikowany
-pakiet i wcześniejsze receipty pozostają zachowane. Źródłowy test kontrolera
-nie zastępuje udanego preview/apply konkretnej próby ani kwalifikacji GPU.
 
 ### Aktywacja skryptu w już działającym Workspace
 
@@ -1200,8 +1106,28 @@ Nie ma automatycznego globalnego GC BuildKit, starych obrazów ani nieaktywnych
 grup. Ich usunięcie wymaga osobnego planu właścicieli/referencji i autoryzacji.
 Samo usunięcie kontenera nie odzyskuje wolumenów ani fizycznego VHDX.
 
-`just docker-dev-control-checks <source>` uruchamia interpretowane regresje
-launcherów w istniejącym backendzie; nie kompiluje natywnych testów jednostkowych.
+`just docker-dev-control-checks <source>` w domyślnym zakresie uruchamia
+interpretowane regresje launcherów w istniejącym backendzie. Zakres
+`live-observation-contracts` kompiluje i wykonuje w tym samym backendzie testy
+kanału publikacji live z binarium `fullmag-api-accepted-worker`, pod istniejącą
+blokadą buildu i w prywatnym targetcie weryfikacji. Polecenie oraz hashe źródeł
+są zapisane w receipcie; test używa wyłączonych danych debug i incremental.
+Wynik potwierdza wykonanie testów źródeł kanału live. Publikacja nowego pakietu i sprawdzenie
+aktualizacji pól/statusu w przeglądarce wymagają osobnych dowodów runtime.
+Zakres `fem-live-control-contracts` sprawdza przekazanie żądania Stop przez
+obserwatora do wykonawcy FEM na granicy zaakceptowanego kroku. Obejmuje sygnał
+ustawiony przed callbackiem lub przez sam callback, publikację kroku przed Stop
+oraz zachowanie Continue/Pause/Stop bez sygnału. Są to testy źródłowe przekazania
+sterowania; nie potwierdzają zatrzymania działającego procesu, zbieżności ani
+publikacji accepted checkpointu po anulowaniu.
+
+Zakres `fem-preparation-contracts` sprawdza przekazanie importowanego STL
+z osobnego katalogu źródeł do przygotowanej siatki; po kompilacji ogranicza
+czas wykonania wskazanego testu do 60 sekund. `stl-classification-contracts`
+sprawdza powłoki, ownerów komponentów oraz eksport granic, a
+`stl-meshing-contracts` obejmuje dodatkowo pełny zestaw testów meshera.
+Receipty tych zakresów wiążą także hashe wykonywanych źródeł i testów Pythona.
+
 Sukces buildu nie stanowi kwalifikacji FDM/FEM/BORIS. Release, CI i kwalifikacja
 naukowa zachowują własne jawne zarządzane recepty zgodnie z AGENTS.md.
 

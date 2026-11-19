@@ -7,6 +7,7 @@
 !docker/fem-gpu/Dockerfile.dockerignore
 !docker/fem-gpu/normalize_cuda_dpkg_lists.sh
 !docker/fem-gpu/write_dependency_versions.py
+!docker/fem-gpu/write_petsc_build_metadata.py
 !docker/fem-gpu/nvidia-entrypoint/
 !docker/fem-gpu/nvidia-entrypoint/SOURCE.md
 !docker/fem-gpu/nvidia-entrypoint/entrypoint.d/
@@ -19,8 +20,4 @@
 !docker/fem-gpu/nvidia-entrypoint/entrypoint.d/90-deprecated-image.sh
 !docker/fem-gpu/nvidia-entrypoint/nvidia_entrypoint.sh
 !docker/fem-gpu/patches/
-!docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff
-!docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp
 !docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff
-!docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff
-!docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp

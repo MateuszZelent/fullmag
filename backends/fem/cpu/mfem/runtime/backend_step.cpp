@@ -503,17 +503,22 @@ int run_backend_relaxation_step(
                 0.0);
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);
-        // Prepare immutable MFEM CSR and Krylov storage outside the hot-loop
-        // audit scope. Subsequent BB steps only reuse this prepared state.
         if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB &&
-            gpu_bb_exchange_mass_enabled(ctx) &&
-            !gpu_bb_exchange_mass_prepare(ctx, error)) {
-            set_stage_completion(ctx, FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
-                nullptr, 0.0, 0.0);
-            return FULLMAG_FEM_ERR_UNAVAILABLE;
+            gpu_bb_exchange_mass_enabled(ctx)) {
+            auto &bb = ctx.gpu_state.device.relaxation;
+            bb.bb_preconditioner_wall_time_ns = 0;
+            bb.bb_preconditioner_cache_hits = 0;
+            bb.bb_preconditioner_cache_misses = 0;
+            // Prepare immutable operators and work buffers before the hot-loop
+            // audit scope. Subsequent BB steps reuse this prepared state.
+            if (!gpu_bb_exchange_mass_prepare(ctx, error)) {
+                set_stage_completion(ctx, FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                    nullptr, 0.0, 0.0);
+                return FULLMAG_FEM_ERR_UNAVAILABLE;
+            }
         }
         gpu_rk_reset_phase_timing_events(ctx);
+        gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);
         ctx.poisson_demag.solves_current_step = 0;
         ctx.poisson_demag.linear_iterations_current_step = 0;
         ctx.poisson_demag.setup_count_current_step = 0;
@@ -642,17 +647,6 @@ int run_backend_relaxation_step(
         }
         const uint64_t step_before = ctx.state.step_count;
         const uint64_t accepted_steps_before = ctx.relaxation.accepted_steps;
-        // Raw native metadata retains the configured auxiliary RK tableau,
-        // matching the native receipt. Minimizer provenance marks it not_used.
-        gpu_performance_configure(
-            ctx.gpu_state.performance_counters,
-            true,
-            static_cast<uint32_t>(gpu_plan.execution_class),
-            static_cast<uint32_t>(ctx.base_plan.precision),
-            static_cast<uint32_t>(ctx.base_plan.integrator),
-            ctx.mfem_context.selected_device_index);
-        GpuPerformanceAttemptScope performance_attempt(
-            ctx.gpu_state.performance_counters, step_before + 1);
         gpu_execution_receipt_begin_attempt(
             ctx.gpu_state.execution_receipt,
             ctx.transfer_audit.audit.counters);
@@ -674,7 +668,7 @@ int run_backend_relaxation_step(
                 TransferAuditScopeKind::HotLoop);
             if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB) {
                 gpu_status =
-                    gpu_relax_projected_gradient_bb_step(ctx, out_stats, error, true);
+                    gpu_relax_projected_gradient_bb_step(ctx, out_stats, error);
             } else {
                 gpu_status =
                     gpu_relax_nonlinear_cg_step(ctx, out_stats, error);
@@ -735,7 +729,6 @@ int run_backend_relaxation_step(
             ctx.relaxation.accepted_steps == accepted_steps_before;
         if (!accepted_step && terminal_observation) {
             gpu_execution_receipt_reject_attempt(ctx.gpu_state.execution_receipt);
-            performance_attempt.reject();
             return FULLMAG_FEM_OK;
         }
         if (!accepted_step) {
@@ -798,7 +791,6 @@ int run_backend_relaxation_step(
                 ", accepted_steps=" + std::to_string(execution_receipt.accepted_step_count);
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        performance_attempt.commit();
         return FULLMAG_FEM_OK;
     }
     const int status = run_native_relaxation_step(ctx, algorithm, out_stats, error);

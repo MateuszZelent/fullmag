@@ -663,6 +663,15 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
 }
 
+impl CurrentLiveSnapshotPayload {
+    pub(crate) fn mesh_reinitialization(&self) -> Option<fullmag_session::mesh_operation::MeshCommandOutcome> {
+        if !self.clear_preview_cache || self.replace_latest_fields {
+            return None;
+        }
+        fullmag_session::mesh_operation::completed_mesh_reinitialization(self.mesh_workspace.as_ref()?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct CurrentLiveFieldGeneration {
     pub run_id: String,

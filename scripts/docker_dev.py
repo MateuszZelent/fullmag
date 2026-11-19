@@ -930,23 +930,6 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
     return base
 
 
-def _verify_registered_data_volume(layout, project, *, state_root=None, user_data_root=None):
-    """Refuse a missing explicit Linux data volume before creating host state."""
-    if os.name == "nt":
-        return None
-    from fullmag_data_volume_guard import verify_registered_volume
-    try:
-        from docker_data_volume_startup_scope import current_scope
-        scope = current_scope()
-        if scope is not None:
-            return verify_registered_volume(layout, project, state_root=state_root,
-                                            user_data_root=user_data_root, migration_scope=scope)
-        return verify_registered_volume(layout, project, state_root=state_root,
-                                        user_data_root=user_data_root)
-    except (ValueError, OSError) as error:
-        raise _fail("registered data volume is unavailable: " + str(error)) from error
-
-
 def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str, object]]:
     from docker_development_inputs import select_checkout
     from fullmag_storage import initialize_runtime, resolve_layout
@@ -955,7 +938,6 @@ def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str
     if not selected.is_dir() or selected.is_symlink():
         raise _fail(f"selected source is not a real checkout: {selected}")
     layout = resolve_layout(selected, STORAGE_PROFILE)
-    _verify_registered_data_volume(layout, _compose_identity(layout)["project_name"])
     initialize_runtime(layout)
     return selected, layout
 
@@ -2682,10 +2664,6 @@ def _parser() -> argparse.ArgumentParser:
         "--capture-terminal-observation", action="store_true",
         help="capture native evidence for a completed or failed run during a managed stop-only drain",
     )
-    idle_restart.add_argument("--terminal-source-activation",
-                              help="explicit historical activation supplying source origin for terminal capture")
-    idle_restart.add_argument("--terminal-source-activation-sha256",
-                              help="exact raw receipt SHA-256 for --terminal-source-activation")
     idle_restart.add_argument("--quiesce-api", action="store_true",
                               help="with native capture stop-only: close only the exact pinned API before native inspection")
     idle_restart.add_argument("--capture-native-terminal", action="store_true",
@@ -2828,6 +2806,15 @@ def _parser() -> argparse.ArgumentParser:
         "--previous-recovery-sha256",
         help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
     )
+    preowner_probe = subparsers.add_parser(
+        'stop-preowner-probe-volume',
+        help='preview or gracefully stop an empty API after a pre-owner GPU probe failure',
+    )
+    for option in ('attempt', 'resume-attempt', 'config-sha256', 'source-root', 'image-id'):
+        preowner_probe.add_argument('--' + option, required=True)
+    preowner_probe.add_argument('--port', type=int, required=True)
+    preowner_probe.add_argument('--apply', action='store_true')
+    preowner_probe.add_argument('--expected-plan-sha256')
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
@@ -2884,8 +2871,7 @@ def _parser() -> argparse.ArgumentParser:
                                  choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                           "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                          "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot",
-                                          "fem-adaptive-dt", "fem-rk-explicit"),
+                                          "fem-cuda-bb-exchange-mass"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -3054,8 +3040,7 @@ def _parser() -> argparse.ArgumentParser:
                              choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                           "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                          "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot",
-                                          "fem-adaptive-dt", "fem-rk-explicit"),
+                                          "fem-cuda-bb-exchange-mass"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
@@ -3217,6 +3202,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == 'stop-preowner-probe-volume':
+            from docker_volume_preowner_probe_stop import stop
+            stop(args)
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")

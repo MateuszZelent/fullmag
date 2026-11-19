@@ -38,6 +38,7 @@ mod accepted_fem_state;
 mod accepted_fem_gpu_state;
 #[path = "accepted_fem_study_worker.rs"]
 mod accepted_fem_study_worker;
+mod accepted_fem_frequency_response_worker;
 mod accepted_antenna_inspection_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
@@ -60,6 +61,7 @@ mod development_handoff_validation;
 mod development_owner_control;
 mod development_consumer_readiness;
 mod error;
+mod material_library;
 mod fdm_planar_grid_overlay;
 mod feature_flags;
 mod fem_cross_section;
@@ -86,6 +88,7 @@ mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
 mod live_authored_initial_state;
+mod live_authored_damping;
 mod prepared_observation_adoption;
 mod prepared_observation_bundle;
 mod docker_startup;
@@ -3796,7 +3799,7 @@ async fn sync_current_live_session_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_session_frame(next, frame),
+        move |next| apply_current_live_session_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3819,7 +3822,7 @@ async fn sync_current_live_runtime_frame(
         false,
         false,
         move |next| {
-            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization)
+            apply_current_live_runtime_frame_with_options(next, frame, drop_live_magnetization).map(|()| true)
         },
     )
     .await
@@ -3841,7 +3844,7 @@ async fn sync_current_live_scalar_frame(
         None,
         false,
         false,
-        move |next| apply_current_live_scalar_frame(next, frame),
+        move |next| apply_current_live_scalar_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3865,7 +3868,7 @@ async fn sync_current_live_field_frame(
         preview_fields,
         clear_preview_cache,
         false,
-        move |next| apply_current_live_field_frame(next, frame),
+        move |next| apply_current_live_field_frame(next, frame).map(|()| true),
     )
     .await
 }
@@ -3896,10 +3899,13 @@ impl CurrentLiveSyncKind {
 // not a resident solver publisher and must not start its heartbeat watchdog.
 // Keep all runtime-bearing snapshots and all typed frames on the existing path.
 fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
+    let prepared_grid = req.metadata.as_ref().is_some_and(|metadata| {
+        metadata["prepared_grid_scene_revision"].is_u64()
+    });
     req.mesh_workspace.is_some()
         && req.session.is_none()
         && req.session_status.is_none()
-        && req.metadata.is_none()
+        && (req.metadata.is_none() || prepared_grid)
         && req.stage_execution.is_none()
         && req.simulation_preparation.is_none()
         && req.run.is_none()
@@ -3911,7 +3917,7 @@ fn is_authoring_grid_snapshot(req: &CurrentLiveSnapshotRequest) -> bool {
         && !req.replace_latest_fields
         && req.field_generation.is_none()
         && req.preview_fields.is_none()
-        && !req.clear_preview_cache
+        && (!req.clear_preview_cache || prepared_grid)
         && req.solver_profile.is_none()
         && req.fem_mesh.is_none()
 }
@@ -3932,6 +3938,9 @@ mod authoring_grid_heartbeat_tests {
     #[test]
     fn grid_metadata_does_not_claim_resident_runner_liveness() {
         let mut req = grid();
+        assert!(is_authoring_grid_snapshot(&req));
+        req.metadata = Some(json!({"prepared_grid_scene_revision": 7}));
+        req.clear_preview_cache = true;
         assert!(is_authoring_grid_snapshot(&req));
         req.mesh_workspace = None;
         assert!(!is_authoring_grid_snapshot(&req));
@@ -4514,7 +4523,7 @@ mod live_publisher_epoch_tests {
                 if reject {
                     Err(ApiError::conflict("fixture_rejected_frame"))
                 } else {
-                    Ok(())
+                    Ok(true)
                 }
             },
         )
@@ -4582,7 +4591,7 @@ async fn sync_current_live_frame_update<F>(
     apply: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
-    F: FnOnce(&mut SessionStateResponse) -> Result<(), ApiError>,
+    F: FnOnce(&mut SessionStateResponse) -> Result<bool, ApiError>,
 {
     let _session_transition = state.current_live_session_transition.lock().await;
     let sync_start = std::time::Instant::now();
@@ -4662,7 +4671,12 @@ where
         None => None,
     };
     let apply_start = std::time::Instant::now();
-    if let Err(error) = apply(&mut next) {
+    let applied = apply(&mut next);
+    if matches!(applied, Ok(false)) {
+        let scope = current_live_publisher_scope(state, &next);
+        return Ok(Json(json!({"status": "ok", "session_scope": scope, "revision": next.state_version})));
+    }
+    if let Err(error) = applied {
         // Rejected stale ownership is an admission failure, not a failure of
         // the current publisher. An old sender must not degrade a new owner.
         if !matches!(error.code.as_deref(),
@@ -5352,6 +5366,9 @@ fn import_asset_into_dir(
         .decode(&req.content_base64)
         .map_err(|error| ApiError::bad_request(format!("invalid base64 payload: {}", error)))?;
 
+    // Parse before publishing either the file or its manifest. A malformed
+    // upload must not leave an orphaned, unvalidated source in the workspace.
+    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     std::fs::create_dir_all(&imports_dir)?;
 
     let asset_id = format!("asset-{}", uuid_v4_hex());
@@ -5359,9 +5376,8 @@ fn import_asset_into_dir(
     let stored_path = imports_dir.join(&stored_name);
     let artifact_ref = format!("imports/{stored_name}");
     std::fs::write(&stored_path, &bytes)?;
-
-    let summary = summarize_uploaded_asset(&safe_file_name, &bytes)?;
     let response = SessionAssetImportResponse {
+        content_sha256: Some(format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes))),
         asset_id: asset_id.clone(),
         session_id: session_id.to_string(),
         artifact_ref,
@@ -5716,6 +5732,7 @@ async fn commit_current_live_scene_document_with_context(
             }
         }
     }
+    let prepared_damping = crate::live_authored_damping::prepare(state, context, &scene_document).await?;
     let (
         scene_document,
         realtime_snapshot,
@@ -5845,6 +5862,9 @@ async fn commit_current_live_scene_document_with_context(
         } else {
             (None, None)
         };
+        if let Some(damping) = prepared_damping.as_ref() {
+            damping.validate(state, snapshot)?;
+        }
         let retired = crate::live_execution_binding::validate_active_scene_mutation(
             state, snapshot, &scene_document, magnetization_apply.is_some(),
         ).await?;
@@ -5863,7 +5883,7 @@ async fn commit_current_live_scene_document_with_context(
             crate::session::refresh_runtime_status(target);
         }
         target.builder_adapter = builder_state;
-        let next_mesh_signature = scene_mesh_signature(&scene_document);
+        let domain_changed = previous_mesh_signature.as_ref() != Some(&scene_mesh_signature(&scene_document));
         target.scene_document = Some(scene_document.clone());
         target.region_realization_revisions = next_region_revisions;
         let allow_live_magnetization_rebuild = magnetization_apply.is_none()
@@ -5882,13 +5902,18 @@ async fn commit_current_live_scene_document_with_context(
         } else {
             None
         };
+        if let Some(damping) = prepared_damping {
+            damping.publish(target);
+        } else if domain_changed && previous_scene.is_some() {
+            crate::live_authored_damping::mark_prepared_domain_changed(target, next_revision);
+        }
         let previous_preview = target.preview.clone();
         target.preview = build_preview_state(
             target, &target.display_selection, &target.preview_config,
         ).or(previous_preview);
         // Polling clients gate updates on `state_version`.
         target.state_version = target.state_version.wrapping_add(1);
-        if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
+        if domain_changed {
             target.mesh_revision = target.mesh_revision.wrapping_add(1).max(1);
             target.mesh_build_revision = target.mesh_build_revision.wrapping_add(1).max(1);
         }
@@ -7381,3 +7406,9 @@ fn scalar_row_metric_value(row: &ScalarRow, metric_key: &str) -> Option<f64> {
         _ => None,
     }
 }
+
+mod imported_geometry_sources;
+
+#[cfg(test)]
+#[path = "material_library/tests.rs"]
+mod material_library_tests;

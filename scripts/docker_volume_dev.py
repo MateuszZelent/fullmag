@@ -30,43 +30,6 @@ INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
 _MAX_INCLUDE_UNTRACKED_BYTES = 64 * 1024
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
-_PREPARATION_PHASE_TIMING_SCHEMA = "fem_preparation_phase_timings.v1"
-_PREPARATION_PHASE_TIMING_SCOPE = "accepted_fem_preparation_process_body.v1"
-_PREPARATION_PHASE_TIMING_FIELDS = frozenset({
-    "load_accepted_snapshot_ns",
-    "replay_validation_ns",
-    "native_mesh_space_ns",
-    "prepared_fields_evaluation_ns",
-    "prepared_bundle_publication_ns",
-    "prepared_observation_commit_ns",
-    "task_preparation_commit_ns",
-})
-_U64_MAX = (1 << 64) - 1
-
-
-def _validate_preparation_phase_timings(value):
-    """Accept absent legacy timing data or one exact, bounded diagnostic object."""
-    if value is None:
-        return True
-    required = {"schema_version", "scope", "total_body_ns"}
-    if (not isinstance(value, dict)
-            or not required.issubset(value)
-            or not set(value).issubset(required | _PREPARATION_PHASE_TIMING_FIELDS)
-            or value.get("schema_version") != _PREPARATION_PHASE_TIMING_SCHEMA
-            or value.get("scope") != _PREPARATION_PHASE_TIMING_SCOPE):
-        return False
-    durations = []
-    for key in {"total_body_ns"} | _PREPARATION_PHASE_TIMING_FIELDS:
-        if key not in value:
-            continue
-        duration = value[key]
-        if duration is None and key != "total_body_ns":
-            continue
-        if type(duration) is not int or not 0 <= duration <= _U64_MAX:
-            return False
-        if key != "total_body_ns":
-            durations.append(duration)
-    return sum(durations) <= value["total_body_ns"]
 
 
 def _session_host():
@@ -2171,31 +2134,18 @@ def _validate_cancellation_maintenance(value):
 
 
 def _native_contracts(values):
-    adaptive_rk_pair = {"fem-adaptive-dt", "fem-rk-explicit"}
-    poisson_adaptive_rk_triple = {
-        "fem-demag-poisson", "fem-adaptive-dt", "fem-rk-explicit",
-    }
-    allowed_combinations = {
-        frozenset(adaptive_rk_pair), frozenset(poisson_adaptive_rk_triple),
-    }
-    allowlisted = {
-        "fem-demag-poisson", "fem-cuda-activity-trace",
-        "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
-        "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-        "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot",
-        *adaptive_rk_pair,
-    }
     if values is None:
         return ()
     if (not isinstance(values, (list, tuple))
             or any(not isinstance(value, str)
-                   or value not in allowlisted
+                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
+                                    "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
+                                    "fem-cuda-bb-exchange-mass"}
                    for value in values)
-            or len(set(values)) != len(values)
-            or (len(values) > 1 and frozenset(values) not in allowed_combinations)):
-        raise BuildControlError(
-            "Native contracts must contain unique allowlisted identifiers, the adaptive-dt/rk-explicit pair, or the exact fem-demag-poisson/adaptive-dt/rk-explicit triple"
-        )
+            or len(values) > 1
+            or len(set(values)) != len(values)):
+        raise BuildControlError("Native contracts must contain at most one unique allowlisted identifier")
     return tuple(sorted(values))
 
 
@@ -2281,27 +2231,14 @@ def _preflight_prepared_start_budget(control, operation, maintenance, recovery, 
     return document
 
 
-def _create_session_state_root(layout, project, token):
-    from docker_dev import _verify_registered_data_volume
-    state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
-                                  layout["storage_root"], "session storage")
-    _verify_registered_data_volume(layout, project, state_root=state)
-    state.mkdir(parents=True, exist_ok=False)
-    return state
-
-
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None, prepared_recovery_constraints=None, capture_terminal=False):
-    if type(capture_terminal) is not bool:
-        raise BuildControlError("Internal start terminal capture must be boolean")
-    if capture_terminal and (control is not None or operation is not None):
-        raise BuildControlError("Captured start must own its new development operation")
-    from docker_dev import (_select_source, _compose_identity, _verify_registered_data_volume,
+          cold_budget_restore=None, prepared_recovery_constraints=None):
+    from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
@@ -2637,9 +2574,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                                               layout["runtime_root"], "isolated session storage")
                 if not state.is_dir() or state.resolve(strict=True) != state:
                     raise BuildControlError("Copied session state is missing or noncanonical")
-                _verify_registered_data_volume(layout, control.project, state_root=state)
             else:
-                state = _create_session_state_root(layout, control.project, token)
+                state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
+                                              layout["storage_root"], "session storage")
+                state.mkdir(parents=True, exist_ok=False)
             if os.name == "nt":
                 operation["receipt"]["windows_runtime_directories"] = list(
                     _precreate_new_windows_runtime_state(state)
@@ -2684,7 +2622,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             reuse_state["state"] = state
             reuse_state["host_certificate"] = certificate_path
             reuse_state["owner_marker"] = owner_marker
-            _verify_registered_data_volume(layout, control.project, state_root=state)
         operation["receipt"]["state_root"] = str(state)
         if validated_post_build_generation is not None:
             # BuildKit has already completed and the new development lease is
@@ -3036,32 +2973,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             _finish(control, operation, document, backend_id, frontend_id, selected, state,
                     certificate_path, certificate, cache, toolchain, image, git_common,
                     ledger_profile, args.port, helper_source_binding=helper_source_binding)
-    if capture_terminal:
-        return _captured_start_terminal(control, operation)
-
-
-def _captured_start_terminal(control, operation):
-    """Return this invocation's exact finalized receipt, never a current pointer."""
-    receipt = operation.get("receipt") if isinstance(operation, Mapping) else None
-    if (getattr(control, "_active_operation", None) is not None
-            or not isinstance(receipt, dict) or operation.get("daemon_pending") is not False
-            or receipt.get("phase") != "development" or receipt.get("state") != "succeeded"
-            or receipt.get("compose_project") != control.project
-            or receipt.get("control_volume") != control.volume
-            or not isinstance(receipt.get("attempt"), str)
-            or re.fullmatch(r"[0-9a-f]{32}", receipt["attempt"]) is None
-            or operation.get("root") != "development/attempts/" + receipt["attempt"]
-            or any(not isinstance(receipt.get(key), str) or
-                   re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None
-                   for key in ("backend_container", "frontend_container"))):
-        raise BuildControlError("Captured start has no exact successful closed development operation")
-    relative = operation["root"] + "/terminal.json"
-    raw = control.read_bytes(relative)
-    if raw != canonical(receipt) + b"\n":
-        raise BuildControlError("Captured start terminal differs from this invocation's finalized receipt")
-    from copy import deepcopy
-    return {"schema": "fullmag.development-start-terminal.v1", "relative": relative,
-            "sha256": hashlib.sha256(raw).hexdigest(), "receipt": deepcopy(receipt)}
 
 
 
@@ -3476,111 +3387,15 @@ def _assert_private_restart_network(actual, ids, project):
         raise BuildControlError("Idle restart bridge has unknown consumers; no backend will be stopped")
 
 
-def _terminal_source_origin_helper_bootstrap(helper_source_binding, selected_source):
-    """Load the origin helper from the pinned helper commit, never the app checkout."""
-    if helper_source_binding is None:
-        return (
-            'sys.path.insert(0,"/opt/fullmag/source/scripts")\n'
-            'from docker_terminal_source_origin import capture_source_origin,revalidate_source_origin\n'
-        )
-
-    import docker_helper_source as helper_source
-
-    try:
-        binding = helper_source.validate_binding_record(helper_source_binding)
-    except helper_source.HelperSourceError as error:
-        raise BuildControlError("Terminal source-origin helper pin is invalid: " + str(error)) from error
-    if selected_source is None:
-        raise BuildControlError("Pinned terminal source-origin helper requires the selected app checkout")
-    try:
-        selected_root = Path(selected_source).resolve(strict=True)
-        bound_app_root = Path(binding["app_source_root"]).resolve(strict=True)
-    except (OSError, ValueError) as error:
-        raise BuildControlError("Cannot resolve the app checkout for the pinned terminal helper") from error
-    if selected_root != bound_app_root:
-        raise BuildControlError("Pinned terminal source-origin helper belongs to another app checkout")
-
-    relative = "scripts/docker_terminal_source_origin.py"
-    entry = next((item for item in binding["files"] if item["path"] == relative), None)
-    if entry is None:
-        raise BuildControlError("Pinned helper manifest omits docker_terminal_source_origin.py")
-
-    return (
-        "HELPER_SOURCE_COMMIT=" + repr(binding["commit"]) + "\n"
-        + "HELPER_SOURCE_GIT_BLOB=" + repr(entry["git_blob"]) + "\n"
-        + "HELPER_SOURCE_SHA256=" + repr(entry["sha256"]) + "\n"
-        + r'''HELPER_SOURCE_PATH="scripts/docker_terminal_source_origin.py"
-HELPER_SOURCE_GIT_DIR=Path("/opt/fullmag/source-git")
-try:
-    helper_git_metadata=HELPER_SOURCE_GIT_DIR.lstat()
-except OSError as error:
-    raise RuntimeError("pinned helper source Git mount is unavailable") from error
-if (not stat.S_ISDIR(helper_git_metadata.st_mode)
-        or HELPER_SOURCE_GIT_DIR.is_symlink()
-        or os.path.realpath(str(HELPER_SOURCE_GIT_DIR))!=str(HELPER_SOURCE_GIT_DIR)):
-    raise RuntimeError("pinned helper source Git mount is not a canonical directory")
-helper_git_environment={key:value for key,value in os.environ.items()
-    if not key.startswith("GIT_")}
-helper_git_environment.update(GIT_OPTIONAL_LOCKS="0",GIT_TERMINAL_PROMPT="0",
-    GIT_CONFIG_NOSYSTEM="1",GIT_CONFIG_GLOBAL=os.devnull)
-def helper_git(*arguments):
-    try:
-        completed=subprocess.run(["git","--no-replace-objects","--git-dir",
-            str(HELPER_SOURCE_GIT_DIR),*arguments],stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=False,timeout=20,
-            env=helper_git_environment)
-    except (OSError,subprocess.TimeoutExpired) as error:
-        raise RuntimeError("pinned helper source Git query failed") from error
-    if completed.returncode!=0:
-        raise RuntimeError("pinned helper source Git query failed")
-    return completed.stdout
-resolved_helper_blob=helper_git("rev-parse","--verify",
-    HELPER_SOURCE_COMMIT+":"+HELPER_SOURCE_PATH).decode("ascii","strict").strip()
-if resolved_helper_blob!=HELPER_SOURCE_GIT_BLOB:
-    raise RuntimeError("pinned helper commit:path differs from its Git blob")
-helper_source_size_raw=helper_git("cat-file","-s",HELPER_SOURCE_GIT_BLOB)
-if re.fullmatch(rb"[0-9]{1,16}\n",helper_source_size_raw) is None:
-    raise RuntimeError("pinned helper source size is malformed")
-helper_source_size=int(helper_source_size_raw[:-1])
-if not 0<helper_source_size<=1024*1024:
-    raise RuntimeError("pinned helper source exceeds its byte bound")
-helper_source_bytes=helper_git("cat-file","blob",HELPER_SOURCE_GIT_BLOB)
-if (len(helper_source_bytes)!=helper_source_size
-        or hashlib.sha256(helper_source_bytes).hexdigest()!=HELPER_SOURCE_SHA256):
-    raise RuntimeError("pinned helper source bytes differ from their SHA-256 binding")
-helper_module=types.ModuleType("docker_terminal_source_origin")
-helper_module.__file__="git:"+HELPER_SOURCE_COMMIT+":"+HELPER_SOURCE_PATH
-helper_module.__package__=""
-sys.modules[helper_module.__name__]=helper_module
-try:
-    exec(compile(helper_source_bytes,helper_module.__file__,"exec"),helper_module.__dict__)
-except BaseException:
-    sys.modules.pop(helper_module.__name__,None)
-    raise
-capture_source_origin=helper_module.capture_source_origin
-revalidate_source_origin=helper_module.revalidate_source_origin
-'''
-    )
-
-
-def _terminal_session_restart_probe(
-    backend_id, *, allow_prepared=False, startup_enabled=False,
-    helper_source_binding=None, selected_source=None,
-):
+def _terminal_session_restart_probe(backend_id, *, allow_prepared=False, startup_enabled=False):
     """Allow drain after a terminal task or an exact pre-acceptance failure.
 
     Called only with the private frontend stopped and the group control lease
     held. This is admission to graceful drain, not proof of process absence:
     the existing native drain receipt remains mandatory before restart.
     """
-    helper_bootstrap = _terminal_source_origin_helper_bootstrap(
-        helper_source_binding, selected_source
-    )
     script = ('ALLOW_PREPARED = ' + repr(bool(allow_prepared)) + '\n'
-        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,subprocess,sys,types,urllib.error,urllib.request
-from pathlib import Path
-''' + helper_bootstrap + r'''
-SOURCE_ROOT=Path("/opt/fullmag/source")
+        + 'STARTUP_ENABLED = ' + repr(bool(startup_enabled)) + '\n' + r'''import hashlib,json,os,re,stat,urllib.error,urllib.request
 MAX=1024*1024
 MAX_STARTUP_RECEIPT=2*MAX
 MAX_STARTUP_MARKERS=256
@@ -3975,13 +3790,6 @@ if (not STARTUP_ENABLED and run is None
 elif STARTUP_ENABLED or run is None or (run.get("status") not in terminal and not prepared):
     print("null")
 else:
-    source_script=session.get("script")
-    try:
-        source_origin=capture_source_origin(source_script,source_root=SOURCE_ROOT)
-    except (OSError,ValueError) as error:
-        raise RuntimeError("terminal source origin could not be captured") from error
-    source_script_key=((source_script.get("origin"),source_script.get("path"))
-        if isinstance(source_script,dict) else None)
     run_id=run.get("run_id")
     if (not isinstance(run_id,str) or not run_id
             or run.get("session_id")!=identity[0]
@@ -4018,18 +3826,6 @@ else:
         raise RuntimeError("terminal restart requires a live native runtime for drain")
     after=get("/v2/sessions/current/status")
     after_run=get("/v2/sessions/current/simulation/runs/current")
-    after_session=after.get("session") or {}
-    after_script=after_session.get("script")
-    after_script_key=((after_script.get("origin"),after_script.get("path"))
-        if isinstance(after_script,dict) else None)
-    if after_script_key!=source_script_key:
-        raise RuntimeError("terminal source origin script path changed during observation")
-    try:
-        revalidated_origin=revalidate_source_origin(source_origin,after_script,root=SOURCE_ROOT)
-    except (OSError,ValueError) as error:
-        raise RuntimeError("terminal source origin changed during observation") from error
-    if revalidated_origin!=source_origin:
-        raise RuntimeError("terminal source origin changed during observation")
     if (tuple((after.get("session") or {}).get(k) for k in
               ("session_id","session_epoch","request_scope_epoch"))!=identity
             or after.get("run",{}).get("run_id")!=run_id
@@ -4055,7 +3851,6 @@ else:
     if type(scene_revision) is int and scene_revision>=0:
         result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
-    if source_origin is not None: result["source_origin"]=source_origin
     print(json.dumps(result,sort_keys=True))
 '''
     )
@@ -4456,25 +4251,6 @@ try:
         exit_required={"schema_version","receipt_id","run_id","task_id","preparation_attempt_id",
                        "resource_id","lease_token","lease_heartbeat_sequence","process_id",
                        "status_success","exit_code","timed_out","observed_at"}
-        def valid_phase_timings(value):
-            if value is None: return True
-            required={"schema_version","scope","total_body_ns"}
-            phases={"load_accepted_snapshot_ns","replay_validation_ns","native_mesh_space_ns",
-                    "prepared_fields_evaluation_ns","prepared_bundle_publication_ns",
-                    "prepared_observation_commit_ns","task_preparation_commit_ns"}
-            if (not isinstance(value,dict) or not required.issubset(value)
-                    or not set(value).issubset(required|phases)
-                    or value.get("schema_version")!="fem_preparation_phase_timings.v1"
-                    or value.get("scope")!="accepted_fem_preparation_process_body.v1"):
-                return False
-            durations=[]
-            for key in {"total_body_ns"}|phases:
-                if key not in value: continue
-                duration=value[key]
-                if duration is None and key!="total_body_ns": continue
-                if type(duration) is not int or not 0<=duration<=(1<<64)-1: return False
-                if key!="total_body_ns": durations.append(duration)
-            return sum(durations)<=value["total_body_ns"]
         lease_required={"schema_version","resource_id","budget","run_id","task_id","preparation_attempt_id",
                         "lease_token","state","acquired_at","heartbeat_at","heartbeat_sequence","released_at"}
         if (not all(isinstance(value,str) and value and len(value)<=200
@@ -4498,8 +4274,7 @@ try:
                 or any(launch.get(key)!=value for key,value in identity.items())
                 or exit_record["path"]!="preparation_process_exit_receipts/"+exit_id+".json"
                 or not exit_required.issubset(process_exit)
-                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason","phase_timings"})
-                or not valid_phase_timings(process_exit.get("phase_timings"))
+                or not set(process_exit).issubset(exit_required|{"process_start_token","failure_reason"})
                 or process_exit.get("schema_version")!="preparation_process_exit_receipt.v1"
                 or any(process_exit.get(key)!=value for key,value in identity.items())
                 or process_exit.get("lease_heartbeat_sequence")!=exit_heartbeat
@@ -4788,10 +4563,6 @@ def _cancelled_activation_store_probe(
         value["preparation_evidence"] = _cancelled_activation_preparation_evidence(
             value["preparation_evidence"], "store probe preparation evidence",
         )
-    failed_preparation = value.get("failed_preparation")
-    if (isinstance(failed_preparation, dict)
-            and not _validate_preparation_phase_timings(failed_preparation.get("phase_timings"))):
-        raise BuildControlError("Cancelled activation store probe returned malformed preparation timings")
     if "preparation_host_reservations" in value:
         value["preparation_host_reservations"] = _cancelled_activation_preparation_host_reservations(
             value["preparation_host_reservations"], "store probe preparation host reservations",
@@ -5082,6 +4853,16 @@ def _retained_startup_enabled(container):
 
 
 _SAVED_AUTHORING_MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT = (
+    '/opt/fullmag/runtime-control/local-live/current/imported-stl-snapshots'
+)
+_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES = 64 * 1024 * 1024
+_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES = _SAVED_AUTHORING_API_RESPONSE_MAX_BYTES
+_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES = (
+    ((_SAVED_AUTHORING_MAX_ARCHIVE_BYTES + 2) // 3) * 4
+    + _SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_METADATA_MAX_BYTES
+)
 _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA = 'fullmag.saved-empty-authoring-restart.v1'
 
 
@@ -5102,6 +4883,54 @@ def _saved_authoring_require(value, message):
 
 def _saved_authoring_sha(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def _saved_authoring_imported_stl_bindings(scene):
+    objects = scene.get('objects', [])
+    _saved_authoring_require(isinstance(objects, list), 'scene objects list is invalid')
+    bindings = []
+    object_ids = set()
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        geometry = obj.get('geometry')
+        if not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry':
+            continue
+        source_asset = geometry.get('source_asset')
+        if not isinstance(source_asset, dict):
+            continue
+        archive_path = source_asset.get('archive_path')
+        match = re.fullmatch(
+            r'project/assets/imported-geometry/([0-9a-f]{64})\.stl',
+            archive_path if isinstance(archive_path, str) else '',
+        )
+        if match is None:
+            continue
+        digest = match.group(1)
+        _saved_authoring_require(set(source_asset) == {'archive_path', 'asset_id', 'content_sha256'}
+            and source_asset.get('content_sha256') == digest
+            and source_asset.get('asset_id') == 'stl-sha256-' + digest,
+            'imported STL source identity differs')
+        params = geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(params, dict) and params.get('source') == archive_path,
+            'imported STL archive source differs from source asset')
+        object_id = obj.get('id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id and object_id.strip() == object_id
+            and len(object_id.encode('utf-8')) <= 256
+            and not any(ord(char) < 32 or ord(char) == 127 for char in object_id),
+            'imported STL object id is invalid')
+        _saved_authoring_require(object_id not in object_ids
+            and sum(isinstance(candidate, dict) and candidate.get('id') == object_id for candidate in objects) == 1,
+            'imported STL object id is ambiguous')
+        object_ids.add(object_id)
+        bindings.append({
+            'object_id': object_id,
+            'archive_path': archive_path,
+            'asset_id': 'stl-sha256-' + digest,
+            'content_sha256': digest,
+        })
+    _saved_authoring_require(len(bindings) <= 8192, 'imported STL binding count exceeds budget')
+    return bindings
 
 
 def _saved_authoring_document(raw):
@@ -5241,10 +5070,23 @@ def _saved_authoring_validate_archive(raw, pin):
         _saved_authoring_require(isinstance(assets, list) and isinstance(opaque, list), 'manifest lists missing')
         if source_less:
             _saved_authoring_require(assets == [], 'empty UI authoring cannot contain unbound assets')
+        asset_paths = set()
         for asset in assets:
-            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str)
-                and asset['path'].startswith('assets/'), 'unexpected asset path')
-            allowed.add(asset['path'])
+            _saved_authoring_require(isinstance(asset, dict) and isinstance(asset.get('path'), str),
+                'unexpected asset path')
+            asset_path = asset['path']
+            imported_stl = re.fullmatch(
+                r'project/assets/imported-geometry/([0-9a-f]{64})\.stl', asset_path)
+            if not asset_path.startswith('assets/'):
+                _saved_authoring_require(imported_stl is not None, 'unexpected asset path')
+                asset_digest = hashlib.sha256()
+                with archive.open(asset_path) as member:
+                    for block in iter(lambda: member.read(1024 * 1024), b''):
+                        asset_digest.update(block)
+                _saved_authoring_require(asset_digest.hexdigest() == imported_stl.group(1),
+                    'imported STL asset digest differs')
+            allowed.add(asset_path)
+            asset_paths.add(asset_path)
         for name in opaque:
             if source_less:
                 _saved_authoring_require(isinstance(name, str) and name == 'project/provenance.json',
@@ -5265,6 +5107,9 @@ def _saved_authoring_validate_archive(raw, pin):
             and definition.get('scene') == scene and scene.get('version') == 'scene.v2'
             and scene.get('revision') == pin['scene_revision']
             and _saved_authoring_sha(canonical(scene)) == pin['scene_sha256'], 'saved project/revision/scene differs')
+        for binding in _saved_authoring_imported_stl_bindings(scene):
+            _saved_authoring_require(binding['archive_path'] in asset_paths,
+                'imported STL source asset is not declared in the archive manifest')
         if source_less:
             nested_scene = scene.get('scene')
             _saved_authoring_require(isinstance(nested_scene, dict)
@@ -5298,6 +5143,72 @@ def _saved_authoring_read_archive(request, state):
     return raw, _saved_authoring_validate_archive(raw, request['archive'])
 
 
+def _saved_authoring_validate_imported_stl_scene(archived_scene, live_scene, bindings, observations):
+    _saved_authoring_require(isinstance(observations, list) and len(observations) == len(bindings),
+        'imported STL snapshot observation count differs')
+    expected = {}
+    for binding in bindings:
+        object_id = binding['object_id']
+        expected[object_id] = {
+            'source_path': _SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl',
+            'content_sha256': binding['content_sha256'],
+        }
+    observed = {}
+    for observation in observations:
+        _saved_authoring_require(isinstance(observation, dict)
+            and set(observation) == {'object_id', 'source_path', 'content_sha256', 'bytes'},
+            'imported STL snapshot observation fields differ')
+        object_id = observation.get('object_id')
+        _saved_authoring_require(isinstance(object_id, str) and object_id in expected and object_id not in observed,
+            'imported STL snapshot observation binding differs')
+        binding = expected[object_id]
+        size = observation.get('bytes')
+        _saved_authoring_require(observation.get('source_path') == binding['source_path']
+            and observation.get('content_sha256') == binding['content_sha256']
+            and type(size) is int and 0 < size <= _SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES,
+            'imported STL snapshot path/hash/size differs')
+        observed[object_id] = observation
+    _saved_authoring_require(set(observed) == set(expected), 'imported STL snapshot binding is missing')
+
+    import copy
+    normalized = copy.deepcopy(live_scene)
+    archived_objects = archived_scene.get('objects')
+    live_objects = normalized.get('objects')
+    _saved_authoring_require(isinstance(archived_objects, list) and isinstance(live_objects, list),
+        'imported STL scene object list is invalid')
+    for binding in bindings:
+        object_id = binding['object_id']
+        archived_matches = [obj for obj in archived_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        live_matches = [obj for obj in live_objects
+            if isinstance(obj, dict) and obj.get('id') == object_id]
+        _saved_authoring_require(len(archived_matches) == 1 and len(live_matches) == 1,
+            'imported STL live object identity differs')
+        archived_geometry = archived_matches[0].get('geometry')
+        live_geometry = live_matches[0].get('geometry')
+        expected_source_asset = {
+            'archive_path': binding['archive_path'],
+            'asset_id': binding['asset_id'],
+            'content_sha256': binding['content_sha256'],
+        }
+        _saved_authoring_require(isinstance(archived_geometry, dict)
+            and archived_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and archived_geometry.get('source_asset') == expected_source_asset,
+            'imported STL archive source identity differs')
+        _saved_authoring_require(isinstance(live_geometry, dict)
+            and live_geometry.get('geometry_kind') == 'ImportedGeometry'
+            and live_geometry.get('source_asset') == archived_geometry.get('source_asset'),
+            'imported STL live source identity differs')
+        live_params = live_geometry.get('geometry_params')
+        archive_params = archived_geometry.get('geometry_params')
+        _saved_authoring_require(isinstance(live_params, dict) and isinstance(archive_params, dict)
+            and live_params.get('source') == expected[object_id]['source_path'],
+            'imported STL live snapshot path differs')
+        live_params['source'] = binding['archive_path']
+    _saved_authoring_require(normalized == archived_scene,
+        'live authored scene differs from durable archive')
+
+
 def _saved_authoring_validate_probe(probe, request, scene):
     cancelled = preclaim_restart.validate_checkpoint(request)
     terminal_cancelled = cancelled is not None and 'stop_command_id' in cancelled
@@ -5308,6 +5219,14 @@ def _saved_authoring_validate_probe(probe, request, scene):
     def body(name, status=200):
         _saved_authoring_require(rows[name].get('status') == status, 'unexpected HTTP result: ' + name)
         return rows[name]['body']
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
+    snapshot_rows = probe.get('imported_stl_snapshots')
+    if imported_stl_bindings:
+        _saved_authoring_require(isinstance(snapshot_rows, dict) and set(snapshot_rows) == {'before', 'after'},
+            'imported STL snapshot observations are missing')
+    else:
+        _saved_authoring_require(snapshot_rows is None or snapshot_rows == {},
+            'unexpected imported STL snapshot observations')
     for suffix in ('before', 'after'):
         current = body('current_' + suffix)
         status = body('status_' + suffix)
@@ -5323,7 +5242,13 @@ def _saved_authoring_validate_probe(probe, request, scene):
             and status.get('resources', {}).get('scene_revision') == scene['revision']
             and status.get('solver', {}).get('state') in ({'cancelled'} if terminal_cancelled else {'idle', 'awaiting_command'}), 'session epoch/run/readiness differs')
         live = body('scene_' + suffix)
-        _saved_authoring_require({k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live} == scene, 'live authored scene differs from durable archive')
+        live_scene = {k: live[k] for k in _SAVED_AUTHORING_SCENE_FIELDS if k in live}
+        if imported_stl_bindings:
+            _saved_authoring_validate_imported_stl_scene(
+                scene, live_scene, imported_stl_bindings, snapshot_rows[suffix],
+            )
+        else:
+            _saved_authoring_require(live_scene == scene, 'live authored scene differs from durable archive')
     health = body('health')
     _saved_authoring_require(health.get('status') == 'ok' and health.get('active_session') is True, 'pinned authoring session lost')
     _saved_authoring_require(body('queue').get('schema_version') == 'compute_queue.v1'
@@ -5392,10 +5317,119 @@ def _saved_authoring_validate_probe(probe, request, scene):
     preclaim_restart.validate_historical_binding(probe, request)
 
 
-_SAVED_AUTHORING_PROBE_SCRIPT = retained_history.PROBE_FUNCTION + "\n" + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
+_SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS = f"""\
+API_RESPONSE_MAX={_SAVED_AUTHORING_API_RESPONSE_MAX_BYTES}
+PROJECT_OPEN_RESPONSE_MAX={_SAVED_AUTHORING_PROJECT_OPEN_RESPONSE_MAX_BYTES}
+def read_api_response(response, path):
+    limit = PROJECT_OPEN_RESPONSE_MAX if path == '/v2/persistence/projects/open' else API_RESPONSE_MAX
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise RuntimeError('API response exceeded budget')
+    return raw
+"""
+
+_SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS = """\
+import hashlib, os, pathlib, re, stat
+IMPORTED_STL_SNAPSHOT_ROOT = __IMPORTED_STL_SNAPSHOT_ROOT__
+IMPORTED_STL_MAX_BYTES = __IMPORTED_STL_MAX_BYTES__
+def read_imported_stl_snapshot(binding):
+    if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+        raise RuntimeError('invalid imported STL snapshot binding')
+    object_id = binding['object_id']
+    archive_path = binding['archive_path']
+    digest = binding['content_sha256']
+    if (not isinstance(object_id, str) or not object_id or not isinstance(digest, str)
+            or re.fullmatch(r'[0-9a-f]{64}', digest) is None
+            or archive_path != 'project/assets/imported-geometry/' + digest + '.stl'
+            or binding['asset_id'] != 'stl-sha256-' + digest):
+        raise RuntimeError('invalid imported STL snapshot identity')
+    root = pathlib.PurePosixPath(IMPORTED_STL_SNAPSHOT_ROOT)
+    if not root.is_absolute() or '..' in root.parts:
+        raise RuntimeError('invalid imported STL snapshot root')
+    directory_fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    file_fd = None
+    try:
+        for component in root.parts[1:]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                               dir_fd=directory_fd)
+            if not stat.S_ISDIR(os.fstat(next_fd).st_mode):
+                os.close(next_fd)
+                raise RuntimeError('invalid imported STL snapshot parent')
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(digest + '.stl', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    try:
+        before = os.fstat(file_fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_size > IMPORTED_STL_MAX_BYTES):
+            raise RuntimeError('invalid bounded imported STL snapshot')
+        hasher = hashlib.sha256()
+        total = 0
+        while True:
+            block = os.read(file_fd, min(1024 * 1024, IMPORTED_STL_MAX_BYTES + 1 - total))
+            if not block:
+                break
+            total += len(block)
+            if total > IMPORTED_STL_MAX_BYTES:
+                raise RuntimeError('imported STL snapshot exceeds byte budget')
+            hasher.update(block)
+        after = os.fstat(file_fd)
+        before_state = (before.st_dev, before.st_ino, before.st_size, before.st_nlink,
+                        before.st_mtime_ns, before.st_ctime_ns)
+        after_state = (after.st_dev, after.st_ino, after.st_size, after.st_nlink,
+                       after.st_mtime_ns, after.st_ctime_ns)
+        observed_digest = hasher.hexdigest()
+        if total != before.st_size or before_state != after_state or observed_digest != digest:
+            raise RuntimeError('imported STL snapshot changed or digest differs')
+        return {'object_id': object_id,
+                'source_path': str(root / (digest + '.stl')),
+                'content_sha256': observed_digest, 'bytes': total}
+    finally:
+        os.close(file_fd)
+
+def observe_imported_stl_snapshots(scene, bindings):
+    if not isinstance(bindings, list) or len(bindings) > 8192:
+        raise RuntimeError('invalid imported STL snapshot binding list')
+    objects = scene.get('objects') if isinstance(scene, dict) else None
+    if not isinstance(objects, list):
+        raise RuntimeError('invalid imported STL live scene')
+    observed = []
+    seen = set()
+    for binding in bindings:
+        if not isinstance(binding, dict) or set(binding) != {'object_id', 'archive_path', 'asset_id', 'content_sha256'}:
+            raise RuntimeError('invalid imported STL snapshot binding')
+        object_id = binding['object_id']
+        if object_id in seen:
+            raise RuntimeError('duplicate imported STL snapshot object id')
+        seen.add(object_id)
+        matches = [obj for obj in objects if isinstance(obj, dict) and obj.get('id') == object_id]
+        if len(matches) != 1:
+            raise RuntimeError('imported STL live object identity differs')
+        geometry = matches[0].get('geometry')
+        expected_source_asset = {'archive_path': binding['archive_path'],
+                                 'asset_id': binding['asset_id'],
+                                 'content_sha256': binding['content_sha256']}
+        params = geometry.get('geometry_params') if isinstance(geometry, dict) else None
+        expected_path = IMPORTED_STL_SNAPSHOT_ROOT + '/' + binding['content_sha256'] + '.stl'
+        if (not isinstance(geometry, dict) or geometry.get('geometry_kind') != 'ImportedGeometry'
+                or geometry.get('source_asset') != expected_source_asset
+                or not isinstance(params, dict) or params.get('source') != expected_path):
+            raise RuntimeError('imported STL live source binding differs')
+        observed.append(read_imported_stl_snapshot(binding))
+    return observed
+""".replace('__IMPORTED_STL_SNAPSHOT_ROOT__', repr(_SAVED_AUTHORING_IMPORTED_STL_SNAPSHOT_ROOT)) \
+    .replace('__IMPORTED_STL_MAX_BYTES__', str(_SAVED_AUTHORING_MAX_IMPORTED_STL_BYTES))
+
+_SAVED_AUTHORING_PROBE_SCRIPT = (retained_history.PROBE_FUNCTION + "\n"
+    + _SAVED_AUTHORING_PROBE_API_RESPONSE_HELPERS + "\n"
+    + _SAVED_AUTHORING_PROBE_IMPORTED_STL_HELPERS + "\n"
+    + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
 MAX=8*1024*1024
 request=json.load(sys.stdin)
 pin=request['checkpoint']; session=pin['session']
+imported_stl_bindings=request.get('imported_stl_bindings',[])
 def canon(value): return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 def regular(path):
  path=pathlib.Path(path)
@@ -5441,8 +5475,7 @@ def api(path,payload=None):
  try: response=urllib.request.urlopen(req,timeout=10)
  except urllib.error.HTTPError as error: response=error
  with response:
-  raw=response.read(MAX+1)
-  if len(raw)>MAX: raise RuntimeError('API response exceeded budget')
+  raw=read_api_response(response,path)
   if response.status==204 and not raw: value=None
   else:
    value=json.loads(raw)
@@ -5451,6 +5484,10 @@ def api(path,payload=None):
 rows={}
 for suffix in ('before',):
  for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_'+suffix]=api('/v2/sessions/current'+path)
+imported_stl_snapshots={}
+if imported_stl_bindings:
+ imported_stl_snapshots['before']=observe_imported_stl_snapshots(
+  rows['scene_before']['body'],imported_stl_bindings)
 for name,path in [('health','/v2/platform/health'),('queue','/v2/platform/compute/queue'),('runtime','/v2/platform/runtime-service'),('commands','/v2/sessions/current/simulation/commands'),('run','/v2/sessions/current/simulation/runs/current'),('preparation','/v2/sessions/current/simulation/preparation'),('mesh','/v2/sessions/current/meshing/builds/current'),('mesh_history','/v2/sessions/current/meshing/builds'),('mesh_manifest','/v2/sessions/current/meshing/meshes/shared-domain/manifest')]: rows[name]=api(path)
 rows['project_open']=api('/v2/persistence/projects/open',{'display_name':pin['archive']['path'].replace('\\','/').split('/')[-1],'archive_base64':request['archive_base64']})
 # Do not retain the archive copy returned by the memory-only project parser.
@@ -5540,18 +5577,25 @@ provenance=json.loads(provenance_raw)
 extra={}
 if 'cancelled_preclaim' in pin or 'historical_preclaim' in pin: extra.update(preclaim_cancelled_snapshots(store,ledger,pin))
 for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_after']=api('/v2/sessions/current'+path)
-print(json.dumps({'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra},sort_keys=True))
-"""
+if imported_stl_bindings:
+ imported_stl_snapshots['after']=observe_imported_stl_snapshots(
+  rows['scene_after']['body'],imported_stl_bindings)
+result={'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra}
+if imported_stl_bindings: result['imported_stl_snapshots']=imported_stl_snapshots
+print(json.dumps(result,sort_keys=True))
+""")
 
 
 def _saved_authoring_probe(backend_id, request, raw, scene, certificate):
     cancelled = preclaim_restart.validate_checkpoint(request)
     historical = preclaim_restart.validate_historical_checkpoint(request)
     script = (preclaim_restart.PROBE_FUNCTION if cancelled or historical else '') + _SAVED_AUTHORING_PROBE_SCRIPT
+    imported_stl_bindings = _saved_authoring_imported_stl_bindings(scene)
     result = docker_capture('exec', '-i', '--env',
         'PYTHONPATH=/opt/fullmag:/opt/fullmag/package:/build/workspace/packages/fullmag-py/src',
         backend_id, '/usr/local/bin/python3', '-B', '-c', script,
         data=canonical({'checkpoint': request, 'archive_base64': base64.b64encode(raw).decode('ascii'),
+                        'imported_stl_bindings': imported_stl_bindings,
                         'host_certificate': certificate}), timeout=180)
     observed = _saved_authoring_document(result.stdout)
     _saved_authoring_validate_probe(observed, request, scene)
@@ -8004,19 +8048,6 @@ def _retained_recovery_build(args, control, previous, document, selected, layout
             package_built=True, runtime_started=False, storage_admitted=False, runtime_qualification="NOT VERIFIED")
 
 
-def _terminal_legacy_source_preflight(preflight, *, pins, control, selected, state):
-    from docker_terminal_legacy_origin import augment_preflight
-    if pins is None:
-        return preflight
-    store_root = storage.validate_path(
-        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
-    )
-    return augment_preflight(
-        preflight, pins=pins, control=control, store_root=store_root, source_root=selected,
-        project=control.project, volume=control.volume, namespace=control.namespace,
-    )
-
-
 def _retained_operation(
     args, *, recreate_services, restart_idle_service=False, stop_after_drain=False,
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
@@ -8024,15 +8055,6 @@ def _retained_operation(
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
     quiesce_api = getattr(args, "quiesce_api", False)
-    from docker_terminal_legacy_origin import validate_options as legacy_source_options
-    try:
-        legacy_source_pins = legacy_source_options(
-            args, restart_idle_service=restart_idle_service, stop_after_drain=stop_after_drain,
-            recreate_services=recreate_services, resume_recreation_id=resume_recreation_id,
-            refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
-        )
-    except ValueError as error:
-        raise BuildControlError(str(error)) from error
     from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
     capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
         args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
@@ -8332,9 +8354,6 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
-                                            **({"terminal_source_activation": legacy_source_pins[0],
-                                                "terminal_source_activation_sha256": legacy_source_pins[1]}
-                                               if legacy_source_pins is not None else {}),
                                             **({"capture_native_terminal": True} if capture_native else {}),
                                             **({"capture_prelaunch_failure": True} if capture_prelaunch_failure else {}),
                                             **({"quiesce_api": True} if quiesce_api else {}),
@@ -8410,13 +8429,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                             raise BuildControlError("Backend has an active session; idle restart refused")
                         terminal_session = _terminal_session_restart_probe(
                             ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                            helper_source_binding=helper_source_binding, selected_source=selected,
                         )
                         if terminal_session is not None:
-                            terminal_session = _terminal_legacy_source_preflight(
-                                terminal_session, pins=legacy_source_pins, control=control,
-                                selected=selected, state=state,
-                            )
                             control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
                             operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
                                 canonical(terminal_session)
@@ -8441,21 +8455,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     store_root = storage.validate_path(
                         state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
                     )
-                    native_capture = capture_terminal_observation(
-                        ids["backend"], store_root, terminal_session, control=control,
-                        scope={"compose_project": control.project, "control_volume": control.volume,
-                               "source_root": str(selected), "image_id": image},
-                    )
-                    fresh_terminal_session = _terminal_session_restart_probe(
+                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
+                    if _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                        helper_source_binding=helper_source_binding, selected_source=selected,
-                    )
-                    if fresh_terminal_session is not None:
-                        fresh_terminal_session = _terminal_legacy_source_preflight(
-                            fresh_terminal_session, pins=legacy_source_pins, control=control,
-                            selected=selected, state=state,
-                        )
-                    if fresh_terminal_session != terminal_session:
+                    ) != terminal_session:
                         raise BuildControlError("Terminal session changed during native capture")
                     capture_raw = canonical(native_capture) + b"\n"
                     control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)

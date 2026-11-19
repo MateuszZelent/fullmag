@@ -5,15 +5,15 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 const SOURCE_LIMIT: u64 = 8 * 1024 * 1024;
 const RUNTIME_LIMIT: u64 = 128 * 1024 * 1024;
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 pub const METADATA_LIMIT: usize = 8 * 1024 * 1024;
-// Mirrors script_pipeline_acceptance::MAX_SOURCE_BYTES (ADR 0036 complete-config cap).
-const SCRIPT_CONFIG_EXPORT_LIMIT: usize = 16 * 1024 * 1024;
+pub const MATERIAL_CATALOG_UNAVAILABLE: &[u8] = br#"{"unavailable":true}"#;
 
 pub struct CapturedScriptSource {
     pub config: Option<ScriptExecutionConfig>,
@@ -231,6 +231,8 @@ pub struct CaptureOptions<'a> {
     pub mode: Option<&'a str>,
     pub precision: Option<&'a str>,
     pub scene_only: bool,
+    pub include_run_config: bool,
+    pub material_catalog: Option<&'a [u8]>,
 }
 fn display_path(path: &Path) -> String {
     let text = path.display().to_string();
@@ -247,33 +249,75 @@ fn helper_arguments(script: &Path, fullmag: &Path, phase: &str, options: &Captur
         if let Some(value)=value { args.extend([key.into(),value.into()]); }
     }
     if options.scene_only { args.push("--scene-only".into()); }
+    if options.include_run_config { args.push("--include-run-config".into()); }
+    if phase == "export" && options.material_catalog.is_some() {
+        args.push("--material-catalog-stdin".into());
+    }
     args
 }
+/// Internal helper operations that execute handwritten Python.
+pub fn runtime_helper_loads_authored_script(args: &[String]) -> bool {
+    matches!(args, [flag, module, operation, ..]
+        if flag == "-m" && module == "fullmag.runtime.helper" && matches!(
+            operation.as_str(),
+            "export-ir" | "export-run-config" | "rewrite-script" | "export-builder-draft"
+                | "export-scene-document" | "rewrite-scene-document"
+        ))
+}
+
+/// Pass a bounded catalog view to a child without a named file or writable pipe.
+pub fn material_catalog_input(snapshot: &[u8]) -> Result<File> {
+    if snapshot.len() > METADATA_LIMIT {
+        bail!("material catalog snapshot exceeds the 8 MiB capture limit");
+    }
+    let mut input = tempfile::tempfile().context("create material catalog input")?;
+    input.write_all(snapshot).context("write material catalog input")?;
+    input.rewind().context("rewind material catalog input")?;
+    Ok(input)
+}
+
+fn material_catalog_lookup_error(stderr: &[u8]) -> Option<(&str, bool)> {
+    let line = std::str::from_utf8(stderr).ok()?.lines().last()?;
+    let (code, key) = line.split_once(": ")?;
+    let unavailable = match code {
+        "source_capture_missing_material_version" => false,
+        "source_capture_material_catalog_unavailable" => true,
+        _ => return None,
+    };
+    let (family, version) = key.split_once('.')?;
+    let valid = |part: &str| {
+        part.len() <= 48
+            && part.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && part.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+    };
+    (valid(family) && valid(version)).then_some((key, unavailable))
+}
+
 fn response(
     args: &[String],
-    stdout_limit: usize,
-    run: &mut impl FnMut(&[String], usize) -> Result<std::process::Output>,
+    input: Option<File>,
+    run: &mut impl FnMut(&[String], usize, Option<File>) -> Result<std::process::Output>,
 ) -> Result<CaptureEnvelope> {
-    let output = run(args, stdout_limit)?;
-    if output.stdout.len() > stdout_limit || output.stderr.len() > METADATA_LIMIT {
-        bail!("accepted source capture output bound");
-    }
+    let output = run(args, METADATA_LIMIT, input)?;
+    if output.stdout.len()>METADATA_LIMIT || output.stderr.len()>METADATA_LIMIT { bail!("accepted source capture metadata bound"); }
     if !output.status.success() {
+        if output.status.code() == Some(27) {
+            if let Some((key, unavailable)) = material_catalog_lookup_error(&output.stderr) {
+                if unavailable {
+                    bail!("the shared material catalog is unavailable for {key}");
+                }
+                bail!("material version {key} was not found in the shared catalog");
+            }
+        }
         bail!("accepted source capture helper refused export");
     }
-    let stdout = String::from_utf8(output.stdout)?;
-    let value = stdout
-        .lines()
-        .rev()
-        .find(|line| {
-            let value = line.trim();
-            value.starts_with('{') && value.ends_with('}')
-        })
+    let stdout=String::from_utf8(output.stdout)?;
+    let value=stdout.lines().rev().find(|line| {let value=line.trim();value.starts_with('{') && value.ends_with('}')})
         .context("could not find valid JSON object in python helper stdout")?;
     serde_json::from_str(value).context("invalid accepted source capture response")
 }
 pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureOptions<'_>,
-    mut run: impl FnMut(&[String],usize)->Result<std::process::Output>) -> Result<CapturedScriptSource> {
+    mut run: impl FnMut(&[String], usize, Option<File>) -> Result<std::process::Output>) -> Result<CapturedScriptSource> {
     let absolute = if script.is_absolute() {
         script.to_path_buf()
     } else {
@@ -281,11 +325,7 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
     };
     let script = absolute.as_path();
     regular_file(script)?;
-    let first = response(
-        &helper_arguments(script, fullmag, "inventory", options, None),
-        METADATA_LIMIT,
-        &mut run,
-    )?;
+    let first = response(&helper_arguments(script, fullmag, "inventory", options, None), None, &mut run)?;
     if first.config.is_some() || first.scene.is_some() {
         bail!("inventory must not execute authored script");
     }
@@ -294,26 +334,21 @@ pub fn capture_authored_script(script: &Path, fullmag: &Path, options: &CaptureO
     for record in &first.capture.records {
         files.insert(record.relative_path.clone(), read_pinned(record)?);
     }
-    let export_limit = if options.scene_only {
-        METADATA_LIMIT
-    } else {
-        SCRIPT_CONFIG_EXPORT_LIMIT
-    };
-    let second = response(
-        &helper_arguments(
-            script,
-            fullmag,
-            "export",
-            options,
-            Some(&first.capture.inventory_sha256),
-        ),
-        export_limit,
-        &mut run,
-    )?;
+    let second = response(&helper_arguments(
+        script,
+        fullmag,
+        "export",
+        options,
+        Some(&first.capture.inventory_sha256),
+    ), options.material_catalog.map(material_catalog_input).transpose()?, &mut run)?;
     validate_capture(&second.capture, script, fullmag)?;
-    if options.scene_only {
-        if second.config.is_some() || !second.scene.as_ref().is_some_and(Value::is_object) { bail!("source scene capture authoring shape"); }
-    } else if second.config.is_none() || second.scene.is_some() { bail!("source config capture authoring shape"); }
+    let expects_config = !options.scene_only || options.include_run_config;
+    if second.config.is_some() != expects_config
+        || (options.scene_only && !second.scene.as_ref().is_some_and(Value::is_object))
+        || (!options.scene_only && second.scene.is_some())
+    {
+        bail!("source capture returned an unexpected authoring shape");
+    }
     if second.capture.inventory_sha256 != first.capture.inventory_sha256
         || serde_json::to_value(&second.capture.runtime)?
             != serde_json::to_value(&first.capture.runtime)?
@@ -393,113 +428,39 @@ fn record_identity(record: &FileRecord) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn passes_a_rewound_snapshot_only_to_the_export_phase() {
+        let payload = br#"[{"source":{"version":{"family":"yig","version":"sample"}}}]"#;
+        let mut input = material_catalog_input(payload).unwrap();
+        let mut read = Vec::new();
+        input.read_to_end(&mut read).unwrap();
+        assert_eq!(read, payload);
+        assert!(material_catalog_input(&vec![0; METADATA_LIMIT + 1]).is_err());
 
-    struct CaptureFixture {
-        _directory: tempfile::TempDir,
-        script: PathBuf,
-        fullmag: PathBuf,
-        capture: Value,
-    }
-
-    impl CaptureFixture {
-        fn new() -> Self {
-            let directory = tempfile::tempdir().unwrap();
-            let script_root = directory.path().join("scripts");
-            let script = script_root.join("main.py");
-            let fullmag = directory.path().join("fullmag");
-            let runtime_file = fullmag.join("runtime/helper.py");
-            std::fs::create_dir_all(&script_root).unwrap();
-            std::fs::create_dir_all(runtime_file.parent().unwrap()).unwrap();
-            std::fs::write(&script, b"pass\n").unwrap();
-            std::fs::write(&runtime_file, b"helper = True\n").unwrap();
-
-            let record = |relative_path: &str, path: &Path, role: &str| {
-                let bytes = std::fs::read(path).unwrap();
-                json!({
-                    "relative_path": relative_path,
-                    "asset_id": format!("script-file-{:x}", Sha256::digest(relative_path.as_bytes())),
-                    "sha256": format!("{:x}", Sha256::digest(&bytes)),
-                    "byte_count": bytes.len(),
-                    "role": role,
-                    "absolute_path": path.to_string_lossy(),
-                })
-            };
-            let capture = json!({
-                "schema_version": "fullmag.script-source-capture.v1",
-                "entry_relative_path": "source/main.py",
-                "records": [
-                    record("source/main.py", &script, "source"),
-                    record("fullmag/runtime/helper.py", &runtime_file, "runtime"),
-                ],
-                "runtime": {"python_version": "3.x", "implementation": "cpython"},
-                "inventory_sha256": "a".repeat(64),
-                "observed_reads": ["source/main.py"],
-            });
-
-            Self {
-                _directory: directory,
-                script,
-                fullmag,
-                capture,
-            }
-        }
-
-        fn reply(&self, config: Option<Value>, scene: Option<Value>) -> Value {
-            json!({"config": config, "scene": scene, "capture": self.capture.clone()})
-        }
-
-        fn invoke(
-            &self,
-            options: &CaptureOptions<'_>,
-            inventory: Value,
-            export: Value,
-        ) -> (Result<CapturedScriptSource>, Vec<usize>) {
-            let mut replies = [inventory, export].into_iter();
-            let mut observed_limits = Vec::new();
-            let result =
-                capture_authored_script(&self.script, &self.fullmag, options, |_, limit| {
-                    observed_limits.push(limit);
-                    let reply = replies.next().expect("expected a fake helper reply");
-                    Ok(successful_output(serde_json::to_vec(&reply)?))
-                });
-            (result, observed_limits)
-        }
-    }
-
-    fn successful_output(stdout: Vec<u8>) -> std::process::Output {
-        #[cfg(unix)]
-        let status = {
-            use std::os::unix::process::ExitStatusExt;
-            std::process::ExitStatus::from_raw(0)
+        let options = CaptureOptions {
+            material_catalog: Some(payload),
+            ..Default::default()
         };
-        #[cfg(windows)]
-        let status = {
-            use std::os::windows::process::ExitStatusExt;
-            std::process::ExitStatus::from_raw(0)
-        };
-        std::process::Output {
-            status,
-            stdout,
-            stderr: Vec::new(),
+        for (phase, expected) in [("inventory", false), ("export", true)] {
+            let args = helper_arguments(Path::new("study.py"), Path::new("fullmag"), phase, &options, None);
+            assert_eq!(args.iter().any(|arg| arg == "--material-catalog-stdin"), expected);
         }
     }
 
-    fn complete_config_with_padding(padding: String) -> (Value, usize) {
-        let mut ir = serde_json::to_value(fullmag_ir::ProblemIR::bootstrap_example()).unwrap();
-        ir.pointer_mut("/problem_meta/runtime_metadata")
-            .and_then(Value::as_object_mut)
-            .expect("bootstrap IR has runtime metadata")
-            .insert("source_capture_test_padding".into(), Value::String(padding));
-        let config = json!({
-            "ir": ir,
-            "antenna_inventory": {},
-            "shared_geometry_assets": null,
-            "default_until_seconds": null,
-            "study_pipeline": null,
-            "stages": [],
-        });
-        let byte_count = serde_json::to_vec(&config).unwrap().len();
-        (config, byte_count)
+    #[test]
+    fn forwards_only_the_bounded_material_alias_from_a_lookup_failure() {
+        for bad in ["yig", "yig.a.b", "YIG.test", "yig._hidden", "yig.sample extra"] {
+            let message = format!("source_capture_missing_material_version: {bad}\n");
+            assert_eq!(material_catalog_lookup_error(message.as_bytes()), None);
+        }
+        assert_eq!(
+            material_catalog_lookup_error(b"source_capture_missing_material_version: yig.sample_1\n"),
+            Some(("yig.sample_1", false))
+        );
+        assert_eq!(
+            material_catalog_lookup_error(b"source_capture_material_catalog_unavailable: yig.sample_1\n"),
+            Some(("yig.sample_1", true))
+        );
     }
 
     #[test]
@@ -553,69 +514,5 @@ mod tests {
             assert!(!portable_relative(value), "{value}");
         }
         assert!(portable_relative("source/assets/input.json"));
-    }
-
-    #[test]
-    fn accepts_complete_config_export_above_metadata_limit_with_phase_specific_callback_limits() {
-        let fixture = CaptureFixture::new();
-        let (config, config_bytes) = complete_config_with_padding("x".repeat(METADATA_LIMIT + 1));
-        assert!(config_bytes > METADATA_LIMIT);
-        assert!(config_bytes < SCRIPT_CONFIG_EXPORT_LIMIT);
-
-        let inventory = fixture.reply(None, None);
-        let export = fixture.reply(Some(config), None);
-        let (captured, limits) = fixture.invoke(&CaptureOptions::default(), inventory, export);
-
-        let captured = captured.expect("full config export fits its 16 MiB cap");
-        assert!(captured.config.is_some());
-        assert!(captured.scene.is_none());
-        assert_eq!(limits, vec![METADATA_LIMIT, SCRIPT_CONFIG_EXPORT_LIMIT]);
-    }
-
-    #[test]
-    fn inventory_and_scene_only_exports_keep_the_metadata_limit() {
-        let fixture = CaptureFixture::new();
-        let padding = "x".repeat(METADATA_LIMIT + 1);
-
-        let mut oversized_inventory = fixture.reply(None, None);
-        oversized_inventory["capture"]["runtime"]["padding"] = json!(padding.clone());
-        let (inventory_result, inventory_limits) = fixture.invoke(
-            &CaptureOptions::default(),
-            oversized_inventory,
-            fixture.reply(None, None),
-        );
-        assert!(
-            inventory_result.is_err(),
-            "oversized inventory stdout is rejected"
-        );
-        assert_eq!(inventory_limits, vec![METADATA_LIMIT]);
-
-        let scene_options = CaptureOptions {
-            scene_only: true,
-            ..CaptureOptions::default()
-        };
-        let scene_export = fixture.reply(None, Some(json!({"padding": padding})));
-        let (scene_result, scene_limits) =
-            fixture.invoke(&scene_options, fixture.reply(None, None), scene_export);
-        assert!(
-            scene_result.is_err(),
-            "oversized scene-only stdout is rejected"
-        );
-        assert_eq!(scene_limits, vec![METADATA_LIMIT, METADATA_LIMIT]);
-    }
-
-    #[test]
-    fn rejects_complete_config_export_above_sixteen_mib() {
-        let fixture = CaptureFixture::new();
-        let (config, config_bytes) =
-            complete_config_with_padding("x".repeat(SCRIPT_CONFIG_EXPORT_LIMIT + 1));
-        assert!(config_bytes > SCRIPT_CONFIG_EXPORT_LIMIT);
-
-        let inventory = fixture.reply(None, None);
-        let export = fixture.reply(Some(config), None);
-        let (result, limits) = fixture.invoke(&CaptureOptions::default(), inventory, export);
-
-        assert!(result.is_err(), "config stdout above 16 MiB is rejected");
-        assert_eq!(limits, vec![METADATA_LIMIT, SCRIPT_CONFIG_EXPORT_LIMIT]);
     }
 }

@@ -67,6 +67,10 @@ pub(crate) fn execute_fem<'a>(
         || plan.antenna_zeeman_masks.iter().any(|mask| {
             mask.waveform.as_ref().is_some_and(dynamic_waveform)
         })
+        || plan
+            .mask_field_term_bases
+            .iter()
+            .any(|basis| basis.time_dependent)
         || plan.current_modules.iter().any(|module| match module {
             fullmag_ir::CurrentModuleIR::AntennaFieldSource { drive, waveform, .. } => {
                 drive.as_ref()
@@ -88,6 +92,11 @@ pub(crate) fn execute_fem<'a>(
                 .to_string(),
         });
     }
+    crate::mask_time::check_mask_time_programs(
+        &plan.mask_field_term_bases,
+        &plan.time_stage,
+        until_seconds,
+    )?;
     let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(plan);
     let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
@@ -364,8 +373,6 @@ fn execute_native_fem(
         effective_fem_omp_threads: initial_stats.and_then(|stats| {
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
-        gpu_mandatory_controls_physical: None,
-        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
         fem_bem_demag,
         ..Default::default()

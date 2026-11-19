@@ -9,26 +9,15 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-build)=
 # Airbox Build API
 
-(python-api-meshing-fem-airbox-build-python-api)=
-<!-- (python-api)= -->
-## Python API
-
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
-
-(python-api-meshing-fem-airbox-build-problem-statement)=
-<!-- (problem-statement)= -->
-(python-api-meshing-fem-airbox-build-governing-equations)=
-<!-- (governing-equations)= -->
 (python-api-meshing-fem-airbox-build-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
 ## Symbols and SI units
 All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
 
 (python-api-meshing-fem-airbox-build-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
 ## Assumptions and validity
 Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
+(python-api-meshing-fem-airbox-build-problem-statement)=
 ## 1. What it is and when to use it
 
 `study.build_domain_mesh()` explicitly materializes the shared domain mesh
@@ -43,6 +32,7 @@ When to use it:
 Impact on the simulation: building is not a scientific certificate — success means
 a mesh was generated; qualification comes from inspecting the report and quality.
 
+(python-api-meshing-fem-airbox-build-governing-equations)=
 ## 2. Physical and mathematical explanation
 
 No equation of its own; the operation creates the discrete space shared by all
@@ -97,6 +87,7 @@ study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 
+(python-api-meshing-fem-airbox-build-python-api)=
 ## 4. Exact API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -119,17 +110,14 @@ ProblemIR mapping: realization and the build report land in provenance; requeste
 intent stays separate from resolved execution.
 
 (python-api-meshing-fem-airbox-build-problem-ir)=
-<!-- (problem-ir)= -->
 ## ProblemIR
 The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
 
 (python-api-meshing-fem-airbox-build-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
 Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
 
 (python-api-meshing-fem-airbox-build-discrete-realization)=
-<!-- (discrete-realization)= -->
 ## Discrete realization
 The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
@@ -153,6 +141,7 @@ The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) and **Airbox Me
 :width: 92%
 ```
 
+(python-api-meshing-fem-airbox-build-implementation-mapping)=
 ## 6. Backend support
 
 | Solver | Device | Status | Notes |
@@ -162,12 +151,10 @@ The **Airbox Mesh Build** inspector (`AirboxMeshBuildLanePanel`) and **Airbox Me
 | FDM | CPU/GPU | not applicable | the FDM grid is built without an explicit build step |
 
 (python-api-meshing-fem-airbox-build-validation)=
-<!-- (validation)= -->
 ## Validation
 Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
 
 (python-api-meshing-fem-airbox-build-limitations)=
-<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Build success ≠ scientific qualification: always inspect the report and quality
@@ -176,29 +163,16 @@ Focused constructor, lowering, and mesh-report tests are the evidence boundary f
   retain the generated asset and provenance.
 
 (python-api-meshing-fem-airbox-build-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 No page-specific physical claims; airbox physics: {doc}`index`.
 
-(python-api-meshing-fem-airbox-build-implementation-mapping)=
-<!-- (implementation-mapping)= -->
 (python-api-meshing-fem-airbox-build-source-code-index)=
-<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
 |---|---|---|---|
+| airbox geometry construction and mesh extraction boundary | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | meshing and API tests |
 | explicit domain build | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.build_domain_mesh`, `build_domain_mesh` | module function implementation |
 | artifact persistence | `packages/fullmag-py/src/fullmag/world.py` | `StudyMeshHandle.save/load/save_or_load`, `MeshPersistenceResult` | facade implementation |
 | quality result | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.quality` | method signature |
-## Source-code index
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
-
-
-### Source-map coverage
-
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Airbox geometry construction and mesh extraction boundary. | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | [`add_air_box`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py#L1457) | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |

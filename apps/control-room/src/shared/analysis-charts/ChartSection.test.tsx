@@ -54,7 +54,7 @@ describe("ChartSection", () => {
     expect(html).toContain('role="alert"');
   });
 
-  it("renders a non-blocking refresh revision beside retained chart metadata", () => {
+  it("keeps the Live pill and visible revision during a background refresh", () => {
     const html = renderToStaticMarkup(
       <ChartSection
         title="Table"
@@ -71,9 +71,11 @@ describe("ChartSection", () => {
       </ChartSection>,
     );
 
-    expect(html).toContain("Updating");
+    expect(html).toContain("Live");
+    expect(html).not.toContain("Updating");
     expect(html).toContain("rev 41");
-    expect(html).toContain("→ 42");
+    // A pending revision would toggle on every fetch, so the pill row omits it.
+    expect(html).not.toContain("→ 42");
   });
 
   it("keeps the visible revision and refresh error in the section header", () => {

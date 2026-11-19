@@ -1,5 +1,4 @@
 #include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
-#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/relaxation/bb_exchange_mass_kernels.hpp"
 #include "context.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
@@ -18,7 +17,7 @@
 namespace fullmag::fem {
 bool gpu_bb_exchange_mass_enabled(const Context &ctx)
 {
-    return ctx.gpu_state.device.relaxation.bb_preconditioner_policy != 1u;
+    return ctx.gpu_state.device.relaxation.bb_preconditioner_policy == 2u;
 }
 
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME
@@ -36,6 +35,7 @@ GpuBbCsr device_csr(const mfem::SparseMatrix &matrix)
 struct GpuBbExchangeMassWorkspace {
     mfem::SparseMatrix mass, stiffness, regularized_mass;
     GpuBbPcgDevice device{};
+    FemGpuComponentField direction{};
     cudaEvent_t uploaded = nullptr;
     const mfem::SparseMatrix *source_mass = nullptr;
     const mfem::SparseMatrix *source_stiffness = nullptr;
@@ -43,7 +43,6 @@ struct GpuBbExchangeMassWorkspace {
     uint64_t device_bytes = 0;
     int blocks = 0;
     GpuBbPcgResult last{};
-    bool last_available = false;
 
     GpuBbExchangeMassWorkspace(const mfem::SparseMatrix &m, const mfem::SparseMatrix &k)
         : mass(m), stiffness(k), regularized_mass(m.Height())
@@ -68,6 +67,7 @@ struct GpuBbExchangeMassWorkspace {
     }
     ~GpuBbExchangeMassWorkspace()
     {
+        gpu_device_free_component(direction);
         gpu_device_free_component(device.rhs);
         gpu_device_free_component(device.residual);
         gpu_device_free_component(device.search);
@@ -107,7 +107,8 @@ bool gpu_bb_exchange_mass_create(
     auto w = std::make_shared<GpuBbExchangeMassWorkspace>(mass_ms, stiffness_a);
     w->blocks = blocks;
     const uint64_t nodes = static_cast<uint64_t>(mass_ms.Height());
-    if (!gpu_device_allocate_component(w->device.rhs, nodes, w->device_bytes, error) ||
+    if (!gpu_device_allocate_component(w->direction, nodes, w->device_bytes, error) ||
+        !gpu_device_allocate_component(w->device.rhs, nodes, w->device_bytes, error) ||
         !gpu_device_allocate_component(w->device.residual, nodes, w->device_bytes, error) ||
         !gpu_device_allocate_component(w->device.search, nodes, w->device_bytes, error) ||
         !gpu_device_allocate_component(w->device.applied, nodes, w->device_bytes, error) ||
@@ -134,13 +135,16 @@ bool gpu_bb_exchange_mass_create(
     return true;
 }
 
+const FemGpuComponentField &gpu_bb_exchange_mass_direction(const GpuBbExchangeMassWorkspace &workspace)
+{
+    return workspace.direction;
+}
+
 bool gpu_bb_exchange_mass_solve(
     GpuBbExchangeMassWorkspace &w, const FemGpuComponentField &gradient,
     const FemGpuComponentField &direction, double step_m_per_a,
-    void *compute_stream, TransferAudit &audit, std::string &error, GpuPerformanceCounterState *performance)
+    void *compute_stream, TransferAudit &audit, std::string &error)
 {
-    // A failed new attempt must not expose an older successful certificate.
-    w.last_available = false;
     if (!std::isfinite(step_m_per_a) || step_m_per_a <= 0.0 ||
         gradient.x == nullptr || gradient.y == nullptr || gradient.z == nullptr ||
         direction.x == nullptr || direction.y == nullptr || direction.z == nullptr) {
@@ -161,15 +165,6 @@ bool gpu_bb_exchange_mass_solve(
     // One small terminal result only. Every inner dot, alpha/beta update,
     // stopping decision and true residual action stayed inside one GPU launch.
     record_device_control_scalar_to_host(audit, sizeof(w.last));
-    GpuPerformanceCounterDelta counter{};
-    // This read was already audited; also expose it in physical performance totals.
-    counter.control_fences=1; counter.control_d2h_bytes=sizeof(w.last);
-    counter.mandatory_controls.bb_certificate_record_bytes=sizeof(w.last);
-    counter.mandatory_controls.bb_certificate_readbacks=1;
-    counter.mandatory_controls.bb_certificate_bytes=sizeof(w.last);
-    note_hot_loop_mandatory_controls(audit,counter.mandatory_controls);
-    if (performance) gpu_performance_note(*performance,counter);
-    w.last_available = true;
     if (w.last.status != 1) {
         error = "cooperative FEM GPU BB PCG failed: status=" + std::to_string(w.last.status) +
             " iterations=" + std::to_string(w.last.iterations);
@@ -191,26 +186,6 @@ double gpu_bb_exchange_mass_last_relative_residual(const GpuBbExchangeMassWorksp
 uint64_t gpu_bb_exchange_mass_last_iterations(const GpuBbExchangeMassWorkspace &w)
 { return static_cast<uint64_t>(std::max(0, w.last.iterations)); }
 #endif
-
-void gpu_bb_exchange_mass_certificate(
-    const Context &ctx, fullmag_fem_gpu_bb_pcg_certificate_v1 &certificate)
-{
-    certificate.certificate_relative_tolerance = kGpuBbCertificateRelativeTolerance;
-#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME
-    const auto &workspace = ctx.gpu_state.device.relaxation.bb_exchange_mass;
-    if (workspace == nullptr) { return; }
-    certificate.cooperative_launch_supported = workspace->blocks > 0 ? 1u : 0u;
-    if (!workspace->last_available) { return; }
-    certificate.available = 1u;
-    certificate.status = static_cast<uint32_t>(workspace->last.status);
-    certificate.iterations = static_cast<uint32_t>(std::max(0, workspace->last.iterations));
-    certificate.nonzero_rhs_mask = workspace->last.nonzero_rhs_mask;
-    std::copy_n(workspace->last.rhs_norm_squared, 3, certificate.rhs_norm_squared);
-    std::copy_n(workspace->last.residual_norm_squared, 3, certificate.residual_norm_squared);
-#else
-    (void)ctx;
-#endif
-}
 
 bool gpu_bb_exchange_mass_prepare(Context &ctx, std::string &error)
 {

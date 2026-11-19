@@ -9,14 +9,12 @@
  */
 
 #include "gpu/cuda/relaxation/pgbb.hpp"
-#include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 
 #include "context.hpp"
 
 #include <cstring>
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
-#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/constraints/frozen_spins.cuh"
@@ -637,15 +635,9 @@ bool gpu_relax_compute_accepted_bb_curvature(
 int gpu_relax_projected_gradient_bb_step(
     Context &ctx,
     fullmag_fem_step_stats &out_stats,
-    std::string &error,
-    bool diagnostics_already_reset)
+    std::string &error)
 {
     out_stats = {};
-    struct PotentialExitGuard {
-        FemGpuPgbbPotentialToken &token;
-        bool committed = false;
-        ~PotentialExitGuard() { if (!committed) token.valid = false; }
-    } potential_guard{ctx.gpu_state.device.relaxation.pgbb_accepted_potential};
 #if FULLMAG_HAS_CUDA_RUNTIME
     std::string reason;
     if (!gpu_relax_pgbb_preflight(ctx, reason)) {
@@ -654,9 +646,7 @@ int gpu_relax_projected_gradient_bb_step(
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (!diagnostics_already_reset) {
-        gpu_relax_reset_step_diagnostics(gpu.relaxation);
-    }
+    gpu_relax_reset_step_diagnostics(gpu.relaxation);
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
@@ -681,27 +671,6 @@ int gpu_relax_projected_gradient_bb_step(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
 
-    const auto capture_confirmation_controls = [&](bool hot) {
-        std::array<uint64_t,6> value{};
-        if (hot) {
-            const auto &a=ctx.transfer_audit.audit;
-            value={a.counters.hot_loop_control_scalar_host_sync_count,a.counters.hot_loop_control_scalar_d2h_bytes,
-                a.mandatory_controls_hot_loop.poisson_certificate_readbacks,a.mandatory_controls_hot_loop.poisson_certificate_bytes,
-                a.device_pcg_hot_loop.status_readbacks,a.device_pcg_hot_loop.control_d2h_bytes};
-        } else {
-            const auto &s=ctx.gpu_state.performance_counters;
-            const std::lock_guard<std::mutex> lock(s.mutex);
-            const auto &p=s.physical_lifetime; const auto &a=s.active;
-            value={p.control_fences+a.control_fences,p.control_d2h_bytes+a.control_d2h_bytes,
-                p.mandatory_controls.poisson_certificate_readbacks+a.mandatory_controls.poisson_certificate_readbacks,
-                p.mandatory_controls.poisson_certificate_bytes+a.mandatory_controls.poisson_certificate_bytes,
-                p.device_pcg_status_readbacks+a.device_pcg_status_readbacks,
-                p.device_pcg_control_d2h_bytes+a.device_pcg_control_d2h_bytes};
-        }
-        return value;
-    };
-    const auto confirmation_physical_before=capture_confirmation_controls(false);
-    const auto confirmation_hot_before=capture_confirmation_controls(true);
     GpuPgbbCurrentMetrics current_metrics{};
     const double field_evaluation_time_s = ctx.state.current_time;
     if (!gpu_relax_compute_current_metrics(
@@ -736,15 +705,6 @@ int gpu_relax_projected_gradient_bb_step(
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        GpuPerformanceCounterDelta confirmation{};
-        fullmag_fem_gpu_mandatory_control_counters_v1 hot_confirmation{};
-        if (!resolve_confirmation_control_delta(confirmation_physical_before,capture_confirmation_controls(false),confirmation.mandatory_controls) ||
-            !resolve_confirmation_control_delta(confirmation_hot_before,capture_confirmation_controls(true),hot_confirmation)) {
-            error="GPU torque confirmation control attribution underflow";
-            return FULLMAG_FEM_ERR_INTERNAL;
-        }
-        gpu_performance_note(ctx.gpu_state.performance_counters,confirmation);
-        note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,hot_confirmation);
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;
@@ -805,15 +765,19 @@ int gpu_relax_projected_gradient_bb_step(
     if (precondition) {
 #if FULLMAG_HAS_MFEM_STACK
         const auto begin = std::chrono::steady_clock::now();
-        if (!gpu_bb_exchange_mass_prepare(ctx, reason) ||
-            !gpu_bb_exchange_mass_solve(*gpu.relaxation.bb_exchange_mass,
-                gpu.rk.k[0], gpu.relaxation.bb_preconditioned_gradient,
-                trial_step, reinterpret_cast<void *>(stream),
-                ctx.transfer_audit.audit, reason, &ctx.gpu_state.performance_counters)) {
+        auto &workspace = gpu.relaxation.bb_exchange_mass;
+        if (!workspace) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx, stream, "exchange-mass direction unavailable",
+                "the backend did not prepare its BB workspace", error);
+        }
+        const auto &z = gpu_bb_exchange_mass_direction(*workspace);
+        if (!gpu_bb_exchange_mass_solve(*workspace,
+                gpu.rk.k[0], z, trial_step, reinterpret_cast<void *>(stream),
+                ctx.transfer_audit.audit, reason)) {
             return gpu_relax_restore_previous_magnetization_after_failure(
                 ctx, stream, "exchange-mass direction solve failure", reason, error);
         }
-        auto &z = gpu.relaxation.bb_preconditioned_gradient;
         if (gpu.mesh_regions.has_periodic_reduced_nodes) {
             fullmag_cuda_relax_project_static_periodic_field(z.x, z.y, z.z,
                 gpu.mesh_regions.periodic_representative_nodes, n, stream);
@@ -834,11 +798,6 @@ int gpu_relax_projected_gradient_bb_step(
             return gpu_relax_restore_previous_magnetization_after_failure(
                 ctx, stream, "exchange-mass descent check failure", reason, error);
         }
-        GpuPerformanceCounterDelta descent_counter{};
-        descent_counter.mandatory_controls.bb_descent_readbacks=1;
-        descent_counter.mandatory_controls.bb_descent_bytes=sizeof(direction_dot_gradient);
-        gpu_performance_note(ctx.gpu_state.performance_counters,descent_counter);
-        note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,descent_counter.mandatory_controls);
         if (!std::isfinite(direction_dot_gradient)) {
             reason = "non-finite FEM GPU BB preconditioned descent metric";
             return gpu_relax_restore_previous_magnetization_after_failure(
@@ -860,7 +819,6 @@ int gpu_relax_projected_gradient_bb_step(
     uint32_t logical_rhs_evaluations = 1u;
     uint32_t refinement_rhs_evaluations = 0u;
     bool line_search_accepted = false;
-    GpuDirectEnergySnapshot accepted_trial_snapshot{};
     relaxation::EnergyDifference last_direct_difference{};
     double accepted_armijo_increment_rhs_j = 0.0;
     double last_armijo_increment_rhs_j = 0.0;
@@ -936,11 +894,12 @@ int gpu_relax_projected_gradient_bb_step(
                     stream,
                     "cudaMemcpyAsync GPU projected-gradient BB trial m",
                     reason) ||
-                !(backtracks == 0
-                    ? gpu_relax_compute_pgbb_trial_field_and_energy_terms(
-                        ctx, stream, n, blocks, reason)
-                    : gpu_relax_compute_effective_field_and_energy_terms(
-                        ctx, stream, n, blocks, reason))) {
+                !gpu_relax_compute_effective_field_and_energy_terms(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    reason)) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -949,11 +908,6 @@ int gpu_relax_projected_gradient_bb_step(
                     error);
             }
             logical_rhs_evaluations += 1u;
-            if (gpu.relaxation.next_pgbb_failure == GpuRelaxPgbbFailurePoint::AfterTrialField) {
-                gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
-                return gpu_relax_restore_previous_magnetization_after_failure(ctx, stream,
-                    "injected PGBB trial failure", "native PGBB phi rollback fixture", error);
-            }
 
             GpuDirectArmijoResult armijo_result{};
             if (!gpu_direct_minimizer_armijo_evaluate(
@@ -1016,12 +970,6 @@ int gpu_relax_projected_gradient_bb_step(
             if (armijo) {
                 last_direct_difference = armijo_result.difference;
                 accepted_armijo_increment_rhs_j = armijo_rhs;
-                accepted_trial_snapshot = armijo_result.trial_snapshot;
-            }
-            if (backtracks == 0 && gpu.relaxation.next_pgbb_failure ==
-                    GpuRelaxPgbbFailurePoint::RejectFirstTrial) {
-                gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
-                armijo = false;
             }
             if (armijo) {
                 line_search_accepted = true;
@@ -1155,38 +1103,7 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
-    // Match the publication gates so disabled, potentially stale energy slots
-    // and the diagnostic Robin slot are never taken from the trial snapshot.
-    std::array<bool, kGpuFinalScalarSlots> accepted_energy_term_mask{};
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::ExchangeEnergy)] =
-        true;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DemagEnergy)] =
-        ctx.demag.enabled;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::ExternalEnergy)] =
-        ctx.zeeman.has_external_field;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] =
-        !ctx.zeeman.regional_drives.empty();
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DmiEnergy)] =
-        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::BulkDmiEnergy)] =
-        ctx.dmi.bulk_enabled;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::AnisotropyEnergy)] =
-        ctx.anisotropy.uniaxial_enabled;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)] =
-        ctx.anisotropy.cubic_enabled;
-    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)] =
-        ctx.magnetoelastic.enabled;
-    if (gpu.relaxation.next_pgbb_failure == GpuRelaxPgbbFailurePoint::DuringAcceptedStatistics) {
-        gpu.relaxation.next_pgbb_failure = GpuRelaxPgbbFailurePoint::None;
-        return gpu_relax_restore_accepted_step_after_finalize_failure(ctx, stream,
-            rollback, "injected native PGBB finalizer failure", error);
-    }
-    if (!gpu_rk_finalize_step_stats_control_readback_with_energy_terms(
-            ctx,
-            out_stats,
-            accepted_trial_snapshot.terms_j,
-            accepted_energy_term_mask,
-            reason)) {
+    if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
         return gpu_relax_restore_accepted_step_after_finalize_failure(
             ctx,
             stream,
@@ -1228,6 +1145,11 @@ int gpu_relax_projected_gradient_bb_step(
     // field reductions. Its finalizer only reads those control scalars, unlike
     // the RK finalizer that both evaluates and records the reductions.
     gpu_rk_note_completed_final_reductions(ctx);
+    if (precondition) {
+        out_stats.relaxation_preconditioner_wall_time_ns = gpu.relaxation.bb_preconditioner_wall_time_ns;
+        out_stats.relaxation_preconditioner_cache_hits = gpu.relaxation.bb_preconditioner_cache_hits;
+        out_stats.relaxation_preconditioner_cache_misses = gpu.relaxation.bb_preconditioner_cache_misses;
+    }
     // Refinement restores the ordinary solver configuration, but leaves fields
     // evaluated at the refined tolerance. Never publish those as ordinary.
     FemGpuPgbbFieldKey accepted_key{};
@@ -1238,15 +1160,10 @@ int gpu_relax_projected_gradient_bb_step(
         gpu_relax_pgbb_field_reuse_key(ctx, accepted_key)) {
         gpu.relaxation.pgbb_accepted_field.key = accepted_key;
         gpu.relaxation.pgbb_accepted_field.valid = true;
-        if (refinement_rhs_evaluations == 0) {
-            gpu_demag_publish_pgbb_potential(ctx, stream);
-            potential_guard.committed = true;
-        }
     }
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;
-    (void)diagnostics_already_reset;
     error = "GPU projected-gradient BB relaxation requires FULLMAG_HAS_CUDA_RUNTIME=1";
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif

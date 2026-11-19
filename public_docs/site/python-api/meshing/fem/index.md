@@ -24,8 +24,8 @@ mesh asset used by weak-form operators, scalar-potential domains, eigenproblems,
 (python-api-meshing-fem-symbols-and-si-units)=
 ## Symbols and SI units
 
-Element sizes, airbox geometry, layer thicknesses, interface distances, and transition distances are
-SI metres. Orders, counts, algorithms, ratios, and quality controls are dimensionless.
+Element sizes, airbox geometry, layer thicknesses, interface distances, and transition distances use
+SI metres ($\mathrm{m}$). Orders, counts, algorithms, ratios, and quality controls are dimensionless ($1$).
 
 (python-api-meshing-fem-assumptions-and-validity)=
 ## Assumptions and validity
@@ -39,12 +39,12 @@ subject to native validation. Element-family/device support is capability-gated.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FEM.order` | `int` | required | 1 | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
-| `FEM.maximum_element_size` | `float \| None` | `None` | m | Finite and positive; required unless hmax is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.hmax` | `float \| None` | `None` | m | Finite positive alias; equal to maximum_element_size when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
-| `FEM.mesh` | `str \| None` | `None` | 1 | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
-| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
-| `FEM.gpu_bb_preconditioner` | `str \| None` | `None` | 1 | When set, exactly `auto`, `none`, or `exchange_mass`; explicit use requires FEM GPU `projected_gradient_bb` relaxation or raises `ValueError`. | Requested FEM GPU BB search-direction policy. `None` omits the hint from `ProblemIR` and preserves the backend default. | Explicit policy: FEM GPU `projected_gradient_bb` only; FEM CPU, FDM CPU/GPU, and other FEM relaxation algorithms reject it. Managed GPU execution, SP4 performance, and CPU/GPU parity remain `NOT VERIFIED`. | `backend_policy.discretization_hints.fem.gpu_bb_preconditioner` |
+| `FEM.order` | `int` | required | $1$ | Integer greater than or equal to one. | Study-level finite-element field order. | FEM CPU; GPU element/order capability-gated | `backend_policy.discretization_hints.fem.order` |
+| `FEM.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | Finite and positive; required unless `hmax` is supplied. | Canonical study-level maximum-size target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.hmax` | `float \| None` | `None` | $\mathrm{m}$ | Finite positive alias; equal to `maximum_element_size` when both are supplied. | Compatibility spelling of the same target. | FEM | `backend_policy.discretization_hints.fem.hmax` |
+| `FEM.mesh` | `str \| None` | `None` | $1$ | Nonempty when present; asset is revalidated during extraction. | Imported or prebuilt FEM mesh reference. | FEM import/extraction path | `backend_policy.discretization_hints.fem.mesh` |
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | $1$ | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+| `FEM.gpu_bb_preconditioner` | `str \| None` | `None` | $1$ | `auto`, `none`, or `exchange_mass`. Explicit values require FEM GPU `projected_gradient_bb` relaxation. | GPU BB search direction. Omission, `auto`, and `none` use the raw tangent gradient. `exchange_mass` selects the exchange-mass preconditioner. | FEM GPU `projected_gradient_bb` only. Runtime qualification is pending. | `backend_policy.discretization_hints.fem.gpu_bb_preconditioner` |
 
 ```python
 # %% Complete stage-first FEM mesh scenario
@@ -133,23 +133,20 @@ scenario-dependent.
 ## Scientific bibliography
 
 1. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
-2. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
-3. R. Anderson et al., “MFEM,” *Comput. Math. Appl.* **81**, 42–74 (2021).
+2. C. Geuzaine and J.-F. Remacle, “Gmsh: A 3-D finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79**(11), 1309–1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579) | [Open-access HAL PDF](https://hal.science/hal-03406365v1/file/Geuzaine2009.pdf).
+3. R. Anderson et al., “MFEM: A modular finite element methods library,” *Computers & Mathematics with Applications* **81**, 42–74 (2021), [doi:10.1016/j.camwa.2020.06.009](https://doi.org/10.1016/j.camwa.2020.06.009).
 
-(python-api-meshing-fem-source-code-index)=
+## Control Room
 
-## Control Room crosswalk
+FEM object mesh policy, airbox mesh parameters, per-region mesh sizing, and mesh quality/history inspection are supported (`partial` relative to raw Python/Gmsh overrides); unlisted FEM options remain `Python-only`.
 
-Status: FEM object mesh policy, airbox mesh parameters, per-region mesh sizing, and mesh quality/history inspection are supported (`partial` relative to raw Python/Gmsh overrides); unlisted FEM options remain Python-only.
-
-| Python/API surface | Control Room path | Status | Transaction |
+| Python/API surface | Control Room path | Status | Interaction |
 |---|---|---|---|
 | `study.universe.mesh(...)` / Airbox sizing and grading | `Model Explorer -> Universe / Airbox -> Mesh` | `supported` | Apply airbox mesh draft and trigger mesh build in Airbox Mesh Parameters ({doc}`/frontend/meshing/airbox-mesh`) |
 | `Object.mesh(...)` / `ObjectRegion.mesh(...)` | `Model Explorer -> Objects -> <object> -> Mesh` / `Regions` | `supported` | Apply `ObjectMeshPolicyPanel` or `ObjectRegionMeshPanel` draft and mark dependent mesh stale ({doc}`/frontend/meshing/object-mesh`, {doc}`/frontend/meshing/region-mesh`) |
-| Unlisted Gmsh / sizing-field options | `See the capability register; Python-only fields remain read-only or omitted` | `not implemented` | Python-only until implemented |
+| Unlisted Gmsh / sizing-field options | — | `Python-only` | Configured directly in Python |
 
-See {doc}`/frontend/meshing/index`, {doc}`/frontend/meshing/quality-and-reports`, and [Control Room capability register](/frontend/capability-register) for panel details and build-evidence inspection.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx (ObjectMeshPolicyPanel)` and `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx (ObjectRegionMeshPanel)`.
+See {doc}`/frontend/meshing/index`, {doc}`/frontend/meshing/quality-and-reports`, and [Control Room capability register](/frontend/capability-register) for panel details and build-evidence inspection (`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` and `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx`).
 
 ```{image} /_static/images/ui/inspector-fem-mesh-and-airbox.png
 :alt: Semantic Inspector panel configuring FEM object mesh sizing and airbox parameters
@@ -161,6 +158,7 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMes
 :width: 92%
 ```
 
+(python-api-meshing-fem-source-code-index)=
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

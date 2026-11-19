@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::common::deserialize_double_option;
 use crate::schemas::status::{DisplayViewMode, FieldComponent};
 
 /// Default vector budget for airbox visualization (glyph count, not stride).
@@ -459,14 +460,6 @@ pub(crate) fn default_planar_color_range_state() -> PlanarColorRangeState {
 
 fn default_planar_raster_opacity() -> f64 {
     1.0
-}
-
-fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
@@ -1229,6 +1222,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 bounds_visible: false,
                 bounds_opacity: 1.0,
                 geometry_scope: VisualizationTargetGeometryScope::Full,
+                wireframe_geometry_scope: None,
                 opacity: 0.18,
                 point_color: "var(--fm-info)".to_string(),
                 point_opacity: 1.0,
@@ -1286,6 +1280,9 @@ pub struct VisualizationResolvedTargetSettings {
     pub bounds_visible: bool,
     pub bounds_opacity: f64,
     pub geometry_scope: VisualizationTargetGeometryScope,
+    /// Optional independent FEM wireframe extent; absent means legacy/default surface edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireframe_geometry_scope: Option<VisualizationTargetGeometryScope>,
     /// Legacy compatibility projection of `surface_opacity`.
     pub opacity: f64,
     pub point_color: String,
@@ -1343,6 +1340,8 @@ pub struct VisualizationTargetDisplayOverride {
     pub opacity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub geometry_scope: Option<VisualizationTargetGeometryScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wireframe_geometry_scope: Option<VisualizationTargetGeometryScope>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

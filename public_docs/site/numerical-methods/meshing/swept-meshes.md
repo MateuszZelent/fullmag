@@ -46,41 +46,24 @@ This equality is only a requested input relation; resolved counts belong in the 
 
 ### Complete public signature and IR matrix
 
-The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+The following rows document the public signature and `ProblemIR` contract for this page.
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| mesh_strategy | str \| None | None | $1$ | stored without standalone vocabulary validation; typed prism/hex intent requires `swept_prism`/`swept_hex` | generator family | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].mesh_strategy |
-| topology | Literal["tetrahedral", "prismatic"] \| None | None | $1$ | exact vocabulary; tetrahedral topology contradicts explicit swept element intent | topology request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].topology |
-| through_thickness_elements | int \| None | None | layers | non-Boolean integer at least `1`; required for layered intent | requested layers | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].through_thickness_elements |
-| through_thickness_distribution | Literal[ fixed, linear, exponential ] \| None | None | $1$ | must be `fixed`, `linear`, or `exponential`; exact layer count requires `fixed` | layer spacing | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].through_thickness_distribution |
-| through_thickness_element_ratio | float \| None | None | $1$ | finite positive; exact layer count permits `1.0` | grading ratio | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].through_thickness_element_ratio |
-| through_thickness_symmetric | bool \| None | None (stored state `False`) | $1$ | non-None value must be Boolean; exact layer count rejects `True` | mirrored grading | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].through_thickness_symmetric |
-| sweep_face_meshing | Literal[ triangular, quadrilateral ] \| None | None | $1$ | prism requires triangular; hex requires quadrilateral | source-face topology | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].sweep_face_meshing |
-| sweep_direction | Literal[ auto, x, y, z ] \| None | None | $1$ | exact vocabulary; required for layered intent | sweep axis | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].sweep_direction |
-| element_family | Literal[ prism, hex ] \| None | None | $1$ | exact vocabulary and strategy/face consistency checks | volume family | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].element_family |
-| transition_policy | Literal[ pyramid_to_tetrahedra, reject ] \| None | None | $1$ | prismatic shared route requires `pyramid_to_tetrahedra` | mixed-topology transition | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].transition_policy |
-| exact_layer_count | bool \| None | None | $1$ | Boolean; strict prismatic route requires `True` | layer-count certificate requirement | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].exact_layer_count |
-| order | int \| None | None | $1$ | prismatic intent supports only `1`; otherwise backend-realization policy applies | FEM order request | FEM CPU/GPU capability-gated | mesh_workflow.per_geometry[].order |
-
-
+| `mesh_strategy` | `str \| None` | `None` | $1$ | stored without standalone vocabulary validation; typed prism/hex intent requires `swept_prism`/`swept_hex` | generator family | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].mesh_strategy` |
+| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | $1$ | exact vocabulary; tetrahedral topology contradicts explicit swept element intent | topology request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].topology` |
+| `through_thickness_elements` | `int \| None` | `None` | layers | non-Boolean integer at least `1`; required for layered intent | requested layers | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_elements` |
+| `through_thickness_distribution` | `Literal[ fixed, linear, exponential ] \| None` | `None` | $1$ | must be `fixed`, `linear`, or `exponential`; exact layer count requires `fixed` | layer spacing | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_distribution` |
+| `through_thickness_element_ratio` | `float \| None` | `None` | $1$ | finite positive; exact layer count permits `1.0` | grading ratio | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_element_ratio` |
+| `through_thickness_symmetric` | `bool \| None` | `None` (stored state `False`) | $1$ | non-None value must be Boolean; exact layer count rejects `True` | mirrored grading | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].through_thickness_symmetric` |
+| `sweep_face_meshing` | `Literal[ triangular, quadrilateral ] \| None` | `None` | $1$ | prism requires triangular; hex requires quadrilateral | source-face topology | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].sweep_face_meshing` |
+| `sweep_direction` | `Literal[ auto, x, y, z ] \| None` | `None` | $1$ | exact vocabulary; required for layered intent | sweep axis | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].sweep_direction` |
+| `element_family` | `Literal[ prism, hex ] \| None` | `None` | $1$ | exact vocabulary and strategy/face consistency checks | volume family | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].element_family` |
+| `transition_policy` | `Literal[ pyramid_to_tetrahedra, reject ] \| None` | `None` | $1$ | prismatic shared route requires `pyramid_to_tetrahedra` | mixed-topology transition | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].transition_policy` |
+| `exact_layer_count` | `bool \| None` | `None` | $1$ | Boolean; strict prismatic route requires `True` | layer-count certificate requirement | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].exact_layer_count` |
+| `order` | `int \| None` | `None` | $1$ | prismatic intent supports only `1`; otherwise backend-realization policy applies | FEM order request | FEM CPU/GPU capability-gated | `mesh_workflow.per_geometry[].order` |
 
 `generate_swept_mesh(geometry, hmax, n_layers, order=1, distribution="fixed", element_ratio=1.0, symmetric=False, recombine=False, airbox=None, options=None)` is an internal realization entry point. Public stage scripts author equivalent mesh policy, not this function directly.
-
-| Python | Type | Default | SI unit | Validation and coercion | Meaning | Backend support | ProblemIR |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `mesh_strategy` | `str \| None` | `None` | 1 | stored directly; typed prism/hex fields require `swept_prism`/`swept_hex` respectively | requested generator family | FEM CPU/GPU capability-gated | `per_geometry[].mesh_strategy` |
-| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | 1 | exact vocabulary; tetrahedral rejects swept-element fields | requested topology | FEM CPU/GPU capability-gated | `per_geometry[].topology` |
-| `through_thickness_elements` | `int \| None` | `None` | layers | non-Boolean integer >= 1 | requested layer count | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_elements` |
-| `through_thickness_distribution` | `Literal["fixed", "linear", "exponential"] \| None` | `None` | 1 | exact vocabulary; exact count accepts only `fixed` | spacing distribution | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_distribution` |
-| `through_thickness_element_ratio` | `float \| None` | `None` | 1 | non-Boolean finite positive; exact count permits only `1.0` | grading ratio | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_element_ratio` |
-| `through_thickness_symmetric` | `bool \| None` | `None` (stored default `False`) | 1 | non-`None` value must be bool; exact count rejects `True` | symmetric grading | FEM CPU/GPU capability-gated | `per_geometry[].through_thickness_symmetric` |
-| `sweep_face_meshing` | `Literal["triangular", "quadrilateral"] \| None` | `None` | 1 | prism requires triangular and hex requires quadrilateral | source-face topology | FEM CPU/GPU capability-gated | `per_geometry[].sweep_face_meshing` |
-| `sweep_direction` | `Literal["auto", "x", "y", "z"] \| None` | `None` | 1 | exact vocabulary; required for complete typed layered intent | sweep axis | FEM CPU/GPU capability-gated | `per_geometry[].sweep_direction` |
-| `element_family` | `Literal["prism", "hex"] \| None` | `None` | 1 | prism requires P1/triangular/`swept_prism`; hex requires quadrilateral/`swept_hex` | volume family | FEM CPU/GPU capability-gated | `per_geometry[].element_family` |
-| `transition_policy` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | 1 | prismatic topology permits only `pyramid_to_tetrahedra`; hex rejects it | transition contract | FEM CPU/GPU capability-gated | `per_geometry[].transition_policy` |
-| `exact_layer_count` | `bool \| None` | `None` | 1 | non-`None` value must be bool; strict prismatic mode rejects `False` and requires complete typed intent | certificate request | FEM CPU/GPU capability-gated | `per_geometry[].exact_layer_count` |
-| `order` | `int \| None` | `None` | 1 | prismatic intent permits only `1` | FEM order request | FEM CPU/GPU capability-gated | `per_geometry[].order` |
 
 ```python
 # %%
@@ -129,12 +112,6 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
 (swept-problem-ir)=
-## Parameters
-
-The complete parameter matrix in the Python API section is the public mesh-authoring contract.
-Defaults, validation, ProblemIR lowering and capability-gated lanes are listed there and mirrored
-by the adjacent source map.
-
 ## ProblemIR
 
 The public mesh-policy fields lower to a requested strategy, layer count, distribution, axis and order. `MeshRealizationReport` records the resolved counterparts and fallback markers.
@@ -170,21 +147,19 @@ The source does not support arbitrary swept geometries or an explicit body-only 
 Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
 (swept-source-code-index)=
-## Contract source-code index
+## Source-code index
 
 | ID | Path | Symbol | Responsibility | Evidence |
 | --- | --- | --- | --- | --- |
-| swept_mesh | packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py | generate_swept_mesh | layered mesh dispatch and failure semantics | source-inspected |
-| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
-| mesh_authoring | packages/fullmag-py/src/fullmag/world.py | class GeometryMeshHandle | swept-policy authoring and validation | source-inspected |
-| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
-| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR mesh-workflow serialization | source-inspected |
-| realization_report | packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py | class MeshRealizationReport | requested/resolved topology contract | source-inspected |
-| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain realization and report | source-inspected |
-| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
-| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
-
-**Last changes: 12:31 24.08.2026**
+| swept_mesh | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_mesh` | layered mesh dispatch and failure semantics | source-inspected |
+| public_study | `packages/fullmag-py/src/fullmag/world.py` | `study` | public study entry point | source-inspected |
+| mesh_authoring | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | swept-policy authoring and validation | source-inspected |
+| problem_lowering | `packages/fullmag-py/src/fullmag/world.py` | `_build_problem` | builder-state lowering | source-inspected |
+| problem_ir | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | ProblemIR mesh-workflow serialization | source-inspected |
+| realization_report | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshRealizationReport` | requested/resolved topology contract | source-inspected |
+| domain_realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_domain_mesh_asset_from_components_with_report` | shared-domain realization and report | source-inspected |
+| planner | `crates/fullmag-plan/src/lib.rs` | `plan` | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | `crates/fullmag-runner/src/lib.rs` | `run_planned_problem` | planned runtime dispatch | source-inspected, device-unverified |
 
 Swept meshing extrudes a source surface through a thickness or along a sweep direction. In Fullmag, requested layers and topology are strict scientific intent only when the capability matrix and post-build certificate confirm them.
 
@@ -447,7 +422,4 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
-## Extended source notes
-
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
 

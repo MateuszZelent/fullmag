@@ -5,6 +5,8 @@ import {
   type WebGLRenderer,
 } from "three";
 
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
+
 export type Viewport3DVisualProfileId =
   | "interactive-lite"
   | "interactive"
@@ -42,7 +44,7 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
 > = {
   "interactive-lite": {
     id: "interactive-lite",
-    label: "Interactive Lite",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"],
     antialias: false,
     dprCap: 1,
     edgeBoost: 0.85,
@@ -62,7 +64,7 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   interactive: {
     id: "interactive",
-    label: "Interactive",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive,
     antialias: true,
     dprCap: 1.25,
     edgeBoost: 1,
@@ -82,7 +84,7 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   balanced: {
     id: "balanced",
-    label: "Balanced",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced,
     antialias: true,
     dprCap: 1.5,
     edgeBoost: 1.1,
@@ -102,7 +104,7 @@ const VIEWPORT_3D_VISUAL_PROFILES: Record<
   },
   figure: {
     id: "figure",
-    label: "Figure",
+    label: VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure,
     antialias: true,
     dprCap: 2,
     edgeBoost: 1.25,
@@ -160,7 +162,9 @@ export function resolveViewport3DCanvasDpr({
   const safeRatio = Number.isFinite(devicePixelRatio)
     ? Math.max(1, devicePixelRatio)
     : 1;
-  return Math.min(safeRatio, profile.dprCap);
+  // Figure supersamples ordinary displays as well as high-density displays.
+  // Other profiles retain their native-density caps for interactive navigation.
+  return profile.id === "figure" ? profile.dprCap : Math.min(safeRatio, profile.dprCap);
 }
 
 /**

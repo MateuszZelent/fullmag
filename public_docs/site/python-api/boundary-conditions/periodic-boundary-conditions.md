@@ -8,9 +8,9 @@ last_updated: 2026-10-14
 reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
+(public-docs-python-api-boundary-conditions-periodic-boundary-conditions)=
 # Periodic boundary conditions
 
-(public-docs-python-api-boundary-conditions-periodic-boundary-conditions)=
 (python-api-boundary-conditions-periodic-boundary-conditions-problem-statement)=
 ## 1. Physical problem and solver family
 
@@ -107,7 +107,7 @@ canonical_ir = periodic_bc.to_ir()
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `pair_ids` | `Sequence[str]` | `required` | `1` | non-empty sequence; IDs non-empty | paired boundary identifiers | FEM/FDM CPU/GPU: IR; resolved support required | `pair_ids` |
+| `pair_ids` | `Sequence[str]` | `required` | $1$ | non-empty sequence; IDs non-empty | paired boundary identifiers | FEM/FDM CPU/GPU: IR; resolved support required | `pair_ids` |
 
 (python-api-boundary-conditions-periodic-boundary-conditions-problem-ir)=
 ## 6. ProblemIR, normalization, and provenance

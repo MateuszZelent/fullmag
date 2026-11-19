@@ -176,6 +176,7 @@ fn classify_object_transition(
 
     if before.material_ref != after.material_ref
         || before.material_parameter_fields != after.material_parameter_fields
+        || before.absorbing_boundary != after.absorbing_boundary
         || before.physics_stack != after.physics_stack
     {
         impact.coefficients = true;
@@ -357,6 +358,26 @@ mod tests {
             classify_region_realization_impact(&before, &after),
             RegionRealizationImpact::default()
         );
+    }
+
+    #[test]
+    fn adding_editing_and_removing_an_absorber_only_advances_coefficients() {
+        let before = scene();
+        let mut added = before.clone();
+        added.objects[0].absorbing_boundary = Some(serde_json::from_value(json!({
+            "total_width_m": 4e-9, "ramp_width_m": 2e-9, "max_damping": 0.5,
+            "faces": ["x+"], "frame": "object", "profile": "linear",
+        })).unwrap());
+        let mut edited = added.clone();
+        let Some(fullmag_ir::AbsorbingBoundaryIR::Legacy(layer)) = &mut edited.objects[0].absorbing_boundary else {
+            panic!("expected legacy face configuration");
+        };
+        layer.max_damping = 0.8;
+        for (old, new) in [(&before, &added), (&added, &edited), (&edited, &before)] {
+            assert_eq!(classify_region_realization_impact(old, new), RegionRealizationImpact {
+                coefficients: true, ..Default::default()
+            });
+        }
     }
 
     #[test]

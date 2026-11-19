@@ -5,11 +5,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import tempfile
 import unittest
 import subprocess
+import shutil
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -55,41 +55,30 @@ class VolumeFixture:
 
 
 class SharedBuildStorageTests(unittest.TestCase):
-    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"),
-                         "the initializer wrapper regression requires POSIX bash")
-    def test_initializer_wrapper_passes_payload_as_quoted_python_c_argument_without_temp_files(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            bin_directory = Path(temporary) / "bin"
-            bin_directory.mkdir()
-            fake_python = bin_directory / "python3"
-            fake_python.write_text(
-                f"#!{sys.executable}\n"
-                "import json, sys\n"
-                "print(json.dumps(sys.argv[1:]))\n",
-                encoding="utf-8",
+    @unittest.skipUnless(sys.platform.startswith("linux") and shutil.which("bash"), "Linux Docker Bash contract")
+    def test_initializer_delivers_complete_program_without_writable_temporary_directory(self):
+        # Compile the real payload without executing its volume mutations.
+        # /proc cannot host Bash here-document temporary files, even as root.
+        program = storage._INITIALIZER_PYTHON + "\n#" + " readonly regression" * 4000 + "\n"
+        command = storage._initializer_script(program)
+        self.assertEqual(storage.INITIALIZER_SCRIPT, storage._initializer_script(storage._INITIALIZER_PYTHON))
+        with tempfile.TemporaryDirectory() as directory:
+            wrapper = Path(directory) / "python3"
+            wrapper.write_text(
+                "#!" + sys.executable + "\n"
+                "import hashlib,sys\n"
+                "source = sys.stdin.read() if sys.argv[1:] == ['-'] else sys.argv[2]\n"
+                "compile(source, '<shared-initializer>', 'exec')\n"
+                "print(hashlib.sha256(source.encode()).hexdigest())\n"
             )
-            fake_python.chmod(0o755)
-            environment = {**os.environ, "PATH": str(bin_directory) + os.pathsep + os.environ.get("PATH", "")}
-
-            def prohibit_file_writes():
-                import resource
-                resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-
+            wrapper.chmod(0o755)
             result = subprocess.run(
-                [shutil.which("bash"), "-euo", "pipefail", "-c", storage.INITIALIZER_SCRIPT],
-                capture_output=True,
-                check=False,
-                env=environment,
-                preexec_fn=prohibit_file_writes,
-                text=True,
+                [shutil.which("bash"), "-euo", "pipefail", "-c", command],
+                env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"], "TMPDIR": "/proc"},
+                capture_output=True, text=True, timeout=10,
             )
-
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("<<", storage.INITIALIZER_SCRIPT)
-        arguments = json.loads(result.stdout)
-        self.assertEqual(arguments[:1], ["-c"], "the initializer must receive its program through python -c")
-        self.assertEqual(len(arguments), 2)
-        self.assertEqual(arguments[1], storage._INITIALIZER_PYTHON)
+        self.assertEqual(result.stdout.strip(), hashlib.sha256(program.encode()).hexdigest())
 
     def test_volume_names_and_labels_are_project_stable_and_task_independent(self):
         first = storage.shared_volume_names("fullmag")

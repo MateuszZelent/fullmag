@@ -1,5 +1,9 @@
 "use client";
 
+import type { ImportedSourceSurfaceResource, SceneResource } from "@/kernel/api/apiTypes";
+import { MODEL_OBJECT_SOURCE_SURFACE_PATH } from "@/kernel/api/apiPaths";
+import { isImportedStlGeometry, loadImportedSurfaceSources } from "./viewport3dImportedSurfaceModel";
+
 import { useCallback, useMemo } from "react";
 
 import {
@@ -7,11 +11,11 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_META_PATH,
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
 } from "@/kernel/api/apiPaths";
+import { useMeshSharedDomainManifestResource } from "@/kernel/resources/geometryLifecycleResources";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
@@ -662,8 +666,6 @@ memoryBudgetRegistry.register("viewport3d.qualityDataCache", () => {
 
 const VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY = DATA_DOMAIN_META_PATH;
 const VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY = DATA_DOMAIN_TOPOLOGY_PATH;
-const VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH;
 const VIEWPORT_3D_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
 const VIEWPORT_3D_SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
@@ -862,12 +864,6 @@ export function invalidateViewport3DFieldMetaResources(
 
 function resolveDomainMetaRevision(meta: { generation_id: string }) {
   return meta.generation_id;
-}
-
-function resolveSharedDomainManifestRevision(
-  manifest: { revision?: number | string | null } | null,
-) {
-  return manifest?.revision ?? null;
 }
 
 function resolveUniverseRevision(universe: { scene_revision: number }) {
@@ -2593,26 +2589,7 @@ export function useViewport3DMeshQualityData(enabled = true) {
 }
 
 export function useViewport3DSharedDomainManifest(enabled = true) {
-  const { api } = useKernel();
-  const sessionIdentity = useViewport3DSessionIdentity();
-  const resourceKey = sessionIdentity
-    ? sessionScopedResourceKey(
-        sessionIdentity,
-        VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY,
-      )
-    : VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY;
-  const load = useCallback(
-    ({ signal }: { signal: AbortSignal }) =>
-      api.meshing.sharedDomainManifest({ signal }),
-    [api],
-  );
-
-  return useResource({
-    enabled: enabled && sessionIdentity !== null,
-    load,
-    resolveRevision: resolveSharedDomainManifestRevision,
-    resourceKey,
-  });
+  return useMeshSharedDomainManifestResource({ enabled });
 }
 
 export function useViewport3DScene(enabled = true) {
@@ -2650,4 +2627,39 @@ export function useViewport3DUniverse(enabled = true) {
     resolveRevision: resolveUniverseRevision,
     resourceKey,
   });
+}
+
+/** Source geometry shares the bounded topology cache, never the solver-domain slot. */
+export function useViewport3DImportedSurfaces(scene: SceneResource | null, enabled = true) {
+  const { api, resources } = useKernel();
+  const identity = useViewport3DSessionIdentity();
+  const revision = scene?.revision ?? null;
+  const objects = useMemo(() => (scene?.objects ?? []).filter(object =>
+    isImportedStlGeometry(object.geometry)), [scene?.objects]);
+  const unscopedKey = `${MODEL_OBJECT_SOURCE_SURFACE_PATH}#source-surfaces:scene=${revision}`;
+  const key = identity ? sessionScopedResourceKey(identity, unscopedKey) : unscopedKey;
+  const load = useCallback(async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+    let bytes = 0;
+    return loadImportedSurfaceSources(objects.map(object => object.id), async (objectId) => {
+      const object = objects.find(object => object.id === objectId)!;
+      const descriptor: ImportedSourceSurfaceResource = await api.model.sourceSurface(object.id, { sessionScopeKey, signal });
+      const reference = object.geometry?.source_asset as { content_sha256?: string } | undefined;
+      if (descriptor.scene_revision !== revision || descriptor.object_id !== object.id
+          || (reference?.content_sha256 && reference.content_sha256 !== descriptor.source_sha256)) {
+        resources.invalidate(sessionScopedResourceKey(identity!, MODEL_SCENE_PATH), descriptor.scene_revision);
+        throw new ControlRoomApiError("Imported source changed; refresh the scene.", 409);
+      }
+      const cacheKey = sessionScopedResourceKey(identity!, `source-surface:${descriptor.surface_id}`);
+      const entry = await loadCachedBinaryResourceEntry(topologyCache, cacheKey,
+        (etag, requestSignal) => api.model.sourceSurfaceTopology(object.id, {
+          scene_revision: descriptor.scene_revision, source_sha256: descriptor.source_sha256,
+        }, { etag, signal: requestSignal, sessionScopeKey, maxResponseBytes: 64 * 1024 * 1024 }), { signal, preferCached: true });
+      if (!entry) throw new Error("Imported source topology is unavailable.");
+      if (bytes + entry.byteLength > 96 * 1024 * 1024) throw new Error("Imported source surfaces exceed the viewport memory budget.");
+      bytes += entry.byteLength;
+      return { descriptor, topology: entry.data };
+    }, signal);
+  }, [api, identity, objects, resources, revision]);
+  return useResource({ enabled: enabled && identity !== null && revision !== null && objects.length > 0,
+    load, resourceKey: key, abortStaleInflight: true, resolveRevision: () => revision });
 }

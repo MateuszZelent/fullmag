@@ -142,10 +142,7 @@ counts; no silent extrapolation is allowed.
 (numerical-methods-fem-to-fdm-implementation-mapping)=
 ## Implementation mapping
 
-| Claim | Repository path | Stable symbol | Responsibility | Lane |
-|---|---|---|---|---|
-| FEM field to grid | [`crates/fullmag-engine/src/fem_solution_transfer.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | [`transfer_fem_field_to_grid`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-engine/src/fem_solution_transfer.rs#L357) | locate/interpolate FEM field at FDM centres | transfer |
-| Continuation orchestration | [`crates/fullmag-cli/src/step_utils.rs`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | [`resample_continuation_if_cross_backend`](https://github.com/MateuszZelent/fullmag/blob/5e99782acbb7fb3f65d0cad872e102bf67733103/crates/fullmag-cli/src/step_utils.rs#L1233) | selects cross-backend transfer | runtime |
+Cross-backend continuation dispatch in the CLI orchestrator and FEM-to-FDM field interpolation in `fullmag-engine` are indexed in {ref}`numerical-methods-fem-to-fdm-source-code-index`.
 
 (numerical-methods-fem-to-fdm-validation)=
 ## Validation
@@ -165,23 +162,13 @@ prove that FEM and FDM discretizations have identical energy or demagnetizing fi
 - Standard P1 finite-element interpolation and barycentric coordinates reference.
 - Canonical continuation implementation is listed below.
 
-(numerical-methods-fem-to-fdm-source-code-index)=
-
 ## Control Room workflow
 
 Author the target FDM grid and continuation stage in Control Room, then inspect the resolved grid
 and transfer counters before execution. Only controls surfaced by the current stage draft are
 authorable.
 
-## Control Room crosswalk
-
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Where this is implemented
-
-The source-code index below records the stable routing and interpolation declarations used by this
-page and its sidecar map.
-
+(numerical-methods-fem-to-fdm-source-code-index)=
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |

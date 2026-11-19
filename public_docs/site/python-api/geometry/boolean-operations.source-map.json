@@ -29,25 +29,8 @@
       "reason": "authoring and IR documented; runtime qualification separate"
     }
   ],
-  "equations": [
-    {
-      "id": "eq-geometry_boolean",
-      "symbols": [
-        "q"
-      ],
-      "sources": [
-        "source_geometry_boolean"
-      ]
-    }
-  ],
-  "symbols": [
-    {
-      "id": "q",
-      "latex": "q",
-      "meaning": "canonical typed authoring quantity",
-      "si_unit": "\\mathrm{1}"
-    }
-  ],
+  "equations": [],
+  "symbols": [],
   "sources": [
     {
       "id": "source_geometry_boolean",
@@ -63,7 +46,7 @@
         "python": "base/tool or a/b",
         "type": "Geometry",
         "default": "required",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "typed geometry operands",
         "meaning": "boolean operands",
         "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
@@ -73,7 +56,7 @@
         "python": "name",
         "type": "str",
         "default": "operation default",
-        "si_unit": "1",
+        "si_unit": "$1$",
         "validation": "non-empty",
         "meaning": "result name",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",

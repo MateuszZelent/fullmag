@@ -108,9 +108,6 @@ bool gpu_direct_armijo_demag_refinement_eligible(
     const GpuDirectArmijoResult &result,
     double armijo_rhs_j);
 
-bool gpu_relax_compute_pgbb_trial_field_and_energy_terms(
-    Context &, cudaStream_t, int, int, std::string &);
-
 bool gpu_relax_compute_effective_field_and_energy_terms(
     Context &ctx,
     cudaStream_t stream,

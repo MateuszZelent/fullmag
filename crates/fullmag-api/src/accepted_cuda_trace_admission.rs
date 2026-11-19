@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const PARAMETER: &str = "cuda_trace";
 pub(crate) const SCHEMA: &str = "accepted_cuda_trace.v1";
-pub(crate) const SCHEMA_V2: &str = "accepted_cuda_trace.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -13,37 +12,16 @@ pub(crate) struct Config {
     pub(crate) schema_version: String,
     pub(crate) max_bytes: u64,
     pub(crate) max_duration_ms: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) accepted_step_window: Option<AcceptedStepWindow>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AcceptedStepWindow {
-    pub(crate) start_after_step: u64,
-    pub(crate) end_after_step: u64,
 }
 
 pub(crate) fn config(parameters: &serde_json::Value) -> Result<Option<Config>> {
     let Some(value) = parameters.get(PARAMETER) else { return Ok(None); };
-    let has_window_field = value.as_object().is_some_and(|object| object.contains_key("accepted_step_window"));
     let config: Config = serde_json::from_value(value.clone())?;
-    let valid_schema = match config.schema_version.as_str() {
-        SCHEMA => !has_window_field,
-        SCHEMA_V2 => config.accepted_step_window.as_ref().is_some_and(valid_window),
-        _ => false,
-    };
-    if !valid_schema || !(4096..=536870912).contains(&config.max_bytes)
+    if config.schema_version != SCHEMA || !(4096..=536870912).contains(&config.max_bytes)
         || !(1..=120000).contains(&config.max_duration_ms) {
-        bail!("CUDA trace requires a supported version, valid accepted-step window, and bounded byte/time limits");
+        bail!("CUDA trace requires accepted_cuda_trace.v1 and bounded byte/time limits");
     }
     Ok(Some(config))
-}
-
-fn valid_window(window: &AcceptedStepWindow) -> bool {
-    window.start_after_step >= 1
-        && window.end_after_step > window.start_after_step
-        && window.end_after_step - window.start_after_step <= 1000
 }
 
 pub(crate) fn request_digest(value: &serde_json::Value) -> Result<String> {
@@ -127,60 +105,6 @@ mod tests {
         assert!(config(&json!({PARAMETER: null})).is_err());
         let mut changed = value.clone(); changed["max_duration_ms"] = json!(30000);
         assert_ne!(request_digest(&value).unwrap(), request_digest(&changed).unwrap());
-    }
-
-    #[test]
-    fn v1_serialized_shape_is_unchanged_and_v2_digest_binds_the_window() {
-        let v1 = config(&json!({PARAMETER: request()})).unwrap().unwrap();
-        assert_eq!(serde_json::to_value(v1).unwrap(), request());
-
-        let v2 = json!({"schema_version": SCHEMA_V2, "max_bytes": 67108864,
-            "max_duration_ms": 60000, "accepted_step_window": {
-                "start_after_step": 16, "end_after_step": 32
-            }});
-        assert_eq!(config(&json!({PARAMETER: v2.clone()})).unwrap().unwrap()
-            .accepted_step_window.as_ref().unwrap().start_after_step, 16);
-        let mut other_window = v2.clone();
-        other_window["accepted_step_window"]["end_after_step"] = json!(33);
-        assert_ne!(request_digest(&v2).unwrap(), request_digest(&other_window).unwrap());
-    }
-
-    #[test]
-    fn v2_window_is_required_closed_integer_and_bounded() {
-        let base = json!({"schema_version": SCHEMA_V2, "max_bytes": 67108864,
-            "max_duration_ms": 60000, "accepted_step_window": {
-                "start_after_step": 16, "end_after_step": 32
-            }});
-        assert!(request_digest(&base).is_ok());
-        let mut cases = Vec::new();
-        let mut changed = base.clone();
-        changed.as_object_mut().unwrap().remove("accepted_step_window");
-        cases.push(changed);
-        for window in [
-            json!({"start_after_step": 0, "end_after_step": 32}),
-            json!({"start_after_step": 32, "end_after_step": 32}),
-            json!({"start_after_step": 16, "end_after_step": 1017}),
-            json!({"start_after_step": true, "end_after_step": 32}),
-            json!({"start_after_step": 16.0, "end_after_step": 32}),
-            json!({"start_after_step": 16, "end_after_step": 32, "extra": 1}),
-        ] {
-            let mut changed = base.clone();
-            changed["accepted_step_window"] = window;
-            cases.push(changed);
-        }
-        let mut v1_with_window = request();
-        v1_with_window["accepted_step_window"] = base["accepted_step_window"].clone();
-        cases.push(v1_with_window);
-        let mut v1_with_null_window = request();
-        v1_with_null_window["accepted_step_window"] = serde_json::Value::Null;
-        cases.push(v1_with_null_window);
-        for value in cases {
-            assert!(request_digest(&value).is_err(), "unexpected admission: {value}");
-        }
-        let overflow: serde_json::Value = serde_json::from_str(
-            r#"{"schema_version":"accepted_cuda_trace.v2","max_bytes":67108864,"max_duration_ms":60000,"accepted_step_window":{"start_after_step":16,"end_after_step":18446744073709551616}}"#,
-        ).unwrap();
-        assert!(request_digest(&overflow).is_err());
     }
 
     fn fixture(device: &str) -> (fullmag_authoring::StudyPlan, fullmag_plan::StudyProblemCatalog) {

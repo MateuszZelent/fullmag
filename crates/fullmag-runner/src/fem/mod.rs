@@ -72,7 +72,5 @@ pub mod engine;
 pub(crate) mod marker_policy;
 pub(crate) mod equilibrium_identity;
 pub(crate) mod execution_receipt;
-#[cfg(any(test, feature = "fem-native", feature = "fem-gpu"))]
-pub(crate) mod gpu_terminal_provenance;
 pub mod integrators;
 pub mod relax;

@@ -342,10 +342,7 @@ buffers. Missing resources are errors; no CPU fallback is implied.
 (interfacial-dmi-implementation-mapping)=
 ## Implementation mapping
 
-The adjacent source map binds each claim to stable path-plus-symbol identities. `InterfacialDMI`
-and `Material` own authoring; `plan_fdm` owns strict `+z` legality; `plan_fem` owns normal and
-material-field resolution; FDM CPU/CUDA own stencil/reduction; FEM CPU/CUDA own weak residual,
-projection, device field, and energy reduction.
+Responsibilities are split across the stack: `InterfacialDMI` and `Material` own authoring, `plan_fdm` owns strict $+\hat{\mathbf z}$ legality, `plan_fem` owns normal and material-field resolution, FDM CPU/CUDA own stencil evaluation and reductions, and FEM CPU/CUDA own weak residuals, projection, device fields, and energy reductions.
 
 (interfacial-dmi-validation)=
 ## Validation

@@ -86,11 +86,7 @@ study.stages.add_relax(
                 "max_torque_T",
             ],
         ),
-        fields=[
-            fm.FieldAutosave("H_ex", every_steps=50_000),
-            fm.FieldAutosave("H_demag", every_steps=50_000),
-            fm.FieldAutosave("H_eff", every_steps=50_000),
-        ],
+        fields=[],
     )
 )
 study.stages.add_save_state(

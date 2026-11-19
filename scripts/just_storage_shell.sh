@@ -87,52 +87,8 @@ fi
 
 # Closed scientific route, before diagnostic/storage shortcuts; never eval argv.
 case "${recipe}" in
-  *"scripts/docker_dev_data_volume_copy.py"*)
-    volume_copy_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_data_volume_copy.py\" --source-root '([^']+)' --volume-id '([0-9a-f]{32})' --stop-attempt '([0-9a-f]{32})' --stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
-    if [[ ! "${recipe}" =~ ${volume_copy_pattern} ]]; then
-      echo "[fullmag just] invalid guarded data-volume copy recipe" >&2
-      exit 2
-    fi
-    exec "${python_cmd}" -B "${script_dir}/docker_dev_data_volume_copy.py" \
-      --source-root "${BASH_REMATCH[1]}" --volume-id "${BASH_REMATCH[2]}" \
-      --stop-attempt "${BASH_REMATCH[3]}" --stop-sha256 "${BASH_REMATCH[4]}"
-    ;;
-  *"scripts/docker_data_volume_linux.py"*)
-    linux_volume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_data_volume_linux.py\" (probe|preflight|format-mount) --source-root '([^']+)' --wsl-distro '([A-Za-z0-9_-]{1,80})'( --request '([^']+)' --request-sha256 '([0-9a-f]{64})')?( --formatter-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
-    if [[ ! "${recipe}" =~ ${linux_volume_pattern} ]]; then
-      echo "[fullmag just] invalid Linux data-volume stage recipe" >&2
-      exit 2
-    fi
-    linux_volume_args=("${BASH_REMATCH[1]}" --source-root "${BASH_REMATCH[2]}" --wsl-distro "${BASH_REMATCH[3]}")
-    if [[ "${BASH_REMATCH[1]}" == probe ]]; then
-      if [[ -n "${BASH_REMATCH[4]:-}" || -n "${BASH_REMATCH[7]:-}" ]]; then exit 2; fi
-    else
-      if [[ -z "${BASH_REMATCH[4]:-}" ]]; then exit 2; fi
-      linux_volume_args+=(--request "${BASH_REMATCH[5]}" --request-sha256 "${BASH_REMATCH[6]}")
-      if [[ "${BASH_REMATCH[1]}" == format-mount ]]; then
-        if [[ -z "${BASH_REMATCH[7]:-}" ]]; then exit 2; fi
-        linux_volume_args+=(--formatter-sha256 "${BASH_REMATCH[8]}")
-      elif [[ -n "${BASH_REMATCH[7]:-}" ]]; then exit 2
-      fi
-    fi
-    # This controller resolves the explicit source itself and holds its group
-    # lock for formatting. Generic prepare-links would select the wrong profile.
-    exec "${python_cmd}" -B "${script_dir}/docker_data_volume_linux.py" "${linux_volume_args[@]}"
-    ;;
-  *"scripts/docker_dev_data_volume.py"*)
-    volume_plan_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_data_volume.py\" plan --source-root '([^']+)' --runtime-pins '([^']+)' --backing-file '([^']+)' --mount-root '([^']+)' --wsl-distro '([A-Za-z0-9_-]{1,80})' --capacity-gib '([0-9]{1,5})'[[:space:]]*$"
-    if [[ ! "${recipe}" =~ ${volume_plan_pattern} ]]; then
-      echo "[fullmag just] invalid data-volume plan recipe" >&2
-      exit 2
-    fi
-    # Planning is read-only: do not initialize host storage or compatibility links.
-    exec "${python_cmd}" -B "${script_dir}/docker_dev_data_volume.py" plan \
-      --source-root "${BASH_REMATCH[1]}" --runtime-pins "${BASH_REMATCH[2]}" \
-      --backing-file "${BASH_REMATCH[3]}" --mount-root "${BASH_REMATCH[4]}" \
-      --wsl-distro "${BASH_REMATCH[5]}" --capacity-gib "${BASH_REMATCH[6]}"
-    ;;
   *"scripts/docker_volume_no_spawn_cancellation.py"*)
-    no_spawn_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_no_spawn_cancellation.py\" --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --request '([^']+)' --request-sha256 '([0-9a-f]{64})'( --apply)?( --reconcile-loader-failure '([0-9a-f]{32})' --failed-receipt-sha256 '([0-9a-f]{64})')?( --runtime-witness '((resume|iteration)/attempts/[0-9a-f]{32}/terminal\.json)' --runtime-witness-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    no_spawn_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_no_spawn_cancellation.py\" --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --request '([^']+)' --request-sha256 '([0-9a-f]{64})'( --apply)?( --reconcile-loader-failure '([0-9a-f]{32})' --failed-receipt-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${no_spawn_pattern} ]]; then
       echo "[fullmag just] invalid native no-spawn cancellation recipe" >&2
       exit 2
@@ -142,7 +98,6 @@ case "${recipe}" in
       --request "${BASH_REMATCH[5]}" --request-sha256 "${BASH_REMATCH[6]}")
     if [[ -n "${BASH_REMATCH[7]:-}" ]]; then no_spawn_args+=(--apply); fi
     if [[ -n "${BASH_REMATCH[8]:-}" ]]; then no_spawn_args+=(--reconcile-loader-failure "${BASH_REMATCH[9]}" --failed-receipt-sha256 "${BASH_REMATCH[10]}"); fi
-    if [[ -n "${BASH_REMATCH[11]:-}" ]]; then no_spawn_args+=(--runtime-witness "${BASH_REMATCH[12]}" --runtime-witness-sha256 "${BASH_REMATCH[14]}"); fi
     exec "${python_cmd}" -B "${script_dir}/docker_volume_no_spawn_cancellation.py" "${no_spawn_args[@]}"
     ;;
   *"scripts/docker_volume_startup_diagnostic.py"*)
@@ -403,6 +358,21 @@ case "${recipe}" in
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_volume_frontend_refresh_reconcile.py" "${frontend_completion_args[@]}"
     ;;
+  *"scripts/docker_volume_verification_interrupted.py"*)
+    verification_interrupted_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_verification_interrupted.py\" --source-root '([^']+)' --attempt '([0-9a-f]{32})' --receipt-sha256 '([0-9a-f]{64})' --active-sha256 '([0-9a-f]{64})' --development-attempt '([0-9a-f]{32})' --development-terminal-sha256 '([0-9a-f]{64})' --compose-sha256 '([0-9a-f]{64})' --engine-id '([0-9a-f-]{36})' --boot-id '([0-9a-f-]{36})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${verification_interrupted_pattern} ]]; then
+      echo "[fullmag just] invalid interrupted source-verification reconciliation recipe" >&2
+      exit 2
+    fi
+    verification_interrupted_args=(--source-root "${BASH_REMATCH[1]}" --attempt "${BASH_REMATCH[2]}"
+      --receipt-sha256 "${BASH_REMATCH[3]}" --active-sha256 "${BASH_REMATCH[4]}"
+      --development-attempt "${BASH_REMATCH[5]}" --development-terminal-sha256 "${BASH_REMATCH[6]}"
+      --compose-sha256 "${BASH_REMATCH[7]}" --engine-id "${BASH_REMATCH[8]}" --boot-id "${BASH_REMATCH[9]}")
+    if [[ -n "${BASH_REMATCH[10]:-}" ]]; then
+      verification_interrupted_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[11]}")
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_volume_verification_interrupted.py" "${verification_interrupted_args[@]}"
+    ;;
   *"scripts/docker_volume_development_interrupted.py"*)
     development_reconcile_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_development_interrupted.py\" --request '([a-zA-Z0-9_./-]+)' --request-sha256 '([0-9a-f]{64})' --source-root '([^']+)'( --apply)?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${development_reconcile_pattern} ]]; then
@@ -467,7 +437,7 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/docker_activation_history.py" "${history_args[@]}"
     ;;
   *"scripts/docker_volume_checks.py"*)
-    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|activation-history|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|authoring-contracts|time-expression-contracts|live-observation-contracts|accepted-runtime-ownership-contracts|gpu-temperature-contracts|material-library-contracts|material-library-python-contracts|frontend-materials|frontend-materials-full|source-capture|activation-history|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
     volume_offline_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)' --offline --modules '(test_[A-Za-z0-9_]+)'[[:space:]]*$"
     if [[ "${recipe}" =~ ${volume_offline_checks_pattern} ]]; then
       volume_checks_args=(--source-root "${BASH_REMATCH[1]}" --offline --modules "${BASH_REMATCH[2]}")
@@ -574,8 +544,9 @@ case "${recipe}" in
     exec "${python_cmd}" -B "${script_dir}/fullmag_console.py" "${fullmag_console_args[@]}"
     ;;
   *"scripts/docker_dev.py"*)
+    docker_dev_preowner_probe_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" stop-preowner-probe-volume --attempt '([0-9a-f]{32})' --resume-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --image-id '(sha256:[0-9a-f]{64})' --port '([0-9]{4,5})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
-    docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson|fem-cuda-bb-exchange-mass|fem-adaptive-dt|fem-rk-explicit)')?([[:space:]]+--network-subnet '([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})')?[[:space:]]*$"
+    docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson|fem-cuda-bb-exchange-mass)')?([[:space:]]+--network-subnet '([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})')?[[:space:]]*$"
     docker_dev_codegen_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" codegen-openapi( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_recreate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate --direct-development --run-receipt '([^']+)' --previous-config-sha256 '([0-9a-f]{64})' --gpu-access '(auto|required|disabled)'[ ]+(--source-root '([^']+)'[ ]+)?--port '([0-9]{4,5})'[[:space:]]*$"
     docker_dev_recovery_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --restart-backend --build-for-recovery '(verification/[A-Za-z0-9._/-]+\\.json)' --build-for-recovery-sha256 '([0-9a-f]{64})'[[:space:]]*$"
@@ -600,7 +571,14 @@ case "${recipe}" in
     docker_dev_retire_stopped_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --retire-only[[:space:]]*$"
     docker_dev_completed_cache_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" reconcile-completed-cache --registry '([^']+)' --volume '(fullmag-backend-v2-[0-9a-f]{24}-package)' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_args=(--repo-root "${repo_root}")
-    if [[ "${recipe}" =~ ${docker_dev_completed_cache_pattern} ]]; then
+    if [[ "${recipe}" =~ ${docker_dev_preowner_probe_pattern} ]]; then
+      docker_dev_args+=(stop-preowner-probe-volume --attempt "${BASH_REMATCH[1]}"
+        --resume-attempt "${BASH_REMATCH[2]}" --config-sha256 "${BASH_REMATCH[3]}"
+        --source-root "${BASH_REMATCH[4]}" --image-id "${BASH_REMATCH[5]}" --port "${BASH_REMATCH[6]}")
+      if [[ -n "${BASH_REMATCH[7]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[8]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_completed_cache_pattern} ]]; then
       docker_dev_args+=(reconcile-completed-cache --registry "${BASH_REMATCH[1]}"
         --volume "${BASH_REMATCH[2]}" --recovery-id "${BASH_REMATCH[3]}")
       if [[ -n "${BASH_REMATCH[4]:-}" ]]; then

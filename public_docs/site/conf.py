@@ -49,6 +49,14 @@ myst_enable_extensions = [
 myst_fence_as_directive = ["math"]
 myst_heading_anchors = 3
 
+numfig = True
+numfig_format = {
+    "figure": "Fig. %s",
+    "table": "Table %s",
+    "code-block": "Listing %s",
+    "section": "Section %s",
+}
+
 copybutton_prompt_text = r">>> |\.\.\. |\$ "
 copybutton_prompt_is_regexp = True
 

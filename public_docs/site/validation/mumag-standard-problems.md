@@ -16,9 +16,9 @@ the strict FEM backend in double precision.
 ## Problem definition
 
 SP4 is a $500 \times 125 \times 3\ \mathrm{nm}$ permalloy film with saturation magnetization
-$M_s = 800\,000\ \mathrm{A\,m^{-1}}$, exchange stiffness $A_{\mathrm{ex}} = 1.3 \times
-10^{-11}\ \mathrm{J\,m^{-1}}$, and damping $\alpha = 0.02$. An S-shaped magnetization state is
-relaxed, then one of two applied fields drives a dynamic reversal:
+$M_s = 800\,000\ \mathrm{A\,m^{-1}}$, exchange stiffness
+$A_{\mathrm{ex}} = 1.3 \times 10^{-11}\ \mathrm{J\,m^{-1}}$, and damping $\alpha = 0.02$. An
+S-shaped magnetization state is relaxed, then one of two applied fields drives a dynamic reversal:
 
 - field 1: $\mathbf{B} = (-24.6, 4.3, 0)\ \mathrm{mT}$;
 - field 2: $\mathbf{B} = (-35.5, -6.3, 0)\ \mathrm{mT}$.
@@ -54,7 +54,7 @@ just verify-fem-standard-problem-4
 
 ### 1) Introduction
 
-Public qualification for muMag Standard Problem #4 follows the same chain: scenario authoring →
+Public qualification for µMAG Standard Problem 4 follows the same chain: scenario authoring →
 `strict` meshing topology → managed verification harness (`verify-fem-standard-problem-4`) → NIST/convergence/CPU-GPU acceptance gates.
 
 ### 2) Direct source-level contract
@@ -159,18 +159,4 @@ closed. Do not treat this page as a claim that SP4 is physics-validated.
 SP4 acceptance requires, per lane: NIST trajectory agreement, mesh and airbox convergence,
 CPU/GPU parity within the documented tolerances, and no silent fallback. Status advances only
 when the full managed gate passes.
-## Control Room crosswalk
-
-Validation pages are `inspection-only` in Control Room. The UI may expose runtime metadata, fields, tables, or reports for inspection, but it does not create a qualification claim. `TODO: frontend support` applies to validation workflow authoring and report publication unless a specific control is named. See {doc}`/frontend/capability-register`.
-
-## Python/API crosswalk
-
-Validation is not a standalone Python constructor unless the linked case page names one. Reproduce the exact case, inputs, device, precision, and receipt described by the page; use the referenced API pages for callable signatures.
-
-## Physics and bibliography scope
-
-The page either states the governing benchmark model or delegates it to the linked physics/numerical-methods page. Any missing derivation is a documented boundary, not an implicit equation. Bibliography and source evidence remain the authoritative references listed by the validation case.
-## Source-code index
-
-- No standalone implementation function is introduced by this validation page. Source evidence is the exact API, managed recipe, runtime manifest, and receipt named by the validation case.
 

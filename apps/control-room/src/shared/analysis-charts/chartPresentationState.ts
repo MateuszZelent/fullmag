@@ -83,3 +83,52 @@ export function deriveChartPresentationState<T>(
   }
   return { kind: "ready", revision: visibleRevision };
 }
+
+/** Header status overrides derived from a chart presentation state. */
+export interface ChartPresentationStatusDisplay {
+  detail?: string;
+  isAlert?: boolean;
+  primary: string;
+  requestedRevision?: ResourceRevision | null;
+  revision?: ResourceRevision | null;
+}
+
+/**
+ * Maps a presentation state to the chart header status pill.
+ *
+ * A background refresh that retains the visible payload is not a user-facing
+ * state change: the pill stays "Live" at the visible revision so it does not
+ * toggle on every fetch. Loading is only surfaced when no payload is visible
+ * (`initial-loading`).
+ */
+export function chartPresentationStatusDisplay(
+  presentation: ChartDataPresentationState,
+): ChartPresentationStatusDisplay {
+  switch (presentation.kind) {
+    case "ready":
+      return { primary: "Live", revision: presentation.revision };
+    case "refreshing":
+      return { primary: "Live", revision: presentation.visibleRevision };
+    case "paused":
+      return {
+        primary: "Paused",
+        requestedRevision: presentation.latestKnownRevision,
+        revision: presentation.visibleRevision,
+      };
+    case "stale":
+      return {
+        detail: presentation.error.message,
+        isAlert: true,
+        primary: "Refresh failed",
+        revision: presentation.visibleRevision,
+      };
+    case "error":
+      return { detail: presentation.error.message, isAlert: true, primary: "Error" };
+    case "unsupported":
+      return { detail: presentation.reason, primary: "Unavailable" };
+    case "empty":
+      return { primary: "No table data", revision: presentation.revision };
+    case "initial-loading":
+      return { primary: "Loading…" };
+  }
+}

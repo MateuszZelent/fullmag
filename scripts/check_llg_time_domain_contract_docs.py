@@ -154,7 +154,7 @@ LOWERING_CONTRACT = {
     ),
     "StudyBuilder.device.spec": (
         "problem_meta.runtime_metadata.runtime_selection.device (normalized requested runtime metadata)",
-        "gpu",
+        "cuda",
     ),
     "StudyBuilder.device.precision": (
         "backend_policy.execution_precision",

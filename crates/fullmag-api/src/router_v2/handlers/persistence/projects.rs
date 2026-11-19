@@ -30,6 +30,7 @@ use std::path::{Path as FsPath, PathBuf as FsPathBuf};
 use std::sync::Arc;
 
 use crate::error::ApiError;
+use crate::imported_geometry_sources;
 use crate::schemas::projects::{
     ProjectArchiveDurability, ProjectArchiveRequest, ProjectAuthoringUpdateRequest,
     ProjectBatchSubmitRequest, ProjectBatchSubmitResource, ProjectBatchAxisSummaryResource,
@@ -2358,6 +2359,7 @@ pub async fn create(
     tag = "persistence"
 )]
 pub async fn open(
+    State(state): State<Arc<AppState>>,
     Json(request): Json<ProjectArchiveRequest>,
 ) -> Result<Json<ProjectDocumentResource>, ApiError> {
     let source_bytes = decode_archive(&request)?;
@@ -2368,6 +2370,22 @@ pub async fn open(
             bytes: source_bytes.clone(),
         })
         .map_err(|error| ApiError::bad_request(format!("invalid_project_document: {error}")))?;
+    let envelope = application
+        .current_document()
+        .ok_or_else(|| ApiError::internal("project application lost opened document"))?;
+    let archived_scene = envelope.definition.scene.value();
+    let current_project_scene =
+        opened.view.schema_version == fullmag_application::CURRENT_PROJECT_SCHEMA
+            && opened.view.migration.source_schema
+                == fullmag_application::CURRENT_PROJECT_SCHEMA
+            && !opened.view.migration.migrated
+            && opened.view.mode.is_writable()
+            && archived_scene.get("version").and_then(Value::as_str) == Some("scene.v2");
+    if current_project_scene && scene_contains_source_asset(archived_scene) {
+        let scene: SceneDocument = serde_json::from_value(archived_scene.clone())
+            .map_err(|error| ApiError::bad_request(format!("invalid project scene: {error}")))?;
+        imported_geometry_sources::validate_embedded_stl_assets(&scene, &envelope.assets)?;
+    }
     // Unknown schemas stay read-only and must be returned byte-for-byte. A
     // writable migration may publish canonical archive bytes in memory;
     // neither branch claims durable publication.
@@ -2376,7 +2394,26 @@ pub async fn open(
     } else {
         source_bytes
     };
-    let authoring_scene_document = opened_authoring_scene(&application, &opened.view);
+    let mut authoring_scene_document = opened_authoring_scene(&application, &opened.view);
+    if let Some(scene_map) = authoring_scene_document.as_mut() {
+        let mut activation_scene: SceneDocument =
+            serde_json::from_value(Value::Object(scene_map.clone().into_iter().collect()))
+                .map_err(|error| ApiError::bad_request(format!("invalid activation scene: {error}")))?;
+        imported_geometry_sources::materialize_embedded_stl_sources(
+            &mut activation_scene,
+            &envelope.assets,
+            &state.current_workspace_root,
+        )?;
+        let mut activation_value =
+            Value::Object(scene_map.clone().into_iter().collect());
+        imported_geometry_sources::patch_scene_asset_fields(&mut activation_value, &activation_scene)?;
+        *scene_map = activation_value
+            .as_object()
+            .ok_or_else(|| ApiError::internal("activation scene is not an object"))?
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+    }
     let mut resource = resource_from_application(&application, opened.view, archive)?;
     resource.authoring_scene_document = authoring_scene_document;
     Ok(Json(resource))
@@ -2475,6 +2512,20 @@ fn authoring_update_blocking(
         .current_document()
         .cloned()
         .ok_or_else(|| ApiError::internal("project application has no current document"))?;
+    let mut scene_value = scene_value;
+    let mut scene_document = scene_document;
+    let allowed_roots = vec![
+        repo_root.to_path_buf(),
+        workspace_root.to_path_buf(),
+        FsPath::new("/user-data").to_path_buf(),
+    ];
+    let newly_uploaded_assets = imported_geometry_sources::resolve_authoring_stl_sources(
+        &mut scene_document,
+        &current.assets,
+        workspace_root,
+        &allowed_roots,
+    )?;
+    imported_geometry_sources::patch_scene_asset_fields(&mut scene_value, &scene_document)?;
     let raw_scene_matches = current.definition.scene.value() == &scene_value;
     let renderable = !scene_document.objects.is_empty()
         && validate_scene_document(&scene_document).is_ok();
@@ -2518,7 +2569,7 @@ fn authoring_update_blocking(
     };
     let source_matches =
         current.source.as_ref().map(|source| source.bytes()) == generated_source.as_deref();
-    if raw_scene_matches && source_matches {
+    if raw_scene_matches && source_matches && newly_uploaded_assets.is_empty() {
         return Ok(resource_from_application(
             &application,
             opened.view,
@@ -2527,6 +2578,7 @@ fn authoring_update_blocking(
     }
 
     let mut draft = current;
+    draft.assets.extend(newly_uploaded_assets);
     let previous_source = draft
         .source
         .as_ref()
@@ -2740,7 +2792,10 @@ fn opened_authoring_scene(
         return None;
     }
     let document = application.current_document()?;
-    if !document.assets.is_empty()
+    let raw_scene = document.definition.scene.value();
+    if raw_scene.get("version")?.as_str()? != "scene.v2" { return None; }
+    let scene: SceneDocument = serde_json::from_value(raw_scene.clone()).ok()?;
+    if !imported_geometry_sources::contains_only_referenced_stl_assets(&scene, &document.assets)
         || !document.raw_definition.unknown_object_fields(
             ["schema", "project_id", "name", "revision", "scene"]).is_empty()
         || document.opaque_documents.iter().any(|entry| {
@@ -2770,9 +2825,6 @@ fn opened_authoring_scene(
     {
         return None;
     }
-    let raw_scene = document.definition.scene.value();
-    if raw_scene.get("version")?.as_str()? != "scene.v2" { return None; }
-    let scene: SceneDocument = serde_json::from_value(raw_scene.clone()).ok()?;
     validate_scene_document_for_authoring(&scene).ok()?;
     // Structural drafts can retain unsupported execution strings as evidence;
     // an activation projection still requires the canonical backend contract.
@@ -2848,6 +2900,17 @@ fn raw_scene_survives_projection(raw: &Value, projected: &Value) -> bool {
                 })
             }
             (Value::Number(a), Value::Number(b)) => exact_projected_number(a, b),
+            // These canonical Python stage scalars have typed legacy readers.
+            // Compare their parsed values only at their exact semantic owners.
+            (Value::String(text), Value::Number(number)) => match path.as_slice() {
+                ["study", "stages", "*", "max_steps"] =>
+                    text.trim().parse::<u64>().ok().zip(number.as_u64())
+                        .is_some_and(|(a,b)| a == b),
+                ["study", "stages", "*", "torque_tolerance"] =>
+                    text.trim().parse::<f64>().ok().filter(|value| value.is_finite())
+                        .zip(number.as_f64()).is_some_and(|(a,b)| a == b),
+                _ => false,
+            },
             _ => raw == projected,
         }
     }
@@ -2885,9 +2948,16 @@ fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
             || (empty_array && matches!(*field, "physics_stack" | "regions"
                 | "allocated_region_ids" | "material_parameter_fields" | "tags"))
             || (empty_object && matches!(*field, "region_overrides" | "visualization_hint")),
+        ["magnetization_assets", "*"] => value.is_null() && matches!(*field,
+            "dataset" | "preset_kind" | "preset_params" | "preset_version"
+            | "sample_index" | "seed" | "source_format" | "source_path" | "ui_label"),
+        ["materials", "*", "properties"] => value.is_null() && matches!(*field, "Dbulk" | "Dind"),
+        ["objects", "*", "physics_stack", "*"] => value.is_null() && *field == "params",
+        ["study", "stages", "*"] => value.as_str() == Some("")
+            && matches!(*field, "energy_tolerance" | "until_seconds"),
         ["study"] => (value.is_null() && matches!(*field,
             "backend" | "requested_cpu_threads" | "fem_demag_solver_policy" | "fem_bb_preconditioner"
-            | "fem_demag_accuracy_contract" | "fem_gpu_pcg_control_experiment" | "demag_realization"
+            | "fem_demag_accuracy_contract" | "demag_realization"
             | "fdm" | "external_field" | "thermal_noise" | "rotated_interfacial_dmi"
             | "rotated_interfacial_dmi_object_ids" | "universe_mesh"
             | "study_pipeline" | "table_autosave" | "output_storage" | "execution_profile"
@@ -2903,7 +2973,7 @@ fn known_omitted_scene_default(path: &[&str], value: &Value) -> bool {
                 | "boundary_layer_target_surface_tags"))
                 || (value.is_null() && matches!(*field, "boundary_layer_count"
                     | "boundary_layer_stretching" | "resolved_narrow_regions"
-                    | "resolved_size_from_curvature"))
+                    | "resolved_size_from_curvature" | "order"))
                 || (value.as_str() == Some("") && matches!(*field, "boundary_layer_thickness"
                     | "interface_maximum_element_size"))
                 || (!per_object && value.as_str() == Some("") && matches!(*field,
@@ -2943,13 +3013,31 @@ fn exact_projected_number(a: &serde_json::Number, b: &serde_json::Number) -> boo
 /// asset-bearing authoring payloads as evidence, including opaque extensions.
 fn scene_references_unmaterialized_assets(value: &Value) -> bool {
     match value {
-        Value::Object(fields) => fields.iter().any(|(key, value)| {
-            key == "asset_id"
+        Value::Object(fields) => {
+            let is_imported_geometry =
+                fields.get("geometry_kind").and_then(Value::as_str) == Some("ImportedGeometry");
+            fields.iter().any(|(key, value)| {
+                if is_imported_geometry && key == "source_asset" {
+                    return false;
+                }
+                key == "asset_id"
                 || (matches!(key.as_str(), "source_path" | "mode_basis_ref" | "equilibrium_ref")
                     && value.as_str().is_some_and(|text| !text.trim().is_empty()))
-                || scene_references_unmaterialized_assets(value)
-        }),
+                    || scene_references_unmaterialized_assets(value)
+            })
+        },
         Value::Array(items) => items.iter().any(scene_references_unmaterialized_assets),
+        _ => false,
+    }
+}
+
+fn scene_contains_source_asset(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.contains_key("source_asset")
+                || fields.values().any(scene_contains_source_asset)
+        }
+        Value::Array(items) => items.iter().any(scene_contains_source_asset),
         _ => false,
     }
 }
@@ -3031,6 +3119,69 @@ mod authoring_open_tests {
         assert_eq!(application.current_document().unwrap(),&before);
         assert_eq!(view.project_id,before.definition.project_id);
         assert_eq!(view.revision,before.definition.revision);
+    }
+
+    #[test]
+    fn canonical_magnetic_relax_scene_survives_stl_project_open_projection() {
+        // Canonical Python emits these optional placeholders and legacy stage
+        // scalars. Opening must preserve their meaning and the original wire data.
+        let raw = json!({
+            "version":"scene.v2","revision":11,
+            "materials":[{"id":"mat:body","name":"Material","properties":{
+                "Ms":400000.0,"Aex":8e-12,"alpha":0.5,"Dbulk":null,"Dind":null}}],
+            "magnetization_assets":[{"id":"mag:body","name":"Uniform","kind":"uniform",
+                "value":[1.0,0.0,0.0],"dataset":null,"preset_kind":null,"preset_params":null,
+                "preset_version":null,"sample_index":null,"seed":null,"source_format":null,
+                "source_path":null,"ui_label":null}],
+            "objects":[{"id":"body","name":"Body","role":"magnet",
+                "material_ref":"mat:body","magnetization_ref":"mag:body",
+                "geometry":{"geometry_kind":"Box","geometry_params":{"size":[5e-6,5e-6,5e-6]}},
+                "physics_stack":[{"kind":"exchange","enabled":true,"params":null},
+                    {"kind":"demag","enabled":true,"params":null}]}],
+            "study":{"requested_backend":"fem","requested_device":"gpu","requested_precision":"double",
+                "mesh_defaults":{"order":null},"shared_domain_mesh":{"order":null},
+                "stages":[{"kind":"relax","entrypoint_kind":"flat_relax","stage_id":"relax_zero_field",
+                    "algorithm":"projected_gradient_bb","max_steps":"100000",
+                    "torque_tolerance":"0.795774715459","energy_tolerance":"","until_seconds":""}]}
+        });
+        let typed: SceneDocument = serde_json::from_value(raw.clone()).unwrap();
+        validate_scene_document_for_authoring(&typed).unwrap();
+        let projected = authoring_scene_wire_projection(&raw, &typed).unwrap();
+        assert!(raw_scene_survives_projection(&raw, &projected));
+        let (mut application, view) = opened(provenance());
+        let mut draft = application.current_document().unwrap().clone();
+        draft.replace_scene(RawJsonEnvelope::from_value(raw.clone()).unwrap()).unwrap();
+        application.replace_draft(draft, view.revision).unwrap();
+        let bytes = application.repository().encode_archive(application.current_document().unwrap()).unwrap();
+        let mut cold = ProjectApplication::new(FileProjectRepository::new());
+        let opened = cold.open(ProjectSource::Bytes { display_name:"magnetic-stl.fms".into(),bytes }).unwrap();
+        let before = cold.current_document().unwrap().clone();
+        assert_eq!(serde_json::to_value(opened_authoring_scene(&cold,&opened.view).unwrap()).unwrap(), raw);
+        assert_eq!(cold.current_document().unwrap(), &before);
+        for owner in ["/magnetization_assets/0", "/materials/0/properties",
+            "/objects/0/physics_stack/0", "/study/mesh_defaults"] {
+            let mut unknown = raw.clone();
+            unknown.pointer_mut(owner).unwrap().as_object_mut().unwrap().insert("future".into(),Value::Null);
+            let typed: SceneDocument = serde_json::from_value(unknown.clone()).unwrap();
+            assert!(!raw_scene_survives_projection(&unknown,&authoring_scene_wire_projection(&unknown,&typed).unwrap()),"{owner}");
+        }
+        // Stage extensions are retained by the typed flatten map. They are
+        // admissible only while the projection actually retains their data.
+        let mut extension = raw.clone();
+        extension["study"]["stages"][0]["future"] = Value::Null;
+        let typed: SceneDocument = serde_json::from_value(extension.clone()).unwrap();
+        let mut with_extension = authoring_scene_wire_projection(&extension,&typed).unwrap();
+        assert!(raw_scene_survives_projection(&extension,&with_extension));
+        with_extension["study"]["stages"][0].as_object_mut().unwrap().remove("future");
+        assert!(!raw_scene_survives_projection(&extension,&with_extension));
+        let mut lost = projected.clone();
+        lost["magnetization_assets"][0].as_object_mut().unwrap().remove("value");
+        assert!(!raw_scene_survives_projection(&raw,&lost));
+        for (field,value) in [("max_steps",json!(99999)),("torque_tolerance",json!(0.9))] {
+            let mut changed = projected.clone();
+            changed["study"]["stages"][0][field] = value;
+            assert!(!raw_scene_survives_projection(&raw,&changed),"{field}");
+        }
     }
 
     #[test]
@@ -3143,9 +3294,26 @@ mod authoring_open_tests {
             ("/study/mesh_defaults", "boundary_layer_thickness", json!("")),
             ("/study/shared_domain_mesh", "boundary_layer_target_surface_tags", json!([])),
             ("/objects/0/mesh_override", "boundary_layer_thickness", json!("")),
+            ("/study/mesh_defaults", "order", Value::Null),
+            ("/study/shared_domain_mesh", "order", Value::Null),
+            ("/magnetization_assets/0", "dataset", Value::Null),
+            ("/magnetization_assets/0", "preset_kind", Value::Null),
+            ("/magnetization_assets/0", "preset_params", Value::Null),
+            ("/magnetization_assets/0", "preset_version", Value::Null),
+            ("/magnetization_assets/0", "sample_index", Value::Null),
+            ("/magnetization_assets/0", "seed", Value::Null),
+            ("/magnetization_assets/0", "source_format", Value::Null),
+            ("/magnetization_assets/0", "source_path", Value::Null),
+            ("/magnetization_assets/0", "ui_label", Value::Null),
+            ("/materials/0/properties", "Dbulk", Value::Null),
+            ("/materials/0/properties", "Dind", Value::Null),
+            ("/objects/0/physics_stack/0", "params", Value::Null),
+            ("/study/stages/0", "energy_tolerance", json!("")),
+            ("/study/stages/0", "until_seconds", json!("")),
         ] {
-            let projected = json!({"study":{"solver":{},"mesh_defaults":{},"shared_domain_mesh":{}},
-                "objects":[{"mesh_override":{}}]});
+            let projected = json!({"study":{"solver":{},"mesh_defaults":{},"shared_domain_mesh":{},"stages":[{}]},
+                "objects":[{"mesh_override":{},"physics_stack":[{}]}],
+                "materials":[{"properties":{}}],"magnetization_assets":[{}]});
             let mut raw = projected.clone();
             raw.pointer_mut(owner).unwrap().as_object_mut().unwrap().insert(field.into(), empty.clone());
             assert!(raw_scene_survives_projection(&raw, &projected), "{owner}/{field}");

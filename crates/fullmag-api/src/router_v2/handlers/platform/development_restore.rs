@@ -180,7 +180,7 @@ fn scratch_capabilities_for_explicit_cpu_double(
         return None;
     }
     match backend {
-        "fdm" | "fem" => fullmag_runner::scratch_authoring_capabilities(backend),
+        "fdm" | "fem" => fullmag_runner::scratch_authoring_capabilities(backend, device, precision),
         _ => None,
     }
 }

@@ -70,6 +70,18 @@ blokuje budowę przed Gmsh.
 | $h_\mathrm{target}(\mathbf x)$ | Resolved target element size | $\mathrm m$ |
 | $\kappa$ | Curvature factor | $1$ |
 | $R$ | Sampled positive local curvature radius | $\mathrm m$ |
+| $S_i$ | Zamknięta powłoka o indeksie $i$ | $\mathrm{m}^2$ (miara powierzchni) |
+| $F_i$, $f$ | Zbiór zorientowanych trójkątów i jego element | $1$ (indeksy) |
+| $\mathbf a,\mathbf b,\mathbf c$ | Wierzchołki trójkąta w kolejności źródłowej | $\mathrm{m}$ |
+| $\mathbf o_i$ | Lokalny początek układu do całkowania objętości | $\mathrm{m}$ |
+| $V_i$ | Objętość ze znakiem zamkniętej powłoki | $\mathrm{m}^3$ |
+| $\mathbf p$ | Punkt zapytania poza powierzchnią | $\mathrm{m}$ |
+| $\omega_f(\mathbf p)$ | Zorientowany kąt bryłowy trójkąta widzianego z punktu | $1$ |
+| $w_i(\mathbf p)$ | Liczba nawinięć powłoki | $1$ |
+| $d_i$, $i$, $j$ | Głębokość i indeksy powłok | $1$ |
+| $\operatorname{parent}(j)$ | Bezpośrednia powłoka nadrzędna | $1$ (indeks) |
+| $U$ | Ograniczona domena universe | $\mathrm{m}^3$ (miara objętości) |
+| $\Omega_{\mathrm m}$, $\Omega_{\mathrm a}$ | Rozłączne wnętrza materiału i powietrza | $\mathrm{m}^3$ (miara objętości) |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -278,6 +290,120 @@ validation.
 | FEM | CPU | implemented | Native reuse, COMSOL MPHTXT v4, and Gmsh interchange feed the existing validated `MeshIR` path |
 | FEM | GPU | implemented | Same mesh contract; runtime/device qualification remains owned by each GPU workflow |
 
+### 8.3 Zamknięte powłoki STL i wnęki
+
+(stl-shell-domain-contract)=
+
+Status tej sekcji: klasyfikator źródeł i konstrukcja domen są zaimplementowane.
+23 testy klasyfikacji oraz diagnostyczne testy generycznego Gmsh sprawdzają
+puste sześciany, orientację i właścicieli komponentów. Rzeczywisty STL
+BuckyBalla (362516 trójkątów) daje dwie powłoki o głębokości 0 i 1 oraz
+objętość materiału 2.6007237847284727e-18 m³ po przeskalowaniu do 5 µm.
+Jest to dowód źródłowy i geometrii; managed runtime, FEM GPU oraz zbieżność
+mikromagnetyczna pozostają NOT VERIFIED. Zmiana nie rozszerza wcześniejszych
+dowodów persistence ani nie kwalifikuje wykonania GPU.
+
+Powierzchnia STL jest uporządkowanym zbiorem trójkątów, bez jednostek,
+magnetyzacji i materiału. `ImportedGeometry.source`, `scale` i `units` zachowują
+istniejącą semantykę: współrzędne są jawnie normalizowane do metrów; orientacja
+wierzchołków zostaje zachowana. Podgląd otwartej powierzchni nie oznacza
+możliwości zbudowania z niej objętościowej domeny FEM. Niefinitywne i
+zdegenerowane trójkąty są odrzucane już przy imporcie. Brakujące krawędzie,
+niezgodna orientacja, stykanie, przecięcia i niejednoznaczne zawieranie blokują
+realizację bryły, bez cichego zszywania lub wypełniania.
+
+Dla zamkniętej, spójnie zorientowanej powłoki $S_i$ objętość ze znakiem jest
+liczona w przesuniętym układzie, aby ograniczyć utratę cyfr:
+
+```{math}
+:label: eq-stl-signed-shell-volume
+V_i=\frac{1}{6}\sum_{(\mathbf a,\mathbf b,\mathbf c)\in F_i}
+(\mathbf a-\mathbf o_i)\cdot
+[(\mathbf b-\mathbf o_i)\times(\mathbf c-\mathbf o_i)].
+```
+
+Niezerowa objętość i zamknięcie krawędzi nie dowodzą braku samoprzecięć.
+Klasyfikacja wnętrza wykorzystuje liczbę nawinięć w punktach poza powierzchnią:
+
+```{math}
+:label: eq-stl-shell-winding
+w_i(\mathbf p)=\frac{1}{4\pi}\sum_{f\in F_i}\omega_f(\mathbf p).
+```
+
+Dla poprawnej powłoki wynik wynosi zero na zewnątrz i ma moduł jeden wewnątrz;
+wynik niejednoznaczny w precyzji zmiennoprzecinkowej wymaga odmowy. Odległości
+nie większe niż 256 epsilon float64 razy największy wymiar wspólnej obwiedni
+są traktowane jako kontakt lub niepewność. Tolerancja liczby nawinięć względem
+zera lub modułu jeden wynosi 1e-7. To konserwatywne predykaty float64, bez
+obietnicy arytmetyki dokładnej i bez tolerancyjnego sklejania wierzchołków. Testy
+przecinania i stykania pozostają osobnym warunkiem przed użyciem drzewa
+zawierania. Sam test punktu albo zawieranie obwiedni nie zastępują tego warunku.
+
+Głębokość $d_i$ w drzewie ścisłego zawierania jest zerowa dla powłoki
+zewnętrznej. Przy domyślnej polityce `volume="full"` materiał tworzą wnętrza
+powłok parzystych z odjętymi bezpośrednimi nieparzystymi dziećmi:
+
+```{math}
+:label: eq-stl-shell-domain-partition
+\Omega_{\mathrm m}=\bigcup_{i:\,d_i\ \mathrm{even}}
+\left(\operatorname{int}S_i\setminus
+\bigcup_{j:\,\operatorname{parent}(j)=i}\operatorname{int}S_j\right),
+\qquad \Omega_{\mathrm a}=U\setminus\overline{\Omega_{\mathrm m}}.
+```
+
+
+
+Gmsh `geo.addVolume` otrzymuje najpierw pętlę zewnętrzną, następnie pętle
+bezpośrednich wnęk. Powietrze we wnękach tworzy osobne objętości pod tym samym
+markerem powietrza co domena zewnętrzna. Granice są wspólne topologicznie;
+materializacja nadal używa istniejącego MeshIR, map obiektów/regionów oraz
+markerów interfejsów. Wiele plików zachowuje pochodzenie komponentu z importu,
+bez wybierania właściciela według największego przecięcia obwiedni.
+
+Ta geometria jest wspólna dla FEM CPU i GPU; zmienia domenę dyskretyzacji,
+a nie model demag, warunki brzegowe, precyzję ani urządzenie. Ścieżki FDM CPU
+oraz FDM GPU nie są przez tę zmianę promowane. Tryb `volume="surface"`
+pozostaje podglądem, bez objętościowego solvera FEM. Żądany mesh size i SI
+pozostają w authoringu, a rzeczywiste objętości, topologia i markery w raporcie
+oraz `geometry_assets.fem_domain_mesh_asset`.
+
+Dla komponentów STL z typowanymi liczbowymi polami rozmiaru importer
+skaluje współrzędne robocze z metrów do mikrometrów przed klasyfikacją
+powierzchni. Parametry rozmiaru, airbox i selektory używają tego samego
+przelicznika. Węzły wracają do metrów, a statystyki objętości globalnej
+oraz każdej domeny do metrów sześciennych przed materializacją MeshIR.
+Znaczniki i tożsamość elementów nie zmieniają się. Pola zawierające surowe
+wyrażenia Gmsh, nieznane rodzaje pól oraz polityki z dolnymi ograniczeniami
+zachowują dotychczasowy układ SI; importer nie interpretuje ich wyrażeń
+ani nie zmienia niejawnie jednostek. Dotyczy to również selektorów warstw
+brzegowych oraz aktywnych kontroli krzywizny i wąskich obszarów, w tym
+ustawień wynikających z presetu. Ta ścieżka nie ma jeszcze dowodu
+odporności numerycznej dla rzeczywistego BuckyBall.
+
+Klasyfikacja tworzy płaty z wymuszoną możliwością parametryzacji przed
+`createGeometry`. Pojedynczy import korzysta z tej samej ścieżki komponentowej
+co wiele importów: lokalny rozmiar materiału jest ograniczony do odzyskanych
+objętości, a nie całego prostopadłościanu obejmującego źródło.
+
+Tymczasowy STL granicy zamrożonej siatki magnetycznej jest wyprowadzany
+z zewnętrznych ścian komórek objętościowych. Metadane faset mogą zawierać
+tylko fizyczny interfejs, pomijając przekroje periodyczne, i nie określają
+orientacji całej zamkniętej powłoki. Ściany mające dwóch właścicieli są
+wewnętrzne; więcej niż dwóch właścicieli powoduje odrzucenie siatki.
+Pozostałe ściany są orientowane na zewnątrz ich komórki, a czworokąty
+dzielone na trójkąty. Dotyczy to wyłącznie wejścia pomocniczego generatora
+powietrza: zamrożone węzły, komórki, fasety, markery i pary periodyczne
+pozostają niezmienione. Nie osłabia to walidacji STL dostarczonego przez
+użytkownika ani nie kwalifikuje nowej realizacji PBC w solverze.
+
+Regresja przyjęcia obejmuje generyczny import pustego sześcianu o objętości
+materiału 7 i wnęki 1 w universe o objętości 64: powietrze zewnętrzne 56,
+łącznie powietrze 57. Wymaga dodatnich objętości Tet4, pełnej rozłącznej
+partycji, braku materiału we wnęce, konforemnego interfejsu, zachowania nazw
+komponentów, niezależności od globalnego odwrócenia orientacji oraz jawnej
+odmowy błędów topologii. BuckyBall jest osobnym rzeczywistym wejściem, nie
+zamiennikiem tej regresji ani dowodem zbieżności mikromagnetycznej.
+
 (implementation-mapping)=
 ## 9. Implementation mapping
 
@@ -351,6 +477,12 @@ stany bezczynności, również bez opcjonalnych preconditions.
 (scientific-bibliography)=
 ## 12. Scientific bibliography
 
+- A. Jacobson, L. Kavan, O. Sorkine-Hornung, “Robust Inside-Outside Segmentation
+  using Generalized Winding Numbers,” ACM Transactions on Graphics 32(4), 2013,
+  <https://doi.org/10.1145/2461912.2461916>.
+- Gmsh API, `gmsh/model/geo/addVolume`,
+  <https://gmsh.info/doc/texinfo/gmsh.html#gmsh_002fmodel_002fgeo_002faddVolume>.
+
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh
   generator with built-in pre- and post-processing facilities,” *International
   Journal for Numerical Methods in Engineering* 79(11), 2009,
@@ -378,3 +510,12 @@ stany bezczynności, również bez opcjonalnych preconditions.
 | Canonical mesh policy | `docs/adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md` | `DOC-ANCHOR:canonical-fem-mesh-policy` | Planowana algebra stref, upper/lower bounds, curvature i migracja | Cross-layer contract | planned contract |
 | Ręczna transakcja remeshu | `crates/fullmag-cli/src/orchestrator/manual_remesh.rs` | `execute_manual_interactive_remesh` | Kandydat, commit i jawna inicjalizacja z modelu | FEM CPU/GPU | kwalifikacja implementacji w toku |
 | Izolacja wyniku komendy | `crates/fullmag-api/src/session.rs` | `remesh_command_completion` | Odczyt strukturalnego wyniku właściwej operacji | Control plane | kwalifikacja implementacji w toku |
+
+| Semantyka powłok STL | `docs/physics/0100-mesh-and-region-discretization.md` | `DOC-ANCHOR:stl-shell-domain-contract` | Zachowanie wnęk, orientacji i partycji materiał/powietrze | FEM CPU/GPU | source contract; managed runtime NOT VERIFIED |
+| Klasyfikacja powłok STL | `packages/fullmag-py/src/fullmag/meshing/_stl_shells.py` | `classify_closed_shells` | Manifold, BVH/SAT, objętości ze znakiem i zawieranie | FEM geometry input | 23 source tests; actual BuckyBall source analysis |
+| Wnętrze powłoki | `packages/fullmag-py/src/fullmag/meshing/_stl_shells.py` | `_winding` | Suma zorientowanych kątów bryłowych | FEM geometry input | Concave-parent and nesting source tests |
+| Materiał z wnękami | `packages/fullmag-py/src/fullmag/meshing/_gmsh_stl_shells.py` | `material_shell_volumes` | Zewnętrzna pętla i bezpośrednie otwory, owner z element IDs | FEM geometry input | Generic Gmsh cube-domain diagnostics; managed runtime NOT VERIFIED |
+| Współrzędne robocze STL | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_work_coordinate_scale` | Typowane pola liczbowe w mikrometrach; surowe wyrażenia i dolne polityki w SI | FEM CPU/GPU geometry input | source tests; managed BuckyBall NOT VERIFIED |
+| Przywrócenie SI | `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `_stl_mesh_in_si` | Węzły w metrach i statystyki objętości w metrach sześciennych | FEM CPU/GPU geometry input | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics`; source proof |
+| Eksport granicy zamrożonej siatki | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `_write_frozen_boundary_ascii_stl` | Zewnętrzne ściany komórek, orientacja na zewnątrz i domknięcie przekrojów periodycznych w pomocniczym STL | FEM CPU/GPU geometry input | `test_frozen_boundary_stl_export.py`; source tests |
+| Regresja współrzędnych STL | `packages/fullmag-py/tests/test_stl_coordinate_conditioning.py` | `test_work_mesh_returns_si_nodes_and_global_and_domain_volume_statistics` | Niezależna kontrola węzłów i globalnych oraz domenowych objętości | FEM CPU/GPU geometry input | source tests |

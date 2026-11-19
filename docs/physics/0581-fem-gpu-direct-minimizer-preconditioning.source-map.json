@@ -11,8 +11,7 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented-unvalidated",
-      "reason": "Managed native oracle, frozen-SP4 component parity at common torque 1e-8 T, and the C7 accepted-energy finalization native contract passed; the required five alternating performance pairs and broader scientific qualification remain open. The C7 contract is not SP4 timing or parity evidence."
+      "status": "implemented-unvalidated"
     },
     {
       "solver": "FDM",
@@ -334,72 +333,6 @@
       "path": "backends/fem/src/api.cpp",
       "symbol": "fullmag_fem_backend_set_gpu_bb_preconditioner",
       "responsibility": "Ustawia typowaną politykę BB w kontekście natywnym FEM."
-    },
-    {
-      "id": "bb-pipeline-carrier",
-      "path": "crates/fullmag-ir/src/bb_pipeline.rs",
-      "symbol": "is_gpu_bb_pipeline_carrier",
-      "responsibility": "Validates a nonexecuted BB-only pipeline carrier; generic execution remains strict."
-    },
-    {
-      "id": "python-bb-pipeline-carrier",
-      "path": "packages/fullmag-py/src/fullmag/model/bb_pipeline.py",
-      "symbol": "is_gpu_bb_only_pipeline",
-      "responsibility": "Matches the canonical BB-only pipeline structural predicate in Python."
-    },
-    {
-      "id": "bb-preparation-study",
-      "path": "crates/fullmag-api/src/script.rs",
-      "symbol": "gpu_bb_preparation_study",
-      "responsibility": "Borrows only validated concrete BB study controls while preserving the base physical payload."
-    },
-    {
-      "id": "gpu-pgbb-accepted-energy-snapshot",
-      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
-      "symbol": "gpu_relax_projected_gradient_bb_step",
-      "responsibility": "Retains the final accepted direct/refined Armijo energy snapshot for final statistics; rejected trials do not publish it."
-    },
-    {
-      "id": "gpu-final-energy-overlay",
-      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp",
-      "symbol": "gpu_rk_overlay_final_energy_terms",
-      "responsibility": "Validates and overlays only the nine enabled published energy terms; the Robin boundary diagnostic remains excluded."
-    },
-    {
-      "id": "gpu-final-stats-with-energy-overlay",
-      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu",
-      "symbol": "gpu_rk_finalize_step_stats_control_readback_with_energy_terms",
-      "responsibility": "Keeps fresh observable reductions, the existing scalar control readback/fence, timing collection, and publication while reusing accepted energy terms."
-    },
-    {
-      "id": "gpu-final-energy-overlay-contract",
-      "path": "backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp",
-      "symbol": "gpu_pgbb_final_energy_overlay_contract",
-      "responsibility": "Checks all nine published energies and their total, fresh torque/moment retention, Robin exclusion, and finite-failure atomicity."
-    },
-    {
-      "id": "bb-certificate-cabi",
-      "path": "backends/fem/src/api.cpp",
-      "symbol": "fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1",
-      "responsibility": "Exports the existing host-cached result without a new device readback or synchronization. Managed native validation pending."
-    },
-    {
-      "id": "bb-certificate-cache",
-      "path": "backends/fem/gpu/cuda/relaxation/bb_exchange_mass.cpp",
-      "symbol": "gpu_bb_exchange_mass_certificate",
-      "responsibility": "Distinguishes an absent result from the last completed cooperative BB solve, independently of accepted-state rollback."
-    },
-    {
-      "id": "bb-certificate-typed-validation",
-      "path": "crates/fullmag-runner/src/fem/gpu_terminal_provenance.rs",
-      "symbol": "gpu_bb_certificate_from_ffi",
-      "responsibility": "Validates ABI, actual cooperative support and each component true residual, including exact zero and tiny nonzero RHS."
-    },
-    {
-      "id": "bb-certificate-terminal-attachment",
-      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
-      "symbol": "finalize_native_fem_relaxation",
-      "responsibility": "Attaches the cached certificate once to terminal performance provenance; no per-step device work."
     }
   ],
   "public_api": {

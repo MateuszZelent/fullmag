@@ -8,9 +8,9 @@ last_updated: 2026-10-14
 reviewed_revision: 5e99782acbb7fb3f65d0cad872e102bf67733103
 ---
 
+(public-docs-python-api-boundary-conditions-floquet-boundary-conditions)=
 # Floquet boundary conditions
 
-(public-docs-python-api-boundary-conditions-floquet-boundary-conditions)=
 (python-api-boundary-conditions-floquet-boundary-conditions-problem-statement)=
 ## 1. Physical problem and solver family
 
@@ -124,8 +124,8 @@ canonical_ir = floquet_bc.to_ir()
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `pair_ids` | `Sequence[str]` | `required` | `1` | non-empty sequence; IDs non-empty | boundary pairs carrying the Bloch phase | FEM/FDM CPU/GPU: IR; resolved support required | `pair_ids` |
-| `phase_convention` | `str` | `exp_minus_i_k_dot_delta_r` | `1` | non-empty string | phase sign convention | FEM/FDM CPU/GPU: IR; resolved support required | `phase_convention` |
+| `pair_ids` | `Sequence[str]` | `required` | $1$ | non-empty sequence; IDs non-empty | boundary pairs carrying the Bloch phase | FEM/FDM CPU/GPU: IR; resolved support required | `pair_ids` |
+| `phase_convention` | `str` | `exp_minus_i_k_dot_delta_r` | $1$ | non-empty string | phase sign convention | FEM/FDM CPU/GPU: IR; resolved support required | `phase_convention` |
 
 (python-api-boundary-conditions-floquet-boundary-conditions-problem-ir)=
 ## 6. ProblemIR, normalization, and provenance

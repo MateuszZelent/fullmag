@@ -105,6 +105,7 @@ export interface VisualizationTargetSettings {
   boundsOpacityPercent: number;
   boundsVisible: boolean;
   geometryScope: VisualizationGeometryScope;
+  wireframeGeometryScope: VisualizationGeometryScope;
   surfaceOpacityPercent: number;
   pointColor: string;
   pointOpacityPercent: number;
@@ -236,6 +237,7 @@ export interface VisualizationTargetCapabilities {
   primaryRenderModes: readonly VisualizationRenderMode[];
   showBoundsControl: boolean;
   showGeometryScopeControl: boolean;
+  showWireframeGeometryScopeControl: boolean;
   supportsFieldData: boolean;
   supportsPoints: boolean;
   supportsVectors: boolean;
@@ -246,6 +248,7 @@ const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities
   primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: true,
+  showWireframeGeometryScopeControl: true,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -256,6 +259,7 @@ const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities 
   primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: false,
+  showWireframeGeometryScopeControl: false,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -266,6 +270,7 @@ const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapab
   primaryRenderModes: ["wireframe", "points"],
   showBoundsControl: true,
   showGeometryScopeControl: false,
+  showWireframeGeometryScopeControl: false,
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
@@ -277,13 +282,23 @@ export function visualizationTargetCapabilities(
   artifactInspection = false,
 ): VisualizationTargetCapabilities {
   // Display passes derive from the owned result topology, never from magnetic physics.
-  if (artifactInspection && target.kind === "airbox") return DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
+  if (artifactInspection && target.kind === "airbox") {
+    return {
+      ...DEFAULT_VISUALIZATION_TARGET_CAPABILITIES,
+      showWireframeGeometryScopeControl: false,
+    };
+  }
   if (isFdmUniverseOutsideSupportTarget(target)) {
     return FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES;
   }
-  return target.kind === "airbox"
-    ? AIRBOX_VISUALIZATION_TARGET_CAPABILITIES
-    : DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
+  if (target.kind === "airbox") return AIRBOX_VISUALIZATION_TARGET_CAPABILITIES;
+  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer" || target.kind === "region") {
+    return {
+      ...DEFAULT_VISUALIZATION_TARGET_CAPABILITIES,
+      showWireframeGeometryScopeControl: false,
+    };
+  }
+  return DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
 }
 
 export function isFdmUniverseOutsideSupportTarget(
@@ -334,6 +349,7 @@ export function visualizationTargetUnsupportedPatchFields(
     "surfaceOpacityPercent",
     "surfaceProjectionMode",
     "tensorProjection",
+    "wireframeGeometryScope",
     "viewportColorbarVisible",
   ]);
   if (target.kind === "airbox") {
@@ -427,6 +443,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsOpacityPercent: 100,
   boundsVisible: false,
   geometryScope: "surface",
+  wireframeGeometryScope: "surface",
   surfaceOpacityPercent: 100,
   pointColor: "var(--fm-border-strong)",
   pointOpacityPercent: 100,
@@ -465,6 +482,7 @@ export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTa
   boundsOpacityPercent: 55,
   boundsVisible: true,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   pointColor: "var(--fm-info)",
   renderMode: "wireframe",
   shaderColorMode: "monochrome",
@@ -542,6 +560,7 @@ export const DEFAULT_FDM_DOMAIN_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
   boundsVisible: false,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   renderMode: "wireframe",
   shaderVisible: false,
   surfaceColorSource: "solid",
@@ -585,6 +604,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsOpacityPercent: 100,
   boundsVisible: false,
   geometryScope: "full",
+  wireframeGeometryScope: "full",
   surfaceOpacityPercent: 28,
   pointColor: "var(--fm-info)",
   pointOpacityPercent: 100,
@@ -1396,6 +1416,10 @@ function resolveVisualizationStateTargetOverride(
     ...(display?.geometry_scope === undefined || display.geometry_scope === null
       ? {}
       : { geometryScope: display.geometry_scope }),
+    ...(display?.wireframe_geometry_scope === undefined ||
+    display.wireframe_geometry_scope === null
+      ? {}
+      : { wireframeGeometryScope: display.wireframe_geometry_scope }),
     ...(surfaceOpacity === undefined || surfaceOpacity === null
       ? {}
       : {
@@ -1507,6 +1531,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.geometryScope === undefined
       ? {}
       : { geometry_scope: normalized.geometryScope }),
+    ...(normalized.wireframeGeometryScope === undefined
+      ? {}
+      : { wireframe_geometry_scope: normalized.wireframeGeometryScope }),
     ...(normalized.boundsVisible === undefined &&
     normalized.boundsOpacityPercent === undefined
       ? {}
@@ -1738,6 +1765,9 @@ function removeSerializedOverrideField(
       break;
     case "geometryScope":
       delete display.geometry_scope;
+      break;
+    case "wireframeGeometryScope":
+      delete display.wireframe_geometry_scope;
       break;
     case "surfaceOpacityPercent":
       delete display.opacity;
@@ -2232,6 +2262,8 @@ function visualizationSettingsFromResolvedTarget(
     boundsVisible: settings.bounds_visible,
     boundsOpacityPercent: layerOpacityToPercent(settings.bounds_opacity),
     geometryScope: settings.geometry_scope,
+    wireframeGeometryScope:
+      settings.wireframe_geometry_scope ?? defaultSettings.wireframeGeometryScope,
     surfaceOpacityPercent: layerOpacityToPercent(
       settings.surface_opacity ?? settings.opacity,
     ),
@@ -2794,6 +2826,8 @@ function normalizeVisualizationSettings(
       settings.geometryScope === "surface" || settings.geometryScope === "full"
         ? settings.geometryScope
         : "full",
+    wireframeGeometryScope:
+      settings.wireframeGeometryScope === "full" ? "full" : "surface",
 
     surfaceOpacityPercent: clampOpacity(settings.surfaceOpacityPercent),
     boundsOpacityPercent: clampOpacity(settings.boundsOpacityPercent),

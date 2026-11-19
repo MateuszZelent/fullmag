@@ -62,6 +62,10 @@ fullmag-dev-container script source_root="" port="" gpu_access="auto":
 # Codegen through the already-running services; no Compose lifecycle operation.
 docker-dev-codegen source_root="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" codegen-openapi {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
+# Preserve and stop an empty pre-owner GPU-probe failure; no native drain is claimed.
+docker-dev-stop-preowner-probe attempt resume_attempt config_sha256 source_root image_id port="3197" apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-preowner-probe-volume --attempt {{quote(attempt)}} --resume-attempt {{quote(resume_attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --image-id {{quote(image_id)}} --port {{quote(port)}}{{if apply == "true" { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+
 # Stop only a pinned supervisor whose failed admission already reaped the API.
 docker-dev-stop-failed source_root container_id image_id process_receipt_sha256 terminal_only="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}{{if terminal_only == "true" { " --terminal-only" } else if terminal_only == "false" { "" } else { error("terminal_only must be true or false") } }}
@@ -72,8 +76,8 @@ docker-dev-stop-prepared-unclaimed source_root container_id image_id process_rec
 
 # Invoke the native WorkerNoSpawn operator in the exact diagnostic backend.
 # Preview is read-only; apply preserves all run data and never repeats Solve.
-docker-dev-cancel-failed-no-spawn source_root container_id image_id process_receipt_sha256 request request_sha256 apply="false" reconcile_attempt="" failed_receipt_sha256="" runtime_witness="" runtime_witness_sha256="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_no_spawn_cancellation.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if reconcile_attempt == "" { if failed_receipt_sha256 == "" { "" } else { error("both loader reconciliation pins are required") } } else { if failed_receipt_sha256 == "" { error("both loader reconciliation pins are required") } else { " --reconcile-loader-failure " + quote(reconcile_attempt) + " --failed-receipt-sha256 " + quote(failed_receipt_sha256) } } }}{{if runtime_witness == "" { if runtime_witness_sha256 == "" { "" } else { error("both runtime witness pins are required") } } else { if runtime_witness_sha256 == "" { error("both runtime witness pins are required") } else { " --runtime-witness " + quote(runtime_witness) + " --runtime-witness-sha256 " + quote(runtime_witness_sha256) } } }}
+docker-dev-cancel-failed-no-spawn source_root container_id image_id process_receipt_sha256 request request_sha256 apply="false" reconcile_attempt="" failed_receipt_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_no_spawn_cancellation.py" --source-root {{quote(source_root)}} --backend-container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if reconcile_attempt == "" { if failed_receipt_sha256 == "" { "" } else { error("both loader reconciliation pins are required") } } else { if failed_receipt_sha256 == "" { error("both loader reconciliation pins are required") } else { " --reconcile-loader-failure " + quote(reconcile_attempt) + " --failed-receipt-sha256 " + quote(failed_receipt_sha256) } } }}
 
 # Release one unknown activation whose recorded HTTP 500 precedes any API mutation,
 # after the backend stopped gracefully with an empty accepted-run store. Never retries the script.
@@ -141,6 +145,10 @@ docker-dev-build-for-recovery attempt config_sha256 source_root request request_
 docker-dev-reconcile-iteration request request_sha256 source_root port="3197" preview="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_reconcile.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
 
+# Close only an orphaned pre-owner source-verification lease; preserve every log and verified receipt.
+docker-dev-reconcile-interrupted-verification source_root attempt receipt_sha256 active_sha256 development_attempt development_terminal_sha256 compose_sha256 engine_id boot_id apply="false" expected_plan_sha256="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_verification_interrupted.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --active-sha256 {{quote(active_sha256)}} --development-attempt {{quote(development_attempt)}} --development-terminal-sha256 {{quote(development_terminal_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}} --boot-id {{quote(boot_id)}}{{if apply == "true" { if expected_plan_sha256 == "" { error("apply requires the exact preview plan digest") } else { " --apply --expected-plan-sha256 " + quote(expected_plan_sha256) } } else if apply == "false" { if expected_plan_sha256 == "" { "" } else { error("a plan digest requires apply=true") } } else { error("apply must be true or false") } }}
+
 # Confirm one interrupted development only; preview never changes its native receipt.
 docker-dev-reconcile-development request request_sha256 source_root apply="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_development_interrupted.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
@@ -202,26 +210,6 @@ docker-dev-stop-startup-diagnostic source_root image_id request request_sha256 a
 # Inspect or stop the exact fenced diagnostic API; preserve Unknown and all data.
 docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_attempt="" preview="true":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-diagnostic-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if resume_attempt == "" { "" } else { " --resume-attempt " + quote(resume_attempt) } }}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
-
-# Inspect one pinned WSL data move without changing disks or stopping services.
-docker-dev-data-volume-plan source_root runtime_pins backing_file mount_root wsl_distro capacity_gib="128":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_data_volume.py" plan --source-root {{quote(source_root)}} --runtime-pins {{quote(runtime_pins)}} --backing-file {{quote(backing_file)}} --mount-root {{quote(mount_root)}} --wsl-distro {{quote(wsl_distro)}} --capacity-gib {{quote(capacity_gib)}}
-
-# Read-only inventory in the persistent Linux host namespace.
-docker-dev-data-volume-probe source_root wsl_distro:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" probe --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}}
-
-# Qualify one new empty disk from the authenticated pre-Attach inventory.
-docker-dev-data-volume-preflight source_root wsl_distro request request_sha256:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" preflight --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}
-
-# One-shot, journaled format/mount; failures never replay this stage.
-docker-dev-data-volume-format source_root wsl_distro request request_sha256 formatter_sha256:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" format-mount --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --formatter-sha256 {{quote(formatter_sha256)}}
-
-# Copy an already mounted volume after an exact managed terminal stop; no cutover.
-docker-dev-data-volume-copy source_root volume_id stop_attempt stop_sha256:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_data_volume_copy.py" --source-root {{quote(source_root)}} --volume-id {{quote(volume_id)}} --stop-attempt {{quote(stop_attempt)}} --stop-sha256 {{quote(stop_sha256)}}
 
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":

@@ -309,6 +309,7 @@ __global__ void combine_effective_field_fp64_kernel(
     const double * __restrict__ regional_drive_z,
     const RegionalFieldDriveParams * __restrict__ regional_drive_params,
     const double * __restrict__ regional_drive_points,
+    RegionalFieldDriveHostMultipliers regional_drive_host,
     uint32_t regional_drive_count,
     uint64_t regional_drive_cell_count,
     double evaluation_time_s,
@@ -526,13 +527,13 @@ __global__ void combine_effective_field_fp64_kernel(
     }
 
     hx += regional_field_drive_component(
-        regional_drive_x, regional_drive_params, regional_drive_points,
+        regional_drive_x, regional_drive_params, regional_drive_points, regional_drive_host,
         regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
     hy += regional_field_drive_component(
-        regional_drive_y, regional_drive_params, regional_drive_points,
+        regional_drive_y, regional_drive_params, regional_drive_points, regional_drive_host,
         regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
     hz += regional_field_drive_component(
-        regional_drive_z, regional_drive_params, regional_drive_points,
+        regional_drive_z, regional_drive_params, regional_drive_points, regional_drive_host,
         regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
 
     h_eff_x[idx] = hx;
@@ -914,6 +915,7 @@ static void launch_effective_field_fp64_impl(
         static_cast<const double*>(ctx.regional_field_drive_z),
         ctx.regional_field_drive_params,
         ctx.regional_field_drive_points,
+        context_regional_field_drive_host_multipliers(ctx, evaluation_time),
         ctx.regional_field_drive_count,
         ctx.cell_count,
         evaluation_time,

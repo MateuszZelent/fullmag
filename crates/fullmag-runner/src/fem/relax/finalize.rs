@@ -35,11 +35,7 @@ struct NativeEquilibriumEvaluation {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        run_after_strict_receipt_gate, should_capture_terminal_gpu_performance_snapshot,
-        terminal_scheduled_field_actions,
-    };
-    use crate::dispatch::FemEngine;
+    use super::{run_after_strict_receipt_gate, terminal_scheduled_field_actions};
     use crate::schedules::OutputSchedule;
     use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt};
 
@@ -107,30 +103,6 @@ mod tests {
     }
 
     #[test]
-    fn performance_snapshot_capture_requires_accepted_direct_gpu_relaxation() {
-        assert!(should_capture_terminal_gpu_performance_snapshot(
-            FemEngine::NativeGpu,
-            true,
-            1
-        ));
-        assert!(!should_capture_terminal_gpu_performance_snapshot(
-            FemEngine::CpuNative,
-            true,
-            1
-        ));
-        assert!(!should_capture_terminal_gpu_performance_snapshot(
-            FemEngine::NativeGpu,
-            false,
-            1
-        ));
-        assert!(!should_capture_terminal_gpu_performance_snapshot(
-            FemEngine::NativeGpu,
-            true,
-            0
-        ));
-    }
-
-    #[test]
     fn native_fem_accepted_steps_reach_the_diagnostic_trace_boundary() {
         let direct = include_str!("direct_minimizer.rs");
         let llg = include_str!("llg_overdamped.rs");
@@ -157,14 +129,6 @@ fn run_after_strict_receipt_gate<T>(
         })?;
     }
     Ok(success())
-}
-
-fn should_capture_terminal_gpu_performance_snapshot(
-    engine: FemEngine,
-    direct_minimizer: bool,
-    accepted_step: u64,
-) -> bool {
-    engine == FemEngine::NativeGpu && direct_minimizer && accepted_step > 0
 }
 
 pub(crate) struct NativeFemRelaxationFinalization {
@@ -929,7 +893,6 @@ pub(crate) fn finalize_native_fem_relaxation(
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let mut diagnostic_steps = artifacts.take_solver_steps();
     let final_cpu_fixed_coupling = backend.cpu_fixed_coupling_telemetry()?;
-    let final_cpu_fixed_coupling_present = final_cpu_fixed_coupling.is_some();
     if final_cpu_fixed_coupling.is_some() {
         final_stats.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
         if let Some(last) = steps.last_mut() {
@@ -939,44 +902,6 @@ pub(crate) fn finalize_native_fem_relaxation(
             last.cpu_fixed_coupling = final_cpu_fixed_coupling.clone();
         }
         final_provenance.cpu_fixed_coupling = final_cpu_fixed_coupling;
-    }
-    let direct_minimizer = plan.relaxation.as_ref().is_some_and(|control| {
-        super::algorithm::is_direct_minimizer(control.algorithm)
-    });
-    let capture_performance_snapshot = should_capture_terminal_gpu_performance_snapshot(
-        engine,
-        direct_minimizer,
-        final_stats.step,
-    );
-    if capture_performance_snapshot {
-        let snapshot = backend.gpu_performance_snapshot()?;
-        let mut provenance = snapshot.to_provenance(final_stats.step)?;
-        if plan.relaxation.as_ref().is_some_and(|control| {
-            control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-        }) {
-            // Existing host cache only: no per-step readback or new GPU fence.
-            provenance.bb_preconditioner_certificate =
-                backend.gpu_bb_preconditioner_certificate()?;
-        }
-        final_provenance.fem_gpu_performance_snapshot = Some(provenance);
-    }
-    let capture_pcg_control_experiment = plan.gpu_pcg_control_experiment.is_some();
-    if let Some(request) = &plan.gpu_pcg_control_experiment {
-        final_provenance.fem_gpu_pcg_control_experiment =
-            Some(backend.gpu_pcg_control_experiment(request.status_batch_stride)?);
-    }
-    // Terminal, process-cumulative host atomics only; no GPU readback or fence.
-    // Never attach these global observations to CPU or per-instance counters.
-    let had_hypre_async_copy = final_provenance.hypre_relax7_async_copy.is_some();
-    final_provenance.hypre_relax7_async_copy = if engine == FemEngine::NativeGpu {
-        crate::native_fem::terminal_hypre_relax7_async_copy()
-    } else {
-        None
-    };
-    let capture_hypre_async_copy =
-        had_hypre_async_copy || final_provenance.hypre_relax7_async_copy.is_some();
-    if final_cpu_fixed_coupling_present || capture_performance_snapshot
-        || capture_hypre_async_copy || capture_pcg_control_experiment {
         artifacts.replace_provenance_synchronously(final_provenance)?;
     }
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();

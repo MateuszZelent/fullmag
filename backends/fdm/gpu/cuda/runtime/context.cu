@@ -6,11 +6,13 @@
  */
 
 #include "context.hpp"
+#include "fullmag_time_expression.h"
 
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -609,6 +611,8 @@ static void free_regional_field_drives(Context &ctx) {
     ctx.regional_field_drive_count = 0;
     ctx.regional_field_drive_time_dependent = false;
     ctx.regional_field_drive_point_count = 0;
+    ctx.regional_field_drive_host_programs.clear();
+    ctx.regional_field_drive_host_time_offsets.clear();
 }
 
 static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &pool)
@@ -4912,7 +4916,7 @@ bool context_mark_static_external_field_profile(
 
 bool context_upload_regional_field_drives(
     Context &ctx,
-    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
+    const fullmag_fdm_regional_field_drive_desc_v3 *drives,
     uint32_t drive_count)
 {
     if (drive_count == 0) return true;
@@ -4950,13 +4954,23 @@ bool context_upload_regional_field_drives(
     std::vector<double> basis_z(basis_count, 0.0);
     std::vector<RegionalFieldDriveParams> params(drive_count);
     std::vector<double> piecewise_points;
+    // HOST_MULTIPLIER drives, by slot: program, clock offset, reads t.
+    std::vector<std::vector<double>> host_programs;
+    std::vector<double> host_time_offsets;
+    std::vector<bool> host_reads_t;
 
     for (uint32_t drive_index = 0; drive_index < drive_count; ++drive_index) {
-        const auto &entry = drives[drive_index];
+        const auto &extended = drives[drive_index];
+        const auto &entry = extended.drive;
         const auto &descriptor = entry.drive;
-        if (descriptor.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 ||
-            descriptor.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v2)) {
+        if (descriptor.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3 ||
+            descriptor.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v3)) {
             ctx.last_error = "regional field drive descriptor ABI mismatch";
+            return false;
+        }
+        if (descriptor.waveform != FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER &&
+            (extended.time_program != nullptr || extended.time_program_len != 0)) {
+            ctx.last_error = "only host-multiplier regional field drives carry a time program";
             return false;
         }
         if (descriptor.field_xyz == nullptr ||
@@ -5069,6 +5083,28 @@ bool context_upload_regional_field_drives(
                 return false;
             }
             break;
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER: {
+            const int reads_t = fullmag_time_expression_reads_t(
+                extended.time_program, extended.time_program_len);
+            if (reads_t < 0 || descriptor.piecewise_point_count != 0 ||
+                descriptor.piecewise_points != nullptr) {
+                ctx.last_error =
+                    "host-multiplier regional field drive needs a well-formed time program and no piecewise points";
+                return false;
+            }
+            if (host_programs.size() >= FULLMAG_FDM_MAX_HOST_MULTIPLIER_DRIVES) {
+                ctx.last_error =
+                    "mask_too_many_terms: more than 8 host-multiplier regional field drives";
+                return false;
+            }
+            resolved.host_multiplier_slot = static_cast<int>(host_programs.size());
+            host_programs.emplace_back(
+                extended.time_program,
+                extended.time_program + extended.time_program_len);
+            host_time_offsets.push_back(resolved.time_offset_s);
+            host_reads_t.push_back(reads_t == 1);
+            break;
+        }
         default:
             ctx.last_error = "unknown regional field drive waveform";
             return false;
@@ -5187,11 +5223,76 @@ bool context_upload_regional_field_drives(
     ctx.regional_field_drive_points = points_device;
     ctx.regional_field_drive_count = drive_count;
     ctx.regional_field_drive_time_dependent = std::any_of(
-        params.begin(), params.end(), [](const RegionalFieldDriveParams &drive) {
+        params.begin(), params.end(), [&](const RegionalFieldDriveParams &drive) {
+            if (drive.waveform == FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER) {
+                return static_cast<bool>(
+                    host_reads_t[static_cast<size_t>(drive.host_multiplier_slot)]);
+            }
             return drive.waveform != FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
         });
     ctx.regional_field_drive_point_count = static_cast<uint64_t>(piecewise_points.size() / 2u);
+    ctx.regional_field_drive_host_programs = std::move(host_programs);
+    ctx.regional_field_drive_host_time_offsets = std::move(host_time_offsets);
     return true;
+}
+
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v2 *drives,
+    uint32_t drive_count)
+{
+    if (drive_count != 0 && drives == nullptr) {
+        ctx.last_error = "regional field drives require a non-null descriptor array";
+        return false;
+    }
+    std::vector<fullmag_fdm_regional_field_drive_desc_v3> upgraded;
+    upgraded.reserve(drive_count);
+    for (uint32_t index = 0; index < drive_count; ++index) {
+        const auto &entry = drives[index];
+        if (entry.drive.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V2 ||
+            entry.drive.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v2)) {
+            ctx.last_error = "regional field drive descriptor ABI mismatch";
+            return false;
+        }
+        if (entry.drive.waveform == FULLMAG_FDM_REGIONAL_FIELD_DRIVE_HOST_MULTIPLIER) {
+            ctx.last_error = "host-multiplier regional field drives need descriptor v3";
+            return false;
+        }
+        fullmag_fdm_regional_field_drive_desc_v3 extended{};
+        extended.drive = entry;
+        extended.drive.drive.abi_version = FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V3;
+        extended.drive.drive.struct_size = sizeof(extended);
+        upgraded.push_back(extended);
+    }
+    return context_upload_regional_field_drives(ctx, upgraded.data(), drive_count);
+}
+
+RegionalFieldDriveHostMultipliers context_regional_field_drive_host_multipliers(
+    Context &ctx,
+    double evaluation_time_s)
+{
+    RegionalFieldDriveHostMultipliers host;
+    const size_t count = ctx.regional_field_drive_host_programs.size();
+    for (size_t slot = 0; slot < count; ++slot) {
+        const auto &program = ctx.regional_field_drive_host_programs[slot];
+        const double local_time_s =
+            evaluation_time_s - ctx.regional_field_drive_host_time_offsets[slot];
+        const double value = fullmag_time_expression_eval(
+            program.data(), static_cast<uint64_t>(program.size()), local_time_s);
+        if (!std::isfinite(value)) {
+            if (ctx.last_error.empty()) {
+                char message[256];
+                std::snprintf(
+                    message, sizeof(message),
+                    "mask_expression_non_finite: host-multiplier drive slot %zu at local time %.17g s gives %g",
+                    slot, local_time_s, value);
+                ctx.last_error = message;
+            }
+            continue;
+        }
+        host.value[slot] = value;
+    }
+    return host;
 }
 
 bool context_upload_regional_field_drives(

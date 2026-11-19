@@ -92,6 +92,7 @@ impl PreparedMagnetizationApply {
                     &plan_fingerprint,
                     scene_revision,
                     provenance,
+                    false,
                 )?;
                 Ok((MagnetizationApplyStatus::InitialStateReady, None))
             }
@@ -139,79 +140,19 @@ fn prepare_preview(
     scene: &SceneDocument,
     apply: &MagnetizationApply,
 ) -> Result<ApplyPreview, ApiError> {
-    let before = snapshot
-        .scene_document
-        .as_ref()
-        .ok_or_else(|| ApiError::conflict("magnetization apply requires a committed scene"))?;
-    if crate::scene_mesh_signature(before) != crate::scene_mesh_signature(scene) {
-        return Ok(ApplyPreview::Pending("domain_requires_rebuild"));
-    }
-    let Some(metadata) = snapshot
+    let (problem, planned, layout) =
+        match plan_on_published_domain(repo, workspace, store_root, context, snapshot, scene)? {
+            PublishedDomainPlan::Ready {
+                problem,
+                plan,
+                layout,
+            } => (problem, plan, layout),
+            PublishedDomainPlan::Pending(reason) => return Ok(ApplyPreview::Pending(reason)),
+        };
+    let metadata = snapshot
         .metadata
         .as_ref()
-        .filter(|meta| meta.get("execution_plan").is_some())
-    else {
-        return Ok(ApplyPreview::Pending("domain_not_prepared"));
-    };
-    let published = metadata
-        .execution_plan()
-        .ok_or_else(|| ApiError::conflict("invalid published domain plan"))?;
-    let Ok(layout) = fullmag_runner::study_magnetization_layout_for_plan(&published) else {
-        return Ok(ApplyPreview::Pending("domain_layout_unsupported"));
-    };
-    let geometry = match &published.backend_plan {
-        BackendPlanIR::Fem(fem) => {
-            let payload = fullmag_runner::FemMeshPayload::from(fem);
-            let topology = fullmag_runner::fem_mesh_topology_fingerprint(&payload);
-            if snapshot
-                .fem_mesh
-                .as_ref()
-                .is_none_or(|mesh| mesh.topology_fingerprint() != topology)
-            {
-                return Ok(ApplyPreview::Pending("domain_layout_not_qualified"));
-            }
-            let Some(geometry) = verified_fem_geometry(store_root, context, snapshot, &layout)?
-            else {
-                return Ok(ApplyPreview::Pending("native_fem_domain_not_qualified"));
-            };
-            Some(geometry)
-        }
-        _ => {
-            let published_layout = snapshot
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("artifact_layout"));
-            if published_layout != Some(&layout) {
-                return Ok(ApplyPreview::Pending("domain_layout_not_qualified"));
-            }
-            None
-        }
-    };
-    let execution = RequestedExecution {
-        backend: scene.study.requested_backend.clone(),
-        device: scene.study.requested_device.clone(),
-        precision: scene.study.requested_precision.clone(),
-        mode: scene.study.requested_mode.clone(),
-        minimum_resources: None,
-    };
-    let source = Path::new(&snapshot.session.script_path);
-    let asset_root = source.is_absolute().then(|| source.parent()).flatten();
-    let mut problem = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
-        repo, workspace, asset_root, scene, &execution,
-    )?;
-    if let Some(geometry) = geometry {
-        problem.geometry_assets = Some(geometry);
-    }
-    let problem = fullmag_application::bind_declared_execution(&problem, vec![])
-        .map_err(|error| ApiError::unprocessable(format!("bind magnetization apply: {error}")))?;
-    let planned = fullmag_plan::plan(&problem).map_err(|error| {
-        ApiError::unprocessable(format!("evaluate magnetization apply: {error}"))
-    })?;
-    let planned_layout = fullmag_runner::study_magnetization_layout_for_plan(&planned)
-        .map_err(|error| ApiError::unprocessable(error.message))?;
-    if planned_layout != layout {
-        return Ok(ApplyPreview::Pending("domain_requires_rebuild"));
-    }
+        .expect("qualified domain has metadata");
 
     let scopes = apply
         .request
@@ -273,6 +214,155 @@ fn prepare_preview(
         plan_fingerprint,
         provenance,
         metadata: Value::Object(next_metadata).into(),
+    })
+}
+
+pub(crate) enum PublishedDomainPlan {
+    Pending(&'static str),
+    Ready {
+        problem: fullmag_ir::ProblemIR,
+        plan: fullmag_ir::ExecutionPlanIR,
+        layout: Value,
+    },
+}
+
+fn matching_domain_layout(next: &Value, previous: &Value) -> bool {
+    if next["backend"] != "fdm_multilayer" || previous["backend"] != "fdm_multilayer" {
+        return next == previous;
+    }
+    // Multilayer layouts also describe material artifacts. A coefficient edit
+    // changes those descriptors without moving a single native cell.
+    fn topology(layout: &Value) -> Value {
+        let mut layout = layout.clone();
+        if let Some(layers) = layout.get_mut("layers").and_then(Value::as_array_mut) {
+            for layer in layers {
+                if let Some(materials) = layer
+                    .get_mut("material_fields")
+                    .and_then(Value::as_object_mut)
+                {
+                    materials.remove("mat_alpha");
+                }
+            }
+        }
+        layout
+    }
+    topology(next) == topology(previous)
+}
+
+pub(crate) fn plan_on_published_domain(
+    repo: &Path,
+    workspace: &Path,
+    store_root: Option<&Path>,
+    context: &CurrentLiveRequestContext,
+    snapshot: &SessionStateResponse,
+    scene: &SceneDocument,
+) -> Result<PublishedDomainPlan, ApiError> {
+    let before = snapshot.scene_document.as_ref().ok_or_else(|| {
+        ApiError::conflict("materializing authored fields requires a committed scene")
+    })?;
+    if crate::scene_mesh_signature(before) != crate::scene_mesh_signature(scene) {
+        return Ok(PublishedDomainPlan::Pending("domain_requires_rebuild"));
+    }
+    let Some(metadata) = snapshot
+        .metadata
+        .as_ref()
+        .filter(|meta| meta.get("execution_plan").is_some())
+    else {
+        return Ok(PublishedDomainPlan::Pending("domain_not_prepared"));
+    };
+    let published = metadata
+        .execution_plan()
+        .ok_or_else(|| ApiError::conflict("invalid published domain plan"))?;
+    let Ok(layout) = fullmag_runner::study_magnetization_layout_for_plan(&published) else {
+        return Ok(PublishedDomainPlan::Pending("domain_layout_unsupported"));
+    };
+    let (geometry, capture_prepared_grid) = match &published.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            let payload = fullmag_runner::FemMeshPayload::from(fem);
+            let topology = fullmag_runner::fem_mesh_topology_fingerprint(&payload);
+            if snapshot
+                .fem_mesh
+                .as_ref()
+                .is_none_or(|mesh| mesh.topology_fingerprint() != topology)
+            {
+                return Ok(PublishedDomainPlan::Pending("domain_layout_not_qualified"));
+            }
+            let Some(geometry) = verified_fem_geometry(store_root, context, snapshot, &layout)?
+            else {
+                return Ok(PublishedDomainPlan::Pending(
+                    "native_fem_domain_not_qualified",
+                ));
+            };
+            (Some(geometry), false)
+        }
+        _ => {
+            let published_layout = snapshot
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("artifact_layout"));
+            // Build Grid publishes a compact summary alongside its complete execution plan.
+            // Qualify that exact summary against the published plan. The full old and new
+            // layouts (including native masks and cell order) are still compared below.
+            let (compact, has_mask) = match &published.backend_plan {
+                BackendPlanIR::Fdm(fdm) => (
+                    published_layout == Some(&fullmag_runner::live_fdm_grid_layout(fdm)),
+                    fdm.active_mask.is_some(),
+                ),
+                BackendPlanIR::FdmMultilayer(ml) => (
+                    published_layout == Some(&fullmag_runner::live_fdm_multilayer_grid_layout(ml)),
+                    ml.layers.iter().any(|layer| layer.native_active_mask.is_some()),
+                ),
+                _ => (false, false),
+            };
+            if !compact
+                && !published_layout.is_some_and(|persisted| matching_domain_layout(persisted, &layout))
+            {
+                return Ok(PublishedDomainPlan::Pending("domain_layout_not_qualified"));
+            }
+            (None, compact && has_mask)
+        }
+    };
+    let execution = RequestedExecution {
+        backend: scene.study.requested_backend.clone(),
+        device: scene.study.requested_device.clone(),
+        precision: scene.study.requested_precision.clone(),
+        mode: scene.study.requested_mode.clone(),
+        minimum_resources: None,
+    };
+    let source = Path::new(&snapshot.session.script_path);
+    let asset_root = source.is_absolute().then(|| source.parent()).flatten();
+    let mut problem = if capture_prepared_grid {
+        // Build Grid voxelizes the authored universe. Geometry-light Box planning instead
+        // uses a tight grid with an implicit mask, even when both contain the same cells.
+        let config = crate::script::scene_document_to_prepared_script_config_with_asset_root(
+            repo, workspace, asset_root, scene, &execution,
+        )?;
+        let mut problem = config.ir;
+        problem.geometry_assets = problem.geometry_assets.or(config.shared_geometry_assets);
+        problem
+    } else {
+        crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
+            repo, workspace, asset_root, scene, &execution,
+        )?
+    };
+    if let Some(geometry) = geometry {
+        problem.geometry_assets = Some(geometry);
+    }
+    let problem = fullmag_application::bind_declared_execution(&problem, vec![])
+        .map_err(|error| ApiError::unprocessable(format!("bind authored field plan: {error}")))?;
+    let planned = fullmag_plan::plan(&problem).map_err(|error| {
+        ApiError::unprocessable(format!("evaluate authored field plan: {error}"))
+    })?;
+    let planned_layout = fullmag_runner::study_magnetization_layout_for_plan(&planned)
+        .map_err(|error| ApiError::unprocessable(error.message))?;
+    if !matching_domain_layout(&planned_layout, &layout) {
+        return Ok(PublishedDomainPlan::Pending("domain_requires_rebuild"));
+    }
+
+    Ok(PublishedDomainPlan::Ready {
+        problem,
+        plan: planned,
+        layout: planned_layout,
     })
 }
 

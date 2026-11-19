@@ -3,6 +3,7 @@ import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { DEFAULT_CAMERA_REGISTRY_STATE } from "@/kernel/visualization/CameraRegistryController";
+import { VIEWPORT_3D_QUALITY_PROFILE_LABELS } from "@/shared/viewport3dQualityLabels";
 
 import { openViewport3DInspector, getViewport3DInspectorSnapshot, setViewport3DInspectorContext } from "./viewport3dInspectorState";
 import { getViewport3DProjection, hasViewport3DProjectionOwner, toggleRegisteredViewport3DProjection } from "./viewport3dCameraCommands";
@@ -32,22 +33,22 @@ const VISUAL_PROFILE_COMMANDS: Array<{
   {
     id: "viewport-3d.profile-interactive-lite",
     profileId: "interactive-lite",
-    title: "Use Interactive Lite 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS["interactive-lite"]} quality profile`,
   },
   {
     id: "viewport-3d.profile-interactive",
     profileId: "interactive",
-    title: "Use Interactive 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.interactive} quality profile`,
   },
   {
     id: "viewport-3d.profile-balanced",
     profileId: "balanced",
-    title: "Use Balanced 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.balanced} quality profile`,
   },
   {
     id: "viewport-3d.profile-figure",
     profileId: "figure",
-    title: "Use Figure 3D Profile",
+    title: `Use ${VIEWPORT_3D_QUALITY_PROFILE_LABELS.figure} quality profile`,
   },
   {
     id: "viewport-3d.profile-capture",
@@ -306,6 +307,23 @@ export const viewport3dManifest: ModuleManifest = {
         scope: "viewport",
         run: () => {
           viewport3dStore.requestCapture();
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.export-model",
+        title: "Export 3D model",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isEnabled: ({ layout }) => {
+          const view = layout?.get();
+          return !view || view.activeViewportMainModuleId === "viewport-3d" ||
+            view.viewportCompanion?.moduleId === "viewport-3d";
+        },
+        disabledReason: () => "Open the 3D viewport to export a model.",
+        run: () => {
+          viewport3dStore.openExport3DDialog();
           return { status: "completed" };
         },
       },

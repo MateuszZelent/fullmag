@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
       revision: 10,
       scene_revision: 10,
     } as unknown,
+    materialLoading: false,
     material: {
       id: "mat:film",
       name: "film material",
@@ -119,11 +120,11 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) 
   return {
     ...actual,
     useMaterialResource: () => ({
-      data: mocks.material,
+      data: mocks.materialLoading ? null : mocks.material,
       error: null,
       refetch: mocks.refetch,
       revision: 10,
-      status: "ready",
+      status: mocks.materialLoading ? "loading" : "ready",
     }),
     useSceneResource: () => ({
       data: mocks.sceneData,
@@ -138,6 +139,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) 
 vi.mock("./ObjectAbsorbingBoundaryPanel", () => ({
   ObjectAbsorbingBoundaryPanel: () => null,
 }));
+
+vi.mock("@/kernel/layout/MaterialLibraryDialog", () => ({ MaterialLibraryDialog: () => null }));
 
 import { ObjectMaterialPanel } from "./ObjectMaterialPanel";
 
@@ -180,6 +183,7 @@ function findElements(root: TestNode, predicate: (element: TestElement) => boole
 describe("ObjectMaterialPanel lazy optional-interaction loading", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.materialLoading = false;
     mocks.resourceLoads.length = 0;
     mocks.interactionRequest.mockImplementation(async (_objectId: string, kind: string) => {
       if (kind === "uniaxial_anisotropy") {
@@ -187,6 +191,26 @@ describe("ObjectMaterialPanel lazy optional-interaction loading", () => {
       }
       return { interaction_kind: kind, params: {}, present: false, revision: 10 };
     });
+  });
+
+  it("shows the assigned scene damping while the material detail is loading", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      mocks.materialLoading = true;
+      await act(async () => root.render(<ObjectMaterialPanel selection={selection("object.material")} />));
+      expect(findControl(container, "alpha").value).toBe("0.5");
+      expect(findControl(container, "alpha").disabled).toBe(true);
+      mocks.materialLoading = false;
+      await act(async () => root.render(<ObjectMaterialPanel selection={selection("object.material")} />));
+      expect(findControl(container, "alpha").value).toBe("0.5");
+      expect(findControl(container, "alpha").disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("loads anisotropy only when its inspector section is visible, while material inputs stay ready", async () => {

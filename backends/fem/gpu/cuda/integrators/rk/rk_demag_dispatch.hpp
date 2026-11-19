@@ -18,10 +18,6 @@ namespace fullmag::fem {
 
 struct Context;
 
-bool gpu_rk_compute_demag_for_pgbb_trial(
-    Context &, const FemGpuComponentField &, cudaStream_t,
-    FemGpuPgbbPotentialPermit &, std::string &);
-
 bool gpu_rk_compute_demag_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,

@@ -4,7 +4,7 @@ status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: demag solver terminal pages, their source maps, and source revision 88c7160080bc1e8519950df283d2dd02087cc3da
+source_of_truth: fdm-convolution, fem-poisson-airbox, fem-bem, periodic-demag
 ---
 
 (public-docs-numerical-methods-demag-solvers-root)=
@@ -67,7 +67,7 @@ approximated.
 
 The public `Demag.model` normalization vocabulary may contain values beyond the four qualified pages,
 including `fmm`. At the reviewed revision, this documentation makes no executable FMM claim because
-no terminal method page and source map qualify such a lane. The planner must reject an unavailable
+no terminal method page qualifies such a lane. The planner must reject an unavailable
 realization rather than replace it silently.
 
 ## FDM cell-averaged convolution
@@ -403,10 +403,3 @@ fem-poisson-airbox
 fem-bem
 periodic-demag
 ```
-## Control Room crosswalk
-
-This is a navigation page; use the terminal page named by the selected stage or solver. The category itself has no standalone editor. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}`/frontend/capability-register` for the current register and exact source owner.
-
-## Source-code index
-
-This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

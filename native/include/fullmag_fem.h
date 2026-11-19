@@ -25,7 +25,11 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
-#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 3u
+/* v4: fullmag_fem_time_dependence_desc carries the time program of a
+ * FULLMAG_FEM_TIME_HOST_EXPRESSION waveform (mask terms, ADR 0081). */
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 4u
+/* At most this many HOST_EXPRESSION drives per backend on the GPU lane. */
+#define FULLMAG_FEM_MAX_HOST_EXPRESSION_DRIVES 8u
 
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
@@ -122,6 +126,10 @@ typedef enum {
     FULLMAG_FEM_TIME_PULSE = 2,
     FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
     FULLMAG_FEM_TIME_SINC_PULSE = 4,
+    /* The multiplier is the value of the descriptor's time program
+     * (fullmag_time_expr.v1, native/include/fullmag_time_expression.h),
+     * evaluated on the host once per field build at the drive's clock. */
+    FULLMAG_FEM_TIME_HOST_EXPRESSION = 5,
 } fullmag_fem_time_dependence_kind;
 
 typedef enum {
@@ -191,6 +199,9 @@ typedef struct {
     fullmag_fem_time_dependence_parameters parameters;
     const fullmag_fem_time_point *points;
     uint64_t point_count;
+    /* HOST_EXPRESSION only: fullmag_time_expr.v1 words; null and 0 otherwise. */
+    const double *time_program;
+    uint64_t time_program_len;
 } fullmag_fem_time_dependence_desc;
 
 /*
@@ -3939,6 +3950,14 @@ FULLMAG_FEM_API int fullmag_fem_get_regional_field_drive_abi_layout(
     fullmag_fem_regional_field_drive_abi_layout *out_layout
 );
 
+/* Value of a fullmag_time_expr.v1 program at t_s, by the interpreter the
+ * library uses for HOST_EXPRESSION drives (NaN for a malformed program). */
+FULLMAG_FEM_API double fullmag_fem_time_expression_eval_v1(
+    const double *code,
+    uint64_t len,
+    double t_s
+);
+
 FULLMAG_FEM_API int fullmag_fem_backend_begin_stage(
     fullmag_fem_backend *handle,
     double stage_start_time_s
@@ -3995,34 +4014,10 @@ FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
 );
 
 /* Per-context FEM GPU projected-gradient BB direction. Set before stepping.
- * 0=auto (exchange mass), 1=raw tangent gradient, 2=exchange mass.
+ * 0=auto (raw tangent gradient), 1=raw tangent gradient, 2=exchange mass.
  * This does not alter Poisson policy, physical gradients or convergence. */
 FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_bb_preconditioner(
     fullmag_fem_backend *handle, uint32_t policy);
-
-/* Last physically completed BB preconditioner solve, independent of Poisson
- * and accepted-state certification. available=0 means no completed readback.
- * Cooperative support is observed during workspace creation, never inferred
- * from the requested device. Status 1 means certified; 2..5 are GPU failures.
- * Initialize abi_version=1 and struct_size=88. This host-cache-only getter
- * performs no CUDA query, transfer, allocation or synchronization. */
-typedef struct fullmag_fem_gpu_bb_pcg_certificate_v1 {
-    uint32_t abi_version;
-    uint32_t struct_size;
-    uint32_t available;
-    uint32_t cooperative_launch_supported;
-    uint32_t status;
-    uint32_t iterations;
-    uint32_t nonzero_rhs_mask;
-    uint32_t reserved;
-    double rhs_norm_squared[3];
-    double residual_norm_squared[3];
-    double certificate_relative_tolerance;
-} fullmag_fem_gpu_bb_pcg_certificate_v1;
-
-FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_bb_pcg_certificate_v1(
-    fullmag_fem_backend *handle,
-    fullmag_fem_gpu_bb_pcg_certificate_v1 *out_certificate);
 
 FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
@@ -4303,90 +4298,10 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_gpu_state_info *out_info
 );
 
-/* Actual initialized GPU Poisson engine: 0 not applicable/uninitialized,
- * 1 HYPRE PCG, 2 HYPRE GMRES, 3 device-scalar PCG with retained HYPRE AMG.
- * Additive getter; does not change existing structure layouts. */
-enum fullmag_fem_poisson_linear_engine {
-    FULLMAG_FEM_POISSON_ENGINE_NOT_APPLICABLE = 0,
-    FULLMAG_FEM_POISSON_ENGINE_HYPRE_PCG = 1,
-    FULLMAG_FEM_POISSON_ENGINE_HYPRE_GMRES = 2,
-    FULLMAG_FEM_POISSON_ENGINE_DEVICE_SCALAR_PCG_AMG = 3
-};
-typedef struct fullmag_fem_poisson_device_pcg_counters_v1 {
-    uint64_t status_readbacks;
-    uint64_t status_record_bytes;
-    uint64_t control_d2h_bytes;
-    uint64_t solves;
-    uint64_t active_iterations;
-} fullmag_fem_poisson_device_pcg_counters_v1;
-
-typedef struct fullmag_fem_gpu_mandatory_control_counters_v1 {
-    uint64_t bb_certificate_record_bytes;
-    uint64_t bb_certificate_readbacks;
-    uint64_t bb_certificate_bytes;
-    uint64_t bb_descent_readbacks;
-    uint64_t bb_descent_bytes;
-    uint64_t poisson_certificate_readbacks;
-    uint64_t poisson_certificate_bytes;
-    uint64_t confirmation_observations;
-    uint64_t confirmation_metric_readbacks;
-    uint64_t confirmation_metric_bytes;
-} fullmag_fem_gpu_mandatory_control_counters_v1;
-
-/* Generic solver-control attribution; independent of demag being enabled. */
-FULLMAG_FEM_API int fullmag_fem_backend_get_mandatory_control_counters_v1(
-    fullmag_fem_backend *handle, uint32_t scope,
-    fullmag_fem_gpu_mandatory_control_counters_v1 *out_counters);
-
-enum fullmag_fem_poisson_pcg_counter_scope {
-    FULLMAG_FEM_POISSON_PCG_SCOPE_PHYSICAL = 0,
-    FULLMAG_FEM_POISSON_PCG_SCOPE_HOT_LOOP = 1
-};
-/* Scope 0: performance physical lifetime, excluding active outer attempt.
- * Scope 1: exact TransferAudit hot_loop_depth>0, with its copy/reset/rollback.
- * Unknown scopes are invalid; old structure layouts are unchanged. */
-FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
-    fullmag_fem_backend *handle, uint32_t scope, fullmag_fem_poisson_device_pcg_counters_v1 *out_counters);
-
-/* Additive control for status-batch reads in the native FEM GPU device-scalar
- * PCG/AMG Poisson solver. The policy is immutable after its first solve attempt. */
-typedef struct fullmag_fem_gpu_pcg_control_config_v1 {
-    uint32_t abi_version;
-    uint32_t struct_size;
-    uint32_t status_batch_stride;
-    uint32_t reserved;
-} fullmag_fem_gpu_pcg_control_config_v1;
-
-typedef struct fullmag_fem_gpu_pcg_control_info_v1 {
-    uint32_t abi_version;
-    uint32_t struct_size;
-    uint32_t requested_status_batch_stride;
-    uint32_t resolved_status_batch_stride;
-    uint64_t solve_attempts;
-    uint64_t enqueued_iterations;
-    uint64_t amg_apply_calls;
-    uint64_t hot_loop_solve_attempts;
-    uint64_t hot_loop_enqueued_iterations;
-    uint64_t hot_loop_amg_apply_calls;
-} fullmag_fem_gpu_pcg_control_info_v1;
-
-FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_pcg_control_v1(
-    fullmag_fem_backend *handle,
-    const fullmag_fem_gpu_pcg_control_config_v1 *config
-);
-
-/* Caller must initialize abi_version=1 and struct_size=64 before this
- * host-only snapshot getter. No device work or synchronization is performed. */
-FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_pcg_control_info_v1(
-    fullmag_fem_backend *handle,
-    fullmag_fem_gpu_pcg_control_info_v1 *out_info
-);
-
-FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_linear_engine_v1(
-    fullmag_fem_backend *handle, uint32_t *out_engine);
-
-/* Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
- * when not applicable. */
+/*
+ * Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
+ * when not applicable.
+ */
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
     fullmag_fem_backend *handle,
     int32_t *out_relax_type

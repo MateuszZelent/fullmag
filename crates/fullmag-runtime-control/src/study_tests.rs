@@ -138,6 +138,241 @@ fn run_spec(device: &str) -> RunSpecification {
     )
 }
 
+fn accepted_frequency_response_snapshot() -> super::AcceptedStudySnapshot {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            gpu_bb_preconditioner: None,
+            order: 1,
+            hmax: 2e-9,
+            mesh: Some("meshes/unit_tet.msh".into()),
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    problem.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: Vec::new(),
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".into(),
+            mesh_source: Some("meshes/unit_tet.msh".into()),
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "accepted-fr-preparation".into(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ],
+                cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+                element_markers: vec![1],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+    problem.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+    problem.study = fullmag_ir::StudyIR::FrequencyResponse {
+        dynamics: problem.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+        excitation: fullmag_ir::FrequencyExcitationIR {
+            field_au_per_m: [0.0, 0.0, 1.0],
+            phase_rad: 0.0,
+        },
+        frequencies_hz: fullmag_ir::FrequencySweepIR {
+            values_hz: vec![1.0e9],
+        },
+        solver_policy: None,
+        sampling: fullmag_ir::SamplingIR {
+            table_autosave: None,
+            stage_autosave: None,
+            outputs: vec![fullmag_ir::OutputIR::FrequencyResponseOutput {
+                observable: fullmag_ir::FrequencyResponseOutputIR::SusceptibilityTensor,
+            }],
+        },
+    };
+
+    let study = StudyPlan::from_pipeline(
+        "study_execution_validation",
+        1,
+        &StudyPipelineDocument {
+            version: "study_pipeline.v2".into(),
+            nodes: vec![StudyPipelineNode::Primitive(PrimitiveStageNode {
+                id: "step:run".into(),
+                label: "FEM frequency response".into(),
+                enabled: true,
+                notes: None,
+                source: Some(StudyPipelineNodeSource::UiAuthored),
+                stage_kind: StudyPrimitiveStageKind::FrequencyResponse,
+                payload: [
+                    ("frequencies_hz".into(), json!([1.0e9])),
+                    ("equilibrium_source".into(), json!("provided")),
+                    ("bc".into(), json!("free")),
+                ]
+                .into_iter()
+                .collect(),
+            })],
+        },
+        &StudyPlanMigrationDefaults {
+            model: StudyModelReference {
+                model_id: "model:one".into(),
+                version: "v1".into(),
+            },
+            solver_config: StudySolverConfigReference {
+                preset_id: "solver:default".into(),
+                version: "v1".into(),
+            },
+            discretization: StudyDiscretizationReference {
+                recipe_id: "mesh:default".into(),
+                version: "v1".into(),
+            },
+            execution_profile: StudyExecutionProfileReference {
+                profile_id: "exec:auto".into(),
+                version: "v1".into(),
+            },
+        },
+    )
+    .expect("accepted FR study fixture is valid");
+    let catalog = StudyProblemCatalog::from_entries(
+        &study,
+        study
+            .steps
+            .iter()
+            .map(|step| StudyProblemCatalogEntry::from_step(step, problem.clone()))
+            .collect(),
+    )
+    .expect("accepted FR catalog is valid");
+    let lowered = lower_study_plan_with_catalog(&study, &catalog)
+        .expect("accepted FR step lowers to its immutable execution plan");
+    let mut specification = run_spec("cpu");
+    specification.requested_execution.backend = "fem".into();
+    let run_id = specification.run_id.as_str().to_owned();
+    let intent = fullmag_session::FmsRunIntent::new(
+        &run_id,
+        format!("intent-{run_id}"),
+        serde_json::to_value(&specification).unwrap(),
+    );
+
+    super::AcceptedStudySnapshot {
+        run: crate::AcceptedRunSnapshot {
+            intent,
+            specification,
+            definition_bytes: Vec::new(),
+        },
+        study,
+        catalog,
+        lowered,
+    }
+}
+
+fn native_fem_evidence_for_mesh(
+    mesh: &fullmag_ir::MeshIR,
+    fe_order: u32,
+) -> fullmag_plan::NativeFemMeshSpaceEvidence {
+    let fingerprint = |hex: char| format!("sha256:{}", hex.to_string().repeat(64));
+    fullmag_plan::NativeFemMeshSpaceEvidence {
+        abi_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_ABI_VERSION,
+        producer_id: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_ID.into(),
+        schema_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_SCHEMA_VERSION.into(),
+        producer_version: fullmag_plan::preparation::NATIVE_FEM_MESH_SPACE_PRODUCER_VERSION.into(),
+        mesh_matches_canonical_input: true,
+        canonical_mesh_fingerprint: mesh.topology_fingerprint_v6(),
+        topology_fingerprint: fingerprint('8'),
+        marker_map_fingerprint: fingerprint('9'),
+        quality_fingerprint: fingerprint('a'),
+        space_fingerprint: fingerprint('b'),
+        mesh_dimension: 3,
+        fe_family: "H1".into(),
+        fe_order,
+        node_count: mesh.nodes.len() as u64,
+        cell_count: mesh.cells.types.len() as u64,
+        boundary_element_count: mesh.facets.len() as u64,
+        local_dof_count: mesh.nodes.len() as u64,
+        true_dof_count: mesh.nodes.len() as u64,
+        quality_sample_count: 4,
+        invalid_cell_count: 0,
+        min_jacobian_determinant: 1.0e-27,
+        max_jacobian_determinant: 2.0e-27,
+    }
+}
+
+#[test]
+fn accepted_frequency_response_preparation_binds_native_evidence_to_exact_run_problem_and_step() {
+    use fullmag_ir::BackendPlanIR;
+
+    let accepted = accepted_frequency_response_snapshot();
+    let step = accepted
+        .lowered
+        .steps
+        .iter()
+        .find(|step| step.step_id == "step:run")
+        .expect("accepted FR step");
+    let plan = step.execution_plan.as_ref().expect("planned FR execution");
+    let BackendPlanIR::FemFrequencyResponse(response) = &plan.backend_plan else {
+        panic!("accepted step must retain its FEM frequency-response plan");
+    };
+    let native = native_fem_evidence_for_mesh(&response.mesh, response.fe_order);
+    assert!(accepted
+        .materialize_fem_preparation_receipt("prep-fr-through-time-path", "step:run", &native)
+        .is_err(), "the time-domain preparation path must keep rejecting FR");
+    let receipt = accepted
+        .materialize_fem_frequency_response_preparation_receipt(
+            "prep-fr-bound",
+            "step:run",
+            &native,
+        )
+        .expect("FR preparation must use its native mesh-space evidence");
+
+    let source = receipt
+        .accepted_run_source
+        .as_ref()
+        .expect("FR preparation receipt must carry accepted identity");
+    assert_eq!(source.run_id, accepted.run.specification.run_id);
+    assert_eq!(source.step_id, "step:run");
+    assert_eq!(
+        source.specification_fingerprint,
+        format!("sha256:{}", accepted.run.specification.fingerprint().unwrap())
+    );
+    match receipt.plan.source.as_ref().unwrap() {
+        fullmag_plan::PreparationPlanSource::AcceptedRunStep { step_id, .. } => {
+            assert_eq!(step_id, "step:run");
+        }
+    }
+    assert!(receipt.validate().is_ok());
+
+    let rebound = receipt
+        .clone()
+        .bind_to_accepted_run(&accepted.run.specification, "step:other")
+        .expect_err("a receipt cannot be rebound to a different accepted step");
+    assert!(rebound.to_string().contains("another accepted run step"));
+
+    let mut wrong_mesh = native;
+    wrong_mesh.canonical_mesh_fingerprint = format!("sha256:{}", "f".repeat(64));
+    assert!(accepted
+        .materialize_fem_frequency_response_preparation_receipt(
+            "prep-fr-wrong-mesh",
+            "step:run",
+            &wrong_mesh,
+        )
+        .is_err());
+}
+
 #[test]
 fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset() {
     use fullmag_application::{

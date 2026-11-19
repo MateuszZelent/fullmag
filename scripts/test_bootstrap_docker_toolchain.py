@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Interpreted admission and frozen-context regressions; no Docker build."""
 from pathlib import Path
-import hashlib
 import io
 import copy
 import os
 import json
 import re
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,27 +25,11 @@ class ToolchainBootstrapTests(unittest.TestCase):
         (self.repo / "docker/fem-gpu/Dockerfile").write_text("FROM scratch\n")
         (self.repo / "docker/fem-gpu/Dockerfile.dockerignore").write_text("**\n")
         (self.repo / "docker/fem-gpu/nvidia-entrypoint/run.sh").write_text("true\n")
-        patch_path = self.repo / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff"
-        patch_path.parent.mkdir(parents=True)
-        patch_path.write_bytes(b"pinned patch fixture\n")
-        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp").write_bytes(
-            b"pinned header fixture\n"
-        )
-        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff").write_bytes(
-            b"residual patch fixture\n"
-        )
-        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp").write_bytes(
-            b"residual header fixture\n"
-        )
         (self.repo / ".dockerignore").write_text("**\n!docker/\n!docker/**\n")
         (self.repo / "compose.toolchain.yaml").write_text("services: {}\n")
         self.tracked = [".dockerignore", "compose.toolchain.yaml", "docker/fem-gpu/Dockerfile",
                         "docker/fem-gpu/Dockerfile.dockerignore",
-                        "docker/fem-gpu/nvidia-entrypoint/run.sh",
-                        "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff",
-                        "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp",
-                        "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff",
-                        "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp"]
+                        "docker/fem-gpu/nvidia-entrypoint/run.sh"]
         git = mock.patch.object(bootstrap.storage, "git",
                                 side_effect=lambda *_: "\0".join(self.tracked) + "\0")
         git.start()
@@ -251,8 +233,6 @@ class ToolchainBootstrapTests(unittest.TestCase):
             "docker/fem-gpu/nvidia-entrypoint/entrypoint.d/80-internal-image.sh",
             "docker/fem-gpu/nvidia-entrypoint/entrypoint.d/90-deprecated-image.sh",
             "docker/fem-gpu/patches/petsc-3.24.6-multiarch-nvcc.diff",
-            "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff",
-            "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp",
         ):
             self.assertIn("!" + path, ignore)
 
@@ -409,131 +389,11 @@ class ToolchainBootstrapTests(unittest.TestCase):
             ".dockerignore", "compose.toolchain.yaml", "docker/fem-gpu/Dockerfile",
             "docker/fem-gpu/Dockerfile.dockerignore",
             "docker/fem-gpu/nvidia-entrypoint/run.sh",
-            "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff",
-            "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp",
-            "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.diff",
-            "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp",
         })
         bootstrap.verify_capture(self.repo, manifest)
         self.assertEqual(tuple(self.context.iterdir()), ())
         self.assertFalse((self.context / ".env").exists())
         self.assertFalse((self.context / ".git").exists())
-
-    def test_hypre_stream_copy_sources_are_tracked_dependency_inputs(self):
-        manifest = bootstrap.capture_inputs(self.repo)
-        by_path = {entry["path"]: entry["sha256"] for entry in manifest}
-        for path, content in (
-            ("docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff", b"pinned patch fixture\n"),
-            ("docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp", b"pinned header fixture\n"),
-        ):
-            self.assertEqual(by_path[path], hashlib.sha256(content).hexdigest())
-
-    def test_residual_stream_copy_sources_are_captured_and_cannot_drift(self):
-        manifest = bootstrap.capture_inputs(self.repo)
-        by_path = {entry["path"]: entry["sha256"] for entry in manifest}
-        for suffix, content in (("diff", b"residual patch fixture\n"), ("hpp", b"residual header fixture\n")):
-            name = f"docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.{suffix}"
-            self.assertEqual(by_path[name], hashlib.sha256(content).hexdigest())
-        (self.repo / "docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.hpp").write_bytes(b"changed")
-        with self.assertRaises(bootstrap.BootstrapError):
-            bootstrap.verify_capture(self.repo, manifest)
-
-    def test_hypre_residual_patch_is_pinned_after_cached_stack_and_recorded(self):
-        repository = Path(__file__).resolve().parents[1]
-        dockerfile = (repository / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
-        anchor = "# DOC-ANCHOR: hypre-residual-stream-copy-patch"
-        self.assertTrue(anchor in dockerfile, "missing residual-copy dependency integration")
-        before, block = dockerfile.split(anchor, 1)
-        block = block.split("RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase deps", 1)[0]
-        self.assertIn("cmake --install /tmp/build/mfem/build-cpu", before)
-        for suffix in ("diff", "hpp"):
-            relative = f"docker/fem-gpu/patches/hypre-3.1.0-residual-stream-copy.{suffix}"
-            raw = (repository / relative).read_bytes()
-            self.assertIn("COPY " + relative + " ", block)
-            self.assertIn(hashlib.sha256(raw).hexdigest(), block)
-            ignore = (repository / "docker/fem-gpu/Dockerfile.dockerignore").read_text()
-            self.assertIn("!" + relative, ignore)
-        self.assertLess(block.index("apply --check"), block.index("apply /tmp/build/hypre-3.1.0-residual-stream-copy.diff"))
-        self.assertLess(block.index("apply /tmp/build/hypre-3.1.0-residual-stream-copy.diff"), block.index("make -C /tmp/build/hypre/src"))
-        self.assertIn("58d86763361cbf5d0510d6e3386aeccc06a0d4f2c3646259ab064564eb65bea2", block)
-        self.assertIn("hypre_residual_stream_copy_patch_sha256", block)
-        self.assertIn("hypre_residual_stream_copy_source_sha256", block)
-        self.assertIn('value["actual"]["hypre_build"]', dockerfile)
-        self.assertIn("cpu_hypre_sha256_before", block)
-        self.assertIn("cpu_hypre_sha256_after", block)
-        self.assertIn('test "${cpu_hypre_sha256_before}" = "${cpu_hypre_sha256_after}"', block)
-        self.assertNotIn("/opt/fullmag-mfem-cpu install", block)
-
-    def test_hash_pinned_hypre_headers_keep_bytes_in_windows_checkout(self):
-        repository = Path(__file__).resolve().parents[1]
-        dockerfile = (repository / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
-        for stem in ("l1", "residual"):
-            relative = f"docker/fem-gpu/patches/hypre-3.1.0-{stem}-stream-copy.hpp"
-            with self.subTest(path=relative):
-                checkout = subprocess.run(
-                    ["git", "-c", "core.autocrlf=true", "cat-file", "--filters",
-                     "--path=" + relative, "HEAD:" + relative],
-                    cwd=repository, check=True, capture_output=True,
-                ).stdout
-                self.assertNotIn(b"\r\n", checkout)
-                self.assertIn(hashlib.sha256(checkout).hexdigest(), dockerfile)
-
-    def test_hypre_l1_patch_is_pinned_applied_and_recorded(self):
-        repository = Path(__file__).resolve().parents[1]
-        dockerfile = (repository / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
-        patch_path = repository / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff"
-        patch_sha256 = hashlib.sha256(patch_path.read_bytes()).hexdigest()
-        source_path = repository / "docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp"
-        source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
-        self.assertIn("# DOC-ANCHOR: hypre-l1-stream-copy-patch", dockerfile)
-        self.assertIn(
-            "COPY docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.diff ",
-            dockerfile,
-        )
-        self.assertIn(
-            "COPY docker/fem-gpu/patches/hypre-3.1.0-l1-stream-copy.hpp ",
-            dockerfile,
-        )
-        self.assertIn(patch_sha256, dockerfile)
-        self.assertIn(source_sha256, dockerfile)
-        self.assertIn('"hypre_l1_stream_copy_patch_sha256"', dockerfile)
-        self.assertIn('"hypre_l1_stream_copy_source_sha256"', dockerfile)
-        build = dockerfile.split(
-            "RUN git clone --depth 1 --branch ${HYPRE_REF}", 1
-        )[1].split("# Task 9 modal GPU contract", 1)[0]
-        check_pos = build.index("git -C /tmp/build/hypre apply --check")
-        apply_pos = build.index("git -C /tmp/build/hypre apply /tmp/build/hypre-")
-        self.assertLess(check_pos, apply_pos)
-        self.assertLess(apply_pos, build.index("./configure"))
-        self.assertLess(
-            build.index("cp /tmp/build/hypre-3.1.0-l1-stream-copy.hpp"),
-            build.index("./configure"),
-        )
-        self.assertIn(
-            'HYPRE_L1_STREAM_COPY_PATCH_SHA256="${actual_patch_sha256}"', build
-        )
-        self.assertIn(
-            'HYPRE_L1_STREAM_COPY_SOURCE_SHA256="${actual_source_sha256}"', build
-        )
-
-        patch_source = patch_path.read_text(encoding="utf-8")
-        self.assertIn('#include "fullmag_l1_stream_copy.hpp"', patch_source)
-        self.assertNotIn("std::atomic", patch_source)
-        patch_source = source_path.read_text(encoding="utf-8")
-        for contract in (
-            "std::atomic<unsigned long long>",
-            "hypre_FullmagRelax7AsyncCopyCount",
-            "hypre_FullmagRelax7AsyncCopyBytes",
-            "fetch_add(1, std::memory_order_relaxed)",
-            "std::memory_order_relaxed",
-            "cudaMemcpyAsync",
-            "cudaMemcpyDeviceToDevice",
-            "hypre_HandleComputeStream(hypre_handle())",
-            '__attribute__((visibility("default")))',
-        ):
-            self.assertIn(contract, patch_source)
-        self.assertNotIn("getenv", patch_source)
-        self.assertNotIn("reset", patch_source.lower())
 
     def test_untracked_dependency_secret_is_not_copied(self):
         (self.repo / "docker/fem-gpu/.env").write_text("SECRET=never-copy")

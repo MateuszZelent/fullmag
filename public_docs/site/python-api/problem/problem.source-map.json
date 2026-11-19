@@ -178,6 +178,16 @@
         "problem_ir": "field_drives"
       },
       {
+        "python": "Problem.mask_field_drives",
+        "type": "sequence",
+        "default": "()",
+        "si_unit": "mixed",
+        "validation": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "meaning": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "backend_support": "hand-written mask antennas (`mask_field_drive.v1`)",
+        "problem_ir": "mask_field_drives"
+      },
+      {
         "python": "Problem.couplings",
         "type": "sequence",
         "default": "()",
@@ -261,7 +271,7 @@
         "python": "Problem.temperature",
         "type": "float | None",
         "default": "None",
-        "si_unit": "K",
+        "si_unit": "$\\mathrm{K}$",
         "validation": "non-negative compatibility temperature; thermal-term consistency checked",
         "meaning": "non-negative compatibility temperature; thermal-term consistency checked",
         "backend_support": "non-negative compatibility temperature; thermal-term consistency checked",
